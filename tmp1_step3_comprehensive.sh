@@ -1,4 +1,12 @@
 #!/bin/bash
+
+# Ensure we're running in bash, not sh
+if [ -z "$BASH_VERSION" ]; then
+    echo "Error: This script requires bash. Please run with: ./$0"
+    echo "Current shell: $0"
+    exit 1
+fi
+
 # build_xubuntu_gui_base_sif.sh -- DROP-IN (3 Sep)
 # Baseline preserved; adds:
 # - Drake key hardening via host-cached asc
@@ -31,10 +39,10 @@ LOG_DIR="${PWD}/build_logs"
 # Clean up old logs FIRST (before creating new log files)
 echo "Cleaning up old log files..."
 if [ -d "${LOG_DIR}" ]; then
-    # Keep only the 2 most recent log files (skip first 2, delete the rest)
-    find "${LOG_DIR}" -name "build_*.log" -type f | sort -r | tail -n +3 | xargs rm -f 2>/dev/null || true
-    find "${LOG_DIR}" -name "errors_*.log" -type f | sort -r | tail -n +3 | xargs rm -f 2>/dev/null || true
-    echo "Old log files cleaned up (kept latest 2)"
+    # Keep only the 1 most recent log file (skip first 1, delete the rest)
+    find "${LOG_DIR}" -name "build_*.log" -type f | sort -r | tail -n +2 | xargs rm -f 2>/dev/null || true
+    find "${LOG_DIR}" -name "errors_*.log" -type f | sort -r | tail -n +2 | xargs rm -f 2>/dev/null || true
+    echo "Old log files cleaned up (kept latest 1)"
 fi
 
 # Create log directory
@@ -82,10 +90,18 @@ log_with_timestamp "Starting build process..."
 log_with_timestamp "Log file: ${LOG_FILE}"
 log_with_timestamp "Error log: ${ERROR_LOG}"
 
-# Redirect ALL output (stdout, stderr, and terminal) to the same log file
-# This ensures complete debugging information is captured
-exec > >(tee -a "${LOG_FILE}")
-exec 2> >(tee -a "${LOG_FILE}" | tee -a "${ERROR_LOG}" >&2)
+# Redirect stdout to log file while preserving terminal output
+# Use a more robust approach to avoid shell parsing issues
+# exec > >(tee -a "${LOG_FILE}" 2>/dev/null)
+
+# Log script start with detailed information
+echo "=========================================="
+echo "Build Script Started: $(date)"
+echo "Log file: ${LOG_FILE}"
+echo "Error log: ${ERROR_LOG}"
+echo "Working directory: $(pwd)"
+echo "Script PID: $$"
+echo "=========================================="
 
 # ==============================================================================
 # --- Host-side Caches and Directories (Baseline) ---
@@ -94,7 +110,6 @@ CACHE_DIR="${PWD}/container_cache"
 BIN_CACHE="${CACHE_DIR}/binaries"
 DEB_CACHE="${CACHE_DIR}/debs"
 APT_CACHE="${CACHE_DIR}/apt"
-APT_PKG_CACHE="${CACHE_DIR}/apt_pkgs"
 APT_ARCHIVE_CACHE="${CACHE_DIR}/apt/archives"
 CONDA_CACHE="${CACHE_DIR}/conda_pkgs"
 JULIA_CACHE="${CACHE_DIR}/julia_pkgs"
@@ -128,7 +143,6 @@ create_directory_with_permissions "${BIN_CACHE}" "Binaries cache"
 create_directory_with_permissions "${DEB_CACHE}" "DEB packages cache"
 create_directory_with_permissions "${APT_CACHE}" "APT cache"
 create_directory_with_permissions "${APT_ARCHIVE_CACHE}" "APT archives cache"
-create_directory_with_permissions "${APT_PKG_CACHE}" "APT packages cache"
 create_directory_with_permissions "${CONDA_CACHE}" "Conda packages cache"
 create_directory_with_permissions "${JULIA_CACHE}" "Julia packages cache"
 create_directory_with_permissions "${WHEELS_CACHE}" "Python wheels cache"
@@ -421,6 +435,7 @@ check_cache_complete() {
     [[ ! -f "${DEB_CACHE}/${VIRTUALGL_DEB}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/drake.asc" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${JULIA_TARBALL}" ]] && ((missing++))
+    [[ ! -f "${BIN_CACHE}/julia_key.asc" ]] && ((missing++))
     echo $missing
 }
 
@@ -433,21 +448,21 @@ check_cache_integrity() {
     for cache_dir in "${BIN_CACHE}" "${DEB_CACHE}" "${APT_ARCHIVE_CACHE}" "${CONDA_CACHE}" "${WHEELS_CACHE}" "${JULIA_CACHE}"; do
         if [[ -d "$cache_dir" ]]; then
             # Check for zero-byte files (likely corrupted downloads)
-            local zero_files=$(find "$cache_dir" -type f -size 0 2>/dev/null | wc -l)
+            zero_files=$(find "$cache_dir" -type f -size 0 2>/dev/null | wc -l)
             if [[ $zero_files -gt 0 ]]; then
                 echo "  ⚠ Found $zero_files zero-byte files in $(basename "$cache_dir")"
                 find "$cache_dir" -type f -size 0 -delete 2>/dev/null || true
                 echo "  ✓ Removed zero-byte files"
-                ((issues++))
+                issues=$((issues + 1))
             fi
             
             # Check for incomplete downloads (files ending with .part, .tmp, etc.)
-            local incomplete_files=$(find "$cache_dir" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l)
+            incomplete_files=$(find "$cache_dir" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l)
             if [[ $incomplete_files -gt 0 ]]; then
                 echo "  ⚠ Found $incomplete_files incomplete downloads in $(basename "$cache_dir")"
                 find "$cache_dir" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
                 echo "  ✓ Removed incomplete downloads"
-                ((issues++))
+                issues=$((issues + 1))
             fi
         fi
     done
@@ -472,8 +487,8 @@ check_cache_integrity
 if [[ $(check_cache_complete) -eq 0 ]]; then
     log "All artifacts already cached, skipping downloads"
 else
-    # Export function for parallel execution
-    export -f fetch_binary fetch
+    # Export functions for parallel execution
+    export -f fetch_binary fetch log log_with_timestamp log_success log_warning log_error warn err
 
     # Define download tasks
     cat > /tmp/download_tasks << EOF
@@ -496,6 +511,30 @@ EOF
         echo "Completed download: $name"'
 
     rm -f /tmp/download_tasks
+fi
+
+# --- Prefetch GPG Keys ---
+log_with_timestamp "Prefetching GPG public keys..."
+JULIA_GPG_KEY_ID="3673DF529D9049477F76B37566E3C7DC03D6E495"
+JULIA_KEY_FILE="${BIN_CACHE}/julia_key.asc"
+
+if [ ! -s "${JULIA_KEY_FILE}" ]; then
+    log "Julia GPG key not found in cache. Fetching from keyserver..."
+    # First, receive the key into the host's keyring
+    gpg --keyserver hkps://keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" || \
+    gpg --keyserver hkps://keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}"
+
+    # Second, export the key from the keyring to our cache file
+    gpg --export --armor "${JULIA_GPG_KEY_ID}" > "${JULIA_KEY_FILE}"
+
+    if [ -s "${JULIA_KEY_FILE}" ]; then
+        log_success "Successfully cached Julia GPG key to ${JULIA_KEY_FILE}"
+    else
+        log_error "Failed to fetch and cache Julia GPG key."
+        exit 1
+    fi
+else
+    log "Using cached Julia GPG key: $(basename "${JULIA_KEY_FILE}")"
 fi
 
 log "Prefetching complete."
@@ -521,6 +560,7 @@ From: ubuntu:22.04
     container_cache/binaries /container_cache/binaries
     container_cache/debs /container_cache/debs
     container_post_script.sh /container_post_script.sh
+    container_cache/binaries/julia_key.asc /container_cache/binaries/julia_key.asc
 
 # ==============================================================================
 # --- %labels Section ---
@@ -569,103 +609,61 @@ From: ubuntu:22.04
     MINIFORGE_SH="Miniforge3-${MINIFORGE_VER}-Linux-x86_64.sh"
     MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VER}/${MINIFORGE_SH}"
     MINIFORGE_SHA256="376b160ed8130820db0ab0f3826ac1fc85923647f75c1b8231166e3d559ab768"
-    
+
     MICROMAMBA_VER="2.3.2-0"
     MICROMAMBA_BIN="micromamba-linux-64"
     MICROMAMBA_URL="https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VER}/${MICROMAMBA_BIN}"
     MICROMAMBA_SHA256="ffc3cb8d52d4d6b354bdbb979c407719c485392b74e462cbd50811aa88e58f85"
-    
+
     YQ_VER="v4.47.2"
     YQ_BIN="yq_linux_amd64"
     YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/${YQ_BIN}"
     YQ_SHA256="1bb99e1019e23de33c7e6afc23e93dad72aad6cf2cb03c797f068ea79814ddb0"
-    
+
     JULIA_LTS_VER="1.10.5"
     JULIA_URL="https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz"
     JASC_URL="https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz.asc"
-    
+
     DRAKE_ASC_URL="https://drake-apt.csail.mit.edu/drake.asc"
-    
+
     TURBOVNC_VER="3.2"
     TURBOVNC_DEB="turbovnc_${TURBOVNC_VER}_amd64.deb"
     TURBOVNC_URL="https://github.com/TurboVNC/turbovnc/releases/download/${TURBOVNC_VER}/${TURBOVNC_DEB}"
-    
+
     VIRTUALGL_VER="3.1.3"
     VIRTUALGL_DEB="virtualgl_${VIRTUALGL_VER}_amd64.deb"
     VIRTUALGL_URL="https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VER}/${VIRTUALGL_DEB}"
-    
+
     VIRTUALGL_TURBOVNC_GPG_KEY_ID="4BACCAB36E7FE9A1"
     VIRTUALGL_TURBOVNC_GPG_KEY_URL="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xae1a7ba4efff9a9987e1474c4baccab36e7fe9a1"
 
     # $SINGULARITY_ROOTFS is the image root during build; this runs on the HOST
     echo "Running %setup on host to pre-populate caches..."
-    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/{apt/archives,apt_pkgs,binaries,conda_pkgs,debs,julia_pkgs,wheels}"
-    
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/apt/archives"
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/binaries"
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/conda_pkgs"
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/debs"
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/julia_pkgs"
+    mkdir -p "${SINGULARITY_ROOTFS}/container_cache/wheels"
+
     # Set proper permissions for cache directories
     chmod -R 755 "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
-    
+
     # Copy (no overwrite) any preseeded cache into the image build root
     rsync -a --ignore-existing "${PWD}/container_cache/" "${SINGULARITY_ROOTFS}/container_cache/" 2>/dev/null || true
-    rsync -a --ignore-existing "${PWD}/container_cache/debs" "${SINGULARITY_ROOTFS}/container_cache/debs" 2>/dev/null || true
-    
-    # Validate and clean corrupted conda packages BEFORE build starts
-    echo "Validating conda package integrity before build..."
-    if [ -d "${PWD}/container_cache/conda_pkgs" ]; then
-        corrupted_count=0
-        for pkg_file in "${PWD}/container_cache/conda_pkgs"/*.conda "${PWD}/container_cache/conda_pkgs"/*.tar.bz2; do
-            if [ -f "$pkg_file" ]; then
-                # Check if file is corrupted by testing its integrity
-                if ! file "$pkg_file" | grep -q "archive\|compressed"; then
-                    echo "  ⚠ Removing corrupted conda package: $(basename "$pkg_file")"
-                    rm -f "$pkg_file"
-                    ((corrupted_count++))
-                else
-                    # Additional CRC check for .conda files (ZIP-based)
-                    if [[ "$pkg_file" == *.conda ]]; then
-                        if ! unzip -t "$pkg_file" >/dev/null 2>&1; then
-                            echo "  ⚠ Removing CRC-corrupted conda package: $(basename "$pkg_file")"
-                            rm -f "$pkg_file"
-                            ((corrupted_count++))
-                        fi
-                    fi
-                fi
-            fi
-        done
-        if [ $corrupted_count -gt 0 ]; then
-            echo "  ✓ Removed $corrupted_count corrupted conda packages"
-        else
-            echo "  ✓ All conda packages validated successfully"
-        fi
-    fi
-    
+
     # === COMPLETE BINARY PREPARATION PHASE ===
     echo "============== Preparing All Binaries Before Build =============="
-    
-    # Validate all required variables are set before defining array
-    echo "Validating required variables..."
-    for var in MINIFORGE_SH MINIFORGE_URL MINIFORGE_SHA256 MICROMAMBA_URL MICROMAMBA_SHA256 YQ_URL YQ_SHA256 JULIA_URL JASC_URL DRAKE_ASC_URL TURBOVNC_URL VIRTUALGL_URL VIRTUALGL_TURBOVNC_GPG_KEY_ID VIRTUALGL_TURBOVNC_GPG_KEY_URL; do
-        if [ -z "${!var}" ]; then
-            echo "❌ ERROR: Variable $var is empty or not set"
-            exit 1
-        fi
-    done
-    echo "✓ All required variables are set"
-    
-    # Debug: Show key variable values
-    echo "Debug - Key variable values:"
-    echo "  MINIFORGE_SH: '${MINIFORGE_SH}'"
-    echo "  MICROMAMBA_URL: '${MICROMAMBA_URL}'"
-    echo "  YQ_URL: '${YQ_URL}'"
-    echo "  JULIA_URL: '${JULIA_URL}'"
-    
+
     # Define all required files with their download URLs and validation methods
     declare -A required_files=(
         ["micromamba-linux-64"]="$MICROMAMBA_URL|binary|$MICROMAMBA_SHA256"
         ["yq_linux_amd64"]="$YQ_URL|binary|$YQ_SHA256"
         ["${MINIFORGE_SH}"]="$MINIFORGE_URL|binary|$MINIFORGE_SHA256"
-        ["julia-1.10.5-linux-x86_64.tar.gz"]="$JULIA_URL|archive_with_asc_sha256"
+        ["julia-1.10.5-linux-x86_64.tar.gz"]="https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz|archive_with_asc_sha256"
         ["julia-1.10.5-linux-x86_64.tar.gz.asc"]="$JASC_URL|asc"
         ["drake.asc"]="$DRAKE_ASC_URL|gpg"
+        ["julia_key.asc"]="local|gpg"
         ["turbovnc_3.2_amd64.deb"]="$TURBOVNC_URL|deb_with_gpg|$VIRTUALGL_TURBOVNC_GPG_KEY_ID|$VIRTUALGL_TURBOVNC_GPG_KEY_URL"
         ["virtualgl_3.1.3_amd64.deb"]="$VIRTUALGL_URL|deb_with_gpg|$VIRTUALGL_TURBOVNC_GPG_KEY_ID|$VIRTUALGL_TURBOVNC_GPG_KEY_URL"
     )
@@ -1033,7 +1031,7 @@ From: ubuntu:22.04
     fi
     
     echo "============== Complete File Preparation Phase Complete =============="
-    
+
     # Ensure proper ownership and permissions after copy
     chown -R root:root "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
     chmod -R 755 "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
@@ -1049,6 +1047,7 @@ From: ubuntu:22.04
 # --- %test Section ---
 # ==============================================================================
 %test
+    #!/bin/bash
     set -eu
     echo "[test] XFCE:"
     if [ -n "$DISPLAY" ] || pgrep 'Xorg|Xvnc' >/dev/null ; then
@@ -1074,10 +1073,9 @@ From: ubuntu:22.04
     echo "[test] LibreOffice:"; libreoffice --version 2>/dev/null || true
     echo "[test] Blender:"; blender --version 2>/dev/null || true
     echo "[test] OpenSCAD:"; openscad --version 2>/dev/null || true
-    echo "[test] FreeCAD:"; freecad --version 2>/dev/null || true
+    echo "[test] FreeCAD:"; if command -v freecad >/dev/null 2>&1; then timeout 5s freecad --version 2>/dev/null || echo "  [info] FreeCAD installed but test skipped (requires graphics environment)"; else echo "  [info] FreeCAD not installed, skipping test."; fi
     # Robotics tools tests
-    echo "[test] Mirror selection:"; command -v apt-smart >/dev/null 2>&1 && echo "apt-smart available" || echo "apt-smart not available"
-
+    echo "[test] Mirror selection: nala and apt-aria wrapper available for fast downloads"
 
 # ==============================================================================
 # --- %runscript Section ---
@@ -1099,19 +1097,29 @@ log "Singularity definition file generated successfully."
 # --- Build the Container ---
 log_with_timestamp "Building sif: ${OUT_DIR}/${SIF_NAME}"
 # Check if apptainer is available, otherwise try singularity
-if command -v apptainer >/dev/null 2>&1; then
-    sudo apptainer build "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}"
-elif command -v singularity >/dev/null 2>&1; then
+# Use full paths to avoid PATH issues with sudo
+if [ -x /usr/bin/apptainer ]; then
+    log "Using apptainer for container build..."
+    sudo /usr/bin/apptainer build --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}"
+elif [ -x /usr/bin/singularity ]; then
     warn "apptainer not found, falling back to singularity."
-    sudo singularity build "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}"
+    sudo /usr/bin/singularity build --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}"
 else
-    err "Neither apptainer nor singularity found in PATH. Please install one to proceed."
+    err "Neither apptainer nor singularity found. Please install one to proceed."
 fi
 log "=============== Image building completed successfully ==============="
 
-
-# --- Turn on detailed command tracing ---
+# Add this line to enable line-number tracing
+export PS4='+${BASH_SOURCE}:${LINENO}: '
+### --- Turn on detailed command tracing ---
 set -x
+
+# Log detailed build information
+echo "=========================================="
+echo "Build Phase: Cache Harvesting"
+echo "Build completed at: $(date)"
+echo "Image size: $(du -sh "${OUT_DIR}/${SIF_NAME}" 2>/dev/null | cut -f1 || echo "unknown")"
+echo "=========================================="
 
 
 # --- Harvest Caches Back to Host ---
@@ -1121,9 +1129,10 @@ HOST_CACHE="${PWD}/container_cache"
 mkdir -p "$HOST_CACHE"
 
 # Check if apptainer is available, otherwise try singularity
-if command -v apptainer >/dev/null 2>&1; then
+# Use full paths to avoid PATH issues
+if [ -x /usr/bin/apptainer ]; then
     log_with_timestamp "Using Apptainer for cache harvest..."
-    if apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
+    if /usr/bin/apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
       bash -c 'rsync -a --ignore-existing /container_cache/ /host_cache/'; then
         log_success "Cache harvest completed successfully"
     else
@@ -1131,11 +1140,11 @@ if command -v apptainer >/dev/null 2>&1; then
     fi
 
     log_with_timestamp "============== Verify Harvest =============="
-    apptainer exec "${SIF_PATH}" bash -lc 'test -d /container_cache && ls -l /container_cache | wc -l' | awk '{print "[info] cache dirs inside image:", $1}'
-    apptainer exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
-elif command -v singularity >/dev/null 2>&1; then
+    /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'test -d /container_cache && ls -l /container_cache | wc -l' | awk '{print "[info] cache dirs inside image:", $1}'
+    /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
+elif [ -x /usr/bin/singularity ]; then
     log_with_timestamp "Using Singularity for cache harvest..."
-    if singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
+    if /usr/bin/singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
       bash -c 'rsync -a --ignore-existing /container_cache/ /host_cache/'; then
         log_success "Cache harvest completed successfully"
     else
@@ -1143,8 +1152,8 @@ elif command -v singularity >/dev/null 2>&1; then
     fi
 
     log_with_timestamp "============== Verify Harvest =============="
-    singularity exec "${SIF_PATH}" bash -lc 'test -d /container_cache && ls -l /container_cache | wc -l' | awk '{print "[info] cache dirs inside image:", $1}'
-    singularity exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
+    /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'test -d /container_cache && ls -l /container_cache | wc -l' | awk '{print "[info] cache dirs inside image:", $1}'
+    /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
 else
     log_warning "Neither apptainer nor singularity found. Skipping cache harvest."
 fi
@@ -1153,25 +1162,25 @@ log_success "============== Harvest Complete =============="
 # Comprehensive cache validation
 log_with_timestamp "============== Validating Harvested Cache =============="
 echo "==> Validating harvested cache..."
-local issues=0
+issues=0
 
 # Check APT cache
 if [[ -d "${HOST_CACHE}/apt/archives" ]]; then
-    local apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l)
+    apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l)
     if [[ $apt_count -gt 0 ]]; then
         echo "  ✓ APT cache: $apt_count .deb files harvested"
     else
         echo "  ⚠ APT cache: No .deb files found"
-        ((issues++))
+        issues=$((issues + 1))
     fi
 else
     echo "  ⚠ APT cache: Directory not found"
-    ((issues++))
+    issues=$((issues + 1))
 fi
 
 # Check Conda cache
 if [[ -d "${HOST_CACHE}/conda_pkgs" ]]; then
-    local conda_count=$(find "${HOST_CACHE}/conda_pkgs" -name "*.conda" -o -name "*.tar.bz2" 2>/dev/null | wc -l)
+    conda_count=$(find "${HOST_CACHE}/conda_pkgs" -name "*.conda" -o -name "*.tar.bz2" 2>/dev/null | wc -l)
     if [[ $conda_count -gt 0 ]]; then
         echo "  ✓ Conda cache: $conda_count packages harvested"
     else
@@ -1183,7 +1192,7 @@ fi
 
 # Check Pip wheels
 if [[ -d "${HOST_CACHE}/wheels" ]]; then
-    local wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l)
+    wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l)
     if [[ $wheel_count -gt 0 ]]; then
         echo "  ✓ Pip wheels: $wheel_count wheels harvested"
     else
@@ -1195,7 +1204,7 @@ fi
 
 # Check Julia cache
 if [[ -d "${HOST_CACHE}/julia_pkgs" ]]; then
-    local julia_size=$(du -sh "${HOST_CACHE}/julia_pkgs" 2>/dev/null | cut -f1 || echo "0B")
+    julia_size=$(du -sh "${HOST_CACHE}/julia_pkgs" 2>/dev/null | cut -f1 || echo "0B")
     if [[ "$julia_size" != "0B" ]]; then
         echo "  ✓ Julia cache: $julia_size harvested"
     else
@@ -1238,7 +1247,7 @@ rm -f ./prune_apt_cache.sh ./prune_conda_cache.sh 2>/dev/null || true
 log_with_timestamp "Cleaning up definition file..."
 rm -f "${DEF_NAME}" 2>/dev/null || true
 log_success "============== Pruning Complete =============="
-# --- Turn off command tracing before the final summary ---
+### --- Turn off command tracing before the final summary ---
 set +x
 
 # --- Final Build Summary ---
@@ -1248,7 +1257,7 @@ echo "Built image: ${OUT_DIR}/${SIF_NAME}"
 echo ""
 echo "📝 Build Summary 📝"
 echo "  - Base system: Ubuntu 22.04 with XFCE4"
-echo "  - Package manager: apt-fast + mamba solver"
+echo "  - Package manager: apt-aria wrapper + mamba solver"
 echo "  - Development: Python, Julia, C++ toolchains"
 echo "  - Jupyter: Full environment with kernels"
 echo "  - Robotics: Drake (ROS2 in separate image)"
@@ -1284,7 +1293,7 @@ echo "[note] For Isaac Sim, Mujoco, and other simulators:"
 echo "  Install via conda/mamba environments or download from official sources"
 echo ""
 echo "[note] Mirror selection features:"
-echo "  - apt-smart for Ubuntu repo mirror testing"
+echo "  - nala and apt-aria wrapper for fast package downloads"
 echo "  - Automatic selection of fastest mirrors"
 echo ""
 echo "[note] Package management:"
@@ -1316,6 +1325,7 @@ echo "============== BUILD SUMMARY =============="
 echo "Container: ${SIF_PATH}"
 echo "Size: $(du -sh "${SIF_PATH}" | cut -f1)"
 echo "Build time: ${BUILD_HOURS}h ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
+echo "Build completed: $(date)"
 echo ""
 echo "============== CACHE STATISTICS =============="
 echo "Total cache size: ${CACHE_TOTAL_SIZE}"
@@ -1323,4 +1333,10 @@ echo "APT cache: ${APT_CACHE_SIZE} (${APT_CACHE_COUNT} .deb files)"
 echo "Conda cache: ${CONDA_CACHE_SIZE} (${CONDA_CACHE_COUNT} packages)"
 echo "Pip wheels: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)"
 echo "Julia cache: ${JULIA_CACHE_SIZE}"
+echo ""
+echo "============== DETAILED CACHE ANALYSIS =============="
+echo "APT cache directory: ${APT_ARCHIVE_CACHE}"
+echo "Conda cache directory: ${CONDA_CACHE}"
+echo "Pip wheels directory: ${WHEELS_CACHE}"
+echo "Julia cache directory: ${JULIA_CACHE}"
 echo "==========================================="

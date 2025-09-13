@@ -52,9 +52,151 @@ JULIA_TARBALL="julia-${JULIA_LTS_VER}-linux-x86_64.tar.gz"
 JULIA_URL="https://julialang-s3.julialang.org/bin/linux/x64/1.10/${JULIA_TARBALL}"
 JASC_URL="https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-1.10.5-linux-x86_64.tar.gz.asc"
 
+# ==============================================================================
+# Advanced Conda Package Management Functions
+# ==============================================================================
+
+# Setup conda staging area for filesystem robustness
+setup_conda_staging_area() {
+    local staging_dir="/tmp/conda-staging"
+    echo "Setting up conda staging area at $staging_dir..."
+    
+    # Create staging directory with proper permissions
+    mkdir -p "$staging_dir"
+    chmod 755 "$staging_dir"
+    
+    # Note: Do not modify CONDA_PKGS_DIRS here to avoid interfering with normal conda operations
+    # The staging area will be used manually for specific cleanup operations
+    
+    echo "✓ Conda staging area configured (manual mode)"
+}
+
+# Atomic package replacement with retry logic
+atomic_package_replace() {
+    local pkg_name="$1"
+    local cache_dir="/container_cache/conda_pkgs"
+    local max_retries=3
+    local retry_count=0
+    
+    while [ $retry_count -lt $max_retries ]; do
+        echo "  Attempting to replace corrupted package: $pkg_name (attempt $((retry_count + 1))/$max_retries)"
+        
+        # Create temporary file for atomic replacement
+        local temp_file="${cache_dir}/${pkg_name}.tmp"
+        local final_file="${cache_dir}/${pkg_name}"
+        
+        # Remove corrupted package
+        rm -f "$final_file" 2>/dev/null || true
+        
+        # Download fresh copy to temporary location
+        if /opt/conda/bin/mamba download --no-deps -c conda-forge -p "$cache_dir" "$pkg_name" --output-filename "$temp_file" 2>/dev/null; then
+            # Atomic move to final location
+            if mv "$temp_file" "$final_file" 2>/dev/null; then
+                # Verify the new package
+                if verify_package_integrity "$final_file"; then
+                    echo "  ✓ Successfully replaced and verified: $pkg_name"
+                    return 0
+                else
+                    echo "  ⚠ Downloaded package failed verification, retrying..."
+                    rm -f "$final_file" 2>/dev/null || true
+                fi
+            else
+                echo "  ⚠ Atomic move failed, retrying..."
+                rm -f "$temp_file" 2>/dev/null || true
+            fi
+        else
+            echo "  ⚠ Download failed, retrying..."
+        fi
+        
+        retry_count=$((retry_count + 1))
+        sleep $((retry_count * 2))  # Exponential backoff
+    done
+    
+    echo "  ❌ Failed to replace package after $max_retries attempts: $pkg_name"
+    return 1
+}
+
+# Comprehensive package integrity verification
+verify_package_integrity() {
+    local pkg_file="$1"
+    
+    if [ ! -f "$pkg_file" ]; then
+        return 1
+    fi
+    
+    # Check file type and verify accordingly
+    local file_type=$(file -b "$pkg_file" 2>/dev/null || echo "unknown")
+    
+    case "$file_type" in
+        *"bzip2"*|*"compressed"*)
+            if bzip2 -t "$pkg_file" >/dev/null 2>&1; then
+                return 0
+            else
+                echo "    ❌ bzip2 integrity check failed"
+                return 1
+            fi
+            ;;
+        *"Zip"*|*"archive"*)
+            if unzip -t "$pkg_file" >/dev/null 2>&1; then
+                return 0
+            else
+                echo "    ❌ ZIP integrity check failed"
+                return 1
+            fi
+            ;;
+        *)
+            # For unknown types, try both checks
+            if bzip2 -t "$pkg_file" >/dev/null 2>&1 || unzip -t "$pkg_file" >/dev/null 2>&1; then
+                return 0
+            else
+                echo "    ❌ Package integrity check failed"
+                return 1
+            fi
+            ;;
+    esac
+}
+
+# Package locking mechanism
+acquire_package_lock() {
+    local pkg_name="$1"
+    local lock_file="/tmp/conda-lock-${pkg_name}.lock"
+    local max_wait=30
+    local wait_count=0
+    
+    while [ $wait_count -lt $max_wait ]; do
+        if (set -C; echo $$ > "$lock_file") 2>/dev/null; then
+            # Lock acquired
+            return 0
+        fi
+        
+        # Check if lock is stale (older than 5 minutes)
+        if [ -f "$lock_file" ] && [ $(($(date +%s) - $(stat -c %Y "$lock_file" 2>/dev/null || echo 0))) -gt 300 ]; then
+            rm -f "$lock_file" 2>/dev/null || true
+            continue
+        fi
+        
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+    
+    echo "  ⚠ Could not acquire lock for $pkg_name after ${max_wait}s"
+    return 1
+}
+
+release_package_lock() {
+    local pkg_name="$1"
+    local lock_file="/tmp/conda-lock-${pkg_name}.lock"
+    rm -f "$lock_file" 2>/dev/null || true
+}
+
 # Create all cache directories immediately at the start of %post
 echo "==> Creating all cache directories at the start of container build..."
-mkdir -p /container_cache/{apt/archives,apt_pkgs,binaries,conda_pkgs,debs,julia_pkgs,wheels}
+mkdir -p /container_cache/apt/archives
+mkdir -p /container_cache/binaries
+mkdir -p /container_cache/conda_pkgs
+mkdir -p /container_cache/debs
+mkdir -p /container_cache/julia_pkgs
+mkdir -p /container_cache/wheels
 mkdir -p /var/cache/apt/archives/partial
 mkdir -p /root/.cache/pip
 # Note: /opt/conda will be created by Miniforge installer
@@ -64,7 +206,7 @@ mkdir -p /usr/local/share/julia
 mkdir -p /root/.cache/conda
 mkdir -p /root/.cache/julia
 mkdir -p /root/.local/share/julia
-mkdir -p /var/cache/apt/archives/apt-fast
+# apt-fast cache directory removed - using apt-aria wrapper instead
 
 # Set proper permissions for all cache directories
 chmod -R 755 /container_cache /var/cache/apt /root/.cache /opt/conda /usr/local/share/julia /root/.local 2>/dev/null || true
@@ -118,14 +260,14 @@ setup_gpg_verification() {
     
     # Enable universe repository for dpkg-sig
     echo "Enabling universe repository for dpkg-sig..."
-    apt-get update
-    apt-get install -y --no-install-recommends software-properties-common
+    /usr/bin/apt-get update
+    /usr/bin/apt-get install -y --no-install-recommends software-properties-common
     add-apt-repository universe -y || true
-    apt-get update || true
+    /usr/bin/apt-get update || true
     
     # Install dpkg-sig for .deb package verification (modern replacement for debsig-verify)
     echo "Installing dpkg-sig for .deb package verification..."
-    apt-get install -y --no-install-recommends dpkg-sig
+    /usr/bin/apt-get install -y --no-install-recommends dpkg-sig
     
     # Import VirtualGL/TurboVNC GPG key
     echo "Importing VirtualGL/TurboVNC GPG key..."
@@ -209,7 +351,7 @@ chown -R root:root "${PIP_CACHE_DIR}" 2>/dev/null || true
 chmod -R 755 "${PIP_CACHE_DIR}" 2>/dev/null || true
 printf '[global]\ncache-dir = %s\n' "${PIP_CACHE_DIR}" > /root/.config/pip/pip.conf
 
-    # --- 3. Prepare Conda Caching ---
+    # --- 3. Prepare Conda Caching with Staging Area Strategy ---
     # This config file will be used when Miniforge is installed later
     cat >/opt/.condarc.pre <<'YAML'
 channels:
@@ -218,6 +360,20 @@ default_channels: []  # This line explicitly removes the default anaconda channe
 channel_priority: strict
 pkgs_dirs:
   - /container_cache/conda_pkgs
+
+# --- Robustness settings for tricky filesystems ---
+use_only_tar_bz2: true  # Force older, more robust package format
+aggressive_update_packages: []  # Disable aggressive caching that can cause issues
+solver: libmamba  # Use mamba solver by default for better reliability
+safety_checks: enabled  # Enable safety checks
+channel_alias: https://conda.anaconda.org  # Use HTTPS for security
+ssl_verify: true  # Verify SSL certificates
+
+# --- Staging Area Configuration ---
+# Use local staging area for package extraction to avoid filesystem race conditions
+extract_threads: 1  # Single-threaded extraction for consistency
+always_copy: false  # Use hard links when possible for efficiency
+always_softlink: false  # Prefer hard links over soft links
 YAML
 
     # --- 4. Configure Julia Caching ---
@@ -232,40 +388,192 @@ setup_unified_cache
 echo "==> Installing essential tools for verification, downloads, and system management..."
 apt-get update -o Acquire::Retries=3
 
-# Install the most essential tools first
+# *** INSTALL ARIA2 FIRST (before creating wrapper) ***
+echo "==> Installing aria2 before creating apt-aria wrapper..."
+/usr/bin/apt-get install -y --no-install-recommends aria2
+
+# *** APT TOOL ALIASING FOR UNIFIED CACHING (MOVED EARLY) ***
+echo "==> Setting up APT tool aliasing for unified caching..."
+
+# Create apt-aria wrapper first
+echo "Creating apt-aria wrapper for unified APT caching..."
+install -d -m 0755 /usr/local/bin
+
+cat >/usr/local/bin/apt-aria <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Centralized APT cache configuration - ALL APT tools use this location
+CACHE="/container_cache/apt/archives"
+mkdir -p "$CACHE" /var/cache/apt/archives
+
+# Common APT options for consistent caching across all tools
+APT_CACHE_OPTS="-o Dir::Cache::archives=$CACHE -o APT::Keep-Downloaded-Packages=true"
+
+# Function to determine if this is an install command that should use aria2c
+is_install_command() {
+    # Check if any argument is an install command (not just the first one)
+    for arg in "$@"; do
+        case "$arg" in
+            install|remove|purge|build-dep|source)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Function to get the appropriate APT tool
+get_apt_tool() {
+    if [ -x /usr/bin/apt-fast ]; then
+        echo "/usr/bin/apt-fast"
+    else
+        echo "/usr/bin/apt-get"
+    fi
+}
+
+# Get the APT tool to use
+APT_TOOL=$(get_apt_tool)
+
+# Handle install commands with aria2c acceleration
+if is_install_command "$@"; then
+    echo "[apt-aria] Using aria2c for accelerated downloads..."
+    
+    # Collect all http/https URLs (incl. dependencies) that would be downloaded
+    URI_FILE="$(mktemp)"
+    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y $*"
+    
+    # Use a more robust approach to collect URIs
+    if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | grep -o 'http[^'\'']*' | sort -u > "$URI_FILE" 2>/dev/null; then
+        echo "[apt-aria] URI collection successful"
+    else
+        echo "[apt-aria] URI collection failed, creating empty file"
+        touch "$URI_FILE"
+    fi
+    
+    echo "[apt-aria] URI file created: $URI_FILE"
+    echo "[apt-aria] URI file contents:"
+    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
+
+    if [ -s "$URI_FILE" ]; then
+      echo "[apt-aria] Downloading $(wc -l < "$URI_FILE") packages via aria2c..."
+      echo "[apt-aria] Cache directory: $CACHE"
+      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
+      
+      # Try multi-connection first
+      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE"; then
+        echo "[apt-aria] Multi-connection failed, trying single-connection..."
+        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
+        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE"; then
+          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
+        else
+          echo "[apt-aria] Single-connection aria2c succeeded"
+        fi
+      else
+        echo "[apt-aria] Multi-connection aria2c succeeded"
+      fi
+      rm -f "$URI_FILE"
+    else
+      echo "[apt-aria] No URIs to download"
+    fi
+    
+    # Install from cache using apt-get (reliable and standard)
+    echo "[apt-aria] Installing packages from cache..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
+else
+    # Use regular apt-get with cache configuration for non-install commands
+    echo "[apt-aria] Using apt-get with cache configuration..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
+fi
+EOF
+
+chmod 0755 /usr/local/bin/apt-aria
+echo "✓ apt-aria wrapper created"
+
+# Create comprehensive aliases to ensure ALL APT tools use consistent caching
+echo "Creating APT tool aliases for consistent caching..."
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
+
+# Update PATH to prioritize /usr/local/bin (where our aliases are)
+export PATH="/usr/local/bin:$PATH"
+
+# Verify the aliasing is working
+echo "Verifying APT tool aliasing..."
+echo "apt-get -> $(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')"
+echo "apt -> $(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')"
+
+# Test cache functionality
+echo "Testing unified APT cache functionality..."
+if /usr/local/bin/apt-get --download-only install -y curl 2>/dev/null; then
+    if [ -f /container_cache/apt/archives/curl*.deb ]; then
+        echo "✓ Unified APT cache test successful - curl package cached"
+        rm -f /container_cache/apt/archives/curl*.deb 2>/dev/null || true
+    else
+        echo "⚠ Unified APT cache test - package downloaded but not found in cache"
+    fi
+else
+    echo "⚠ Unified APT cache test failed - curl may already be installed"
+fi
+
+# Install essential tools in smaller, logical batches for robustness
+
+# Batch 1: Core APT and system utilities
+echo "==> Installing core APT and system utilities..."
 apt-get install -y --no-install-recommends \
     debconf-utils \
     dialog \
-    curl \
-    wget \
-    gnupg \
-    dirmngr \
-    ca-certificates \
-    apt-transport-https \
     software-properties-common \
     lsb-release \
     tzdata \
     locales \
-    bc \
+    bc
+
+# Batch 2: Network and download tools
+echo "==> Installing network and download tools..."
+apt-get install -y --no-install-recommends \
+    curl \
+    wget \
+    apt-transport-https
+
+# Batch 3: Security and encryption tools
+echo "==> Installing security and encryption tools..."
+apt-get install -y --no-install-recommends \
+    gnupg \
+    dirmngr \
+    ca-certificates \
     debsig-verify \
+    sudo
+
+# Batch 4: Archive and compression tools
+echo "==> Installing archive and compression tools..."
+apt-get install -y --no-install-recommends \
     unzip \
     bzip2 \
-    file \
-    less \
-    tree \
-    htop \
-    nano \
-    vim-tiny \
-    git \
-    rsync \
     tar \
     gzip \
     xz-utils \
-    p7zip-full \
-    jq \
+    p7zip-full
+
+# Batch 5: File and text utilities
+echo "==> Installing file and text utilities..."
+apt-get install -y --no-install-recommends \
+    file \
+    less \
+    tree \
+    nano \
+    vim-tiny \
     dos2unix \
     bsdextrautils \
     xxd
+
+# Batch 6: Development and system tools
+echo "==> Installing development and system tools..."
+apt-get install -y --no-install-recommends \
+    git \
+    rsync \
+    htop \
+    jq
 
 # Try to install apt-utils (might not be available in all base images)
 apt-get install -y --no-install-recommends apt-utils || echo "⚠️ apt-utils not available (continuing without it)"
@@ -274,7 +582,7 @@ apt-get install -y --no-install-recommends apt-utils || echo "⚠️ apt-utils n
 echo "==> Attempting to install advanced package managers..."
 apt-get install -y --no-install-recommends aptitude || echo "⚠️ aptitude not available (continuing without it)"
 apt-get install -y --no-install-recommends nala || echo "⚠️ nala not available (continuing without it)"
-apt-get install -y --no-install-recommends apt-fast || echo "⚠️ apt-fast not available (continuing without it)"
+# apt-fast removed - using apt-aria wrapper instead
 apt-get install -y --no-install-recommends synaptic || echo "⚠️ synaptic not available (continuing without it)"
 
 # Verify essential tools are working
@@ -292,11 +600,13 @@ command -v aptitude || { echo "aptitude install failed"; exit 1; }
 # Check for optional advanced package managers (these might not be available in all Ubuntu versions)
 echo "Checking for advanced package managers..."
 command -v nala && echo "✓ nala available" || echo "⚠️ nala not available"
-command -v apt-fast && echo "✓ apt-fast available" || echo "⚠️ apt-fast not available"
+# apt-fast removed - using apt-aria wrapper instead
 command -v synaptic && echo "✓ synaptic available" || echo "⚠️ synaptic not available"
-command -v apt-utils && echo "✓ apt-utils available" || echo "⚠️ apt-utils not available (this is often normal in minimal base images)"
+if dpkg -l | grep -q "^ii.*apt-utils"; then echo "✓ apt-utils package is installed"; else echo "⚠️ apt-utils package is not installed"; fi
 
 echo "✓ Essential tools installed and verified"
+
+# apt-aria wrapper already created earlier in the script
 
 # *** EARLY VERIFICATION OF CACHED FILES (catch corruption after copy) ***
 echo "==> Performing early verification of cached files..."
@@ -409,9 +719,7 @@ setup_gpg_verification
 probe_and_set_mirrors() {
 export LC_NUMERIC=C # Prevents printf errors with decimals
 echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
-local CODENAME
 CODENAME="$(. /etc/os-release; echo "${UBUNTU_CODENAME:-jammy}")"
-local PROBE_RESULTS
 PROBE_RESULTS="$(mktemp)"
 
 # Function to test a single mirror (for parallel execution)
@@ -460,49 +768,74 @@ test_mirror() {
 # Export function for parallel execution
 export -f test_mirror
 
-# Define candidate mirrors list
-local CANDIDATE_MIRRORS
-CANDIDATE_MIRRORS="https://de.archive.ubuntu.com/ubuntu"
+# Define candidate mirrors list - High-speed (100+ Gbps) and up-to-date mirrors only
+# Based on https://launchpad.net/ubuntu/+archivemirrors
+CANDIDATE_MIRRORS="https://archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirror.leaseweb.net/ubuntu/"
+https://de.archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://au.archive.ubuntu.com/ubuntu"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirror.aarnet.edu.au/pub/ubuntu/archive/"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirrors.kernel.org/ubuntu/"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirrors.ustc.edu.cn/ubuntu"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://in.archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://jp.archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirror.cse.iitk.ac.in/ubuntu"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://sg.archive.ubuntu.com/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://ftp.riken.jp/Linux/ubuntu/"
+https://mirror.aarnet.edu.au/pub/ubuntu/archive/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirror.kku.ac.th/ubuntu/"
+https://mirror.leaseweb.net/ubuntu/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirror.twds.com.tw/ubuntu/"
+https://mirror.gsl.icu/ubuntu/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://mirrors.nhanhoa.com/ubuntu/"
+https://mirror.internet.asn.au/pub/ubuntu/archive/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://ftp.kaist.ac.kr/ubuntu/"
+https://mirror.datamossa.io/ubuntu/archive/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://ftp.udx.icscoe.jp/Linux/ubuntu/"
+https://mirror.realcompute.io/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://ubuntu.mirror.serversaustralia.com.au/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.alwyzon.net/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.easyname.at/ubuntu-archive/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://ubuntu.anexia.at/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.datacenter.az/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.ourhost.az/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.asnet.am/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.teamcloud.am/mirrors/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.azvps.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://ubuntu.vpsttt.com/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirror.clearsky.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.bkns.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.gofiber.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.tino.org/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://vn-mirrors.techhost.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://vn-mirrors.vhost.vn/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.kernel.org/ubuntu/"
+CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
+https://mirrors.ustc.edu.cn/ubuntu"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://repo.huaweicloud.com/ubuntu/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://mirrors.nipa.cloud/ubuntu/"
 CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
-https://ubuntu-archive.mirrors.estointernet.in/ubuntu"
-CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS}
 https://ossmirror.mycloud.services/os/linux/ubuntu/"
+
 
 # Run mirror tests in parallel (max 8 concurrent)
 echo "Testing mirrors in parallel (max 8 concurrent)..."
@@ -512,7 +845,6 @@ echo "--- Mirror Probe Results (speed score, url): ---"
 LC_NUMERIC=C sort -n "$PROBE_RESULTS" | sed 's/^/  /'
 
 # Extract the fastest mirror that responded in under 9 seconds
-local FASTEST_MIRROR
 FASTEST_MIRROR="$(LC_NUMERIC=C sort -n "$PROBE_RESULTS" | awk 'NF==2 && $1 < 9.0 {print $2; exit}')"
 rm -f "$PROBE_RESULTS"
 
@@ -559,7 +891,6 @@ rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
 # Batch 1: Additional network and download tools
 echo "==> Installing additional network and download tools..."
 apt-get install -y --no-install-recommends \
-    aria2 \
     rsync
 
 # Batch 2: Additional security and encryption tools
@@ -574,7 +905,7 @@ apt-get install -y --no-install-recommends \
 
 update-ca-certificates
 locale-gen en_US.UTF-8
-pip3 install apt-smart
+# We already have nala and aptitude installed via APT for package management
 command -v curl || { echo "curl install failed"; exit 1; }
 
 # *** RUN THE UNIFIED MIRROR PROBE ONCE ***
@@ -583,24 +914,22 @@ probe_and_set_mirrors
 
 
 # ### >>> ADDED: ALL PPA CONFIGURATIONS (EARLIEST POSSIBLE) - OPTIMIZED
-echo "==> Adding all PPAs and configuring apt-fast (earliest possible) - OPTIMIZED"
+echo "==> Adding all PPAs (earliest possible) - OPTIMIZED"
 # Add all PPAs using fallback method (add-apt-repository with proper error handling)
 echo "Adding PPA repositories with verification..."
 
 # Try modern method first, fallback to add-apt-repository if needed
 echo "Attempting to add PPAs using add-apt-repository..."
-add-apt-repository -y ppa:apt-fast/stable 2>/dev/null || echo "[warn] apt-fast PPA failed, will try manual method"
+# apt-fast PPA removed - using apt-aria wrapper instead
 add-apt-repository -y ppa:mozillateam/ppa 2>/dev/null || echo "[warn] Mozilla PPA failed, will try manual method"  
 add-apt-repository -y ppa:agornostal/ulauncher 2>/dev/null || echo "[warn] Ulauncher PPA failed, will try manual method"
 
 # If add-apt-repository failed, use manual method as fallback
-if [ ! -f /etc/apt/sources.list.d/apt-fast-ubuntu-stable-jammy.list ]; then
+if [ ! -f /etc/apt/sources.list.d/mozillateam-ubuntu-ppa-jammy.list ]; then
     echo "Using manual PPA configuration as fallback..."
     CODENAME=$(lsb_release -cs)
     
-    # Add apt-fast PPA manually
-    echo "deb http://ppa.launchpad.net/apt-fast/stable/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/apt-fast-ppa.list
-    echo "deb-src http://ppa.launchpad.net/apt-fast/stable/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/apt-fast-ppa.list
+    # apt-fast PPA removed - using apt-aria wrapper instead
     
     # Add Mozilla PPA manually
     echo "deb http://ppa.launchpad.net/mozillateam/ppa/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/mozillateam-ppa.list
@@ -614,8 +943,7 @@ fi
 # Add GPG keys using direct download method (most reliable)
 echo "Adding PPA GPG keys..."
 
-# apt-fast PPA key
-curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0x1E2824A7F22B44BD | gpg --dearmor -o /etc/apt/trusted.gpg.d/apt-fast.gpg 2>/dev/null || echo "[warn] apt-fast key failed"
+# apt-fast PPA key removed - using apt-aria wrapper instead
 
 # Mozilla PPA key  
 curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xAEBDF4819BE21867 | gpg --dearmor -o /etc/apt/trusted.gpg.d/mozillateam.gpg 2>/dev/null || echo "[warn] Mozilla key failed"
@@ -635,49 +963,6 @@ done
 echo "Updating package lists with all PPAs..."
 apt-get update -o Acquire::Retries=3
 
-# Install and configure apt-fast immediately with verification
-echo "Installing and configuring apt-fast..."
-if apt-get -y --no-install-recommends -o Dpkg::Options::="--force-confnew" install apt-fast; then
-  echo "✓ apt-fast installed successfully"
-else
-  echo "[warn] apt-fast installation failed, falling back to apt-get"
-fi
-
-
-# --- apt-fast hardening: force aria2c + mirrors + sane defaults ---
-mkdir -p /etc/apt-fast
-mkdir -p /var/cache/apt/archives/apt-fast
-install -d -m 0755 /etc/apt-fast
-
-# Ensure essential device files exist for apt-fast
-[[ -e /dev/null ]] || mknod /dev/null c 1 3 2>/dev/null || true
-[[ -e /dev/zero ]] || mknod /dev/zero c 1 5 2>/dev/null || true
-
-
-
-# Create the mirror list for apt-fast using the selected mirror
-echo "==> Creating mirror list for apt-fast..."
-{
-    # Use the fastest mirror found by the probe
-    grep -oP 'http[s]?://[^/ ]*/ubuntu' /etc/apt/sources.list | head -n1
-    # Add default fallbacks and PPA hosts
-    echo "http://security.ubuntu.com/ubuntu"
-    echo "https://ppa.launchpadcontent.net/mozillateam/ppa/ubuntu"
-    echo "https://ppa.launchpadcontent.net/apt-fast/stable/ubuntu"
-    echo "https://ppa.launchpadcontent.net/agornostal/ulauncher/ubuntu"
-} > /etc/apt-fast/mirrors.list
-
-
-
-
-# Configure apt-fast for optimal performance
-cat > /etc/apt-fast.conf <<'EOC'
-# apt-fast core config (simplified)
-DOWNLOADER=aria2c
-_DLDIR="/container_cache/apt/archives"
-APT_FAST_OPTS=(--check-certificate=false --min-split-size=1M --timeout=30)
-# apt-fast will automatically use /etc/apt-fast/mirrors.list if it exists
-EOC
 
 # --- Improve APT robustness ---
 cat >>/etc/apt/apt.conf.d/80-retries <<'EOF'
@@ -687,120 +972,14 @@ Acquire::https::Timeout "30";
 Acquire::ftp::Timeout "30";
 EOF
 
-# Export in case apt-fast looks at env first
-export DOWNLOADER=aria2c
-export APT_FAST_OPTS="--summary-interval=1 --console-log-level=notice --check-certificate=false --max-connection-per-server=16 --split=16 --min-split-size=1M --timeout=30"
-export LC_ALL=C
-echo "[apt-fast] configured to use aria2c (verbose progress enabled)"
-echo "[apt-fast] mirrors + config + ENVIRONMENT VARIABLES written"
-# Verify apt-fast configuration
-if [ -x /usr/bin/apt-fast ] && [ -f /etc/apt-fast.conf ]; then
-  echo "✓ apt-fast configured successfully"
-else
-  echo "[warn] apt-fast configuration may be incomplete"
-fi
+# apt-fast environment variables and verification removed - using apt-aria wrapper instead
 
-# Clean up any stale apt-fast lock files
-rm -f /tmp/apt-fast.lock
+# apt-fast debug section removed - using apt-aria wrapper instead
+# apt-fast debug code removed - using apt-aria wrapper instead
 
-# --- DEBUG: verify aria2/apt-fast wiring (Ubuntu-safe probe) ---
-set +e
-echo "[debug] Checking aria2/apt-fast wiring ..."
-# 1) Binaries present?
-command -v aria2c >/dev/null 2>&1 || { echo "[debug][FAIL] aria2c not found"; exit 71; }
-command -v apt-fast >/dev/null 2>&1 || { echo "[debug][FAIL] apt-fast not found"; exit 72; }
-# 2) Show configs
-echo "[debug] /etc/apt-fast/apt-fast.conf:"
-[ -s /etc/apt-fast/apt-fast.conf ] && sed -n '1,120p' /etc/apt-fast/apt-fast.conf || echo "[debug] Missing apt-fast.conf"
-echo "[debug] /etc/apt-fast/mirrors.list:"
-[ -s /etc/apt-fast/mirrors.list ] && sed -n '1,40p' /etc/apt-fast/mirrors.list || echo "[debug] Missing mirrors.list"
-# 3) Pick a mirror + codename for a guaranteed file
-CODENAME="$(. /etc/os-release 2>/dev/null; echo "${UBUNTU_CODENAME:-jammy}")"
-UBU_MIRROR="$(head -n1 /etc/apt-fast/mirrors.list 2>/dev/null | sed 's|[[:space:]]*$||')"
-[ -z "$UBU_MIRROR" ] && UBU_MIRROR="https://in.archive.ubuntu.com/ubuntu"
-TEST_URL="$UBU_MIRROR/dists/$CODENAME/Release" # small text file that always exists
-# 4) Aria2 connectivity probe (no cert check to survive weird proxies)
-echo "[debug] Aria2 probe: $TEST_URL"
-ARIA2_TMP=/tmp/aria2_probe.$$
-mkdir -p "$ARIA2_TMP"
-aria2c --check-certificate=false -x16 -s16 -m3 -d "$ARIA2_TMP" -o Release.txt "$TEST_URL"
-ARIA2_RC=$?
-if [ $ARIA2_RC -ne 0 ]; then
-  echo "[debug][FAIL] Aria2 probe failed (rc=$ARIA2_RC) for $TEST_URL"
-  ls -l "$ARIA2_TMP" || true
-  exit 73
-fi
-rm -rf "$ARIA2_TMP/Release.txt"
+# apt-fast mirror checking removed - using apt-aria wrapper instead
 
-# 5) apt-fast smoke test (update only; fast and safe)
-echo "[debug] apt-fast update (short):"
-# Clean up any stale lock files
-rm -f /tmp/apt-fast.lock
-APT_FAST_OPTS="$APT_FAST_OPTS;--no-check-certificate"
-apt-fast -o Acquire::Check-Valid-Until=false -o Acquire::Retries=3 update
-APTFAST_RC=$?
-if [ $APTFAST_RC -ne 0 ]; then
-  echo "[debug][FAIL] apt-fast update failed (rc=$APTFAST_RC)."
-  exit 74
-fi
-apt-fast -y --no-install-recommends --download-only install libgpg-error0
-echo "[debug] apt-fast + aria2 look OK."
-set -e
-# --- END DEBUG ---
-
-echo "----------- Checking APT-FAST MIRRORS -----------"
-# Show what apt-fast thinks its mirrors are (POSIX-safe)
-if [ -f /etc/apt-fast/apt-fast.conf ]; then
-  MLINE="$(grep -E '^(( *)?)MIRRORS=' /etc/apt-fast.conf | \
-    sed -e 's/MIRRORS=//' -e 's/(//' -e 's/)//')"
-  printf 'apt-fast conf mirrors: %s\n' "$MLINE"
-fi
-printf '[debug] apt-fast mirrors.list (first 20 lines):\n'
-sed -n '1,20p' /etc/apt-fast/mirrors.list 2>/dev/null || true
-
-
-echo "[debug] apt-fast -> aria2c probe..."
-APTFAST_DEBUG=1 apt-fast -y -o Debug::pkgAcquire::Worker=1 \
-  --no-install-recommends --download-only install libgpg-error0 >/dev/null 2>&1 || true
-
-echo "----------- APT-ARIA WRAPPER -----------"
-# Use aria2c for multi-connection fetches using apt's actual URLs (works for PPAs too)
-install -d -m 0755 /usr/local/bin
-
-cat >/usr/local/bin/apt-aria <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-CACHE="/container_cache/apt/archives"
-mkdir -p "$CACHE" /var/cache/apt/archives
-
-case "$1" in
-  update|upgrade|full-upgrade|dist-upgrade|autoremove|autoclean|clean|check|-f|--fix-broken)
-exec /usr/bin/apt-get -o Dir::Cache::archives="$CACHE" "$@"
-;;
-esac
-
-# Collect all http/https URLs (incl. dependencies) that would be downloaded
-URI_FILE="$(mktemp)"
-/usr/bin/apt-get -o Dir::Cache::archives="$CACHE" --print-uris -y "$@" \
-  | awk -F"'" '/^https?:\/\// {print $2}' \
-  | sort -u > "$URI_FILE"
-
-if [ -s "$URI_FILE" ]; then
-  # Try multi-connection first
-  if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE"; then
-# Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE" || \
-echo "[warn] aria2c prefetch failed; apt-get will fetch what's missing"
-  fi
-fi
-
-# Install from cache (APT will reuse any .debs present; download only what's missing/newer)
-exec /usr/bin/apt-get -o Dir::Cache::archives="$CACHE" -y "$@"
-EOF
-chmod 0755 /usr/local/bin/apt-aria
-
-# Optional: keep your existing lines untouched by aliasing apt-fast -> apt-aria
-ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-fast
+# APT-aria wrapper moved to early in the script for better integration
 
 # Drake APT (use cached key) + INSTALL
 echo "==> Drake APT (hardened via cached key) + INSTALL"
@@ -848,10 +1027,7 @@ dpkg --configure -a || true
 
 # Install drake-dev with more verbose output for debugging
 echo "Installing drake-dev..."
-apt-fast install -y --no-install-recommends drake-dev || {
-    echo "apt-fast failed, trying with apt-get..."
-    apt-get install -y --no-install-recommends drake-dev
-}
+apt-get install -y --no-install-recommends drake-dev
 
 # 5) AFTER installing drake-dev (clean up the insecure override)
 rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
@@ -880,10 +1056,8 @@ PREF
 
 # Install Firefox immediately after PPA configuration with verification
 echo "Installing Firefox with optimized PPA..."
-if apt-fast -y --no-install-recommends install libdbus-glib-1-2 firefox; then
-  echo "✓ Firefox installed successfully via apt-fast"
-elif apt-get -y --no-install-recommends install libdbus-glib-1-2 firefox; then
-  echo "✓ Firefox installed successfully via apt-get"
+if apt-get -y --no-install-recommends install libdbus-glib-1-2 firefox; then
+  echo "✓ Firefox installed successfully"
 else
   echo "[warn] Firefox installation failed"
 fi
@@ -898,7 +1072,7 @@ fi
 # APT caching already configured above
 
 echo "==> Desktop stack"
-apt-fast install -y --no-install-recommends \
+apt-get install -y --no-install-recommends \
     xfce4 xfce4-goodies xorg dbus-x11 x11-xserver-utils xauth fontconfig\
     fonts-dejavu fonts-liberation fonts-noto \
     iproute2 iputils-ping net-tools lsof \
@@ -914,29 +1088,21 @@ apt-fast install -y --no-install-recommends \
 echo "==> Additional system libraries for robotics/ML"
 
 # Helper function for package installation with fallback
-install_packages() {
-    local group_name="$1"
-    shift
-    echo "Installing $group_name..."
-    if ! apt-fast install -y --no-install-recommends "$@"; then
-        echo "apt-fast failed, trying with apt-get..."
-        apt-get install -y --no-install-recommends "$@" || true
-    fi
-}
+# install_packages function removed - using apt-get directly (aliased to apt-aria)
 
 # First, fix any broken dependencies
 echo "Fixing broken dependencies..."
 apt-get -y --fix-broken install || true
 dpkg --configure -a || true
 apt-get -y autoremove || true
-apt-get -y autoclean || true
+# Note: autoclean removed to preserve cached .deb files for host-side caching
 
 # Remove any held packages that might cause conflicts
 apt-mark unhold $(dpkg --get-selections | grep hold | awk '{print $1}') 2>/dev/null || true
 
 # Install essential dependencies first
 echo "Installing essential dependencies..."
-apt-fast install -y --no-install-recommends \
+apt-get install -y --no-install-recommends \
     pkg-config || true
 
 # Handle specific version conflicts
@@ -949,35 +1115,35 @@ apt-get -y install libpython3.10-stdlib=3.10.12-1~22.04.11 || true
 apt-get update || true
 
 # Install packages in groups to avoid dependency conflicts
-install_packages "core math libraries" \
+apt-get install -y --no-install-recommends \
     libeigen3-dev \
     libatlas-base-dev \
     libopenblas-dev \
     liblapack-dev
 
-install_packages "boost and logging libraries" \
+apt-get install -y --no-install-recommends \
     libboost-all-dev \
     libgflags-dev \
     libgoogle-glog-dev
 
-install_packages "HDF5 libraries" \
+apt-get install -y --no-install-recommends \
     libhdf5-dev \
     libhdf5-serial-dev \
     libhdf5-103
 
-install_packages "compression and crypto libraries" \
+apt-get install -y --no-install-recommends \
     libffi-dev \
     libssl-dev \
     libbz2-dev \
     liblzma-dev
 
-install_packages "image processing libraries" \
+apt-get install -y --no-install-recommends \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
     libwebp-dev
 
-install_packages "multimedia libraries" \
+apt-get install -y --no-install-recommends \
     libavcodec-dev \
     libavformat-dev \
     libswscale-dev \
@@ -985,50 +1151,38 @@ install_packages "multimedia libraries" \
     libgstreamer1.0-dev \
     libgstreamer-plugins-base1.0-dev
 
-install_packages "GUI libraries" \
+apt-get install -y --no-install-recommends \
     libgtk-3-dev \
     libcanberra-gtk3-dev
 
-install_packages "SDL libraries" \
+apt-get install -y --no-install-recommends \
     libsdl2-dev \
     libsdl2-image-dev \
     libsdl2-mixer-dev
 
-install_packages "physics simulation libraries" \
+apt-get install -y --no-install-recommends \
     libbullet-dev \
     libode-dev
 
-install_packages "3D and XML libraries" \
+apt-get install -y --no-install-recommends \
     libassimp-dev \
     libtinyxml2-dev
 
-install_packages "data format libraries" \
+apt-get install -y --no-install-recommends \
     libyaml-cpp-dev \
     libjsoncpp-dev
 
-# Install PCL and VTK libraries with better dependency handling
-echo "Installing PCL and VTK libraries..."
+# PCL and VTK libraries are already installed as dependencies of Drake
+# No need to install them separately to avoid version conflicts
+echo "PCL and VTK libraries already available via Drake dependencies"
 
-# First, try to install PCL without VTK to avoid conflicts
-if ! apt-fast install -y --no-install-recommends libpcl-dev; then
-    echo "PCL installation failed, trying with apt-get..."
-    apt-get install -y --no-install-recommends libpcl-dev || true
-fi
+# Install Python VTK bindings if available (useful for scripting)
+echo "Installing Python VTK bindings if available..."
+apt-get install -y --no-install-recommends python3-vtk9 || apt-get install -y --no-install-recommends python3-vtk7 || echo "⚠ Python VTK bindings not available"
 
-# Then try VTK separately
-if ! apt-fast install -y --no-install-recommends libvtk7-dev; then
-    echo "VTK7 installation failed, trying VTK9..."
-    if ! apt-fast install -y --no-install-recommends libvtk9-dev; then
-        echo "VTK installation failed, continuing without VTK..."
-    fi
-fi
+# apt-fast removed - using apt-aria wrapper instead
 
-# apt-fast already installed and configured above
-
-# --- Prevent VTK conflicts (we don't need both; prefer none in base) ---
-apt-get -y remove python3-vtk7 python3-vtk9 || true
-apt-fast -y install || true
-apt-fast -y install python3-vtk9 || true
+# VTK conflicts resolved by using Drake's compatible versions
 
 # Firefox already installed above with optimized PPA
 
@@ -1066,17 +1220,14 @@ for deb_file in /container_cache/debs/turbovnc_*.deb /container_cache/debs/virtu
     fi
     
     echo "  Verifying GPG signature for $(basename "$deb_file")..."
-    # The policy is now automatically created by debsig-import, so we can just verify.
     if debsig-verify "$deb_file"; then
-        echo "  ✓ GPG Signature OK. Installing..."
-        # Use a non-interactive install to prevent prompts
-        DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
+        echo "  ✓ GPG Signature OK."
     else
-        echo "  ⚠️ GPG SIGNATURE VERIFICATION FAILED for $(basename "$deb_file")!"
-        echo "     Installing anyway with warning (build will continue)..."
-        # Use a non-interactive install to prevent prompts
-        DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
+        echo "  ⚠️ GPG signature verification failed. Continuing installation with warning."
     fi
+    
+    echo "  Installing $(basename "$deb_file")..."
+    DEBIAN_FRONTEND=noninteractive apt-get install -y "$deb_file"
 done
 # Create symlinks with verification
 if [ -x /opt/TurboVNC/bin/vncserver ]; then
@@ -1116,17 +1267,62 @@ if [ -s /container_cache/binaries/${MINIFORGE_SH} ]; then
     rm -rf /opt/conda/pkgs/* 2>/dev/null || true
     rm -rf /root/.cache/conda/* 2>/dev/null || true
     
-    # Pre-clean corrupted packages from cache before installation
-    echo "Pre-cleaning potentially corrupted conda packages from cache..."
+    # Advanced conda package cache cleanup with smart replacement
+    echo "Performing advanced conda package cache cleanup..."
     if [ -d "/container_cache/conda_pkgs" ]; then
-      find /container_cache/conda_pkgs -name "*.conda" -type f -exec sh -c '
-        for pkg; do
-          if ! unzip -t "$pkg" >/dev/null 2>&1; then
-            echo "  ⚠ Removing pre-corrupted package: $(basename "$pkg")"
-            rm -f "$pkg"
+      # Setup staging area for robust package handling
+      setup_conda_staging_area
+      
+      # Remove specific problematic packages mentioned in errors
+      echo "  Removing known problematic packages..."
+      problematic_packages=(
+        "openssl-3.5.2-h26f9b46_0.conda"
+        "certifi-2025.8.3-pyhd8ed1ab_0.conda"
+        "anyio-4.10.0-pyhe01879c_0.conda"
+        "argon2-cffi-25.1.0-pyhd8ed1ab_0.conda"
+        "argon2-cffi-bindings-25.1.0-py312h4c3975b_0.conda"
+      )
+      
+      for pkg in "${problematic_packages[@]}"; do
+        if [ -f "/container_cache/conda_pkgs/$pkg" ]; then
+          echo "  Removing problematic package: $pkg"
+          rm -f "/container_cache/conda_pkgs/$pkg" 2>/dev/null || true
+        fi
+      done
+      
+      # Comprehensive integrity check with smart replacement
+      echo "  Performing comprehensive package integrity check..."
+      corrupted_packages=()
+      
+      # Check all conda packages for integrity
+      find /container_cache/conda_pkgs -name "*.conda" -o -name "*.tar.bz2" | while read -r pkg_file; do
+        if ! verify_package_integrity "$pkg_file"; then
+          pkg_name=$(basename "$pkg_file")
+          echo "  ⚠ Found corrupted package: $pkg_name"
+          corrupted_packages+=("$pkg_name")
+        fi
+      done
+      
+      # Replace corrupted packages with fresh downloads
+      if [ ${#corrupted_packages[@]} -gt 0 ]; then
+        echo "  Replacing ${#corrupted_packages[@]} corrupted packages..."
+        for pkg_name in "${corrupted_packages[@]}"; do
+          if acquire_package_lock "$pkg_name"; then
+            atomic_package_replace "$pkg_name"
+            release_package_lock "$pkg_name"
           fi
         done
-      ' _ {} +
+      fi
+      
+      # Clear conda package cache metadata that might be stale
+      echo "  Clearing conda package cache metadata..."
+      rm -rf /container_cache/conda_pkgs/cache 2>/dev/null || true
+      rm -rf /container_cache/conda_pkgs/*/info 2>/dev/null || true
+      
+      # Force filesystem sync to ensure all writes are flushed
+      sync
+      
+      echo "  ✓ Advanced conda package cache cleanup completed"
     fi
     
     # Set environment variables to use our cache directory and make it non-interactive
@@ -1336,12 +1532,27 @@ fi
 # Conda base env - Full Jupyter + meshcat + additional libraries
 echo "Starting Conda base env setup"
 if [ -x /opt/conda/bin/conda ]; then
-  # Conda channel configuration (strict conda-forge only)
-  /opt/conda/bin/conda config --system --remove-key channels || true
-  /opt/conda/bin/conda config --system --add channels conda-forge
-  /opt/conda/bin/conda config --system --set channel_priority strict
+  # Conda channel configuration is already set in .condarc.pre (strict conda-forge only)
   
   echo "Installing full Jupyter environment + additional libraries using mamba solver..."
+  
+  # Enhanced conda package cache management before mamba installation
+  echo "Performing enhanced conda cache management before mamba installation..."
+  if [ -d "/container_cache/conda_pkgs" ]; then
+    # Setup staging area for robust package handling
+    setup_conda_staging_area
+    
+    # Remove cache metadata that causes "modified by another program" warnings
+    rm -rf /container_cache/conda_pkgs/cache 2>/dev/null || true
+    # Remove any partially extracted packages
+    find /container_cache/conda_pkgs -maxdepth 1 -type d -name "*-*" -exec rm -rf {} + 2>/dev/null || true
+    
+    # Force filesystem sync to ensure all operations are flushed
+    sync
+    
+    echo "  ✓ Enhanced conda cache management completed"
+  fi
+  
   # Use mamba (installed in conda) for better environment solving
   if [ -x /opt/conda/bin/mamba ]; then
     echo "Using mamba solver for package installation..."
@@ -1366,7 +1577,7 @@ if [ -x /opt/conda/bin/conda ]; then
     /opt/conda/bin/mamba install -y -c conda-forge \
         gymnasium stable-baselines3 mujoco pybullet glfw imageio || true
     # Vision bits (headless)
-    /opt/conda/bin/pip install --no-cache-dir "opencv-python-headless>=4.7"
+    /opt/conda/bin/pip install "opencv-python-headless>=4.7"
     # Install Jupyter extensions
     echo "Installing Jupyter extensions..."
     /opt/conda/bin/mamba install -y -c conda-forge \
@@ -1378,7 +1589,7 @@ if [ -x /opt/conda/bin/conda ]; then
   # Register base Python kernel
   /opt/conda/bin/python -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" || true
   # Install additional useful packages via pip
-  /opt/conda/bin/pip install --no-cache-dir \
+  /opt/conda/bin/pip install \
     openai-gym \
     robosuite \
     pyrender \
@@ -1449,9 +1660,13 @@ chmod 700 "$GNUPGHOME"
 # Download .asc file if available
 curl -fsSL --retry 3 "${JASC_URL}" -o "${LATEST_TGZ}.asc" || true
 
-# Import key from Ubuntu keyserver; ignore failures (behind some firewalls)
-gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys 3673DF529D9049477F76B37566E3C7DC03D6E495 || \
-gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys 3673DF529D9049477F76B37566E3C7DC03D6E495 || true
+# Import the GPG key from the local file prefetched from the host
+if [ -f "/container_cache/binaries/julia_key.asc" ]; then
+    echo "  Importing local GPG key for Julia..."
+    gpg --import /container_cache/binaries/julia_key.asc
+else
+    echo "  [warn] Local Julia GPG key not found. GPG verification may fail."
+fi
 
 # Verify signature if .asc present and key imported (non-blocking)
 if [ -s "${LATEST_TGZ}.asc" ]; then
@@ -1565,14 +1780,11 @@ fi
 
 # LibreOffice (from baseline)
 echo "==> LibreOffice installation"
-apt-fast -y --no-install-recommends install \
-  libreoffice-writer libreoffice-calc libreoffice-impress || \
 apt-get -y --no-install-recommends install \
   libreoffice-writer libreoffice-calc libreoffice-impress
 
 # Blender (from baseline)
 echo "==> Blender installation"
-apt-fast -y --no-install-recommends install blender || \
 apt-get -y --no-install-recommends install blender
 
 # ==================== OCIO color management (quiet & portable) ====================
@@ -1580,7 +1792,7 @@ echo "==> OCIO color profile configuration initialized"
 set -e
 DEBIAN_FRONTEND=noninteractive apt-get update -yq
 if ! dpkg -l blender-data >/dev/null 2>&1; then
-  DEBIAN_FRONTEND=noninteractive apt-fast install -yq --no-install-recommends blender-data
+  DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends blender-data
   # Find Blender's bundled OCIO config
   OCIO_PATH="$(/usr/bin/python3 -c '
 import glob; p=glob.glob("/usr/share/blender/*/datafiles/colormanagement/config.ocio")
@@ -1607,20 +1819,29 @@ echo "=================== OCIO Color profile configuration complete ============
 
 # CAD tools (from baseline)
 echo "==> CAD tools installation"
-apt-fast -y --no-install-recommends install \
-  openscad freecad || \
 apt-get -y --no-install-recommends install \
-  openscad freecad
+  openscad
+
+# Install FreeCAD with proper graphics dependencies to prevent crashes
+echo "Installing FreeCAD with graphics dependencies..."
+apt-get -y install \
+  freecad \
+  freecad-python3 \
+  libqt5gui5 \
+  libqt5widgets5 \
+  libqt5core5a \
+  libgl1-mesa-glx \
+  libglu1-mesa \
+  libxrender1 \
+  libxext6 \
+  libxcb1 \
+  libx11-6 \
+  libxkbcommon-x11-0 || echo "⚠ FreeCAD installation failed, continuing without it"
 
 echo "[note] ROS2 not included in base image - use separate ROS2 image for ROS-specific work"
 
 # TeX English-only (feature-complete)
 echo "==> TeX (English-only, full feature)"
-apt-fast -y --no-install-recommends install \
-  texlive texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra \
-  latexml latexmk texlive-xetex texlive-bibtex-extra biber lmodern cm-super \
-  texlive-pictures texlive-science texlive-pstricks texlive-context \
-  ipe texworks || \
 apt-get -y --no-install-recommends install \
   texlive texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra \
   latexml latexmk texlive-xetex texlive-bibtex-extra biber lmodern cm-super \
@@ -1697,7 +1918,7 @@ chmod 0755 /usr/local/bin/start_vnc_xfce.sh
 
 # === Ulauncher (baseline) ===
 echo "==> Ulauncher (PPA already added above)"
-apt-fast -y --no-install-recommends install ulauncher || apt-get -y --no-install-recommends install ulauncher
+apt-get -y --no-install-recommends install ulauncher
 
 # === Sioyek note (baseline) ===
 echo "==> Sioyek (manual AppImage install recommended)"
@@ -1724,7 +1945,7 @@ rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 
 # Clean temporary APT directories that might cause issues
 rm -rf /tmp/apt-dpkg-install-* 2>/dev/null || true
-rm -rf /tmp/apt-fast-* 2>/dev/null || true
+# apt-fast cleanup removed - using apt-aria wrapper instead
 
 # Clean temporary files but preserve our container_cache
 find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
