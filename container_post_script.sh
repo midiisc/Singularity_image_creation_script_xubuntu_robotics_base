@@ -2,6 +2,79 @@
 set -eu
 
 export DEBIAN_FRONTEND=noninteractive
+
+# Cache monitoring data collection
+CACHE_MONITOR_DATA="/tmp/cache_monitor_data.txt"
+
+# Initialize cache monitoring data file
+echo "# Stage|Container APT|Var APT|Conda|Wheels|Julia" > "$CACHE_MONITOR_DATA"
+
+# Cache monitoring function
+monitor_cache() {
+    local stage="$1"
+    local container_apt=$(ls /container_cache/apt/archives/*.deb 2>/dev/null | wc -l)
+    local var_apt=$(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l)
+    local conda_pkgs=$(ls /container_cache/conda_pkgs/* 2>/dev/null | wc -l)
+    local wheels=$(ls /container_cache/wheels/* 2>/dev/null | wc -l)
+    local julia_pkgs=$(ls /container_cache/julia_pkgs/* 2>/dev/null | wc -l)
+    
+    echo "[CACHE MONITOR] Stage: $stage"
+    echo "  /container_cache/apt/archives: $container_apt .deb files"
+    echo "  /var/cache/apt/archives: $var_apt .deb files"
+    echo "  /container_cache/conda_pkgs: $conda_pkgs files"
+    echo "  /container_cache/wheels: $wheels files"
+    echo "  /container_cache/julia_pkgs: $julia_pkgs files"
+    echo ""
+    
+    # Store data for summary
+    echo "$stage|$container_apt|$var_apt|$conda_pkgs|$wheels|$julia_pkgs" >> "$CACHE_MONITOR_DATA"
+}
+
+# Display collected cache monitoring data
+display_cache_monitoring_summary() {
+    echo "=========================================="
+    echo "📈 CACHE MONITORING SUMMARY - ALL STAGES"
+    echo "=========================================="
+    echo "Stage                           | Container APT | Var APT | Conda | Wheels | Julia"
+    echo "--------------------------------|---------------|---------|-------|--------|-------"
+    
+    # Read and display the monitoring data
+    while IFS='|' read -r stage container_apt var_apt conda_pkgs wheels julia_pkgs; do
+        # Skip header line
+        if [[ "$stage" == "# Stage" ]]; then
+            continue
+        fi
+        # Format the output with proper alignment
+        printf "%-30s | %-13s | %-7s | %-5s | %-6s | %-5s\n" \
+            "$stage" "$container_apt" "$var_apt" "$conda_pkgs" "$wheels" "$julia_pkgs"
+    done < "$CACHE_MONITOR_DATA"
+    
+    echo "=========================================="
+    echo ""
+}
+
+# Aggregated cache summary function
+cache_summary() {
+    echo "=========================================="
+    echo "📊 FINAL CACHE SUMMARY - BEFORE IMAGE CREATION"
+    echo "=========================================="
+    echo "APT Archives:"
+    echo "  /container_cache/apt/archives: $(ls /container_cache/apt/archives/*.deb 2>/dev/null | wc -l) .deb files"
+    echo "  /var/cache/apt/archives: $(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l) .deb files"
+    echo ""
+    echo "Other Caches:"
+    echo "  /container_cache/conda_pkgs: $(ls /container_cache/conda_pkgs/* 2>/dev/null | wc -l) files"
+    echo "  /container_cache/wheels: $(ls /container_cache/wheels/* 2>/dev/null | wc -l) files"
+    echo "  /container_cache/julia_pkgs: $(ls /container_cache/julia_pkgs/* 2>/dev/null | wc -l) files"
+    echo ""
+    echo "Cache Directory Sizes:"
+    echo "  /container_cache/apt/archives: $(du -sh /container_cache/apt/archives 2>/dev/null | cut -f1 || echo '0B')"
+    echo "  /container_cache/conda_pkgs: $(du -sh /container_cache/conda_pkgs 2>/dev/null | cut -f1 || echo '0B')"
+    echo "  /container_cache/wheels: $(du -sh /container_cache/wheels 2>/dev/null | cut -f1 || echo '0B')"
+    echo "  /container_cache/julia_pkgs: $(du -sh /container_cache/julia_pkgs 2>/dev/null | cut -f1 || echo '0B')"
+    echo "=========================================="
+    echo ""
+}
 # Define CACHE_ROOT to point to the unified cache directory
 # that was copied from the host in the %setup phase.
 export CACHE_ROOT="/container_cache"
@@ -392,135 +465,16 @@ apt-get update -o Acquire::Retries=3
 echo "==> Installing aria2 before creating apt-aria wrapper..."
 /usr/bin/apt-get install -y --no-install-recommends aria2
 
-# *** APT TOOL ALIASING FOR UNIFIED CACHING (MOVED EARLY) ***
-echo "==> Setting up APT tool aliasing for unified caching..."
+# Monitor cache after first package installation
+monitor_cache "After aria2 installation"
 
-# Create apt-aria wrapper first
-echo "Creating apt-aria wrapper for unified APT caching..."
-install -d -m 0755 /usr/local/bin
-
-cat >/usr/local/bin/apt-aria <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Centralized APT cache configuration - ALL APT tools use this location
-CACHE="/container_cache/apt/archives"
-mkdir -p "$CACHE" /var/cache/apt/archives
-
-# Common APT options for consistent caching across all tools
-APT_CACHE_OPTS="-o Dir::Cache::archives=$CACHE -o APT::Keep-Downloaded-Packages=true"
-
-# Function to determine if this is an install command that should use aria2c
-is_install_command() {
-    # Check if any argument is an install command (not just the first one)
-    for arg in "$@"; do
-        case "$arg" in
-            install|remove|purge|build-dep|source)
-                return 0
-                ;;
-        esac
-    done
-    return 1
-}
-
-# Function to get the appropriate APT tool
-get_apt_tool() {
-    if [ -x /usr/bin/apt-fast ]; then
-        echo "/usr/bin/apt-fast"
-    else
-        echo "/usr/bin/apt-get"
-    fi
-}
-
-# Get the APT tool to use
-APT_TOOL=$(get_apt_tool)
-
-# Handle install commands with aria2c acceleration
-if is_install_command "$@"; then
-    echo "[apt-aria] Using aria2c for accelerated downloads..."
-    
-    # Collect all http/https URLs (incl. dependencies) that would be downloaded
-    URI_FILE="$(mktemp)"
-    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y $*"
-    
-    # Use a more robust approach to collect URIs
-    if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | grep -o 'http[^'\'']*' | sort -u > "$URI_FILE" 2>/dev/null; then
-        echo "[apt-aria] URI collection successful"
-    else
-        echo "[apt-aria] URI collection failed, creating empty file"
-        touch "$URI_FILE"
-    fi
-    
-    echo "[apt-aria] URI file created: $URI_FILE"
-    echo "[apt-aria] URI file contents:"
-    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
-
-    if [ -s "$URI_FILE" ]; then
-      echo "[apt-aria] Downloading $(wc -l < "$URI_FILE") packages via aria2c..."
-      echo "[apt-aria] Cache directory: $CACHE"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
-      
-      # Try multi-connection first
-      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE"; then
-        echo "[apt-aria] Multi-connection failed, trying single-connection..."
-        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE"; then
-          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
-        else
-          echo "[apt-aria] Single-connection aria2c succeeded"
-        fi
-      else
-        echo "[apt-aria] Multi-connection aria2c succeeded"
-      fi
-      rm -f "$URI_FILE"
-    else
-      echo "[apt-aria] No URIs to download"
-    fi
-    
-    # Install from cache using apt-get (reliable and standard)
-    echo "[apt-aria] Installing packages from cache..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
-else
-    # Use regular apt-get with cache configuration for non-install commands
-    echo "[apt-aria] Using apt-get with cache configuration..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
-fi
-EOF
-
-chmod 0755 /usr/local/bin/apt-aria
-echo "✓ apt-aria wrapper created"
-
-# Create comprehensive aliases to ensure ALL APT tools use consistent caching
-echo "Creating APT tool aliases for consistent caching..."
-ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
-ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
-
-# Update PATH to prioritize /usr/local/bin (where our aliases are)
-export PATH="/usr/local/bin:$PATH"
-
-# Verify the aliasing is working
-echo "Verifying APT tool aliasing..."
-echo "apt-get -> $(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')"
-echo "apt -> $(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')"
-
-# Test cache functionality
-echo "Testing unified APT cache functionality..."
-if /usr/local/bin/apt-get --download-only install -y curl 2>/dev/null; then
-    if [ -f /container_cache/apt/archives/curl*.deb ]; then
-        echo "✓ Unified APT cache test successful - curl package cached"
-        rm -f /container_cache/apt/archives/curl*.deb 2>/dev/null || true
-    else
-        echo "⚠ Unified APT cache test - package downloaded but not found in cache"
-    fi
-else
-    echo "⚠ Unified APT cache test failed - curl may already be installed"
-fi
 
 # Install essential tools in smaller, logical batches for robustness
 
 # Batch 1: Core APT and system utilities
 echo "==> Installing core APT and system utilities..."
 apt-get install -y --no-install-recommends \
+    e2fsprogs \
     debconf-utils \
     dialog \
     software-properties-common \
@@ -554,6 +508,9 @@ apt-get install -y --no-install-recommends \
     gzip \
     xz-utils \
     p7zip-full
+
+# Monitor cache after 4 batches of installations
+monitor_cache "After 4 batches of essential tools"
 
 # Batch 5: File and text utilities
 echo "==> Installing file and text utilities..."
@@ -606,7 +563,157 @@ if dpkg -l | grep -q "^ii.*apt-utils"; then echo "✓ apt-utils package is insta
 
 echo "✓ Essential tools installed and verified"
 
-# apt-aria wrapper already created earlier in the script
+# Monitor cache after essential tools installation
+monitor_cache "After essential tools installation"
+
+# *** APT TOOL ALIASING FOR UNIFIED CACHING (MOVED TO AFTER ESSENTIAL TOOLS) ***
+echo "==> Setting up APT tool aliasing for unified caching..."
+
+# Create apt-aria wrapper first
+echo "Creating apt-aria wrapper for unified APT caching..."
+install -d -m 0755 /usr/local/bin
+
+cat >/usr/local/bin/apt-aria <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Centralized APT cache configuration - ALL APT tools use this location
+CACHE="/container_cache/apt/archives"
+mkdir -p "$CACHE" /var/cache/apt/archives
+
+# Configure APT to keep downloaded packages (prevent automatic cleanup)
+echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Clean-Installed "false";' >> /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Get::AutomaticRemove "false";' >> /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Get::AutomaticRemove::Kernels "false";' >> /etc/apt/apt.conf.d/99keep-packages
+
+# Common APT options for consistent caching across all tools
+# Keep downloaded packages and don't clean them automatically
+APT_CACHE_OPTS="-o Dir::Cache::archives=$CACHE -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
+
+# Function to determine if this is an install command that should use aria2c
+is_install_command() {
+    # Check if any argument is an install command (not just the first one)
+    for arg in "$@"; do
+        case "$arg" in
+            install|remove|purge|build-dep|source)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Function to get the appropriate APT tool
+get_apt_tool() {
+    if [ -x /usr/bin/apt-fast ]; then
+        echo "/usr/bin/apt-fast"
+    else
+        echo "/usr/bin/apt-get"
+    fi
+}
+
+# Get the APT tool to use
+APT_TOOL=$(get_apt_tool)
+
+# Handle install commands with aria2c acceleration
+if is_install_command "$@"; then
+    echo "[apt-aria] Using aria2c for accelerated downloads..."
+    
+    # Collect all http/https URLs (incl. dependencies) that would be downloaded
+    URI_FILE="$(mktemp)"
+    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y $*"
+    
+    # Use a more robust approach to collect URIs
+    # Filter out package metadata and only extract actual download URLs
+    if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | \
+       grep -E '^[[:space:]]*['\''"]?https?://[^[:space:]]*['\''"]?[[:space:]]' | \
+       sed -E 's/^[[:space:]]*['\''"]?([^[:space:]]*)['\''"]?[[:space:]].*/\1/' | \
+       sed "s/'//g" | \
+       grep -E '^https?://.*\.deb$' | sort -u > "$URI_FILE" 2>/dev/null; then
+        echo "[apt-aria] URI collection successful"
+    else
+        echo "[apt-aria] URI collection failed, creating empty file"
+        touch "$URI_FILE"
+    fi
+    
+    echo "[apt-aria] URI file created: $URI_FILE"
+    echo "[apt-aria] URI file contents:"
+    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
+
+    if [ -s "$URI_FILE" ]; then
+      echo "[apt-aria] Downloading $(wc -l < "$URI_FILE") packages via aria2c..."
+      echo "[apt-aria] Cache directory: $CACHE"
+      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
+      
+      # Try multi-connection first with error suppression
+      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+        echo "[apt-aria] Multi-connection failed, trying single-connection..."
+        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
+        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
+        else
+          echo "[apt-aria] Single-connection aria2c succeeded"
+        fi
+      else
+        echo "[apt-aria] Multi-connection aria2c succeeded"
+      fi
+      rm -f "$URI_FILE"
+    else
+      echo "[apt-aria] No URIs to download"
+    fi
+    
+    # --- PROTECT CACHE ---
+    # Make all .deb files in the cache immutable to prevent deletion
+    echo "[apt-aria] Making downloaded packages immutable to protect cache..."
+    if command -v chattr >/dev/null 2>&1; then
+        chattr +i ${CACHE}/*.deb 2>/dev/null
+        echo "[apt-aria] chattr command executed successfully"
+    else
+        echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
+    fi
+    
+    # Install from cache using apt-get (reliable and standard)
+    echo "[apt-aria] Installing packages from cache..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
+else
+    # Use regular apt-get with cache configuration for non-install commands
+    echo "[apt-aria] Using apt-get with cache configuration..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
+fi
+EOF
+
+chmod 0755 /usr/local/bin/apt-aria
+echo "✓ apt-aria wrapper created"
+
+# Monitor cache after apt-aria setup
+monitor_cache "After apt-aria wrapper setup"
+
+# Create comprehensive aliases to ensure ALL APT tools use consistent caching
+echo "Creating APT tool aliases for consistent caching..."
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
+
+# Update PATH to prioritize /usr/local/bin (where our aliases are)
+export PATH="/usr/local/bin:$PATH"
+
+# Verify the aliasing is working
+echo "Verifying APT tool aliasing..."
+echo "apt-get -> $(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')"
+echo "apt -> $(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')"
+
+# Test cache functionality
+echo "Testing unified APT cache functionality..."
+if /usr/local/bin/apt-get --download-only install -y curl 2>/dev/null; then
+    if [ -f /container_cache/apt/archives/curl*.deb ]; then
+        echo "✓ Unified APT cache test successful - curl package cached"
+        rm -f /container_cache/apt/archives/curl*.deb 2>/dev/null || true
+    else
+        echo "⚠ Unified APT cache test - package downloaded but not found in cache"
+    fi
+else
+    echo "⚠ Unified APT cache test failed - curl may already be installed"
+fi
 
 # *** EARLY VERIFICATION OF CACHED FILES (catch corruption after copy) ***
 echo "==> Performing early verification of cached files..."
@@ -903,6 +1010,9 @@ echo "==> Installing development and utility tools..."
 apt-get install -y --no-install-recommends \
     python3-pip
 
+# Monitor cache after bootstrap packages installation
+monitor_cache "After bootstrap packages installation"
+
 update-ca-certificates
 locale-gen en_US.UTF-8
 # We already have nala and aptitude installed via APT for package management
@@ -962,6 +1072,9 @@ done
 # Single apt-get update with all PPAs (more efficient)
 echo "Updating package lists with all PPAs..."
 apt-get update -o Acquire::Retries=3
+
+# Monitor cache after PPA update
+monitor_cache "After PPA update"
 
 
 # --- Improve APT robustness ---
@@ -1029,6 +1142,9 @@ dpkg --configure -a || true
 echo "Installing drake-dev..."
 apt-get install -y --no-install-recommends drake-dev
 
+# Monitor cache after Drake installation
+monitor_cache "After Drake installation"
+
 # 5) AFTER installing drake-dev (clean up the insecure override)
 rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
 
@@ -1084,6 +1200,9 @@ apt-get install -y --no-install-recommends \
     libvulkan1 vulkan-tools \
     python3 python3-pip python3-venv \
     whiptail
+
+# Monitor cache after desktop stack installation
+monitor_cache "After desktop stack installation"
 
 echo "==> Additional system libraries for robotics/ML"
 
@@ -1179,6 +1298,9 @@ echo "PCL and VTK libraries already available via Drake dependencies"
 # Install Python VTK bindings if available (useful for scripting)
 echo "Installing Python VTK bindings if available..."
 apt-get install -y --no-install-recommends python3-vtk9 || apt-get install -y --no-install-recommends python3-vtk7 || echo "⚠ Python VTK bindings not available"
+
+# Monitor cache after robotics/ML libraries installation
+monitor_cache "After robotics/ML libraries installation"
 
 # apt-fast removed - using apt-aria wrapper instead
 
@@ -1941,16 +2063,93 @@ echo "==> Cache is unified in /container_cache/ - ready for harvest"
 echo "==> Cleaning temporary files while preserving cache..."
 
 # Clean APT lists (safe to remove)
+echo "🧹 APT LISTS CLEANUP - Monitoring cache before APT lists cleanup"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+
 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+
+echo "🧹 APT LISTS CLEANUP - Monitoring cache after APT lists cleanup"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
 
 # Clean temporary APT directories that might cause issues
 rm -rf /tmp/apt-dpkg-install-* 2>/dev/null || true
 # apt-fast cleanup removed - using apt-aria wrapper instead
 
 # Clean temporary files but preserve our container_cache
+echo "🧹 CLEANUP SECTION - Monitoring cache before cleanup"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+
+# DEBUG: Check for symlinks or unusual directory structure
+echo "🔍 DEBUG: Checking for symlinks or unusual paths..."
+ls -la /tmp/ | grep -E "(container_cache|apt|archives)" || echo "No suspicious symlinks in /tmp"
+ls -la /container_cache/apt/archives/ | head -5
+echo "🔍 DEBUG: About to run: find /tmp -type f -name '*.deb' -delete"
+
 find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
 find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true
 find /tmp -type f -name "*.whl" -delete 2>/dev/null || true
+
+echo "🧹 CLEANUP SECTION - Monitoring cache after cleanup"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+
+# === FINAL CACHE PRESERVATION ===
+echo "=== Reverting cache file permissions to normal ==="
+if command -v chattr >/dev/null 2>&1; then
+    chattr -i /container_cache/apt/archives/*.deb 2>/dev/null
+    echo "chattr -i command executed successfully"
+else
+    echo "WARNING: chattr command not available - cannot revert file permissions"
+fi
+
+# Show monitoring summary and aggregated cache summary before preservation
+display_cache_monitoring_summary
+cache_summary
+
+# Add detailed monitoring before any cache operations
+echo "🔍 DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
+echo "=========================================="
+echo "Container cache directory contents:"
+ls -la /container_cache/apt/archives/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+echo ""
+echo "Var cache directory contents:"
+ls -la /var/cache/apt/archives/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+echo ""
+echo "Cache file counts:"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  /var/cache/apt/archives: $(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "=========================================="
+
+# Ensure all downloaded packages are preserved in the cache directory
+echo "=== Preserving APT cache for future builds ==="
+
+# Check if packages are in the standard APT cache location
+if [ -d "/var/cache/apt/archives" ]; then
+    echo "Copying packages from /var/cache/apt/archives to /container_cache/apt/archives..."
+    find /var/cache/apt/archives -name "*.deb" -type f -exec cp {} /container_cache/apt/archives/ \; 2>/dev/null || true
+    echo "After copying from /var/cache/apt/archives:"
+    echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+fi
+
+# Also preserve any packages that might be in the system cache
+if [ -d "/var/lib/apt/cache" ]; then
+    echo "Checking system APT cache for additional packages..."
+    find /var/lib/apt/cache -name "*.deb" -type f -exec cp {} /container_cache/apt/archives/ \; 2>/dev/null || true
+    echo "After copying from /var/lib/apt/cache:"
+    echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+fi
+
+# Final monitoring before cache harvest
+monitor_cache "Final cache status before harvest"
+
+# Add one more detailed check right before the script ends
+echo "🔍 FINAL CACHE CHECK - RIGHT BEFORE SCRIPT END"
+echo "=========================================="
+echo "Final container cache contents:"
+ls -la /container_cache/apt/archives/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+echo ""
+echo "Final cache file count:"
+echo "  /container_cache/apt/archives: $(find /container_cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "=========================================="
 
 # Report cache status
 echo "[debug] Container cache status:"

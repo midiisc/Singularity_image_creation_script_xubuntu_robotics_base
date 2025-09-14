@@ -59,28 +59,44 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Function to log with timestamp
+# Function to log with timestamp (simplified for better readability)
 log_with_timestamp() {
-    local message="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
+    local message="[$(date '+%H:%M:%S')] $1"
+    if [ -f "${LOG_FILE}" ]; then
     echo -e "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${BLUE}${message}${NC}"
+    fi
 }
 
 # Function to log errors (RED in both terminal and log)
 log_error() {
-    local message="[$(date '+%Y-%m-%d %H:%M:%S')] ERROR: $1"
+    local message="[$(date '+%H:%M:%S')] ERROR: $1"
+    if [ -f "${ERROR_LOG}" ] && [ -f "${LOG_FILE}" ]; then
     echo -e "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${RED}${message}${NC}"
+    fi
 }
 
 # Function to log warnings (YELLOW in both terminal and log)
 log_warning() {
-    local message="[$(date '+%Y-%m-%d %H:%M:%S')] WARNING: $1"
+    local message="[$(date '+%H:%M:%S')] WARNING: $1"
+    if [ -f "${LOG_FILE}" ]; then
     echo -e "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${YELLOW}${message}${NC}"
+    fi
 }
 
 # Function to log success (GREEN in both terminal and log)
 log_success() {
-    local message="[$(date '+%Y-%m-%d %H:%M:%S')] SUCCESS: $1"
+    local message="[$(date '+%H:%M:%S')] SUCCESS: $1"
+    if [ -f "${LOG_FILE}" ]; then
     echo -e "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
+    else
+        echo -e "${GREEN}${message}${NC}"
+    fi
 }
 
 # Note: DEF file removal will be done after variable definitions
@@ -645,16 +661,16 @@ From: ubuntu:22.04
     mkdir -p "${SINGULARITY_ROOTFS}/container_cache/debs"
     mkdir -p "${SINGULARITY_ROOTFS}/container_cache/julia_pkgs"
     mkdir -p "${SINGULARITY_ROOTFS}/container_cache/wheels"
-
+    
     # Set proper permissions for cache directories
     chmod -R 755 "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
-
+    
     # Copy (no overwrite) any preseeded cache into the image build root
     rsync -a --ignore-existing "${PWD}/container_cache/" "${SINGULARITY_ROOTFS}/container_cache/" 2>/dev/null || true
-
+    
     # === COMPLETE BINARY PREPARATION PHASE ===
     echo "============== Preparing All Binaries Before Build =============="
-
+    
     # Define all required files with their download URLs and validation methods
     declare -A required_files=(
         ["micromamba-linux-64"]="$MICROMAMBA_URL|binary|$MICROMAMBA_SHA256"
@@ -1031,7 +1047,7 @@ From: ubuntu:22.04
     fi
     
     echo "============== Complete File Preparation Phase Complete =============="
-
+    
     # Ensure proper ownership and permissions after copy
     chown -R root:root "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
     chmod -R 755 "${SINGULARITY_ROOTFS}/container_cache" 2>/dev/null || true
@@ -1110,9 +1126,10 @@ fi
 log "=============== Image building completed successfully ==============="
 
 # Add this line to enable line-number tracing
-export PS4='+${BASH_SOURCE}:${LINENO}: '
-### --- Turn on detailed command tracing ---
-set -x
+# Disable verbose logging for cleaner output
+# export PS4='+${BASH_SOURCE}:${LINENO}: '
+# ### --- Turn on detailed command tracing ---
+# set -x
 
 # Log detailed build information
 echo "=========================================="
@@ -1133,7 +1150,7 @@ mkdir -p "$HOST_CACHE"
 if [ -x /usr/bin/apptainer ]; then
     log_with_timestamp "Using Apptainer for cache harvest..."
     if /usr/bin/apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-      bash -c 'rsync -a --ignore-existing /container_cache/ /host_cache/'; then
+      bash -c 'rsync -a /container_cache/ /host_cache/'; then
         log_success "Cache harvest completed successfully"
     else
         log_warning "Cache harvest failed, but continuing..."
@@ -1145,7 +1162,7 @@ if [ -x /usr/bin/apptainer ]; then
 elif [ -x /usr/bin/singularity ]; then
     log_with_timestamp "Using Singularity for cache harvest..."
     if /usr/bin/singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-      bash -c 'rsync -a --ignore-existing /container_cache/ /host_cache/'; then
+      bash -c 'rsync -a /container_cache/ /host_cache/'; then
         log_success "Cache harvest completed successfully"
     else
         log_warning "Cache harvest failed, but continuing..."
