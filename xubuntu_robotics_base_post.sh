@@ -42,7 +42,7 @@ debug_glibc() {
   echo "Test compile with stdlib.h:"
   echo '#include <stdlib.h>' >> /tmp/test_$$$.c
   echo 'int main() { return 0; }' >> /tmp/test_$$$.c
-  gcc /tmp/test_$$$.c -o /tmp/test_$$$ >&1 && echo "SUCCESS" || echo "FAILED"
+  gcc /tmp/test_$$$.c -o /tmp/test_$$$ 2>&1 && echo "SUCCESS" || echo "FAILED"
   rm -f /tmp/test_$$$.c /tmp/test_$$$
   echo "---"
   echo
@@ -279,7 +279,7 @@ acquire_package_lock() {
   local wait_count=0
 
   while [ $wait_count -lt $max_wait ]; do
-    if [set -C; echo $$ > "$lock_file"] 2>/dev/null; then
+    if { set -C; echo $$ > "$lock_file"; } 2>/dev/null; then
       # lock acquired
       return 0
     fi
@@ -357,7 +357,7 @@ validate_and_repair_cache() {
 # Conda package integrity validation is done via Xsetup for efficiency
 
 # Test write permissions
-local test_file="/root/.cache/write_test"
+test_file="/root/.cache/write_test"
 if touch "$test_file" 2>/dev/null; then
   rm -f "$test_file"
   echo "✓ Write permissions verified"
@@ -628,7 +628,7 @@ echo "Checking for advanced package managers..."
 command -v nala >& /dev/null && echo "✓ nala available" || echo "Δ nala not available"
 # apt-fast removed - using apt-aria wrapper instead
 command -v synaptic >& /dev/null && echo "✓ synaptic available" || echo "Δ synaptic not available"
-dpkg -l | grep -q "ii.*apt-utils" ; then echo "✓ apt-utils package is installed"; else echo "Δ apt-utils package is not installed"; fi
+if dpkg -l | grep -q "ii.*apt-utils" ; then echo "✓ apt-utils package is installed"; else echo "Δ apt-utils package is not installed"; fi
 
 echo "✓ Essential tools installed and verified"
 
@@ -758,9 +758,6 @@ else
   export PHASE2_STATUS="FAIL"
   exit 1
 fi
-          fi
-     rm -f "${KEYRING_DEB}"
-fi # [UNCLEAR: dangling fi]
 
 # === END OF NVIDIA BLOCK ===
 debug_glibc "After installing NVIDIA Cuda Toolkit"

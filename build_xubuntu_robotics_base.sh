@@ -1879,4 +1879,3 @@ echo "APT cache directory: ${APT_ARCHIVE_CACHE}"
 echo "Conda cache directory: ${CONDA_CACHE}"
 echo "Pip wheels directory: ${WHEELS_CACHE}"
 echo "Julia cache directory: ${JULIA_CACHE}"
-```
