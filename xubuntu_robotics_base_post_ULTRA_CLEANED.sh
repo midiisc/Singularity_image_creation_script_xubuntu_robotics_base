@@ -2279,7 +2279,10 @@ PHASE3_ALL_SUCCESS=true
 echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
 rm -rf /tmp/ceres-solver
 # Using CERES_VERSION from config.sh
-git clone --branch ${CERES_VERSION} https://github.com/ceres-solver/ceres-solver.git /tmp/ceres-solver || { echo "ERROR: Failed to clone ceres-solver"; exit 1; }
+if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
+    echo "ERROR: Failed to clone Ceres Solver after all retry attempts"
+    exit 1
+fi
 # Use explicit, separate commands for navigation
 cd /tmp/ceres-solver || { echo "ERROR: Failed to access ceres-solver directory"; exit 1; }
 mkdir -p build
@@ -2372,7 +2375,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "\n${YELLOW}[PHASE 3 | g2o] Compiling from source...${NC}"
   rm -rf /tmp/g2o
   # Using G2O_VERSION from config.sh
-  git clone --branch ${G2O_VERSION} https://github.com/RainerKuemmerle/g2o.git /tmp/g2o && cd /tmp/g2o || { echo "ERROR: Failed to clone/access g2o"; exit 1; }
+  if ! clone_with_retry "https://github.com/RainerKuemmerle/g2o.git" "/tmp/g2o" "${G2O_VERSION}"; then
+    echo "ERROR: Failed to clone G2O after all retry attempts"
+    exit 1
+  fi
+  cd /tmp/g2o || { echo "ERROR: Failed to access g2o directory"; exit 1; }
   mkdir build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
 
   #--- Sub-block 8.7: Configure g2o with CMake ---
@@ -2441,7 +2448,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "${YELLOW}[PHASE 3 | GTSAM] Compiling from source...${NC}"
   rm -rf /tmp/gtsam
   # Using GTSAM_VERSION from config.sh
-  git clone --branch ${GTSAM_VERSION} https://github.com/borglab/gtsam.git /tmp/gtsam && cd /tmp/gtsam || { echo "ERROR: Failed to clone/access gtsam"; exit 1; }
+  if ! clone_with_retry "https://github.com/borglab/gtsam.git" "/tmp/gtsam" "${GTSAM_VERSION}"; then
+    echo "ERROR: Failed to clone GTSAM after all retry attempts"
+    exit 1
+  fi
+  cd /tmp/gtsam || { echo "ERROR: Failed to access gtsam directory"; exit 1; }
   mkdir build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
 
   #--- Sub-block 8.11: Configure GTSAM with CMake ---
@@ -2920,8 +2931,81 @@ apt-get install -y \
 # Purpose: Clone OpenCV core and contrib modules
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-git clone --depth 1 --branch ${OPENCV_VERSION} https://github.com/opencv/opencv.git /tmp/opencv || { echo "ERROR: Failed to clone opencv"; exit 1; }
-git clone --depth 1 --branch ${OPENCV_VERSION} https://github.com/opencv/opencv_contrib.git /tmp/opencv_contrib || { echo "ERROR: Failed to clone opencv_contrib"; exit 1; }
+
+# Robust git cloning function with retry and error handling
+clone_with_retry() {
+    local repo_url="$1"
+    local target_dir="$2"
+    local branch="$3"
+    local max_retries=5
+    local retry_count=0
+    
+    echo "Cloning $repo_url to $target_dir..."
+    
+    while [ $retry_count -lt $max_retries ]; do
+        echo "Attempt $((retry_count + 1))/$max_retries..."
+        
+        # Configure git for better network handling
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequestBuffer 100M
+        git config --global core.compression 0
+        
+        # Try cloning with different strategies
+        if [ $retry_count -eq 0 ]; then
+            # First attempt: standard clone
+            git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 1 ]; then
+            # Second attempt: with single branch
+            git clone --depth 1 --single-branch --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 2 ]; then
+            # Third attempt: with no tags
+            git clone --depth 1 --no-tags --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 3 ]; then
+            # Fourth attempt: with different protocol
+            if [[ "$repo_url" == https://* ]]; then
+                local git_url="${repo_url/https:\/\//git@}"
+                git_url="${git_url/github.com/github.com:}"
+                git clone --depth 1 --branch "$branch" "$git_url" "$target_dir"
+            else
+                git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
+            fi
+        else
+            # Final attempt: shallow clone with retry
+            git clone --depth 1 --branch "$branch" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "$repo_url" "$target_dir"
+        fi
+        
+        if [ $? -eq 0 ]; then
+            echo "✓ Successfully cloned $repo_url"
+            return 0
+        else
+            echo "✗ Clone attempt $((retry_count + 1)) failed"
+            retry_count=$((retry_count + 1))
+            
+            # Clean up failed attempt
+            rm -rf "$target_dir" 2>/dev/null || true
+            
+            if [ $retry_count -lt $max_retries ]; then
+                echo "Waiting 10 seconds before retry..."
+                sleep 10
+            fi
+        fi
+    done
+    
+    echo "✗ Failed to clone $repo_url after $max_retries attempts"
+    return 1
+}
+
+# Clone OpenCV core
+if ! clone_with_retry "https://github.com/opencv/opencv.git" "/tmp/opencv" "${OPENCV_VERSION}"; then
+    echo "ERROR: Failed to clone OpenCV core after all retry attempts"
+    exit 1
+fi
+
+# Clone OpenCV contrib
+if ! clone_with_retry "https://github.com/opencv/opencv_contrib.git" "/tmp/opencv_contrib" "${OPENCV_VERSION}"; then
+    echo "ERROR: Failed to clone OpenCV contrib after all retry attempts"
+    exit 1
+fi
 
 #--- Sub-block 10.6: Create OpenCV build directory ---
 # Purpose: Prepare build directory for CMake
@@ -3540,9 +3624,12 @@ echo "✓ COLMAP dependencies installed"
 cd /tmp || exit 1
 echo "Downloading COLMAP ${COLMAP_VERSION}..."
 
-if ! git clone https://github.com/colmap/colmap.git --branch ${COLMAP_VERSION} --depth 1; then
+if ! clone_with_retry "https://github.com/colmap/colmap.git" "." "${COLMAP_VERSION}"; then
     echo "⚠ COLMAP ${COLMAP_VERSION} tag not found, trying main branch"
-    git clone https://github.com/colmap/colmap.git --depth 1
+    if ! clone_with_retry "https://github.com/colmap/colmap.git" "." "main"; then
+        echo "ERROR: Failed to clone COLMAP after all retry attempts"
+        exit 1
+    fi
 fi
 
 cd colmap || exit 1
@@ -3711,8 +3798,13 @@ fi
 cd /tmp || exit 1
 echo "Downloading Open3D ${OPEN3D_VERSION}..."
 
-git clone https://github.com/isl-org/Open3D.git --branch v${OPEN3D_VERSION} --recursive --depth 1 || \
-    git clone https://github.com/isl-org/Open3D.git --recursive --depth 1
+if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "Open3D" "v${OPEN3D_VERSION}"; then
+    echo "⚠ Open3D v${OPEN3D_VERSION} tag not found, trying main branch"
+    if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "Open3D" "main"; then
+        echo "ERROR: Failed to clone Open3D after all retry attempts"
+        exit 1
+    fi
+fi
 
 cd Open3D || exit 1
 echo "✓ Open3D source downloaded"
