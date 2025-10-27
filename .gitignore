@@ -1,0 +1,30 @@
+# Test and helper scripts (keep locally, don't commit)
+run_test_clean.sh
+test_3d_recon_build.sh
+*_test_*.sh
+
+# Build artifacts and cache
+container_cache/
+build_logs/
+*.sif
+*.def
+
+# Temporary files
+*.tmp
+*.log
+*~
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.pytest_cache/
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
