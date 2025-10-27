@@ -1409,9 +1409,9 @@ early_verify_cached_files() {
     # Verify Julia (early verification for complex archive)
     if [ -f "${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}" ]; then
     echo "Verifying Julia archive..."
-        local julia_file="${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}"
-        local expected_sha256="${JULIA_SHA256}"
-        local julia_url="${JULIA_URL}"
+        julia_file="${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}"
+        expected_sha256="${JULIA_SHA256}"
+        julia_url="${JULIA_URL}"
 
         # SHA256 verification
     if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
