@@ -2305,6 +2305,7 @@ fi
 # Create a dummy package to satisfy dependencies without installing actual package
 echo "Protecting compiled Ceres from APT overwrites..."
 mkdir -p /var/lib/dpkg/info
+mkdir -p /var/lib/dpkg/status.d
 cat > /var/lib/dpkg/info/libceres-dev.list << 'EOF'
 # Dummy package list to prevent apt from installing libceres-dev
 # Our optimized Ceres is in /usr/local
@@ -2384,6 +2385,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 8.9.1: Protect compiled G2O from APT overwrites ---
   echo "Protecting compiled G2O from APT overwrites..."
+  mkdir -p /var/lib/dpkg/status.d
   cat > /var/lib/dpkg/status.d/libg2o-dev << 'EOF'
 Package: libg2o-dev
 Status: install ok installed
@@ -2458,6 +2460,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 8.13.1: Protect compiled GTSAM from APT overwrites ---
   echo "Protecting compiled GTSAM from APT overwrites..."
+  mkdir -p /var/lib/dpkg/status.d
   cat > /var/lib/dpkg/status.d/libgtsam-dev << 'EOF'
 Package: libgtsam-dev
 Status: install ok installed
