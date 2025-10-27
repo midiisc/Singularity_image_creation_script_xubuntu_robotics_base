@@ -42,26 +42,51 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     BUILD_LOG_DIR="/var/log/singularity_build"
     mkdir -p "${BUILD_LOG_DIR}"
 
-    # Generate timestamp for this build
-    BUILD_TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-    BUILD_LOG_FILE="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}.log"
-
-    # Rotate old logs - keep only N most recent (excluding current)
+    # Clean up old logs FIRST - keep only N most recent logs
     if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT}" -gt 0 ]; then
-        # List all log files sorted by modification time (newest first)
-        # Keep only (N-1) files since current log will be created
-        KEEP_COUNT=$((BUILD_LOG_KEEP_COUNT - 1))
+        echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT} most recent)..."
         
-        # Find and remove old logs, keeping only the most recent ones
-        ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | tail -n +$((KEEP_COUNT + 1)) | xargs -r rm -f
+        # Count existing log files
+        EXISTING_LOGS=$(ls "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | wc -l)
         
-        echo "✓ Log rotation: keeping ${BUILD_LOG_KEEP_COUNT} most recent logs"
+        if [ "$EXISTING_LOGS" -gt 0 ]; then
+            # List all log files sorted by modification time (newest first)
+            # Keep only N most recent files
+            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | while read -r old_log; do
+                if [ -f "$old_log" ]; then
+                    echo "  Removing old log: $(basename "$old_log")"
+                    rm -f "$old_log"
+                fi
+            done
+            echo "✓ Old logs cleaned up"
+        else
+            echo "✓ No old logs to clean up"
+        fi
     fi
+
+    # Generate improved timestamp for this build
+    # Format: YYYYMMDD_Day_HHMM_AMPM (e.g., 20241027_Sun_1430_PM)
+    DAY_NAMES=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
+    CURRENT_DAY=$(date +%w)  # 0=Sunday, 1=Monday, etc.
+    DAY_NAME=${DAY_NAMES[$CURRENT_DAY]}
+    
+    # Get 12-hour format with AM/PM
+    HOUR_12=$(date +"%I")
+    MINUTE=$(date +"%M")
+    AMPM=$(date +"%p")
+    
+    # Remove leading zero from hour for cleaner format
+    HOUR_12=$((10#$HOUR_12))
+    
+    # Create timestamp: YYYYMMDD_Day_HHMM_AMPM
+    BUILD_TIMESTAMP=$(date +"%Y%m%d")_${DAY_NAME}_${HOUR_12}${MINUTE}_${AMPM}
+    BUILD_LOG_FILE="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}.log"
 
     # Start logging to file while preserving terminal output
     # This creates a background process that tees output to both terminal and log file
     echo "✓ Build logging enabled: ${BUILD_LOG_FILE}"
     echo "  Log directory: ${BUILD_LOG_DIR}"
+    echo "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
     echo "  Keeping ${BUILD_LOG_KEEP_COUNT} most recent logs"
     echo "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL} seconds"
     echo ""
@@ -115,6 +140,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     echo "  BUILD LOG START: $(date)"
     echo "  Script: xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     echo "  Log file: ${BUILD_LOG_FILE}"
+    echo "  Timestamp: ${BUILD_TIMESTAMP}"
     echo "  PID: $$"
     echo "  Sync job PID: ${BUILD_LOG_SYNC_PID}"
     echo "═══════════════════════════════════════════════════════════════"

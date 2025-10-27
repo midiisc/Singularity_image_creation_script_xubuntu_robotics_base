@@ -29,6 +29,7 @@ export BUILD_LOG_KEEP_COUNT=2
 export BUILD_LOG_DIR="build_logs"
 
 # Log file prefix (timestamp will be appended)
+# Timestamp format: YYYYMMDD_Day_HHMM_AMPM (e.g., 20241027_Sun_1430_PM)
 export BUILD_LOG_PREFIX="singularity_build"
 
 # Sync interval (seconds) - how often to flush log to disk
