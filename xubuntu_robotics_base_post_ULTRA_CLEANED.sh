@@ -3075,40 +3075,73 @@ echo "==============="
 #--- Sub-block 10.13.1: Protect compiled OpenCV from APT overwrites ---
 # Critical: Prevent apt from installing libopencv-dev which would overwrite our optimized version
 echo "Protecting compiled OpenCV from APT overwrites..."
-mkdir -p /var/lib/dpkg/status.d
-cat > /var/lib/dpkg/status.d/libopencv-dev << 'EOF'
-Package: libopencv-dev
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled OpenCV (in /usr/local)
- This is a dummy package to prevent apt from installing libopencv-dev.
-EOF
-cat /var/lib/dpkg/status.d/libopencv-dev >> /var/lib/dpkg/status
-echo "libopencv-dev hold" | dpkg --set-selections
 
-# Also protect related packages
-for pkg in libopencv-core-dev libopencv-imgproc-dev libopencv-highgui-dev libopencv-contrib-dev; do
-  cat > /var/lib/dpkg/status.d/$pkg << PKGEOF
-Package: $pkg
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder (compiled OpenCV in /usr/local)
-PKGEOF
-  cat /var/lib/dpkg/status.d/$pkg >> /var/lib/dpkg/status
-  echo "$pkg hold" | dpkg --set-selections
+# Clean up any existing OpenCV package entries that might cause conflicts
+echo "Cleaning up existing OpenCV package entries..."
+if [ -f "/var/lib/dpkg/status" ]; then
+    # Remove any existing OpenCV package entries to prevent conflicts
+    local opencv_packages=(
+        "libopencv-dev"
+        "libopencv-core-dev"
+        "libopencv-imgproc-dev" 
+        "libopencv-highgui-dev"
+        "libopencv-contrib-dev"
+    )
+    
+    for pkg in "${opencv_packages[@]}"; do
+        # Remove package entries (from Package: line to next empty line)
+        sed -i "/^Package: $pkg$/,/^$/d" /var/lib/dpkg/status 2>/dev/null || true
+    done
+    
+    echo "✓ Cleaned existing OpenCV entries from dpkg status"
+fi
+
+# Use apt-mark hold (preferred method)
+echo "Applying OpenCV protection using apt-mark hold..."
+local opencv_packages=(
+    "libopencv-dev"
+    "libopencv-core-dev"
+    "libopencv-imgproc-dev"
+    "libopencv-highgui-dev" 
+    "libopencv-contrib-dev"
+)
+
+local protected_count=0
+for pkg in "${opencv_packages[@]}"; do
+    echo "  Protecting package: $pkg"
+    if apt-mark hold "$pkg" 2>/dev/null; then
+        echo "    ✓ Held: $pkg"
+        protected_count=$((protected_count + 1))
+    else
+        echo "    ⚠ Could not hold: $pkg (non-fatal)"
+    fi
 done
 
-echo "✓ OpenCV protected from APT overwrites"
+# Create apt preferences for additional protection
+echo "Creating apt preferences for additional protection..."
+mkdir -p /etc/apt/preferences.d 2>/dev/null || true
+
+cat > /etc/apt/preferences.d/opencv-protection << 'PREFEOF'
+# Protect compiled OpenCV from APT overwrites
+Package: libopencv-dev libopencv-core-dev libopencv-imgproc-dev libopencv-highgui-dev libopencv-contrib-dev
+Pin: version 999.9.9
+Pin-Priority: 1001
+PREFEOF
+
+if [ -f "/etc/apt/preferences.d/opencv-protection" ]; then
+    echo "✓ Created apt preferences for OpenCV protection"
+    protected_count=$((protected_count + 1))
+fi
+
+# Verify dpkg database integrity
+echo "Verifying dpkg database integrity..."
+if dpkg --audit 2>/dev/null; then
+    echo "✓ Dpkg database is clean and consistent"
+else
+    echo "⚠ Dpkg database has issues, but continuing..."
+fi
+
+echo "✓ OpenCV protection completed ($protected_count methods applied)"
 
 #--- Sub-block 10.14: Cleanup OpenCV build files ---
 # Purpose: Remove temporary build files
