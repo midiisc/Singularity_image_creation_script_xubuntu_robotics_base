@@ -28,3 +28,4 @@ __pycache__/
 *.swp
 *.swo
 
+RESTORE_TEST_FILES.md
