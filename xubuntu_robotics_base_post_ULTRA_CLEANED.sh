@@ -3106,7 +3106,7 @@ echo "Protecting compiled OpenCV from APT overwrites..."
 echo "Cleaning up existing OpenCV package entries..."
 if [ -f "/var/lib/dpkg/status" ]; then
     # Remove any existing OpenCV package entries to prevent conflicts
-    local opencv_packages=(
+    opencv_packages=(
         "libopencv-dev"
         "libopencv-core-dev"
         "libopencv-imgproc-dev" 
@@ -3124,7 +3124,7 @@ fi
 
 # Use apt-mark hold (preferred method)
 echo "Applying OpenCV protection using apt-mark hold..."
-local opencv_packages=(
+opencv_packages=(
     "libopencv-dev"
     "libopencv-core-dev"
     "libopencv-imgproc-dev"
@@ -3132,7 +3132,7 @@ local opencv_packages=(
     "libopencv-contrib-dev"
 )
 
-local protected_count=0
+protected_count=0
 for pkg in "${opencv_packages[@]}"; do
     echo "  Protecting package: $pkg"
     if apt-mark hold "$pkg" 2>/dev/null; then
