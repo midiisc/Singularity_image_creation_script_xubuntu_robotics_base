@@ -5181,6 +5181,7 @@ echo ""
 echo "Available Helper Scripts:"
 echo "  • start_vnc_xfce.sh     - Main VNC launcher with GPU acceleration"
 echo "  • start_x11vnc.sh       - Alternative X11VNC server"
+echo "  • vnc_ssl_tunnel.sh     - Two-stage SSL tunneling for HPC"
 echo "  • vnc_monitor.sh        - Monitor VNC server status"
 echo "  • vnc_select.sh         - Interactive VNC server selector"
 echo "  • vnc_clipboard_sync.sh - Clipboard synchronization"
@@ -5191,8 +5192,9 @@ echo "  • turbovnc_tune.sh      - TurboVNC performance tuning"
 echo ""
 echo "Quick Start:"
 echo "  1. Start VNC: start_vnc_xfce.sh"
-echo "  2. Connect:   localhost:5901 (VNC) or :6080 (noVNC browser)"
-echo "  3. GPU apps:  vglrun <application>"
+echo "  2. SSL Tunnel: vnc_ssl_tunnel.sh (for HPC environments)"
+echo "  3. Connect:   localhost:5901 (VNC) or :6080 (noVNC browser)"
+echo "  4. GPU apps:  vglrun <application>"
 echo ""
 echo "For detailed help: turbovnc_tune.sh"
 echo "═══════════════════════════════════════════════════════════════"
@@ -6365,10 +6367,18 @@ display_connection_info() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "CONNECTION METHOD 2: Web Browser (noVNC)"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. Create SSH tunnel from your laptop:"
-    echo "   ssh -L ${WEB_PORT}:${NODE}:${WEB_PORT} \$USER@login.hpc.edu"
+    echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
     echo ""
-    echo "2. Open browser to: http://localhost:${WEB_PORT}"
+    echo "Stage 1 - Tunnel to Login Node:"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@login.hpc.edu"
+    echo ""
+    echo "Stage 2 - From Login Node to Compute Node:"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+    echo ""
+    echo "Alternative - Direct Two-Stage Tunnel:"
+    echo "   ssh -J \$USER@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+    echo ""
+    echo "Open browser to: http://localhost:${WEB_PORT}"
     echo ""
   fi
 
@@ -6381,10 +6391,18 @@ display_connection_info() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "CONNECTION METHOD 3: TurboVNC Java Applet"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "1. Create SSH tunnel from your laptop:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:${NODE}:${TURBOVNC_WEB_PORT} \$USER@login.hpc.edu"
+    echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
     echo ""
-    echo "2. Open browser to: http://localhost:${TURBOVNC_WEB_PORT}"
+    echo "Stage 1 - Tunnel to Login Node:"
+    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@login.hpc.edu"
+    echo ""
+    echo "Stage 2 - From Login Node to Compute Node:"
+    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@${NODE}"
+    echo ""
+    echo "Alternative - Direct Two-Stage Tunnel:"
+    echo "   ssh -J \$USER@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@${NODE}"
+    echo ""
+    echo "Open browser to: http://localhost:${TURBOVNC_WEB_PORT}"
     echo "   (Requires Java plugin - not recommended for modern browsers)"
     echo ""
   fi
@@ -6488,6 +6506,190 @@ VNCLAUNCHER
 
 chmod 0755 /usr/local/bin/start_vnc_xfce.sh
 echo "✓ Enhanced VNC startup script created at /usr/local/bin/start_vnc_xfce.sh"
+
+#--- Sub-block 20.4: Create SSL Tunneling Scripts ---
+# Purpose: Automated two-stage SSL tunneling for HPC environments
+# Dependencies: VNC server running
+# Outputs: SSL tunneling scripts
+echo "==> Creating SSL tunneling scripts for HPC environments..."
+
+# Create main SSL tunnel script
+cat > /usr/local/bin/vnc_ssl_tunnel.sh << 'SSLTUNNEL'
+#!/usr/bin/env bash
+# Two-Stage SSL Tunneling for VNC Access in HPC Environments
+# Usage: vnc_ssl_tunnel.sh [login_node] [compute_node] [vnc_port] [web_port]
+
+set -euo pipefail
+
+# Configuration
+LOGIN_NODE="${1:-login.hpc.edu}"
+COMPUTE_NODE="${2:-$(hostname)}"
+VNC_PORT="${3:-5901}"
+WEB_PORT="${4:-6080}"
+TURBOVNC_WEB_PORT=$((5800 + ${VNC_PORT#59}))
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+print_header() {
+    echo ""
+    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${CYAN}║  Two-Stage SSL Tunneling for VNC Access (HPC Environment)     ║${NC}"
+    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+}
+
+show_usage() {
+    echo "Usage: $0 [login_node] [compute_node] [vnc_port] [web_port]"
+    echo ""
+    echo "Arguments:"
+    echo "  login_node    - HPC login node hostname (default: login.hpc.edu)"
+    echo "  compute_node  - Compute node hostname (default: current hostname)"
+    echo "  vnc_port      - VNC port number (default: 5901)"
+    echo "  web_port      - Web/noVNC port number (default: 6080)"
+    echo ""
+    echo "Examples:"
+    echo "  $0                                    # Use defaults"
+    echo "  $0 login.cluster.edu node001 5902    # Custom nodes and VNC port"
+    echo "  $0 login.hpc.edu gpu-node-01 5901 6081  # All custom"
+}
+
+check_vnc_running() {
+    local port=$1
+    if ! ss -tuln 2>/dev/null | grep -q ":${port}\b"; then
+        echo -e "${RED}Error: VNC server not running on port ${port}${NC}"
+        echo "Start VNC first with: start_vnc_xfce.sh"
+        return 1
+    fi
+    return 0
+}
+
+create_tunnel_scripts() {
+    local login_node="$1"
+    local compute_node="$2"
+    local vnc_port="$3"
+    local web_port="$4"
+    local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    
+    # Create Stage 1 script (local machine to login node)
+    cat > /tmp/vnc_tunnel_stage1.sh << EOF
+#!/bin/bash
+# Stage 1: Tunnel from local machine to login node
+echo "Stage 1: Creating tunnel to login node..."
+echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${login_node}"
+echo ""
+echo "After connecting, run Stage 2 script on the login node."
+echo "Press Ctrl+C to stop this tunnel."
+echo ""
+
+ssh -L ${vnc_port}:localhost:${vnc_port} \\
+    -L ${web_port}:localhost:${web_port} \\
+    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
+    \$USER@${login_node}
+EOF
+
+    # Create Stage 2 script (login node to compute node)
+    cat > /tmp/vnc_tunnel_stage2.sh << EOF
+#!/bin/bash
+# Stage 2: Tunnel from login node to compute node
+echo "Stage 2: Creating tunnel to compute node..."
+echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${compute_node}"
+echo ""
+echo "After connecting, VNC will be available on localhost:${vnc_port}"
+echo "Press Ctrl+C to stop this tunnel."
+echo ""
+
+ssh -L ${vnc_port}:localhost:${vnc_port} \\
+    -L ${web_port}:localhost:${web_port} \\
+    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
+    \$USER@${compute_node}
+EOF
+
+    # Create combined script (direct two-stage tunnel)
+    cat > /tmp/vnc_tunnel_direct.sh << EOF
+#!/bin/bash
+# Direct two-stage tunnel using SSH jump host
+echo "Direct Two-Stage Tunnel: Local -> Login -> Compute"
+echo "Command: ssh -J \$USER@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${compute_node}"
+echo ""
+echo "VNC will be available on localhost:${vnc_port}"
+echo "Web interface: http://localhost:${web_port}"
+echo "Press Ctrl+C to stop this tunnel."
+echo ""
+
+ssh -J \$USER@${login_node} \\
+    -L ${vnc_port}:localhost:${vnc_port} \\
+    -L ${web_port}:localhost:${web_port} \\
+    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
+    \$USER@${compute_node}
+EOF
+
+    chmod +x /tmp/vnc_tunnel_*.sh
+}
+
+show_connection_info() {
+    local vnc_port="$1"
+    local web_port="$2"
+    local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    
+    echo -e "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
+    echo ""
+    echo -e "${BLUE}Connection Information:${NC}"
+    echo "  VNC Port: ${vnc_port}"
+    echo "  Web Port: ${web_port}"
+    echo "  TurboVNC Web Port: ${turbovnc_web_port}"
+    echo ""
+    echo -e "${YELLOW}Available Scripts:${NC}"
+    echo "  /tmp/vnc_tunnel_stage1.sh  - Stage 1 (Local -> Login Node)"
+    echo "  /tmp/vnc_tunnel_stage2.sh  - Stage 2 (Login -> Compute Node)"
+    echo "  /tmp/vnc_tunnel_direct.sh  - Direct Two-Stage Tunnel"
+    echo ""
+    echo -e "${CYAN}Quick Start:${NC}"
+    echo "1. Run Stage 1 script on your local machine"
+    echo "2. On login node, run Stage 2 script"
+    echo "3. Connect VNC viewer to localhost:${vnc_port}"
+    echo ""
+    echo "Or use direct tunnel: ./vnc_tunnel_direct.sh"
+}
+
+# Main execution
+main() {
+    print_header
+    
+    if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+        show_usage
+        exit 0
+    fi
+    
+    echo -e "${BLUE}Configuration:${NC}"
+    echo "  Login Node: ${LOGIN_NODE}"
+    echo "  Compute Node: ${COMPUTE_NODE}"
+    echo "  VNC Port: ${VNC_PORT}"
+    echo "  Web Port: ${WEB_PORT}"
+    echo ""
+    
+    # Check if VNC is running
+    if ! check_vnc_running "${VNC_PORT}"; then
+        exit 1
+    fi
+    
+    # Create tunnel scripts
+    create_tunnel_scripts "${LOGIN_NODE}" "${COMPUTE_NODE}" "${VNC_PORT}" "${WEB_PORT}"
+    
+    # Show connection info
+    show_connection_info "${VNC_PORT}" "${WEB_PORT}"
+}
+
+main "$@"
+SSLTUNNEL
+
+chmod +x /usr/local/bin/vnc_ssl_tunnel.sh
+echo "✓ SSL tunneling script created at /usr/local/bin/vnc_ssl_tunnel.sh"
 
 # ===============================================================
 # Create ULTIMATE VNC startup script with all optimizations
@@ -6762,10 +6964,18 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "METHOD 1: VNC Viewer (Best Performance)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "1. SSH tunnel:"
-echo "   ssh -L ${VNC_PORT}:${NODE}:${VNC_PORT} \$USER@login.hpc.edu"
+echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
 echo ""
-echo "2. Connect VNC to: localhost:${VNC_PORT}"
+echo "Stage 1 - Tunnel to Login Node:"
+echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@login.hpc.edu"
+echo ""
+echo "Stage 2 - From Login Node to Compute Node:"
+echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+echo ""
+echo "Alternative - Direct Two-Stage Tunnel:"
+echo "   ssh -J \$USER@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+echo ""
+echo "Connect VNC to: localhost:${VNC_PORT}"
 echo ""
 
 
@@ -6777,10 +6987,18 @@ if [ -n "${WSPID:-}" ] && kill -0 $WSPID 2>/dev/null; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "METHOD 2: Web Browser (No Install Needed)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "1. SSH tunnel:"
-  echo "   ssh -L ${WEB_PORT}:${NODE}:${WEB_PORT} \$USER@login.hpc.edu"
+  echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
   echo ""
-  echo "2. Browse: http://localhost:${WEB_PORT}"
+  echo "Stage 1 - Tunnel to Login Node:"
+  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@login.hpc.edu"
+  echo ""
+  echo "Stage 2 - From Login Node to Compute Node:"
+  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+  echo ""
+  echo "Alternative - Direct Two-Stage Tunnel:"
+  echo "   ssh -J \$USER@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+  echo ""
+  echo "Browse: http://localhost:${WEB_PORT}"
   echo ""
 fi
 
