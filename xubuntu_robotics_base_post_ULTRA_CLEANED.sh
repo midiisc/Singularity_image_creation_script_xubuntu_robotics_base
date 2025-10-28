@@ -6350,14 +6350,22 @@ display_connection_info() {
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
   echo ""
-  echo "Stage 1 - Tunnel to Login Node:"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@login.hpc.edu"
+  echo "Auto-Detected Information:"
+  echo "  Username: \${USER:-$(whoami)}"
+  echo "  Compute Node: ${NODE}"
+  echo "  Node IP: $(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
   echo ""
-  echo "Stage 2 - From Login Node to Compute Node:"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+  echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@login.hpc.edu"
   echo ""
-  echo "Alternative - Direct Two-Stage Tunnel:"
-  echo "   ssh -J \$USER@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+  echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+  echo ""
+  echo "Alternative Stage 2 (with IP):"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+  echo ""
+  echo "Direct Two-Stage Tunnel (Single Command):"
+  echo "   ssh -J \${USER:-$(whoami)}@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
   echo ""
   echo "Connect VNC viewer to: localhost:${VNC_PORT}"
   echo "   (or localhost:${VNC_DISPLAY_NUM})"
@@ -6369,14 +6377,22 @@ display_connection_info() {
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
     echo ""
-    echo "Stage 1 - Tunnel to Login Node:"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@login.hpc.edu"
+    echo "Auto-Detected Information:"
+    echo "  Username: \${USER:-$(whoami)}"
+    echo "  Compute Node: ${NODE}"
+    echo "  Node IP: $(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
     echo ""
-    echo "Stage 2 - From Login Node to Compute Node:"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+    echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@login.hpc.edu"
     echo ""
-    echo "Alternative - Direct Two-Stage Tunnel:"
-    echo "   ssh -J \$USER@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+    echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+    echo ""
+    echo "Alternative Stage 2 (with IP):"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+    echo ""
+    echo "Direct Two-Stage Tunnel (Single Command):"
+    echo "   ssh -J \${USER:-$(whoami)}@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
     echo ""
     echo "Open browser to: http://localhost:${WEB_PORT}"
     echo ""
@@ -6521,12 +6537,43 @@ cat > /usr/local/bin/vnc_ssl_tunnel.sh << 'SSLTUNNEL'
 
 set -euo pipefail
 
-# Configuration
-LOGIN_NODE="${1:-login.hpc.edu}"
+# Auto-detect system information
 COMPUTE_NODE="${2:-$(hostname)}"
+USER_NAME="${USER:-$(whoami)}"
+NODE_IP="${NODE_IP:-$(hostname -I | awk '{print $1}')}"
+
+# Configuration with auto-detection
+LOGIN_NODE="${1:-login.hpc.edu}"
 VNC_PORT="${3:-5901}"
 WEB_PORT="${4:-6080}"
 TURBOVNC_WEB_PORT=$((5800 + ${VNC_PORT#59}))
+
+# Try to detect compute node from SLURM environment
+if [ -n "${SLURM_JOB_NODELIST:-}" ]; then
+    # Extract first node from SLURM_JOB_NODELIST
+    COMPUTE_NODE=$(echo "$SLURM_JOB_NODELIST" | cut -d',' -f1 | sed 's/\[.*\]//')
+    echo "Detected compute node from SLURM: $COMPUTE_NODE"
+elif [ -n "${SLURM_NODELIST:-}" ]; then
+    COMPUTE_NODE=$(echo "$SLURM_NODELIST" | cut -d',' -f1 | sed 's/\[.*\]//')
+    echo "Detected compute node from SLURM: $COMPUTE_NODE"
+fi
+
+# Try to detect node IP more accurately
+if [ -n "${SLURM_NODEID:-}" ]; then
+    # If we have SLURM node ID, try to get IP from scontrol
+    NODE_IP=$(scontrol show node "$COMPUTE_NODE" 2>/dev/null | grep -oP 'NodeAddr=\K[^\s]+' | head -1 || echo "$NODE_IP")
+fi
+
+# Fallback IP detection methods
+if [ -z "$NODE_IP" ] || [ "$NODE_IP" = "127.0.0.1" ]; then
+    # Try to get external IP
+    NODE_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || echo "$NODE_IP")
+fi
+
+if [ -z "$NODE_IP" ] || [ "$NODE_IP" = "127.0.0.1" ]; then
+    # Last resort - use hostname
+    NODE_IP=$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo "localhost")
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -6575,13 +6622,15 @@ create_tunnel_scripts() {
     local vnc_port="$3"
     local web_port="$4"
     local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    local user_name="$5"
+    local node_ip="$6"
     
     # Create Stage 1 script (local machine to login node)
     cat > /tmp/vnc_tunnel_stage1.sh << EOF
 #!/bin/bash
 # Stage 1: Tunnel from local machine to login node
 echo "Stage 1: Creating tunnel to login node..."
-echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${login_node}"
+echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${login_node}"
 echo ""
 echo "After connecting, run Stage 2 script on the login node."
 echo "Press Ctrl+C to stop this tunnel."
@@ -6590,7 +6639,7 @@ echo ""
 ssh -L ${vnc_port}:localhost:${vnc_port} \\
     -L ${web_port}:localhost:${web_port} \\
     -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    \$USER@${login_node}
+    ${user_name}@${login_node}
 EOF
 
     # Create Stage 2 script (login node to compute node)
@@ -6598,16 +6647,23 @@ EOF
 #!/bin/bash
 # Stage 2: Tunnel from login node to compute node
 echo "Stage 2: Creating tunnel to compute node..."
-echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${compute_node}"
+echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
+echo ""
+echo "Alternative with IP: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
 echo ""
 echo "After connecting, VNC will be available on localhost:${vnc_port}"
 echo "Press Ctrl+C to stop this tunnel."
 echo ""
 
+# Try hostname first, fallback to IP if needed
 ssh -L ${vnc_port}:localhost:${vnc_port} \\
     -L ${web_port}:localhost:${web_port} \\
     -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    \$USER@${compute_node}
+    ${user_name}@${compute_node} || \\
+ssh -L ${vnc_port}:localhost:${vnc_port} \\
+    -L ${web_port}:localhost:${web_port} \\
+    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
+    ${user_name}@${node_ip}
 EOF
 
     # Create combined script (direct two-stage tunnel)
@@ -6615,18 +6671,26 @@ EOF
 #!/bin/bash
 # Direct two-stage tunnel using SSH jump host
 echo "Direct Two-Stage Tunnel: Local -> Login -> Compute"
-echo "Command: ssh -J \$USER@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \$USER@${compute_node}"
+echo "Command: ssh -J ${user_name}@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
+echo ""
+echo "Alternative with IP: ssh -J ${user_name}@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
 echo ""
 echo "VNC will be available on localhost:${vnc_port}"
 echo "Web interface: http://localhost:${web_port}"
 echo "Press Ctrl+C to stop this tunnel."
 echo ""
 
-ssh -J \$USER@${login_node} \\
+# Try hostname first, fallback to IP if needed
+ssh -J ${user_name}@${login_node} \\
     -L ${vnc_port}:localhost:${vnc_port} \\
     -L ${web_port}:localhost:${web_port} \\
     -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    \$USER@${compute_node}
+    ${user_name}@${compute_node} || \\
+ssh -J ${user_name}@${login_node} \\
+    -L ${vnc_port}:localhost:${vnc_port} \\
+    -L ${web_port}:localhost:${web_port} \\
+    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
+    ${user_name}@${node_ip}
 EOF
 
     chmod +x /tmp/vnc_tunnel_*.sh
@@ -6636,25 +6700,50 @@ show_connection_info() {
     local vnc_port="$1"
     local web_port="$2"
     local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    local user_name="$3"
+    local compute_node="$4"
+    local node_ip="$5"
+    local login_node="$6"
     
     echo -e "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
     echo ""
-    echo -e "${BLUE}Connection Information:${NC}"
+    echo -e "${BLUE}Auto-Detected Information:${NC}"
+    echo "  Username: ${user_name}"
+    echo "  Compute Node: ${compute_node}"
+    echo "  Node IP: ${node_ip}"
+    echo "  Login Node: ${login_node}"
+    echo ""
+    echo -e "${BLUE}Port Information:${NC}"
     echo "  VNC Port: ${vnc_port}"
     echo "  Web Port: ${web_port}"
     echo "  TurboVNC Web Port: ${turbovnc_web_port}"
+    echo ""
+    echo -e "${YELLOW}Ready-to-Copy SSH Commands:${NC}"
+    echo ""
+    echo -e "${CYAN}Stage 1 (Run on your local machine):${NC}"
+    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${login_node}"
+    echo ""
+    echo -e "${CYAN}Stage 2 (Run on login node):${NC}"
+    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
+    echo ""
+    echo -e "${CYAN}Alternative Stage 2 (with IP):${NC}"
+    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
+    echo ""
+    echo -e "${CYAN}Direct Two-Stage Tunnel (Single Command):${NC}"
+    echo "ssh -J ${user_name}@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
+    echo ""
+    echo -e "${CYAN}Alternative Direct Tunnel (with IP):${NC}"
+    echo "ssh -J ${user_name}@${login_node} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
     echo ""
     echo -e "${YELLOW}Available Scripts:${NC}"
     echo "  /tmp/vnc_tunnel_stage1.sh  - Stage 1 (Local -> Login Node)"
     echo "  /tmp/vnc_tunnel_stage2.sh  - Stage 2 (Login -> Compute Node)"
     echo "  /tmp/vnc_tunnel_direct.sh  - Direct Two-Stage Tunnel"
     echo ""
-    echo -e "${CYAN}Quick Start:${NC}"
-    echo "1. Run Stage 1 script on your local machine"
-    echo "2. On login node, run Stage 2 script"
-    echo "3. Connect VNC viewer to localhost:${vnc_port}"
-    echo ""
-    echo "Or use direct tunnel: ./vnc_tunnel_direct.sh"
+    echo -e "${GREEN}Connection URLs:${NC}"
+    echo "  VNC Viewer: localhost:${vnc_port}"
+    echo "  Web Browser: http://localhost:${web_port}"
+    echo "  TurboVNC Web: http://localhost:${turbovnc_web_port}"
 }
 
 # Main execution
@@ -6669,6 +6758,8 @@ main() {
     echo -e "${BLUE}Configuration:${NC}"
     echo "  Login Node: ${LOGIN_NODE}"
     echo "  Compute Node: ${COMPUTE_NODE}"
+    echo "  Username: ${USER_NAME}"
+    echo "  Node IP: ${NODE_IP}"
     echo "  VNC Port: ${VNC_PORT}"
     echo "  Web Port: ${WEB_PORT}"
     echo ""
@@ -6679,10 +6770,10 @@ main() {
     fi
     
     # Create tunnel scripts
-    create_tunnel_scripts "${LOGIN_NODE}" "${COMPUTE_NODE}" "${VNC_PORT}" "${WEB_PORT}"
+    create_tunnel_scripts "${LOGIN_NODE}" "${COMPUTE_NODE}" "${VNC_PORT}" "${WEB_PORT}" "${USER_NAME}" "${NODE_IP}"
     
     # Show connection info
-    show_connection_info "${VNC_PORT}" "${WEB_PORT}"
+    show_connection_info "${VNC_PORT}" "${WEB_PORT}" "${USER_NAME}" "${COMPUTE_NODE}" "${NODE_IP}" "${LOGIN_NODE}"
 }
 
 main "$@"
