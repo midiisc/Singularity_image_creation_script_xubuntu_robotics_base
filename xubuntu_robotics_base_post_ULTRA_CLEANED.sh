@@ -4459,21 +4459,58 @@ done
 cat > /etc/profile.d/virtualgl.sh << 'VGL_PROFILE'
 # VirtualGL environment configuration
 
-# VirtualGL runtime environment
-export VGL_DISPLAY=":0"           # Default X display for VirtualGL
-export VGL_COMPRESS="proxy"       # Compression method (proxy, jpeg, rgb)
-export VGL_READBACK="sync"        # Readback mode (sync recommended for VNC)
-export VGL_LOGO="0"               # Disable VirtualGL logo overlay
-export VGL_FPS="0"                # Disable FPS display (set to 1 to enable)
+# VirtualGL runtime environment (with dynamic display detection)
+# VGL_DISPLAY will be set dynamically by VNC launcher scripts
+export VGL_COMPRESS="${VGL_COMPRESS:-proxy}"       # Compression method (proxy, jpeg, rgb)
+export VGL_READBACK="${VGL_READBACK:-sync}"        # Readback mode (sync recommended for VNC)
+export VGL_LOGO="${VGL_LOGO:-0}"                   # Disable VirtualGL logo overlay
+export VGL_FPS="${VGL_FPS:-0}"                     # Disable FPS display (set to 1 to enable)
+export VGL_VERBOSE="${VGL_VERBOSE:-0}"             # Verbose output (set to 1 to enable)
 
 # Optimize for VNC environments
-export VGL_SYNC="1"               # Synchronize with vertical retrace
+export VGL_SYNC="${VGL_SYNC:-1}"                   # Synchronize with vertical retrace
+export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"    # Target refresh rate for VNC
 
-#--- Sub-block: Section 3070 ---
-# Purpose: Continued implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-export VGL_REFRESHRATE="60"       # Target refresh rate for VNC
+# Debug and development settings
+export VGL_DEBUG="${VGL_DEBUG:-0}"                 # Debug mode (set to 1 to enable)
+export VGL_LOG_LEVEL="${VGL_LOG_LEVEL:-1}"         # Log level (0-3)
+export VGL_FORCE_GPU="${VGL_FORCE_GPU:-0}"         # Force GPU usage (set to 1 to enable)
+
+# Auto-detect VNC display if not set
+if [ -z "${VGL_DISPLAY:-}" ]; then
+  # Try to detect VNC display from running processes
+  local vnc_display=""
+  
+  # Method 1: Check for Xvnc processes
+  vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+  
+  # Method 2: Check for vncserver processes
+  if [ -z "$vnc_display" ]; then
+    vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+  fi
+  
+  # Method 3: Check for display :1, :2, etc.
+  if [ -z "$vnc_display" ]; then
+    for i in 1 2 3 4 5; do
+      if [ -S "/tmp/.X11-unix/X$i" ]; then
+        vnc_display=":$i"
+        break
+      fi
+    done
+  fi
+  
+  # Set VGL_DISPLAY
+  if [ -n "$vnc_display" ]; then
+    export VGL_DISPLAY="$vnc_display"
+  else
+    export VGL_DISPLAY=":0"  # Fallback
+  fi
+fi
+
+# VirtualGL integration settings
+export VNC_VGL_INTEGRATION="${VNC_VGL_INTEGRATION:-1}"     # Enable VNC-VGL integration
+export VNC_OPENGL_EXTENSIONS="${VNC_OPENGL_EXTENSIONS:-1}" # Enable OpenGL extensions
+export VNC_GLX_EXTENSIONS="${VNC_GLX_EXTENSIONS:-1}"       # Enable GLX extensions
 VGL_PROFILE
 chmod +x /etc/profile.d/virtualgl.sh
 
@@ -6034,19 +6071,288 @@ cat > /usr/local/bin/start_vnc_xfce.sh << 'VNCLAUNCHER'
 set -euo pipefail
 
 # ============================================================================
-# TurboVNC + noVNC Launcher with Full Integration
+# Enhanced TurboVNC + VirtualGL + noVNC Launcher with Full Configuration
 # ============================================================================
 
-# --- Configuration ---
+# --- Default Configuration ---
 VNC_DISPLAY_NUM=${VNC_DISPLAY_NUM:-1}
 VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
 WEB_PORT=${WEB_PORT:-6081}
-TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))  # TurboVNC's built-in webserver
+TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))
 GEOM="${VNC_GEOM:-1920x1080}"
 DEPTH="${VNC_DEPTH:-24}"
 
+# VirtualGL Configuration
+VGL_DISPLAY_AUTO_DETECT=${VGL_DISPLAY_AUTO_DETECT:-1}
+VGL_DISPLAY_FALLBACK="${VGL_DISPLAY_FALLBACK:-:0}"
+VGL_COMPRESS="${VGL_COMPRESS:-proxy}"
+VGL_READBACK="${VGL_READBACK:-sync}"
+VGL_FPS="${VGL_FPS:-0}"
+VGL_VERBOSE="${VGL_VERBOSE:-0}"
+VGL_DEBUG="${VGL_DEBUG:-0}"
+VGL_FORCE_GPU="${VGL_FORCE_GPU:-0}"
+
+# VNC Integration
+VNC_VGL_INTEGRATION="${VNC_VGL_INTEGRATION:-1}"
+VNC_OPENGL_EXTENSIONS="${VNC_OPENGL_EXTENSIONS:-1}"
+VNC_GLX_EXTENSIONS="${VNC_GLX_EXTENSIONS:-1}"
+
+# Debug Configuration
+DEBUG_MODE="${DEBUG_MODE:-0}"
+VERBOSE_MODE="${VERBOSE_MODE:-0}"
+
 # Security: bind to localhost only (use -nolisten for remote access)
 SECURITY_ARGS="-localhost"
+
+# --- Command Line Argument Parsing ---
+parse_arguments() {
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --vgl-display)
+        VGL_DISPLAY_AUTO_DETECT=0
+        VGL_DISPLAY_FALLBACK="$2"
+        shift 2
+        ;;
+      --vgl-compress)
+        VGL_COMPRESS="$2"
+        shift 2
+        ;;
+      --vgl-readback)
+        VGL_READBACK="$2"
+        shift 2
+        ;;
+      --vgl-fps)
+        VGL_FPS="1"
+        shift
+        ;;
+      --vgl-verbose)
+        VGL_VERBOSE="1"
+        VERBOSE_MODE="1"
+        shift
+        ;;
+      --vgl-debug)
+        VGL_DEBUG="1"
+        DEBUG_MODE="1"
+        VERBOSE_MODE="1"
+        shift
+        ;;
+      --vnc-display)
+        VNC_DISPLAY_NUM="$2"
+        VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
+        TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))
+        shift 2
+        ;;
+      --vnc-geometry)
+        GEOM="$2"
+        shift 2
+        ;;
+      --vnc-depth)
+        DEPTH="$2"
+        shift 2
+        ;;
+      --no-vgl)
+        VNC_VGL_INTEGRATION="0"
+        shift
+        ;;
+      --force-vgl)
+        VGL_FORCE_GPU="1"
+        shift
+        ;;
+      --debug)
+        DEBUG_MODE="1"
+        VERBOSE_MODE="1"
+        shift
+        ;;
+      --verbose)
+        VERBOSE_MODE="1"
+        shift
+        ;;
+      --help|-h)
+        show_help
+        exit 0
+        ;;
+      *)
+        echo "Unknown option: $1"
+        echo "Use --help for usage information"
+        exit 1
+        ;;
+    esac
+  done
+}
+
+# --- Help Function ---
+show_help() {
+  cat << 'EOF'
+Enhanced TurboVNC + VirtualGL + noVNC Launcher
+
+USAGE:
+  start_vnc_xfce.sh [OPTIONS]
+
+OPTIONS:
+  --vgl-display DISPLAY    Set VGL_DISPLAY (default: auto-detect)
+  --vgl-compress METHOD    Set compression (proxy|jpeg|rgb) (default: proxy)
+  --vgl-readback MODE      Set readback mode (sync|async) (default: sync)
+  --vgl-fps               Enable FPS display (default: disabled)
+  --vgl-verbose           Enable verbose VirtualGL output
+  --vgl-debug             Enable debug mode with detailed logging
+  --vnc-display NUM       Set VNC display number (default: 1)
+  --vnc-geometry SIZE     Set VNC geometry (default: 1920x1080)
+  --vnc-depth BITS        Set color depth (default: 24)
+  --no-vgl                Disable VirtualGL (software rendering)
+  --force-vgl             Force VirtualGL even if not detected
+  --debug                 Enable debug mode
+  --verbose               Enable verbose output
+  --help, -h              Show this help message
+
+ENVIRONMENT VARIABLES:
+  VGL_DISPLAY_AUTO_DETECT=1    Auto-detect VNC display (default: 1)
+  VGL_DISPLAY_FALLBACK=:0      Fallback display (default: :0)
+  VGL_COMPRESS=proxy           Compression method (default: proxy)
+  VGL_READBACK=sync            Readback mode (default: sync)
+  VGL_FPS=0                    FPS display (default: 0)
+  VGL_VERBOSE=0                Verbose output (default: 0)
+  VGL_DEBUG=0                  Debug mode (default: 0)
+  VNC_DISPLAY_NUM=1            VNC display number (default: 1)
+  VNC_GEOM=1920x1080           VNC geometry (default: 1920x1080)
+  VNC_DEPTH=24                 Color depth (default: 24)
+
+EXAMPLES:
+  # Auto-detect everything
+  start_vnc_xfce.sh
+
+  # Specify VNC display and enable debug
+  start_vnc_xfce.sh --vnc-display 2 --vgl-debug
+
+  # Force specific VirtualGL display
+  start_vnc_xfce.sh --vgl-display :2 --vgl-verbose
+
+  # Disable VirtualGL (software rendering)
+  start_vnc_xfce.sh --no-vgl
+
+  # Test different compression
+  start_vnc_xfce.sh --vgl-compress jpeg --vgl-fps
+EOF
+}
+
+# --- VirtualGL Display Detection ---
+detect_vgl_display() {
+  if [ "$VGL_DISPLAY_AUTO_DETECT" = "1" ]; then
+    # Try to detect VNC display from running processes
+    local vnc_display=""
+    
+    # Method 1: Check for Xvnc processes
+    vnc_display=$(ps aux | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    
+    # Method 2: Check for vncserver processes
+    if [ -z "$vnc_display" ]; then
+      vnc_display=$(ps aux | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    fi
+    
+    # Method 3: Check for display :1, :2, etc.
+    if [ -z "$vnc_display" ]; then
+      for i in 1 2 3 4 5; do
+        if [ -S "/tmp/.X11-unix/X$i" ]; then
+          vnc_display=":$i"
+          break
+        fi
+      done
+    fi
+    
+    if [ -n "$vnc_display" ]; then
+      export VGL_DISPLAY="$vnc_display"
+      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: $vnc_display"
+    else
+      export VGL_DISPLAY="$VGL_DISPLAY_FALLBACK"
+      [ "$VERBOSE_MODE" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: $VGL_DISPLAY_FALLBACK"
+    fi
+  else
+    export VGL_DISPLAY="$VGL_DISPLAY_FALLBACK"
+    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: $VGL_DISPLAY_FALLBACK"
+  fi
+}
+
+# --- VirtualGL Configuration ---
+configure_virtualgl() {
+  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+    echo "Configuring VirtualGL..."
+    
+    # Detect display
+    detect_vgl_display
+    
+    # Set VirtualGL environment variables
+    export VGL_COMPRESS="$VGL_COMPRESS"
+    export VGL_READBACK="$VGL_READBACK"
+    export VGL_LOGO="0"
+    export VGL_FPS="$VGL_FPS"
+    export VGL_VERBOSE="$VGL_VERBOSE"
+    
+    # Debug mode settings
+    if [ "$VGL_DEBUG" = "1" ]; then
+      export VGL_VERBOSE="1"
+      export VGL_LOG_LEVEL="2"
+      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL debug mode enabled"
+    fi
+    
+    # Force GPU usage
+    if [ "$VGL_FORCE_GPU" = "1" ]; then
+      export VGL_FORCE_GPU="1"
+      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL force GPU enabled"
+    fi
+    
+    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL configured:"
+    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_DISPLAY=$VGL_DISPLAY"
+    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_COMPRESS=$VGL_COMPRESS"
+    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_READBACK=$VGL_READBACK"
+    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_FPS=$VGL_FPS"
+    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_VERBOSE=$VGL_VERBOSE"
+  else
+    echo "VirtualGL integration disabled (software rendering)"
+  fi
+}
+
+# --- VirtualGL Test Function ---
+test_virtualgl() {
+  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+    echo "Testing VirtualGL configuration..."
+    
+    # Check if vglrun is available
+    if ! command -v vglrun >/dev/null 2>&1; then
+      echo "  ✗ vglrun not found - VirtualGL not available"
+      return 1
+    fi
+    
+    # Check if VirtualGL can access the display
+    if [ -n "${VGL_DISPLAY:-}" ]; then
+      echo "  ✓ VGL_DISPLAY set to: $VGL_DISPLAY"
+      
+      # Test VirtualGL connection
+      if vglrun -d "$VGL_DISPLAY" glxinfo >/dev/null 2>&1; then
+        echo "  ✓ VirtualGL can access display $VGL_DISPLAY"
+        
+        # Test OpenGL rendering
+        if vglrun -d "$VGL_DISPLAY" glxinfo | grep -q "OpenGL renderer"; then
+          echo "  ✓ OpenGL rendering available"
+          return 0
+        else
+          echo "  ⚠ OpenGL rendering not available"
+          return 1
+        fi
+      else
+        echo "  ✗ VirtualGL cannot access display $VGL_DISPLAY"
+        return 1
+      fi
+    else
+      echo "  ✗ VGL_DISPLAY not set"
+      return 1
+    fi
+  else
+    echo "VirtualGL integration disabled"
+    return 0
+  fi
+}
+
+# --- Parse command line arguments ---
+parse_arguments "$@"
 
 # --- Ensure TurboVNC is in PATH ---
 
@@ -6159,10 +6465,10 @@ check_virtualgl() {
 setup_vnc_config() {
   mkdir -p "$HOME/.vnc"
 
-  # Create xstartup script
+  # Create xstartup script with VirtualGL integration
   cat > "$HOME/.vnc/xstartup" << 'XSTART'
 #!/bin/sh
-# TurboVNC xstartup for XFCE4
+# Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
 
 # Load X resources
 [ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
@@ -6176,25 +6482,55 @@ if ! dbus-send --session --dest=org.freedesktop.DBus --type=method_call \
   eval "$(dbus-launch --sh-syntax)"
 fi
 
+# VirtualGL Environment Setup
+if [ -n "${VGL_DISPLAY:-}" ]; then
+  export VGL_DISPLAY
+  export VGL_COMPRESS="${VGL_COMPRESS:-proxy}"
+  export VGL_READBACK="${VGL_READBACK:-sync}"
+  export VGL_LOGO="${VGL_LOGO:-0}"
+  export VGL_FPS="${VGL_FPS:-0}"
+  export VGL_VERBOSE="${VGL_VERBOSE:-0}"
+  
+  # Debug mode
+  if [ "${VGL_DEBUG:-0}" = "1" ]; then
+    export VGL_VERBOSE="1"
+    export VGL_LOG_LEVEL="2"
+  fi
+  
+  # Force GPU usage
+  if [ "${VGL_FORCE_GPU:-0}" = "1" ]; then
+    export VGL_FORCE_GPU="1"
+  fi
+fi
+
+# X11 Configuration for VirtualGL
+export DISPLAY="${DISPLAY:-:1}"
+
 # Disable compositing for better VNC performance
 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
 xfconf-query -c xfce4-session -p /general/use_compositing -s false 2>/dev/null || true
 
-#--- Sub-block: Section continuation (4379) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+# XFCE4 optimizations for VirtualGL
+export XFWM4_USE_PRESENT=0  # Disable Present extension (can cause issues with VirtualGL)
+export XFCE4_SESSION_DEBUG=0  # Disable XFCE debug output
 
 # Disable screen blanking
 xset s off 2>/dev/null || true
 xset -dpms 2>/dev/null || true
 xset s noblank 2>/dev/null || true
 
+# VirtualGL Integration Test (if enabled)
+if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && [ -n "${VGL_DISPLAY:-}" ]; then
+  # Test VirtualGL connection
+  if command -v vglrun >/dev/null 2>&1; then
+    # Set up VirtualGL environment
+    export VGL_DISPLAY
+    echo "VirtualGL configured for display: $VGL_DISPLAY"
+  else
+    echo "Warning: VirtualGL not found, using software rendering"
+  fi
+fi
 
-#--- Sub-block: Code section 4285 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # Start XFCE4
 exec /usr/bin/startxfce4
 XSTART
@@ -6209,6 +6545,7 @@ start_vnc_server() {
   echo "  Display: :${VNC_DISPLAY_NUM}"
   echo "  Geometry: ${GEOM}"
   echo "  Depth: ${DEPTH}"
+  echo "  VirtualGL Integration: $([ "$VNC_VGL_INTEGRATION" = "1" ] && echo "Enabled" || echo "Disabled")"
 
   # Check if VNC password is set
   if [ ! -f "$HOME/.vnc/passwd" ]; then
@@ -6218,12 +6555,43 @@ start_vnc_server() {
     echo ""
   fi
 
-  # Start VNC server
-  vncserver ":${VNC_DISPLAY_NUM}" \
-    -geometry "${GEOM}" \
-    -depth "${DEPTH}" \
-    ${SECURITY_ARGS} \
-    -xstartup "$HOME/.vnc/xstartup"
+  # Configure VirtualGL before starting VNC
+  configure_virtualgl
+
+  # Build VNC server arguments
+  local vnc_args=(
+    ":${VNC_DISPLAY_NUM}"
+    "-geometry" "${GEOM}"
+    "-depth" "${DEPTH}"
+    ${SECURITY_ARGS}
+    "-xstartup" "$HOME/.vnc/xstartup"
+  )
+
+  # Add VirtualGL-specific VNC arguments if integration is enabled
+  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+    # Add OpenGL extensions for VirtualGL
+    if [ "$VNC_OPENGL_EXTENSIONS" = "1" ]; then
+      vnc_args+=("-extension" "GLX")
+    fi
+    
+    # Add GLX extensions for VirtualGL
+    if [ "$VNC_GLX_EXTENSIONS" = "1" ]; then
+      vnc_args+=("-extension" "MIT-SHM")
+    fi
+    
+    # Add VirtualGL-optimized settings
+    vnc_args+=(
+      "-dpi" "96"
+      "-desktop" "Xubuntu-VGL"
+      "-alwaysshared"
+      "-dontdisconnect"
+    )
+    
+    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added"
+  fi
+
+  # Start VNC server with arguments
+  vncserver "${vnc_args[@]}"
 
   # Wait for server to start
   sleep 3
@@ -6344,6 +6712,7 @@ display_connection_info() {
   echo "=========================================="
   echo "Hostname: $NODE"
   echo "Display: :${VNC_DISPLAY_NUM}"
+  echo "VirtualGL: $([ "$VNC_VGL_INTEGRATION" = "1" ] && echo "Enabled (VGL_DISPLAY=${VGL_DISPLAY:-:1})" || echo "Disabled")"
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "CONNECTION METHOD 1: Native VNC Viewer (Recommended)"
@@ -6447,6 +6816,30 @@ display_connection_info() {
   echo ""
   echo "Change VNC password:"
   echo "  vncpasswd"
+  echo ""
+  
+  # Add VirtualGL usage instructions
+  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "VIRTUALGL USAGE:"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "To run GPU-accelerated applications:"
+    echo "  vglrun glxspheres64          # Test OpenGL rendering"
+    echo "  vglrun firefox               # GPU-accelerated Firefox"
+    echo "  vglrun glxgears              # Test OpenGL performance"
+    echo ""
+    echo "Debug VirtualGL:"
+    echo "  test_virtualgl.sh            # Comprehensive test"
+    echo "  vglrun -d :1 glxinfo         # Check OpenGL info"
+    echo "  vglrun -d :1 glxspheres64    # Test with specific display"
+    echo ""
+    echo "VirtualGL Configuration:"
+    echo "  VGL_DISPLAY: ${VGL_DISPLAY:-:1}"
+    echo "  VGL_COMPRESS: ${VGL_COMPRESS:-proxy}"
+    echo "  VGL_READBACK: ${VGL_READBACK:-sync}"
+    echo ""
+  fi
+  
   echo "=========================================="
   echo ""
   echo "Press Ctrl+C to stop all VNC services"
@@ -6508,6 +6901,13 @@ check_dependencies
 check_virtualgl
 setup_vnc_config
 start_vnc_server
+
+# Test VirtualGL after VNC is running
+if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+  echo ""
+  echo "Testing VirtualGL integration..."
+  test_virtualgl || echo "⚠ VirtualGL test failed - check configuration"
+fi
 
 # Try to start web interfaces
 check_turbovnc_webserver || true
@@ -7182,6 +7582,111 @@ NOVNCADV
 chmod +x /usr/local/bin/start_novnc_advanced.sh
 
 echo "✓ Advanced noVNC features configured"
+
+# Create VirtualGL test and debug script
+cat > /usr/local/bin/test_virtualgl.sh << 'VGLTEST'
+#!/usr/bin/env bash
+# VirtualGL Test and Debug Script
+
+set -euo pipefail
+
+# Configuration
+VGL_DISPLAY="${VGL_DISPLAY:-:1}"
+VGL_VERBOSE="${VGL_VERBOSE:-1}"
+VGL_DEBUG="${VGL_DEBUG:-1}"
+
+echo "=========================================="
+echo "VirtualGL Test and Debug Script"
+echo "=========================================="
+echo ""
+
+# Test 1: Check VirtualGL installation
+echo "1. Checking VirtualGL installation..."
+if command -v vglrun >/dev/null 2>&1; then
+  echo "  ✓ vglrun found: $(which vglrun)"
+  vglrun --version 2>/dev/null || echo "  ⚠ Could not get version"
+else
+  echo "  ✗ vglrun not found"
+  exit 1
+fi
+
+# Test 2: Check display
+echo ""
+echo "2. Checking display configuration..."
+echo "  VGL_DISPLAY: $VGL_DISPLAY"
+echo "  DISPLAY: ${DISPLAY:-not set}"
+
+if [ -S "/tmp/.X11-unix/X${VGL_DISPLAY#:}" ]; then
+  echo "  ✓ X socket found: /tmp/.X11-unix/X${VGL_DISPLAY#:}"
+else
+  echo "  ✗ X socket not found: /tmp/.X11-unix/X${VGL_DISPLAY#:}"
+fi
+
+# Test 3: Test VirtualGL connection
+echo ""
+echo "3. Testing VirtualGL connection..."
+if vglrun -d "$VGL_DISPLAY" glxinfo >/dev/null 2>&1; then
+  echo "  ✓ VirtualGL can access display $VGL_DISPLAY"
+else
+  echo "  ✗ VirtualGL cannot access display $VGL_DISPLAY"
+  echo "  Trying to get more info..."
+  vglrun -d "$VGL_DISPLAY" glxinfo 2>&1 | head -10
+fi
+
+# Test 4: Check OpenGL rendering
+echo ""
+echo "4. Checking OpenGL rendering..."
+if vglrun -d "$VGL_DISPLAY" glxinfo | grep -q "OpenGL renderer"; then
+  echo "  ✓ OpenGL rendering available"
+  echo "  OpenGL renderer: $(vglrun -d "$VGL_DISPLAY" glxinfo | grep "OpenGL renderer" | head -1)"
+  echo "  OpenGL version: $(vglrun -d "$VGL_DISPLAY" glxinfo | grep "OpenGL version" | head -1)"
+else
+  echo "  ✗ OpenGL rendering not available"
+fi
+
+# Test 5: Test glxspheres64
+echo ""
+echo "5. Testing glxspheres64..."
+if command -v glxspheres64 >/dev/null 2>&1; then
+  echo "  ✓ glxspheres64 found"
+  echo "  Running glxspheres64 test (5 seconds)..."
+  timeout 5s vglrun -d "$VGL_DISPLAY" glxspheres64 2>&1 | head -10 || echo "  ⚠ glxspheres64 test timed out or failed"
+else
+  echo "  ✗ glxspheres64 not found"
+fi
+
+# Test 6: Environment variables
+echo ""
+echo "6. VirtualGL environment variables:"
+echo "  VGL_DISPLAY: ${VGL_DISPLAY:-not set}"
+echo "  VGL_COMPRESS: ${VGL_COMPRESS:-not set}"
+echo "  VGL_READBACK: ${VGL_READBACK:-not set}"
+echo "  VGL_LOGO: ${VGL_LOGO:-not set}"
+echo "  VGL_FPS: ${VGL_FPS:-not set}"
+echo "  VGL_VERBOSE: ${VGL_VERBOSE:-not set}"
+
+# Test 7: X11 authentication
+echo ""
+echo "7. Checking X11 authentication..."
+if [ -f "$HOME/.Xauthority" ]; then
+  echo "  ✓ .Xauthority file found"
+  if xauth list 2>/dev/null | grep -q "$VGL_DISPLAY"; then
+    echo "  ✓ X11 auth for display $VGL_DISPLAY found"
+  else
+    echo "  ⚠ X11 auth for display $VGL_DISPLAY not found"
+  fi
+else
+  echo "  ⚠ .Xauthority file not found"
+fi
+
+echo ""
+echo "=========================================="
+echo "VirtualGL test completed"
+echo "=========================================="
+VGLTEST
+
+chmod +x /usr/local/bin/test_virtualgl.sh
+echo "✓ VirtualGL test script created"
 
 #===============================================================================
 # BLOCK 21: ADDITIONAL VNC AND DISPLAY SERVERS (Part 3 of 3)
