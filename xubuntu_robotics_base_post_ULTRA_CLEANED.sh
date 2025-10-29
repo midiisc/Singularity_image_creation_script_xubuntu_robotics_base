@@ -2097,7 +2097,8 @@ PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
 PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev"
 # Core dependencies
-PKGS_CORE_DEPS="libgflags-dev libgoogle-glog-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
+# NOTE: libgoogle-glog-dev is EXCLUDED here - we compile glog 0.7.1 from source later for COLMAP compatibility
+PKGS_CORE_DEPS="libgflags-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
 # Media and GUI libraries
 PKGS_MEDIA_GUI="libjpeg-dev libpng-dev libwebp-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libcanberra-gtk3-dev libvtk9-dev libgtkglext1-dev libevent-dev libyaml-cpp-dev libjsoncpp-dev"
 # Simulation libraries
@@ -2369,12 +2370,16 @@ clone_with_retry() {
 #   - g2o: No glog dependency → NO CONFLICT
 #   - GTSAM: No glog dependency → NO CONFLICT
 #   - Open3D: No glog dependency → NO CONFLICT
+#   - ROS2 Jazzy: No glog core dependency → NO CONFLICT
 #
 # This design provides:
 #   ✓ Maximum stability (Ceres isolated from external glog changes)
 #   ✓ COLMAP gets required modern APIs (CHECK_EQ, CHECK_GE, etc.)
 #   ✓ No ABI conflicts between packages
 #   ✓ 5-layer apt protection prevents system glog from interfering
+#   ✓ ROS2 Jazzy base image compatibility maintained
+#
+# NOTE: libgoogle-glog-dev is EXCLUDED from apt package lists to prevent version conflicts
 #
 # Dependencies: Build essentials (Block 7), gflags
 # Outputs: glog library in /usr/local with optimized flags
@@ -2384,10 +2389,12 @@ echo -e "\n${YELLOW}[PHASE 3 | glog] Compiling from source (required by COLMAP).
 echo "Checking for conflicting glog installations..."
 if dpkg -l | grep -q "^ii.*libglog-dev"; then
     INSTALLED_GLOG_VERSION=$(dpkg -l | grep "^ii.*libglog-dev" | awk '{print $3}')
-    echo "⚠ Found system libglog-dev: ${INSTALLED_GLOG_VERSION}"
-    echo "  Will be blocked by apt preferences after our custom build"
+    echo "⚠ Found OLD system libglog-dev: ${INSTALLED_GLOG_VERSION}"
+    echo "  Will be REPLACED with glog ${GLOG_VERSION} compiled from source"
+    echo "  Old version will be blocked by apt preferences after our custom build"
 else
     echo "✓ No conflicting system glog found"
+    echo "  Will install glog ${GLOG_VERSION} compiled from source"
 fi
 
 # Install minimal glog build dependencies
@@ -2399,23 +2406,24 @@ apt-get install -y --no-install-recommends \
 cd /tmp || exit 1
 rm -rf glog
 
-echo "Downloading glog ${GLOG_VERSION}..."
+echo "Downloading glog v${GLOG_VERSION} from GitHub..."
 if ! clone_with_retry "https://github.com/google/glog.git" "/tmp/glog" "v${GLOG_VERSION}"; then
-    echo "ERROR: Failed to clone glog after all retry attempts"
+    echo "ERROR: Failed to clone glog v${GLOG_VERSION} after all retry attempts"
     exit 1
 fi
+
+echo "✓ Successfully cloned glog v${GLOG_VERSION}"
 
 cd /tmp/glog || exit 1
 rm -rf build
 mkdir -p build
 cd build || exit 1
 
-echo "Configuring glog with optimizations..."
+echo "Configuring glog v${GLOG_VERSION} with optimizations..."
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DBUILD_SHARED_LIBS=ON \
-    -DBUILD_STATIC_LIBS=OFF \
     -DWITH_GFLAGS=ON \
     -DWITH_UNWIND=ON \
     -DWITH_TLS=ON \
@@ -2423,7 +2431,6 @@ cmake .. \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_CXX_FLAGS="-O3 -march=x86-64-v3 -mavx2 -mfma -fPIC -DNDEBUG" \
-    -DCMAKE_C_FLAGS="-O3 -march=x86-64-v3 -mavx2 -mfma -fPIC -DNDEBUG" \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
@@ -2435,7 +2442,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Building glog..."
+echo "Building glog v${GLOG_VERSION}..."
 make -j$(nproc) 2>&1 | tee /tmp/glog_build.log
 
 if [ $? -ne 0 ]; then
@@ -2444,7 +2451,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Installing glog..."
+echo "Installing glog v${GLOG_VERSION}..."
 make install 2>&1 | tee /tmp/glog_install.log
 
 if [ $? -ne 0 ]; then
@@ -2462,8 +2469,13 @@ if ! ldconfig -p | grep -q "libglog.so"; then
 fi
 
 echo "Verifying glog installation..."
-GLOG_VERSION_INSTALLED=$(pkg-config --modversion libglog 2>/dev/null || echo "pkg-config not available")
-echo "  Installed glog version: ${GLOG_VERSION_INSTALLED}"
+GLOG_VERSION_INSTALLED=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
+if [ "$GLOG_VERSION_INSTALLED" = "unknown" ]; then
+    echo "  Installed glog version: ${GLOG_VERSION} (pkg-config not available, using configured version)"
+else
+    echo "  Installed glog version: ${GLOG_VERSION_INSTALLED}"
+fi
+echo "  Target version from config: ${GLOG_VERSION}"
 echo "  Location: $(ldconfig -p | grep libglog.so | head -1)"
 
 # Compatibility verification: Check CMake can find glog
@@ -2513,7 +2525,7 @@ cd /
 rm -rf /tmp/glog
 rm -f /tmp/glog_*.log
 
-echo "✓ glog ${GLOG_VERSION} built and installed with optimizations"
+echo "✓ glog v${GLOG_VERSION} successfully built and installed with optimizations"
 
 #--- Sub-block 8.1.6: Protect compiled glog from APT overwrites ---
 # Critical: Multi-layer protection to prevent apt from overwriting our optimized glog
@@ -2573,14 +2585,20 @@ Description: Placeholder for compiled glog runtime library (in /usr/local)
  Real installation: /usr/local (compiled from source v0.7.1)
 EOF
 
-# Add both packages to dpkg status if not already present
-if ! grep -q "Package: libglog-dev" /var/lib/dpkg/status 2>/dev/null; then
-    cat /var/lib/dpkg/status.d/libglog-dev >> /var/lib/dpkg/status
+# Add both packages to dpkg status (remove any existing entries first to prevent duplicates)
+# Remove any existing entries for libglog-dev (from Package: line through the blank line after Description)
+if grep -q "^Package: libglog-dev$" /var/lib/dpkg/status 2>/dev/null; then
+    echo "  Removing existing libglog-dev entry from dpkg status..."
+    sed -i '/^Package: libglog-dev$/,/^$/d' /var/lib/dpkg/status
 fi
+cat /var/lib/dpkg/status.d/libglog-dev >> /var/lib/dpkg/status
 
-if ! grep -q "Package: libglog1" /var/lib/dpkg/status 2>/dev/null; then
-    cat /var/lib/dpkg/status.d/libglog1 >> /var/lib/dpkg/status
+# Remove any existing entries for libglog1 (from Package: line through the blank line after Description)
+if grep -q "^Package: libglog1$" /var/lib/dpkg/status 2>/dev/null; then
+    echo "  Removing existing libglog1 entry from dpkg status..."
+    sed -i '/^Package: libglog1$/,/^$/d' /var/lib/dpkg/status
 fi
+cat /var/lib/dpkg/status.d/libglog1 >> /var/lib/dpkg/status
 
 # Layer 3: dpkg selections hold (prevent removal/upgrade)
 echo "libglog-dev hold" | dpkg --set-selections
@@ -2743,14 +2761,14 @@ Description: Placeholder for compiled Ceres Solver (in /usr/local)
  which would conflict with our custom-compiled optimized version.
 EOF
 
-# Append to main dpkg status (only if not already present to prevent duplicates)
+# Append to main dpkg status (remove any existing entries first to prevent duplicates)
 if [ -f /var/lib/dpkg/status.d/libceres-dev ]; then
-  # Check if package entry already exists in status file
-  if ! grep -q "^Package: libceres-dev$" /var/lib/dpkg/status 2>/dev/null; then
-    cat /var/lib/dpkg/status.d/libceres-dev >> /var/lib/dpkg/status
-  else
-    echo "  libceres-dev entry already exists in dpkg status, skipping append"
+  # Remove any existing entry for libceres-dev (from Package: line through the blank line after Description)
+  if grep -q "^Package: libceres-dev$" /var/lib/dpkg/status 2>/dev/null; then
+    echo "  Removing existing libceres-dev entry from dpkg status..."
+    sed -i '/^Package: libceres-dev$/,/^$/d' /var/lib/dpkg/status
   fi
+  cat /var/lib/dpkg/status.d/libceres-dev >> /var/lib/dpkg/status
 fi
 
 # Mark as held to prevent removal/upgrade
@@ -2836,14 +2854,14 @@ Version: 999.9.9
 Description: Placeholder for compiled G2O (in /usr/local)
  This is a dummy package to prevent apt from installing libg2o-dev.
 EOF
-  # Append to main dpkg status (only if not already present to prevent duplicates)
+  # Append to main dpkg status (remove any existing entries first to prevent duplicates)
   if [ -f /var/lib/dpkg/status.d/libg2o-dev ]; then
-    # Check if package entry already exists in status file
-    if ! grep -q "^Package: libg2o-dev$" /var/lib/dpkg/status 2>/dev/null; then
-      cat /var/lib/dpkg/status.d/libg2o-dev >> /var/lib/dpkg/status
-    else
-      echo "  libg2o-dev entry already exists in dpkg status, skipping append"
+    # Remove any existing entry for libg2o-dev (from Package: line through the blank line after Description)
+    if grep -q "^Package: libg2o-dev$" /var/lib/dpkg/status 2>/dev/null; then
+      echo "  Removing existing libg2o-dev entry from dpkg status..."
+      sed -i '/^Package: libg2o-dev$/,/^$/d' /var/lib/dpkg/status
     fi
+    cat /var/lib/dpkg/status.d/libg2o-dev >> /var/lib/dpkg/status
   fi
   echo "libg2o-dev hold" | dpkg --set-selections
   echo "✓ G2O protected from APT overwrites"
@@ -2933,14 +2951,14 @@ Version: 999.9.9
 Description: Placeholder for compiled GTSAM (in /usr/local)
  This is a dummy package to prevent apt from installing libgtsam-dev.
 EOF
-  # Append to main dpkg status (only if not already present to prevent duplicates)
+  # Append to main dpkg status (remove any existing entries first to prevent duplicates)
   if [ -f /var/lib/dpkg/status.d/libgtsam-dev ]; then
-    # Check if package entry already exists in status file
-    if ! grep -q "^Package: libgtsam-dev$" /var/lib/dpkg/status 2>/dev/null; then
-      cat /var/lib/dpkg/status.d/libgtsam-dev >> /var/lib/dpkg/status
-    else
-      echo "  libgtsam-dev entry already exists in dpkg status, skipping append"
+    # Remove any existing entry for libgtsam-dev (from Package: line through the blank line after Description)
+    if grep -q "^Package: libgtsam-dev$" /var/lib/dpkg/status 2>/dev/null; then
+      echo "  Removing existing libgtsam-dev entry from dpkg status..."
+      sed -i '/^Package: libgtsam-dev$/,/^$/d' /var/lib/dpkg/status
     fi
+    cat /var/lib/dpkg/status.d/libgtsam-dev >> /var/lib/dpkg/status
   fi
   echo "libgtsam-dev hold" | dpkg --set-selections
   echo "✓ GTSAM protected from APT overwrites"
