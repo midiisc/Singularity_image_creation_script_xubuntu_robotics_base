@@ -147,8 +147,22 @@ LOG_DIR="${PWD}/build_logs"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Initializing logging system..."
+echo "  Log directory: ${PWD}/build_logs"
+
 # Ensure LOG_RETENTION_COUNT is set (default if not set)
 LOG_RETENTION_COUNT="${LOG_RETENTION_COUNT:-1}"
+
+# Safety check: Warn if retention count is misconfigured
+if [ "$LOG_RETENTION_COUNT" -le 0 ]; then
+    echo "  ⚠ WARNING: LOG_RETENTION_COUNT=${LOG_RETENTION_COUNT} (should be >= 1)"
+    echo "  ⚠ Log cleanup is DISABLED - old logs will accumulate!"
+    echo "  ⚠ Set LOG_RETENTION_COUNT=2 in config.sh (recommended)"
+elif [ "$LOG_RETENTION_COUNT" -gt 10 ]; then
+    echo "  ⚠ WARNING: LOG_RETENTION_COUNT=${LOG_RETENTION_COUNT} (unusually high)"
+    echo "  ⚠ This will keep many old logs - consider reducing to 2-5"
+else
+    echo "  Retention policy: Keep ${LOG_RETENTION_COUNT} most recent log(s)"
+fi
 
 # Create log directory first (if it doesn't exist) so cleanup can run
 mkdir -p "${LOG_DIR}"
@@ -161,6 +175,8 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f 2>/dev/null | wc -l)
     ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f 2>/dev/null | wc -l)
     
+    echo "  Found: ${BUILD_LOGS} build log(s), ${ERROR_LOGS} error log(s)"
+    
     # Calculate how many old logs to keep (accounting for new log about to be created)
     KEEP_OLD_LOGS=$((LOG_RETENTION_COUNT - 1))
     if [ "$KEEP_OLD_LOGS" -lt 0 ]; then
@@ -171,30 +187,44 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
     if [ "$BUILD_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
         echo "Cleaning old build logs (found ${BUILD_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
+        DELETED_COUNT=0
         # Use while read loop instead of xargs to handle spaces/special chars better
         # CRITICAL: Use hyphen pattern to match actual log file names
-        ls -t "${LOG_DIR}/build-"*.log 2>/dev/null | \
-            tail -n +$((KEEP_OLD_LOGS + 1)) | \
+        if ls -t "${LOG_DIR}/build-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
                 if [ -f "$old_log" ]; then
-                    rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
+                    if rm -f "$old_log"; then
+                        echo "  Removed: $(basename "$old_log")"
+                        DELETED_COUNT=$((DELETED_COUNT + 1))
+                    else
+                        echo "  ⚠ Failed to remove: $(basename "$old_log")"
+                    fi
                 fi
-            done
-        echo "✓ Old build log files cleaned up"
+            done; then
+            echo "✓ Old build log files cleaned up"
+        else
+            echo "⚠ Warning: Build log cleanup may have failed (check permissions)"
+        fi
     fi
     
     # Clean error logs if we have more than we want to keep
     if [ "$ERROR_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
         echo "Cleaning old error logs (found ${ERROR_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         # CRITICAL: Use hyphen pattern to match actual log file names
-        ls -t "${LOG_DIR}/errors-"*.log 2>/dev/null | \
-            tail -n +$((KEEP_OLD_LOGS + 1)) | \
+        if ls -t "${LOG_DIR}/errors-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
                 if [ -f "$old_log" ]; then
-                    rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
+                    if rm -f "$old_log"; then
+                        echo "  Removed: $(basename "$old_log")"
+                    else
+                        echo "  ⚠ Failed to remove: $(basename "$old_log")"
+                    fi
                 fi
-            done
-        echo "✓ Old error log files cleaned up"
+            done; then
+            echo "✓ Old error log files cleaned up"
+        else
+            echo "⚠ Warning: Error log cleanup may have failed (check permissions)"
+        fi
     fi
     
     if [ "$BUILD_LOGS" -le "$KEEP_OLD_LOGS" ] && [ "$ERROR_LOGS" -le "$KEEP_OLD_LOGS" ]; then
