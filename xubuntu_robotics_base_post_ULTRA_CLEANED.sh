@@ -43,24 +43,30 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     mkdir -p "${BUILD_LOG_DIR}"
 
     # Clean up old logs FIRST - keep only N most recent logs
-    if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT}" -gt 0 ]; then
-        echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT} most recent)..."
+    # Ensure BUILD_LOG_PREFIX is set (default if not set)
+    BUILD_LOG_PREFIX="${BUILD_LOG_PREFIX:-singularity_build}"
+    
+    if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT:-2}" -gt 0 ]; then
+        echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
         
-        # Count existing log files
-        EXISTING_LOGS=$(ls "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | wc -l)
+        # Count existing log files matching the pattern
+        EXISTING_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*.log" -type f 2>/dev/null | wc -l)
         
-        if [ "$EXISTING_LOGS" -gt 0 ]; then
+        if [ "$EXISTING_LOGS" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
             # List all log files sorted by modification time (newest first)
-            # Keep only N most recent files
-            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | while read -r old_log; do
-                if [ -f "$old_log" ]; then
-                    echo "  Removing old log: $(basename "$old_log")"
-                    rm -f "$old_log"
-                fi
-            done
-            echo "✓ Old logs cleaned up"
+            # Keep only N most recent files, remove the rest
+            # Use ls -t for sorting by modification time (works on all systems)
+            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | \
+                tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | \
+                while read -r old_log; do
+                    if [ -f "$old_log" ]; then
+                        echo "  Removing old log: $(basename "$old_log")"
+                        rm -f "$old_log"
+                    fi
+                done
+            echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
         else
-            echo "✓ No old logs to clean up"
+            echo "✓ No old logs to clean up (found $EXISTING_LOGS logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
         fi
     fi
 
@@ -2402,6 +2408,9 @@ cat > /var/lib/dpkg/info/libceres-dev.list << 'EOF'
 # Dummy package list to prevent apt from installing libceres-dev
 # Our optimized Ceres is in /usr/local
 EOF
+cat > /var/lib/dpkg/info/libceres-dev.md5sums << 'EOF'
+# Dummy md5sums file to prevent apt md5sums control file errors
+EOF
 cat > /var/lib/dpkg/status.d/libceres-dev << 'EOF'
 Package: libceres-dev
 Status: install ok installed
@@ -2482,6 +2491,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   #--- Sub-block 8.9.1: Protect compiled G2O from APT overwrites ---
   echo "Protecting compiled G2O from APT overwrites..."
   mkdir -p /var/lib/dpkg/status.d
+  mkdir -p /var/lib/dpkg/info
+  cat > /var/lib/dpkg/info/libg2o-dev.md5sums << 'EOF'
+# Dummy md5sums file to prevent apt md5sums control file errors
+EOF
   cat > /var/lib/dpkg/status.d/libg2o-dev << 'EOF'
 Package: libg2o-dev
 Status: install ok installed
@@ -2561,6 +2574,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   #--- Sub-block 8.13.1: Protect compiled GTSAM from APT overwrites ---
   echo "Protecting compiled GTSAM from APT overwrites..."
   mkdir -p /var/lib/dpkg/status.d
+  mkdir -p /var/lib/dpkg/info
+  cat > /var/lib/dpkg/info/libgtsam-dev.md5sums << 'EOF'
+# Dummy md5sums file to prevent apt md5sums control file errors
+EOF
   cat > /var/lib/dpkg/status.d/libgtsam-dev << 'EOF'
 Package: libgtsam-dev
 Status: install ok installed
@@ -3624,15 +3641,19 @@ echo "✓ COLMAP dependencies installed"
 cd /tmp || exit 1
 echo "Downloading COLMAP ${COLMAP_VERSION}..."
 
-if ! clone_with_retry "https://github.com/colmap/colmap.git" "." "${COLMAP_VERSION}"; then
+# Remove existing colmap directory if it exists to prevent clone failure
+rm -rf /tmp/colmap
+
+if ! clone_with_retry "https://github.com/colmap/colmap.git" "/tmp/colmap" "${COLMAP_VERSION}"; then
     echo "⚠ COLMAP ${COLMAP_VERSION} tag not found, trying main branch"
-    if ! clone_with_retry "https://github.com/colmap/colmap.git" "." "main"; then
+    rm -rf /tmp/colmap
+    if ! clone_with_retry "https://github.com/colmap/colmap.git" "/tmp/colmap" "main"; then
         echo "ERROR: Failed to clone COLMAP after all retry attempts"
         exit 1
     fi
 fi
 
-cd colmap || exit 1
+cd /tmp/colmap || exit 1
 echo "✓ COLMAP source downloaded"
 
 #--- Sub-block 13A.3: Configure COLMAP with CMake ---
