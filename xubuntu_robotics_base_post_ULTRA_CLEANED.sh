@@ -3277,6 +3277,25 @@ if [ -f "/var/lib/dpkg/status" ]; then
     echo "✓ Cleaned existing OpenCV entries from dpkg status"
 fi
 
+# Create dummy dpkg entries for OpenCV packages (similar to Ceres/G2O/GTSAM)
+# This prevents "missing list control file" errors
+echo "Creating dummy dpkg entries for OpenCV packages..."
+mkdir -p /var/lib/dpkg/info
+mkdir -p /var/lib/dpkg/status.d
+
+for pkg in "${opencv_packages[@]}"; do
+    # Create .list file
+    cat > "/var/lib/dpkg/info/${pkg}.list" << EOF
+# Dummy package list to prevent apt from installing ${pkg}
+# Our optimized OpenCV is in /usr/local
+EOF
+    
+    # Create .md5sums file
+    cat > "/var/lib/dpkg/info/${pkg}.md5sums" << EOF
+# Dummy md5sums file to prevent apt md5sums control file errors
+EOF
+done
+
 # Use apt-mark hold (preferred method)
 echo "Applying OpenCV protection using apt-mark hold..."
 opencv_packages=(
@@ -3290,6 +3309,25 @@ opencv_packages=(
 protected_count=0
 for pkg in "${opencv_packages[@]}"; do
     echo "  Protecting package: $pkg"
+    
+    # Create dpkg status entry if not already present
+    if ! grep -q "^Package: $pkg$" /var/lib/dpkg/status 2>/dev/null; then
+        cat > "/var/lib/dpkg/status.d/${pkg}" << EOF
+Package: ${pkg}
+Status: install ok installed
+Priority: optional
+Section: libdevel
+Installed-Size: 1
+Maintainer: Custom Build
+Architecture: amd64
+Version: 999.9.9
+Description: Placeholder for compiled OpenCV (in /usr/local)
+ This is a dummy package to prevent apt from installing ${pkg}
+ which would conflict with our custom-compiled optimized version.
+EOF
+        cat "/var/lib/dpkg/status.d/${pkg}" >> /var/lib/dpkg/status
+    fi
+    
     if apt-mark hold "$pkg" 2>/dev/null; then
         echo "    ✓ Held: $pkg"
         protected_count=$((protected_count + 1))
@@ -3313,6 +3351,8 @@ if [ -f "/etc/apt/preferences.d/opencv-protection" ]; then
     echo "✓ Created apt preferences for OpenCV protection"
     protected_count=$((protected_count + 1))
 fi
+
+echo "✓ OpenCV protected from APT overwrites (${protected_count} packages protected)"
 
 # Verify dpkg database integrity
 echo "Verifying dpkg database integrity..."
