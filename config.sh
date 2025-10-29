@@ -168,6 +168,10 @@ export VIRTUALGL_TURBOVNC_GPG_KEY_URL_ALT="https://keyserver.ubuntu.com/pks/look
 # BUILD PARAMETERS
 #===============================================================================
 export DISK_SPACE_REQUIRED_GB=150
+# Host-side log retention (in build_logs/ directory)
+# LOG_RETENTION_COUNT=1 means keep only the current run (delete all old logs)
+# LOG_RETENTION_COUNT=2 means keep current run + 1 previous run
+# LOG_RETENTION_COUNT=3 means keep current run + 2 previous runs, etc.
 export LOG_RETENTION_COUNT=1
 export PARALLEL_DOWNLOADS=4
 export CACHE_KEEP_VERSIONS=2

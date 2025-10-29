@@ -154,41 +154,51 @@ LOG_RETENTION_COUNT="${LOG_RETENTION_COUNT:-1}"
 mkdir -p "${LOG_DIR}"
 
 # Now clean up old logs if directory exists and retention count is positive
+# CRITICAL: Cleanup runs BEFORE new log creation, so we keep (LOG_RETENTION_COUNT - 1) old logs
+# to account for the new log that will be created. This ensures total = LOG_RETENTION_COUNT
 if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     # Count existing log files (match actual pattern: build-*.log and errors-*.log with hyphen)
     BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f 2>/dev/null | wc -l)
     ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f 2>/dev/null | wc -l)
     
-    # Clean build logs if more than retention count
+    # Calculate how many old logs to keep (accounting for new log about to be created)
+    KEEP_OLD_LOGS=$((LOG_RETENTION_COUNT - 1))
+    if [ "$KEEP_OLD_LOGS" -lt 0 ]; then
+        KEEP_OLD_LOGS=0
+    fi
+    
+    # Clean build logs if we have more than we want to keep
     # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
-    if [ "$BUILD_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
+    if [ "$BUILD_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
+        echo "Cleaning old build logs (found ${BUILD_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         # Use while read loop instead of xargs to handle spaces/special chars better
         # CRITICAL: Use hyphen pattern to match actual log file names
         ls -t "${LOG_DIR}/build-"*.log 2>/dev/null | \
-            tail -n +$((LOG_RETENTION_COUNT + 1)) | \
+            tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
                 if [ -f "$old_log" ]; then
                     rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
                 fi
             done
-        echo "✓ Old build log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
+        echo "✓ Old build log files cleaned up"
     fi
     
-    # Clean error logs if more than retention count
-    if [ "$ERROR_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
+    # Clean error logs if we have more than we want to keep
+    if [ "$ERROR_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
+        echo "Cleaning old error logs (found ${ERROR_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         # CRITICAL: Use hyphen pattern to match actual log file names
         ls -t "${LOG_DIR}/errors-"*.log 2>/dev/null | \
-            tail -n +$((LOG_RETENTION_COUNT + 1)) | \
+            tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
                 if [ -f "$old_log" ]; then
                     rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
                 fi
             done
-        echo "✓ Old error log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
+        echo "✓ Old error log files cleaned up"
     fi
     
-    if [ "$BUILD_LOGS" -le "$LOG_RETENTION_COUNT" ] && [ "$ERROR_LOGS" -le "$LOG_RETENTION_COUNT" ]; then
-        echo "✓ No log cleanup needed (found ${BUILD_LOGS} build logs, ${ERROR_LOGS} error logs, keeping ${LOG_RETENTION_COUNT} of each)"
+    if [ "$BUILD_LOGS" -le "$KEEP_OLD_LOGS" ] && [ "$ERROR_LOGS" -le "$KEEP_OLD_LOGS" ]; then
+        echo "✓ No log cleanup needed (found ${BUILD_LOGS} build logs, ${ERROR_LOGS} error logs, will have ${LOG_RETENTION_COUNT} total after this run)"
     fi
 fi
 # End if-fi block (self-contained)
