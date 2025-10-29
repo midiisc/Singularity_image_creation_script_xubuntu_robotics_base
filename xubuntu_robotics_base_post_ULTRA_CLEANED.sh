@@ -2518,6 +2518,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo "Protecting compiled G2O from APT overwrites..."
   mkdir -p /var/lib/dpkg/status.d
   mkdir -p /var/lib/dpkg/info
+  cat > /var/lib/dpkg/info/libg2o-dev.list << 'EOF'
+# Dummy package list to prevent apt from installing libg2o-dev
+# Our optimized G2O is in /usr/local
+EOF
   cat > /var/lib/dpkg/info/libg2o-dev.md5sums << 'EOF'
 # Dummy md5sums file to prevent apt md5sums control file errors
 EOF
@@ -2611,6 +2615,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo "Protecting compiled GTSAM from APT overwrites..."
   mkdir -p /var/lib/dpkg/status.d
   mkdir -p /var/lib/dpkg/info
+  cat > /var/lib/dpkg/info/libgtsam-dev.list << 'EOF'
+# Dummy package list to prevent apt from installing libgtsam-dev
+# Our optimized GTSAM is in /usr/local
+EOF
   cat > /var/lib/dpkg/info/libgtsam-dev.md5sums << 'EOF'
 # Dummy md5sums file to prevent apt md5sums control file errors
 EOF
