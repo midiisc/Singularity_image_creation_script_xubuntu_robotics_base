@@ -769,7 +769,8 @@ setup_unified_cache() {
 
   # 1. Configure APT Caching (safe to do early)
     # This directory exists by default on Ubuntu.
-  echo 'Dir::Cache::Archives "${CONTAINER_APT_CACHE}";' > /etc/apt/apt.conf.d/90-cache.conf
+    # CRITICAL: Use double quotes to expand ${CONTAINER_APT_CACHE} variable
+  echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
     echo 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
 
   # 2. Configure Pip Caching
@@ -816,6 +817,22 @@ EOF
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # === 4. Configure Julia Caching ===
+    # Verify APT cache configuration was properly applied
+    echo "==> Verifying APT cache configuration..."
+    if [ -f /etc/apt/apt.conf.d/90-cache.conf ]; then
+        echo "APT cache configuration file contents:"
+        cat /etc/apt/apt.conf.d/90-cache.conf
+        # Verify the path is expanded (not literal ${CONTAINER_APT_CACHE})
+        if grep -q '${CONTAINER_APT_CACHE}' /etc/apt/apt.conf.d/90-cache.conf; then
+            echo "ERROR: APT cache configuration has unexpanded variable!"
+            exit 1
+        fi
+        echo "✓ APT cache configured to: ${CONTAINER_APT_CACHE}"
+    else
+        echo "ERROR: APT cache configuration file not created!"
+        exit 1
+    fi
+    
     echo "==> Initial caching configured successfully."
 }
 # End setup_unified_cache function (self-contained)
@@ -1009,11 +1026,17 @@ echo "==> Rust tool aliases will be configured in Block 24 after compilation"
 #===============================================================================
 # BLOCK 6.13: NVIDIA CUDA/cuDNN SETUP
 #===============================================================================
-# Purpose: Install NVIDIA CUDA toolkit and cuDNN libraries
+# Purpose: Install NVIDIA CUDA toolkit and cuDNN libraries (~4GB)
 # Self-contained: Yes (complete NVIDIA stack installation)
-# Dependencies: GPG keys, APT configuration
+# Dependencies: GPG keys, APT configuration (Block 6.12 - MUST BE CONFIGURED FIRST)
 # Outputs: Installed packages
 # Reference: https://developer.nvidia.com/cudnn-downloads
+#
+# CACHING STRATEGY:
+# - APT cache MUST be configured before this block (setup_unified_cache called at line ~844)
+# - NVIDIA packages (~4GB) will be cached in ${CONTAINER_APT_CACHE}
+# - Subsequent builds will reuse cached packages instead of re-downloading
+# - APT config: /etc/apt/apt.conf.d/90-cache.conf sets Dir::Cache::Archives
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 6.13.1: NVIDIA repository keyring installation ---
