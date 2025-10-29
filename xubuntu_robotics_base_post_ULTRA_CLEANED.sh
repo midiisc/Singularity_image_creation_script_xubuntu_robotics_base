@@ -1024,19 +1024,175 @@ apt-get install -y --no-install-recommends \
 echo "==> Rust tool aliases will be configured in Block 24 after compilation"
 
 #===============================================================================
+# BLOCK 6.12A: APT-ARIA WRAPPER SETUP (MUST BE BEFORE NVIDIA!)
+#===============================================================================
+# Purpose: Setup apt-aria wrapper for accelerated downloads with aria2
+# Critical: MUST be configured BEFORE NVIDIA installation to enable aria2 for 4GB downloads
+# Dependencies: aria2 (installed in Block 6.12.8)
+# Outputs: apt-aria wrapper, symlinks for apt/apt-get
+#-------------------------------------------------------------------------------
+
+#--- Sub-block 6.12A.1: Create APT tool aliasing wrapper ---
+# Purpose: Setup unified caching with aria2 acceleration
+# Dependencies: Block 6 (APT configuration), aria2
+# Outputs: Installed packages
+echo "==> Setting up APT tool aliasing for unified caching..."
+
+# Create apt-aria wrapper first
+echo "Creating apt-aria wrapper for unified APT caching..."
+install -d -m 0755 /usr/local/bin
+
+# Configure APT to keep downloaded packages (prevent automatic cleanup)
+echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Clean-Installed "false";' >> /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Get::AutomaticRemove "false";' >> /etc/apt/apt.conf.d/99keep-packages
+echo 'APT::Get::AutomaticRemove::Kernels "false";' >> /etc/apt/apt.conf.d/99keep-packages
+
+cat > /usr/local/bin/apt-aria <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Centralized APT cache configuration - All APT tools use this location
+CACHE="${CONTAINER_APT_CACHE}"
+mkdir -p "/var/cache/apt/archives"
+
+# Common APT options for consistent caching across all tools
+# Keep downloaded packages and don't clean them automatically
+APT_CACHE_OPTS="-o Dir::Cache::Archives=${CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
+
+# Function to determine if this is an install command that should use aria2c
+is_install_command() {
+    # Check if any argument is an install command (not just the first one)
+    for arg in "$@"; do
+        case "$arg" in
+            install|remove|purge|build-dep|source)
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# Function to get the appropriate APT tool
+get_apt_tool() {
+    if [ -x /usr/bin/apt-fast ]; then
+        echo "/usr/bin/apt-fast"
+    else
+        echo "/usr/bin/apt-get"
+    fi
+}
+
+# Get the APT tool to use
+APT_TOOL=$(get_apt_tool)
+
+# Handle install commands with aria2c acceleration
+if is_install_command "$@"; then
+    echo "[apt-aria] Using aria2c for accelerated downloads..."
+
+    # Collect all http/https URLs (incl. dependencies) that would be downloaded
+  URI_FILE=$(mktemp)
+  echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
+
+    # Use a more robust approach to collect URIs
+  # Filter out package metadata and only extract actual download URIs
+  if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | \
+    grep -E "'(https?://[^']*)'" | \
+    sed -E "s/^'([^']+)'.*$/\1/" | \
+    sed "s/ //g" | \
+    grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null; then
+        echo "[apt-aria] URI collection successful"
+    else
+        echo "[apt-aria] URI collection failed, creating empty file"
+        touch "$URI_FILE"
+    fi
+
+    echo "[apt-aria] URI file created: $URI_FILE"
+    echo "[apt-aria] URI file contents:"
+    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
+
+    if [ -s "$URI_FILE" ]; then
+    echo "[apt-aria] Downloading $(< "$URI_FILE" wc -l) packages via aria2c..."
+      echo "[apt-aria] Cache directory: $CACHE"
+      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
+
+      # Try multi-connection first with error suppression
+      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+        echo "[apt-aria] Multi-connection failed, trying single-connection..."
+        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
+        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
+        else
+          echo "[apt-aria] Single-connection aria2c succeeded"
+        fi
+      else
+        echo "[apt-aria] Multi-connection aria2c succeeded"
+      fi
+      rm -f "$URI_FILE"
+    else
+      echo "[apt-aria] No URIs to download"
+    fi
+
+    # --- PROTECT CACHE ---
+    # Make all .deb files in the cache immutable to prevent deletion
+    echo "[apt-aria] Making downloaded packages immutable to protect cache..."
+    if command -v chattr >/dev/null 2>&1; then
+    chattr +i "${CACHE}/"*.deb 2>/dev/null
+        echo "[apt-aria] chattr command executed successfully"
+    else
+        echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
+    fi
+
+    # Install from cache using apt-get (reliable and standard)
+    echo "[apt-aria] Installing packages from cache..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
+else
+    # Use regular apt-get with cache configuration for non-install commands
+    echo "[apt-aria] Using apt-get with cache configuration..."
+    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
+fi
+EOF
+chmod 0755 /usr/local/bin/apt-aria
+echo "✓ apt-aria wrapper created"
+# Monitor cache after apt-aria setup
+monitor_cache "After apt-aria wrapper setup"
+
+#--- Sub-block 6.12A.2: Create APT tool symlinks for consistent caching ---
+# Critical: Ensure ALL apt commands use unified cache and aria2 acceleration
+# Dependencies: apt-aria wrapper (created above)
+# Outputs: Symlinks for apt/apt-get
+echo "Creating APT tool symlinks for consistent caching..."
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
+ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
+
+#--- Sub-block 6.12A.3: Verify APT aliasing ---
+# Purpose: Confirm symlinks are properly configured
+# Dependencies: apt-aria wrapper and symlinks
+# Outputs: Verification output
+echo "Verifying APT tool aliasing..."
+echo "apt-get -> $(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')"
+echo "apt -> $(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')"
+echo "✓ APT-aria wrapper and symlinks configured successfully"
+echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + caching"
+
+#===============================================================================
 # BLOCK 6.13: NVIDIA CUDA/cuDNN SETUP
 #===============================================================================
 # Purpose: Install NVIDIA CUDA toolkit and cuDNN libraries (~4GB)
 # Self-contained: Yes (complete NVIDIA stack installation)
-# Dependencies: GPG keys, APT configuration (Block 6.12 - MUST BE CONFIGURED FIRST)
+# Dependencies: 
+#   - Block 6.12: APT configuration (setup_unified_cache at line ~844)
+#   - Block 6.12A: apt-aria wrapper and symlinks (configured at line ~1027)
 # Outputs: Installed packages
 # Reference: https://developer.nvidia.com/cudnn-downloads
 #
-# CACHING STRATEGY:
-# - APT cache MUST be configured before this block (setup_unified_cache called at line ~844)
-# - NVIDIA packages (~4GB) will be cached in ${CONTAINER_APT_CACHE}
-# - Subsequent builds will reuse cached packages instead of re-downloading
-# - APT config: /etc/apt/apt.conf.d/90-cache.conf sets Dir::Cache::Archives
+# CACHING + ACCELERATION STRATEGY:
+# ✅ APT cache configured: /etc/apt/apt.conf.d/90-cache.conf
+# ✅ apt-aria wrapper active: Symlinked at /usr/local/bin/apt-get
+# ✅ aria2 acceleration: 16-connection parallel downloads
+# ✅ NVIDIA packages (~4GB) will be:
+#     1. Downloaded in parallel via aria2c (10-15 min faster)
+#     2. Cached in ${CONTAINER_APT_CACHE}
+#     3. Reused in subsequent builds (no re-download)
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 6.13.1: NVIDIA repository keyring installation ---
@@ -1166,187 +1322,7 @@ fi
 
 debug_glibc "After installing NVIDIA Cuda Toolkit"
 
-#--- Sub-block 6.13.7: Create APT tool aliasing wrapper ---
-# Purpose: Setup unified caching with aria2 acceleration
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Setting up APT tool aliasing for unified caching..."
-
-# Create apt-aria wrapper first
-echo "Creating apt-aria wrapper for unified APT caching..."
-install -d -m 0755 /usr/local/bin
-
-# Configure APT to keep downloaded packages (prevent automatic cleanup)
-echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";' > /etc/apt/apt.conf.d/99keep-packages
-echo 'APT::Clean-Installed "false";' >> /etc/apt/apt.conf.d/99keep-packages
-echo 'APT::Get::AutomaticRemove "false";' >> /etc/apt/apt.conf.d/99keep-packages
-echo 'APT::Get::AutomaticRemove::Kernels "false";' >> /etc/apt/apt.conf.d/99keep-packages
-
-cat > /usr/local/bin/apt-aria <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Centralized APT cache configuration - All APT tools use this location
-CACHE="${CONTAINER_APT_CACHE}"
-mkdir -p "/var/cache/apt/archives"
-
-# Common APT options for consistent caching across all tools
-# Keep downloaded packages and don't clean them automatically
-APT_CACHE_OPTS="-o Dir::Cache::Archives=${CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
-
-# Function to determine if this is an install command that should use aria2c
-is_install_command() {
-    # Check if any argument is an install command (not just the first one)
-    for arg in "$@"; do
-        case "$arg" in
-            install|remove|purge|build-dep|source)
-                return 0
-                ;;
-        esac
-    done
-    return 1
-}
-
-# Function to get the appropriate APT tool
-get_apt_tool() {
-    if [ -x /usr/bin/apt-fast ]; then
-        echo "/usr/bin/apt-fast"
-    else
-        echo "/usr/bin/apt-get"
-    fi
-}
-
-#--- Sub-block: Section continuation (976) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 967 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-# Get the APT tool to use
-APT_TOOL=$(get_apt_tool)
-
-# Handle install commands with aria2c acceleration
-if is_install_command "$@"; then
-    echo "[apt-aria] Using aria2c for accelerated downloads..."
-
-    # Collect all http/https URLs (incl. dependencies) that would be downloaded
-  URI_FILE=$(mktemp)
-  echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
-
-    # Use a more robust approach to collect URIs
-  # Filter out package metadata and only extract actual download URIs
-  if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | \
-    grep -E "'(https?://[^']*)'" | \
-    sed -E "s/^'([^']+)'.*$/\1/" | \
-    sed "s/ //g" | \
-    grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null; then
-        echo "[apt-aria] URI collection successful"
-    else
-        echo "[apt-aria] URI collection failed, creating empty file"
-        touch "$URI_FILE"
-    fi
-
-    echo "[apt-aria] URI file created: $URI_FILE"
-
-#--- Sub-block: APT cache configuration details ---
-# Purpose: Configure unified APT caching system
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: APT configuration section ---
-# Purpose: APT tool setup and caching
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-    echo "[apt-aria] URI file contents:"
-    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
-
-    if [ -s "$URI_FILE" ]; then
-    echo "[apt-aria] Downloading $(< "$URI_FILE" wc -l) packages via aria2c..."
-      echo "[apt-aria] Cache directory: $CACHE"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
-
-      # Try multi-connection first with error suppression
-      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
-        echo "[apt-aria] Multi-connection failed, trying single-connection..."
-        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
-          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
-        else
-          echo "[apt-aria] Single-connection aria2c succeeded"
-        fi
-      else
-        echo "[apt-aria] Multi-connection aria2c succeeded"
-      fi
-      rm -f "$URI_FILE"
-    else
-      echo "[apt-aria] No URIs to download"
-    fi
-
-#--- Sub-block: Section continuation (1029) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 1017 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-    # --- PROTECT CACHE ---
-    # Make all .deb files in the cache immutable to prevent deletion
-    echo "[apt-aria] Making downloaded packages immutable to protect cache..."
-    if command -v chattr >/dev/null 2>&1; then
-    chattr +i "${CACHE}/"*.deb 2>/dev/null
-        echo "[apt-aria] chattr command executed successfully"
-    else
-        echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
-    fi
-
-    # Install from cache using apt-get (reliable and standard)
-    echo "[apt-aria] Installing packages from cache..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
-else
-    # Use regular apt-get with cache configuration for non-install commands
-    echo "[apt-aria] Using apt-get with cache configuration..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
-fi
-EOF
-chmod 0755 /usr/local/bin/apt-aria
-echo "✓ apt-aria wrapper created"
-# Monitor cache after apt-aria setup
-monitor_cache "After apt-aria wrapper setup"
-
-
-#--- Sub-block 6.13.13: Complete APT tool setup ---
-# Purpose: Finalize unified APT caching configuration
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 6.13.8: Create APT tool aliases for consistent caching ---
-# Critical: Ensure ALL apt commands use unified cache and aria2 acceleration
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "Creating APT tool aliases for consistent caching..."
-ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
-ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
-
-#--- Sub-block 6.13.9: Update PATH for alias priority ---
-# Critical: Prioritize /usr/local/bin so our wrappers are used
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block 6.13.10: Verify APT aliasing ---
-# Purpose: Confirm aliases are properly configured
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "Verifying APT tool aliasing..."
-echo "apt-get -> $(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')"
-echo "apt -> $(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')"
-
-#--- Sub-block 6.13.11: Test unified APT cache functionality ---
+#--- Sub-block 6.13.11: Test unified APT cache functionality (apt-aria already configured) ---
 # Purpose: Verify cache is working correctly
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
