@@ -1322,6 +1322,56 @@ fi
 
 debug_glibc "After installing NVIDIA Cuda Toolkit"
 
+#--- Sub-block 6.13.7: IMMEDIATE cache sync for NVIDIA packages ---
+# Critical: Preserve large NVIDIA packages (~4GB) immediately to survive build failures
+# Purpose: Sync NVIDIA .deb files from /var/cache/apt/archives to container cache NOW
+# Rationale: NVIDIA packages are massive; if build fails later, we don't want to re-download
+# Dependencies: CONTAINER_APT_CACHE (configured in Block 6.12)
+# Outputs: NVIDIA packages preserved in persistent cache
+echo "==> IMMEDIATE CACHE SYNC: Preserving NVIDIA packages (~4GB)..."
+echo "[INFO] This intermediate sync ensures NVIDIA packages are saved even if build fails later"
+
+# Count packages before sync
+NVIDIA_PKG_COUNT_BEFORE=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
+CACHE_SIZE_BEFORE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+
+echo "[BEFORE SYNC] Found ${NVIDIA_PKG_COUNT_BEFORE} NVIDIA-related packages in /var/cache/apt/archives"
+echo "[BEFORE SYNC] Container cache size: ${CACHE_SIZE_BEFORE}"
+
+# Sync NVIDIA packages immediately
+if [ -d "/var/cache/apt/archives" ] && [ -d "${CONTAINER_APT_CACHE}" ]; then
+    echo "Copying NVIDIA packages to persistent cache..."
+    
+    # Copy all NVIDIA-related packages (with proper error handling)
+    NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+    
+    if [ -n "$NVIDIA_FILES" ]; then
+        echo "$NVIDIA_FILES" | head -20 | while read -r deb_file; do
+            if [ -f "$deb_file" ]; then
+                cp -v "$deb_file" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: $deb_file"
+            fi
+        done
+        
+        # Show summary
+        NVIDIA_PKG_COUNT_AFTER=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
+        CACHE_SIZE_AFTER=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+        
+        echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT_AFTER} NVIDIA-related packages"
+        echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE_AFTER}"
+        echo "✓ IMMEDIATE SYNC COMPLETE: NVIDIA packages preserved in ${CONTAINER_APT_CACHE}"
+        echo "   → If build fails later, these ~4GB packages won't need re-downloading"
+    else
+        echo "[INFO] No NVIDIA packages found to sync (may have been installed from cache)"
+    fi
+else
+    echo "[WARN] Cache directories not found, skipping immediate sync"
+fi
+
+# Force filesystem sync to ensure data is written to disk
+sync
+
+echo "==> Continuing with rest of build process..."
+
 #--- Sub-block 6.13.11: Test unified APT cache functionality (apt-aria already configured) ---
 # Purpose: Verify cache is working correctly
 # Dependencies: Block 6 (APT configuration)
@@ -1631,16 +1681,46 @@ if [[ -z "$FASTEST_MIRROR" ]]; then
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
 fi
 echo "==> Selected fastest mirror: $FASTEST_MIRROR"
+
+# Export the variable so it persists after function ends and is available globally
+export FASTEST_MIRROR
+
 # Apply the fastest mirror to the main APT sources (more specific pattern to avoid false matches)
 if [ -f /etc/apt/sources.list ]; then
   sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
   echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+  
+  # Verify the update was successful by checking sources.list content
+  if grep -q "${FASTEST_MIRROR}" /etc/apt/sources.list 2>/dev/null; then
+    echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
+  else
+    echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+  fi
 else
   echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
 fi
 }
 # End probe_and_set_mirrors function (self-contained)
 
+#--- Sub-block 6.13.14.1: Execute mirror probing EARLY ---
+# Critical: Select fastest Ubuntu mirror BEFORE any apt-get operations
+# Dependencies: test_mirror function, curl (from base image)
+# Outputs: Updated /etc/apt/sources.list with fastest mirror
+echo "==> Executing mirror probing BEFORE package installations..."
+probe_and_set_mirrors
+
+# Display the selected mirror and confirm it's exported
+echo "==> Mirror configuration complete:"
+echo "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
+echo "    This variable is now available globally for wget/curl/apt operations"
+
+# Show first few lines of updated sources.list for verification
+echo "==> Contents of /etc/apt/sources.list (first 5 lines):"
+if [ -f /etc/apt/sources.list ]; then
+  head -n 5 /etc/apt/sources.list | sed 's/^/    /'
+else
+  echo "    [warn] /etc/apt/sources.list not found"
+fi
 
 #--- Sub-block 6.7.1: Mirror selection complete ---
 # Purpose: Selected mirrors written to sources.list
@@ -1714,11 +1794,11 @@ locale-gen en_US.UTF-8
 # We already have nala and aptitude installed via APT for package management
 command -v curl || { echo "curl install failed"; exit 1; }
 
-#--- Sub-block 6.13.23: Execute mirror probing ---
-# Critical: Select fastest Ubuntu mirror for subsequent downloads
+#--- Sub-block 6.13.23: Mirror probing already executed (moved to line ~1649) ---
+# Note: probe_and_set_mirrors was moved earlier to run BEFORE apt-get operations
+# This ensures all package downloads use the fastest mirror
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-probe_and_set_mirrors
 
 #--- Sub-block 6.13.24: Configure additional PPAs ---
 # Purpose: Add Mozilla, Ulauncher PPAs with fallback mechanisms
@@ -2384,6 +2464,164 @@ clone_with_retry() {
 # Outputs: glog library in /usr/local with optimized flags
 echo -e "\n${YELLOW}[PHASE 3 | glog] Compiling from source (required by COLMAP)...${NC}"
 
+# CRITICAL: Reusable function to safely add/update dummy packages in dpkg status
+# This function prevents duplicate package entries that corrupt /var/lib/dpkg/status
+safe_add_dummy_package() {
+    local PKG_NAME="$1"
+    local PKG_FILE="$2"
+    
+    if [ ! -f "$PKG_FILE" ]; then
+        echo "  ✗ ERROR: Package file not found: $PKG_FILE"
+        return 1
+    fi
+    
+    # Validate dpkg status file exists
+    if [ ! -f /var/lib/dpkg/status ]; then
+        echo "  ✗ ERROR: /var/lib/dpkg/status does not exist!"
+        return 1
+    fi
+    
+    # Check if package already exists in status file
+    if grep -q "^Package: ${PKG_NAME}$" /var/lib/dpkg/status 2>/dev/null; then
+        echo "  Removing existing ${PKG_NAME} entry from dpkg status..."
+        
+        # Use awk to remove the complete package stanza (safer than sed)
+        awk -v pkg="$PKG_NAME" '
+            BEGIN { in_pkg = 0; buffer = ""; skip_blank = 0 }
+            /^Package:/ {
+                # Print previous buffer if not our target package
+                if (buffer != "" && in_pkg == 0) {
+                    print buffer
+                }
+                buffer = $0
+                # Check if this is the package we want to skip
+                if ($2 == pkg) {
+                    in_pkg = 1
+                } else {
+                    in_pkg = 0
+                }
+                skip_blank = 0
+                next
+            }
+            {
+                # Blank line signals end of package stanza
+                if (NF == 0) {
+                    if (buffer != "") {
+                        # End of a package stanza
+                        if (in_pkg == 0) {
+                            print buffer
+                            print ""  # Print the blank separator
+                        }
+                        buffer = ""
+                        in_pkg = 0
+                    }
+                    # Dont accumulate blank lines
+                    next
+                }
+                
+                # Non-blank line: accumulate if we have started a package
+                if (buffer != "") {
+                    buffer = buffer "\n" $0
+                } else if (!skip_blank) {
+                    # Shouldnt happen, but handle orphan lines
+                    buffer = $0
+                }
+            }
+            END {
+                # Print remaining buffer if not target package
+                if (buffer != "" && in_pkg == 0) {
+                    print buffer
+                }
+            }
+        ' /var/lib/dpkg/status > /var/lib/dpkg/status.tmp
+        
+        # Verify and replace
+        if [ -s /var/lib/dpkg/status.tmp ] && grep -q "^Package:" /var/lib/dpkg/status.tmp; then
+            mv /var/lib/dpkg/status.tmp /var/lib/dpkg/status
+            echo "  ✓ Removed existing ${PKG_NAME} entry"
+        else
+            echo "  ✗ ERROR: Failed to clean dpkg status for ${PKG_NAME}"
+            echo "  Keeping original dpkg status file"
+            rm -f /var/lib/dpkg/status.tmp
+            return 1
+        fi
+    fi
+    
+    # Ensure the package file ends with a newline (for proper concatenation)
+    # Check if last line of file has newline
+    if [ -n "$(tail -c 1 "$PKG_FILE")" ]; then
+        echo "" >> "$PKG_FILE"
+    fi
+    
+    # Add new package entry
+    cat "$PKG_FILE" >> /var/lib/dpkg/status
+    echo "" >> /var/lib/dpkg/status  # Ensure blank line separator
+    
+    # Verify no duplicates and proper format
+    local COUNT=$(grep -c "^Package: ${PKG_NAME}$" /var/lib/dpkg/status 2>/dev/null || echo "0")
+    if [ "$COUNT" -eq 1 ]; then
+        echo "  ✓ Added ${PKG_NAME} to dpkg status (verified unique)"
+        return 0
+    elif [ "$COUNT" -eq 0 ]; then
+        echo "  ✗ ERROR: Failed to add ${PKG_NAME} to dpkg status (not found after insertion)"
+        return 1
+    else
+        echo "  ✗ WARNING: ${PKG_NAME} appears ${COUNT} times in dpkg status!"
+        return 1
+    fi
+}
+export -f safe_add_dummy_package
+
+# CRITICAL: Check dpkg status file for corruption before proceeding
+echo "Checking dpkg status file integrity..."
+if ! dpkg --audit > /dev/null 2>&1; then
+    echo "⚠ WARNING: dpkg status file may be corrupted. Attempting repair..."
+    
+    # Check specifically for duplicate Package entries
+    DUPLICATES=$(awk '/^Package:/ {count[$2]++} END {for (pkg in count) if (count[pkg] > 1) print pkg}' /var/lib/dpkg/status)
+    
+    if [ -n "$DUPLICATES" ]; then
+        echo "  Found duplicate package entries: $(echo $DUPLICATES | tr '\n' ', ')"
+        echo "  Creating clean dpkg status file..."
+        
+        # Backup the corrupted file
+        cp /var/lib/dpkg/status /var/lib/dpkg/status.corrupted.backup
+        
+        # Remove ALL duplicate entries using awk (keep only first occurrence)
+        awk '
+            /^Package:/ {
+                pkg = $2
+                if (seen[pkg]) {
+                    skip = 1
+                    next
+                }
+                seen[pkg] = 1
+                skip = 0
+            }
+            !skip || /^$/ {
+                if (/^$/ && skip) {
+                    skip = 0
+                    next
+                }
+                print
+            }
+        ' /var/lib/dpkg/status.corrupted.backup > /var/lib/dpkg/status.new
+        
+        # Verify the new file is valid
+        if [ -s /var/lib/dpkg/status.new ] && grep -q "^Package:" /var/lib/dpkg/status.new; then
+            mv /var/lib/dpkg/status.new /var/lib/dpkg/status
+            echo "  ✓ dpkg status file repaired successfully"
+            echo "  Corrupted backup saved to: /var/lib/dpkg/status.corrupted.backup"
+        else
+            echo "  ✗ ERROR: Failed to repair dpkg status file"
+            rm -f /var/lib/dpkg/status.new
+            exit 1
+        fi
+    fi
+else
+    echo "✓ dpkg status file integrity verified"
+fi
+
 # Compatibility check: Ensure no conflicting glog is already installed
 echo "Checking for conflicting glog installations..."
 if dpkg -l | grep -q "^ii.*libglog-dev"; then
@@ -2584,20 +2822,10 @@ Description: Placeholder for compiled glog runtime library (in /usr/local)
  Real installation: /usr/local (compiled from source v0.7.1)
 EOF
 
-# Add both packages to dpkg status (remove any existing entries first to prevent duplicates)
-# Remove any existing entries for libglog-dev (from Package: line through the blank line after Description)
-if grep -q "^Package: libglog-dev$" /var/lib/dpkg/status 2>/dev/null; then
-    echo "  Removing existing libglog-dev entry from dpkg status..."
-    sed -i '/^Package: libglog-dev$/,/^$/d' /var/lib/dpkg/status
-fi
-cat /var/lib/dpkg/status.d/libglog-dev >> /var/lib/dpkg/status
-
-# Remove any existing entries for libglog1 (from Package: line through the blank line after Description)
-if grep -q "^Package: libglog1$" /var/lib/dpkg/status 2>/dev/null; then
-    echo "  Removing existing libglog1 entry from dpkg status..."
-    sed -i '/^Package: libglog1$/,/^$/d' /var/lib/dpkg/status
-fi
-cat /var/lib/dpkg/status.d/libglog1 >> /var/lib/dpkg/status
+# Add both packages to dpkg status using safe function
+echo "  Adding libglog-dev and libglog1 to dpkg status..."
+safe_add_dummy_package "libglog-dev" "/var/lib/dpkg/status.d/libglog-dev"
+safe_add_dummy_package "libglog1" "/var/lib/dpkg/status.d/libglog1"
 
 # Layer 3: dpkg selections hold (prevent removal/upgrade)
 echo "libglog-dev hold" | dpkg --set-selections
@@ -2762,12 +2990,7 @@ EOF
 
 # Append to main dpkg status (remove any existing entries first to prevent duplicates)
 if [ -f /var/lib/dpkg/status.d/libceres-dev ]; then
-  # Remove any existing entry for libceres-dev (from Package: line through the blank line after Description)
-  if grep -q "^Package: libceres-dev$" /var/lib/dpkg/status 2>/dev/null; then
-    echo "  Removing existing libceres-dev entry from dpkg status..."
-    sed -i '/^Package: libceres-dev$/,/^$/d' /var/lib/dpkg/status
-  fi
-  cat /var/lib/dpkg/status.d/libceres-dev >> /var/lib/dpkg/status
+  safe_add_dummy_package "libceres-dev" "/var/lib/dpkg/status.d/libceres-dev"
 fi
 
 # Mark as held to prevent removal/upgrade
@@ -2855,12 +3078,7 @@ Description: Placeholder for compiled G2O (in /usr/local)
 EOF
   # Append to main dpkg status (remove any existing entries first to prevent duplicates)
   if [ -f /var/lib/dpkg/status.d/libg2o-dev ]; then
-    # Remove any existing entry for libg2o-dev (from Package: line through the blank line after Description)
-    if grep -q "^Package: libg2o-dev$" /var/lib/dpkg/status 2>/dev/null; then
-      echo "  Removing existing libg2o-dev entry from dpkg status..."
-      sed -i '/^Package: libg2o-dev$/,/^$/d' /var/lib/dpkg/status
-    fi
-    cat /var/lib/dpkg/status.d/libg2o-dev >> /var/lib/dpkg/status
+    safe_add_dummy_package "libg2o-dev" "/var/lib/dpkg/status.d/libg2o-dev"
   fi
   echo "libg2o-dev hold" | dpkg --set-selections
   echo "✓ G2O protected from APT overwrites"
@@ -2952,12 +3170,7 @@ Description: Placeholder for compiled GTSAM (in /usr/local)
 EOF
   # Append to main dpkg status (remove any existing entries first to prevent duplicates)
   if [ -f /var/lib/dpkg/status.d/libgtsam-dev ]; then
-    # Remove any existing entry for libgtsam-dev (from Package: line through the blank line after Description)
-    if grep -q "^Package: libgtsam-dev$" /var/lib/dpkg/status 2>/dev/null; then
-      echo "  Removing existing libgtsam-dev entry from dpkg status..."
-      sed -i '/^Package: libgtsam-dev$/,/^$/d' /var/lib/dpkg/status
-    fi
-    cat /var/lib/dpkg/status.d/libgtsam-dev >> /var/lib/dpkg/status
+    safe_add_dummy_package "libgtsam-dev" "/var/lib/dpkg/status.d/libgtsam-dev"
   fi
   echo "libgtsam-dev hold" | dpkg --set-selections
   echo "✓ GTSAM protected from APT overwrites"
@@ -3575,23 +3788,7 @@ echo "Protecting compiled OpenCV from APT overwrites..."
 
 # Clean up any existing OpenCV package entries that might cause conflicts
 echo "Cleaning up existing OpenCV package entries..."
-if [ -f "/var/lib/dpkg/status" ]; then
-    # Remove any existing OpenCV package entries to prevent conflicts
-    opencv_packages=(
-        "libopencv-dev"
-        "libopencv-core-dev"
-        "libopencv-imgproc-dev" 
-        "libopencv-highgui-dev"
-        "libopencv-contrib-dev"
-    )
-    
-    for pkg in "${opencv_packages[@]}"; do
-        # Remove package entries (from Package: line to next empty line)
-        sed -i "/^Package: $pkg$/,/^$/d" /var/lib/dpkg/status 2>/dev/null || true
-    done
-    
-    echo "✓ Cleaned existing OpenCV entries from dpkg status"
-fi
+# Note: OpenCV package cleanup will be handled by safe_add_dummy_package function
 
 # Create dummy dpkg entries for OpenCV packages (similar to Ceres/G2O/GTSAM)
 # This prevents "missing list control file" errors
@@ -3626,9 +3823,8 @@ protected_count=0
 for pkg in "${opencv_packages[@]}"; do
     echo "  Protecting package: $pkg"
     
-    # Create dpkg status entry if not already present
-    if ! grep -q "^Package: $pkg$" /var/lib/dpkg/status 2>/dev/null; then
-        cat > "/var/lib/dpkg/status.d/${pkg}" << EOF
+    # Create dpkg status entry using safe function
+    cat > "/var/lib/dpkg/status.d/${pkg}" << EOF
 Package: ${pkg}
 Status: install ok installed
 Priority: optional
@@ -3641,8 +3837,7 @@ Description: Placeholder for compiled OpenCV (in /usr/local)
  This is a dummy package to prevent apt from installing ${pkg}
  which would conflict with our custom-compiled optimized version.
 EOF
-        cat "/var/lib/dpkg/status.d/${pkg}" >> /var/lib/dpkg/status
-    fi
+    safe_add_dummy_package "${pkg}" "/var/lib/dpkg/status.d/${pkg}"
     
     if apt-mark hold "$pkg" 2>/dev/null; then
         echo "    ✓ Held: $pkg"
