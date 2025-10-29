@@ -2279,6 +2279,7 @@ echo -e "\n${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
 PHASE3_ALL_SUCCESS=true
 
 # Robust git cloning function with retry and error handling
+# NOTE: In Singularity builds, /tmp persists between attempts, so we must clean existing directories
 clone_with_retry() {
     local repo_url="$1"
     local target_dir="$2"
@@ -2286,7 +2287,23 @@ clone_with_retry() {
     local max_retries=5
     local retry_count=0
     
+    # Convert relative paths to absolute (critical for Singularity environment)
+    if [[ "$target_dir" != /* ]]; then
+        target_dir="$(cd "$(dirname "$target_dir")" 2>/dev/null && pwd)/$(basename "$target_dir")"
+        # If still relative, use current directory
+        if [[ "$target_dir" != /* ]]; then
+            target_dir="$(pwd)/$target_dir"
+        fi
+    fi
+    
     echo "Cloning $repo_url to $target_dir..."
+    
+    # CRITICAL: Remove existing directory before cloning (essential for Singularity builds)
+    # In Singularity, /tmp persists between build attempts, so directories may already exist
+    if [ -d "$target_dir" ] || [ -f "$target_dir" ]; then
+        echo "  Removing existing target directory: $target_dir"
+        rm -rf "$target_dir" 2>/dev/null || true
+    fi
     
     while [ $retry_count -lt $max_retries ]; do
         echo "Attempt $((retry_count + 1))/$max_retries..."
@@ -2354,6 +2371,8 @@ if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/c
 fi
 # Use explicit, separate commands for navigation
 cd /tmp/ceres-solver || { echo "ERROR: Failed to access ceres-solver directory"; exit 1; }
+# Remove existing build directory if it exists (critical for Singularity rebuilds)
+rm -rf build
 mkdir -p build
 cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
@@ -2425,9 +2444,14 @@ Description: Placeholder for compiled Ceres Solver (in /usr/local)
  which would conflict with our custom-compiled optimized version.
 EOF
 
-# Append to main dpkg status
+# Append to main dpkg status (only if not already present to prevent duplicates)
 if [ -f /var/lib/dpkg/status.d/libceres-dev ]; then
-  cat /var/lib/dpkg/status.d/libceres-dev >> /var/lib/dpkg/status
+  # Check if package entry already exists in status file
+  if ! grep -q "^Package: libceres-dev$" /var/lib/dpkg/status 2>/dev/null; then
+    cat /var/lib/dpkg/status.d/libceres-dev >> /var/lib/dpkg/status
+  else
+    echo "  libceres-dev entry already exists in dpkg status, skipping append"
+  fi
 fi
 
 # Mark as held to prevent removal/upgrade
@@ -2452,7 +2476,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     exit 1
   fi
   cd /tmp/g2o || { echo "ERROR: Failed to access g2o directory"; exit 1; }
-  mkdir build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
+  # Remove existing build directory if it exists (critical for Singularity rebuilds)
+  rm -rf build
+  mkdir -p build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
 
   #--- Sub-block 8.7: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
@@ -2507,7 +2533,15 @@ Version: 999.9.9
 Description: Placeholder for compiled G2O (in /usr/local)
  This is a dummy package to prevent apt from installing libg2o-dev.
 EOF
-  cat /var/lib/dpkg/status.d/libg2o-dev >> /var/lib/dpkg/status
+  # Append to main dpkg status (only if not already present to prevent duplicates)
+  if [ -f /var/lib/dpkg/status.d/libg2o-dev ]; then
+    # Check if package entry already exists in status file
+    if ! grep -q "^Package: libg2o-dev$" /var/lib/dpkg/status 2>/dev/null; then
+      cat /var/lib/dpkg/status.d/libg2o-dev >> /var/lib/dpkg/status
+    else
+      echo "  libg2o-dev entry already exists in dpkg status, skipping append"
+    fi
+  fi
   echo "libg2o-dev hold" | dpkg --set-selections
   echo "✓ G2O protected from APT overwrites"
 
@@ -2529,7 +2563,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     exit 1
   fi
   cd /tmp/gtsam || { echo "ERROR: Failed to access gtsam directory"; exit 1; }
-  mkdir build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
+  # Remove existing build directory if it exists (critical for Singularity rebuilds)
+  rm -rf build
+  mkdir -p build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
 
   #--- Sub-block 8.11: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
@@ -2590,7 +2626,15 @@ Version: 999.9.9
 Description: Placeholder for compiled GTSAM (in /usr/local)
  This is a dummy package to prevent apt from installing libgtsam-dev.
 EOF
-  cat /var/lib/dpkg/status.d/libgtsam-dev >> /var/lib/dpkg/status
+  # Append to main dpkg status (only if not already present to prevent duplicates)
+  if [ -f /var/lib/dpkg/status.d/libgtsam-dev ]; then
+    # Check if package entry already exists in status file
+    if ! grep -q "^Package: libgtsam-dev$" /var/lib/dpkg/status 2>/dev/null; then
+      cat /var/lib/dpkg/status.d/libgtsam-dev >> /var/lib/dpkg/status
+    else
+      echo "  libgtsam-dev entry already exists in dpkg status, skipping append"
+    fi
+  fi
   echo "libgtsam-dev hold" | dpkg --set-selections
   echo "✓ GTSAM protected from APT overwrites"
 
@@ -3029,6 +3073,8 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 cd /tmp/opencv || { echo "ERROR: Failed to access opencv directory"; exit 1; }
+# Remove existing build directory if it exists (critical for Singularity rebuilds)
+rm -rf build
 mkdir -p build
 cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
@@ -3661,7 +3707,9 @@ echo "✓ COLMAP source downloaded"
 # Dependencies: Block 10 (OpenCV), Block 8 (Ceres)
 # Outputs: COLMAP build configuration
 echo "Configuring COLMAP with CUDA optimizations..."
-mkdir build && cd build
+# Remove existing build directory if it exists (critical for Singularity rebuilds)
+rm -rf build
+mkdir -p build && cd build
 
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
@@ -3819,15 +3867,20 @@ fi
 cd /tmp || exit 1
 echo "Downloading Open3D ${OPEN3D_VERSION}..."
 
-if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "Open3D" "v${OPEN3D_VERSION}"; then
+# Remove existing Open3D directory if it exists to prevent clone failure
+# CRITICAL: In Singularity builds, /tmp persists between attempts
+rm -rf /tmp/Open3D
+
+if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "/tmp/Open3D" "v${OPEN3D_VERSION}"; then
     echo "⚠ Open3D v${OPEN3D_VERSION} tag not found, trying main branch"
-    if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "Open3D" "main"; then
+    rm -rf /tmp/Open3D
+    if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "/tmp/Open3D" "main"; then
         echo "ERROR: Failed to clone Open3D after all retry attempts"
         exit 1
     fi
 fi
 
-cd Open3D || exit 1
+cd /tmp/Open3D || exit 1
 echo "✓ Open3D source downloaded"
 
 # Fix Embree hash mismatch (Open3D 0.19.0 has outdated hash for Embree 4.3.3)
@@ -3845,7 +3898,9 @@ fi
 # Dependencies: CUDA, Eigen, Clang
 # Outputs: Open3D build configuration
 echo "Configuring Open3D with CUDA optimizations..."
-mkdir build && cd build
+# Remove existing build directory if it exists (critical for Singularity rebuilds)
+rm -rf build
+mkdir -p build && cd build
 
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
