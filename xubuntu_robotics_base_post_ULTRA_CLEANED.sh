@@ -3754,6 +3754,9 @@ echo "✓ COLMAP source downloaded"
 # Critical: Enable CUDA, OpenMP, CGAL, GUI for maximum performance
 # Dependencies: Block 10 (OpenCV), Block 8 (Ceres)
 # Outputs: COLMAP build configuration
+# Note: Python support is auto-enabled if pybind11-dev is installed
+# Note: OpenCV_DIR is auto-detected via CMAKE_PREFIX_PATH
+# Note: BOOST_STATIC is deprecated/removed in COLMAP 3.12.6
 echo "Configuring COLMAP with CUDA optimizations..."
 # Remove existing build directory if it exists (critical for Singularity rebuilds)
 rm -rf build
@@ -3768,8 +3771,6 @@ cmake .. \
     -DOPENMP_ENABLED=ON \
     -DSIMD_ENABLED=ON \
     -DGUI_ENABLED=ON \
-    -DPYTHON_ENABLED=ON \
-    -DBOOST_STATIC=OFF \
     -DTESTS_ENABLED=OFF \
     -DPROFILING_ENABLED=OFF \
     -DCMAKE_CXX_STANDARD=17 \
@@ -3781,7 +3782,7 @@ cmake .. \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    -DOpenCV_DIR=/usr/local/lib/cmake/opencv4 \
+    -DCMAKE_PREFIX_PATH="/usr/local" \
     -DEigen3_DIR=/usr/local/share/eigen3/cmake \
     -DCeres_DIR=/usr/local/lib/cmake/Ceres \
     2>&1 | tee /tmp/colmap_cmake.log
