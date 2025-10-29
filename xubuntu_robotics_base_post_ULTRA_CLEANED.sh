@@ -3724,6 +3724,14 @@ apt-get install -y --no-install-recommends \
     python3-dev \
     python3-pip \
     pybind11-dev \
+    libboost-dev \
+    libboost-system-dev \
+    libboost-filesystem-dev \
+    libboost-program-options-dev \
+    libboost-graph-dev \
+    libboost-thread-dev \
+    libglog-dev \
+    libgflags-dev \
     || echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
 
 echo "✓ COLMAP dependencies installed"
