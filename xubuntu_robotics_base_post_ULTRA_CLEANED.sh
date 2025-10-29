@@ -2272,6 +2272,69 @@ echo -e "\n${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
 # Critical: Track phase success
 PHASE3_ALL_SUCCESS=true
 
+# Robust git cloning function with retry and error handling
+clone_with_retry() {
+    local repo_url="$1"
+    local target_dir="$2"
+    local branch="$3"
+    local max_retries=5
+    local retry_count=0
+    
+    echo "Cloning $repo_url to $target_dir..."
+    
+    while [ $retry_count -lt $max_retries ]; do
+        echo "Attempt $((retry_count + 1))/$max_retries..."
+        
+        # Configure git for better network handling
+        git config --global http.postBuffer 524288000
+        git config --global http.maxRequestBuffer 100M
+        git config --global core.compression 0
+        
+        # Try cloning with different strategies
+        if [ $retry_count -eq 0 ]; then
+            # First attempt: standard clone
+            git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 1 ]; then
+            # Second attempt: with single branch
+            git clone --depth 1 --single-branch --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 2 ]; then
+            # Third attempt: with no tags
+            git clone --depth 1 --no-tags --branch "$branch" "$repo_url" "$target_dir"
+        elif [ $retry_count -eq 3 ]; then
+            # Fourth attempt: with different protocol
+            if [[ "$repo_url" == https://* ]]; then
+                local git_url="${repo_url/https:\/\//git@}"
+                git_url="${git_url/github.com/github.com:}"
+                git clone --depth 1 --branch "$branch" "$git_url" "$target_dir"
+            else
+                git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
+            fi
+        else
+            # Final attempt: shallow clone with retry
+            git clone --depth 1 --branch "$branch" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "$repo_url" "$target_dir"
+        fi
+        
+        if [ $? -eq 0 ]; then
+            echo "✓ Successfully cloned $repo_url"
+            return 0
+        else
+            echo "✗ Clone attempt $((retry_count + 1)) failed"
+            retry_count=$((retry_count + 1))
+            
+            # Clean up failed attempt
+            rm -rf "$target_dir" 2>/dev/null || true
+            
+            if [ $retry_count -lt $max_retries ]; then
+                echo "Waiting 10 seconds before retry..."
+                sleep 10
+            fi
+        fi
+    done
+    
+    echo "✗ Failed to clone $repo_url after $max_retries attempts"
+    return 1
+}
+
 #--- Sub-block 8.2: Compile Ceres Solver ---
 # Purpose: Build Ceres optimization library from source (COMPILE FIRST - g2o can link to it)
 # Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
@@ -2931,69 +2994,6 @@ apt-get install -y \
 # Purpose: Clone OpenCV core and contrib modules
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-
-# Robust git cloning function with retry and error handling
-clone_with_retry() {
-    local repo_url="$1"
-    local target_dir="$2"
-    local branch="$3"
-    local max_retries=5
-    local retry_count=0
-    
-    echo "Cloning $repo_url to $target_dir..."
-    
-    while [ $retry_count -lt $max_retries ]; do
-        echo "Attempt $((retry_count + 1))/$max_retries..."
-        
-        # Configure git for better network handling
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequestBuffer 100M
-        git config --global core.compression 0
-        
-        # Try cloning with different strategies
-        if [ $retry_count -eq 0 ]; then
-            # First attempt: standard clone
-            git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 1 ]; then
-            # Second attempt: with single branch
-            git clone --depth 1 --single-branch --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 2 ]; then
-            # Third attempt: with no tags
-            git clone --depth 1 --no-tags --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 3 ]; then
-            # Fourth attempt: with different protocol
-            if [[ "$repo_url" == https://* ]]; then
-                local git_url="${repo_url/https:\/\//git@}"
-                git_url="${git_url/github.com/github.com:}"
-                git clone --depth 1 --branch "$branch" "$git_url" "$target_dir"
-            else
-                git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
-            fi
-        else
-            # Final attempt: shallow clone with retry
-            git clone --depth 1 --branch "$branch" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "$repo_url" "$target_dir"
-        fi
-        
-        if [ $? -eq 0 ]; then
-            echo "✓ Successfully cloned $repo_url"
-            return 0
-        else
-            echo "✗ Clone attempt $((retry_count + 1)) failed"
-            retry_count=$((retry_count + 1))
-            
-            # Clean up failed attempt
-            rm -rf "$target_dir" 2>/dev/null || true
-            
-            if [ $retry_count -lt $max_retries ]; then
-                echo "Waiting 10 seconds before retry..."
-                sleep 10
-            fi
-        fi
-    done
-    
-    echo "✗ Failed to clone $repo_url after $max_retries attempts"
-    return 1
-}
 
 # Clone OpenCV core
 if ! clone_with_retry "https://github.com/opencv/opencv.git" "/tmp/opencv" "${OPENCV_VERSION}"; then
@@ -4479,7 +4479,7 @@ export VGL_FORCE_GPU="${VGL_FORCE_GPU:-0}"         # Force GPU usage (set to 1 t
 # Auto-detect VNC display if not set
 if [ -z "${VGL_DISPLAY:-}" ]; then
   # Try to detect VNC display from running processes
-  local vnc_display=""
+  vnc_display=""
   
   # Method 1: Check for Xvnc processes
   vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
