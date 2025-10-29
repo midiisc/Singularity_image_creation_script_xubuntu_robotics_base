@@ -150,6 +150,10 @@ echo "Initializing logging system..."
 # Ensure LOG_RETENTION_COUNT is set (default if not set)
 LOG_RETENTION_COUNT="${LOG_RETENTION_COUNT:-1}"
 
+# Create log directory first (if it doesn't exist) so cleanup can run
+mkdir -p "${LOG_DIR}"
+
+# Now clean up old logs if directory exists and retention count is positive
 if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     # Count existing log files
     BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build_*.log" -type f 2>/dev/null | wc -l)
@@ -158,9 +162,14 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     # Clean build logs if more than retention count
     # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
     if [ "$BUILD_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
+        # Use while read loop instead of xargs to handle spaces/special chars better
         ls -t "${LOG_DIR}/build_"*.log 2>/dev/null | \
             tail -n +$((LOG_RETENTION_COUNT + 1)) | \
-            xargs rm -f 2>/dev/null || true
+            while read -r old_log; do
+                if [ -f "$old_log" ]; then
+                    rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
+                fi
+            done
         echo "✓ Old build log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
     fi
     
@@ -168,7 +177,11 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     if [ "$ERROR_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
         ls -t "${LOG_DIR}/errors_"*.log 2>/dev/null | \
             tail -n +$((LOG_RETENTION_COUNT + 1)) | \
-            xargs rm -f 2>/dev/null || true
+            while read -r old_log; do
+                if [ -f "$old_log" ]; then
+                    rm -f "$old_log" && echo "  Removed: $(basename "$old_log")"
+                fi
+            done
         echo "✓ Old error log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
     fi
     
@@ -181,6 +194,7 @@ fi
 #--- Sub-block 6.3: Create log files with timestamp ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# Note: LOG_DIR already created above, but ensure it exists
 mkdir -p "${LOG_DIR}"
 LOG_FILE="${LOG_DIR}/build-$(date +%Y%m%d-%H%M%S).log"
 ERROR_LOG="${LOG_DIR}/errors-$(date +%Y%m%d-%H%M%S).log"
