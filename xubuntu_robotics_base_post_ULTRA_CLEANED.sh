@@ -3796,16 +3796,38 @@ fi
 echo "✓ COLMAP configured with CUDA support"
 
 #--- Sub-block 13A.4: Build COLMAP ---
-# Critical: Compile with all cores for speed
+# Critical: Compile with reduced parallelism to avoid memory/OOM issues
 # Dependencies: None (foundational)
 # Outputs: COLMAP binaries
-echo "Building COLMAP (this may take 10-15 minutes)..."
-make -j$(nproc) 2>&1 | tee /tmp/colmap_build.log
+# Note: COLMAP builds can be memory-intensive, so use half cores to prevent OOM
+echo "Building COLMAP (this may take 15-20 minutes)..."
+# Use half cores to prevent memory issues during compilation
+BUILD_JOBS=$(($(nproc) / 2))
+if [ "$BUILD_JOBS" -lt 1 ]; then
+    BUILD_JOBS=1
+fi
+echo "Using $BUILD_JOBS parallel jobs for COLMAP build..."
 
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "✗ COLMAP build failed"
-    tail -100 /tmp/colmap_build.log
-    exit 1
+# Try building with reduced parallelism
+if ! make -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
+    echo "✗ COLMAP build failed with $BUILD_JOBS jobs, trying single-threaded build..."
+    # Fallback to single-threaded build to get better error messages
+    if ! make -j1 2>&1 | tee -a /tmp/colmap_build.log; then
+        echo "✗ COLMAP build failed even with single-threaded build"
+        echo "Last 200 lines of build log:"
+        tail -200 /tmp/colmap_build.log
+        echo ""
+        echo "Checking for common issues..."
+        # Check if it's a dependency issue
+        if grep -i "not found\|missing\|undefined" /tmp/colmap_build.log; then
+            echo "Possible dependency issue detected"
+        fi
+        # Check if it's a memory issue
+        if grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log; then
+            echo "Possible memory issue detected - try reducing BUILD_JOBS further"
+        fi
+        exit 1
+    fi
 fi
 
 echo "✓ COLMAP built successfully"
