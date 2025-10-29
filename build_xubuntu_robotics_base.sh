@@ -147,11 +147,34 @@ LOG_DIR="${PWD}/build_logs"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Initializing logging system..."
-if [ -d "$LOG_DIR" ]; then
-    # Keep only N most recent logs based on LOG_RETENTION_COUNT from config
-    find "${LOG_DIR}" -name "build_*.log" -type f | sort -r | tail -n +$((LOG_RETENTION_COUNT + 1)) | xargs rm -f 2>/dev/null || true
-    find "${LOG_DIR}" -name "errors_*.log" -type f | sort -r | tail -n +$((LOG_RETENTION_COUNT + 1)) | xargs rm -f 2>/dev/null || true
-    echo "✓ Old log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
+# Ensure LOG_RETENTION_COUNT is set (default if not set)
+LOG_RETENTION_COUNT="${LOG_RETENTION_COUNT:-1}"
+
+if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
+    # Count existing log files
+    BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build_*.log" -type f 2>/dev/null | wc -l)
+    ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors_*.log" -type f 2>/dev/null | wc -l)
+    
+    # Clean build logs if more than retention count
+    # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
+    if [ "$BUILD_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
+        ls -t "${LOG_DIR}/build_"*.log 2>/dev/null | \
+            tail -n +$((LOG_RETENTION_COUNT + 1)) | \
+            xargs rm -f 2>/dev/null || true
+        echo "✓ Old build log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
+    fi
+    
+    # Clean error logs if more than retention count
+    if [ "$ERROR_LOGS" -gt "$LOG_RETENTION_COUNT" ]; then
+        ls -t "${LOG_DIR}/errors_"*.log 2>/dev/null | \
+            tail -n +$((LOG_RETENTION_COUNT + 1)) | \
+            xargs rm -f 2>/dev/null || true
+        echo "✓ Old error log files cleaned up (kept latest ${LOG_RETENTION_COUNT})"
+    fi
+    
+    if [ "$BUILD_LOGS" -le "$LOG_RETENTION_COUNT" ] && [ "$ERROR_LOGS" -le "$LOG_RETENTION_COUNT" ]; then
+        echo "✓ No log cleanup needed (found ${BUILD_LOGS} build logs, ${ERROR_LOGS} error logs, keeping ${LOG_RETENTION_COUNT} of each)"
+    fi
 fi
 # End if-fi block (self-contained)
 
