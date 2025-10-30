@@ -68,7 +68,7 @@ export OPENCV_VERSION="4.12.0"
 
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"
-export GLOG_VERSION="0.7.1"
+export GLOG_VERSION="0.6.0"  # Changed from 0.7.1 - COLMAP 3.12.6 incompatible with glog 0.7.x internal APIs
 export OPEN3D_VERSION="0.19.0"
 
 # NVIDIA Video Codec SDK

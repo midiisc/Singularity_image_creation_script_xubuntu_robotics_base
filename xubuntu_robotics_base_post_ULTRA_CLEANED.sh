@@ -2176,7 +2176,7 @@ PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
 PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev"
 # Core dependencies
-# NOTE: libgoogle-glog-dev is EXCLUDED here - we compile glog 0.7.1 from source later for COLMAP compatibility
+# NOTE: libgoogle-glog-dev is EXCLUDED here - we compile glog 0.6.0 from source later for COLMAP compatibility
 PKGS_CORE_DEPS="libgflags-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
 # Media and GUI libraries
 PKGS_MEDIA_GUI="libjpeg-dev libpng-dev libwebp-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libcanberra-gtk3-dev libvtk9-dev libgtkglext1-dev libevent-dev libyaml-cpp-dev libjsoncpp-dev"
@@ -2443,9 +2443,15 @@ clone_with_retry() {
 # Critical: MUST compile BEFORE Ceres/g2o/GTSAM/COLMAP that depend on it
 # COLMAP 3.12.6 requires glog 0.6.0+ APIs not available in Ubuntu 24.04's libglog-dev
 # 
+# VERSION SELECTION: glog 0.6.0 (NOT 0.7.x)
+#   - COLMAP 3.12.6 was tested with glog 0.6.0
+#   - glog 0.7.x introduced breaking changes to internal APIs (GOOGLE_PREDICT_BRANCH_NOT_TAKEN, 
+#     CHECK_OP_LOG, google::logging namespace) that cause COLMAP compilation failures
+#   - Using glog 0.6.0 ensures COLMAP compatibility while providing required modern APIs
+#
 # COMPATIBILITY DESIGN:
 #   - Ceres: Uses MINIGLOG=ON (internal bundled mini-glog) → ISOLATED, NO CONFLICT
-#   - COLMAP: Uses external glog 0.7.1 (this build) → GETS NEW APIS IT NEEDS
+#   - COLMAP: Uses external glog 0.6.0 (this build) → GETS COMPATIBLE APIS
 #   - g2o: No glog dependency → NO CONFLICT
 #   - GTSAM: No glog dependency → NO CONFLICT
 #   - Open3D: No glog dependency → NO CONFLICT
@@ -2453,7 +2459,7 @@ clone_with_retry() {
 #
 # This design provides:
 #   ✓ Maximum stability (Ceres isolated from external glog changes)
-#   ✓ COLMAP gets required modern APIs (CHECK_EQ, CHECK_GE, etc.)
+#   ✓ COLMAP gets required modern APIs (CHECK_EQ, CHECK_GE, etc.) without breaking changes
 #   ✓ No ABI conflicts between packages
 #   ✓ 5-layer apt protection prevents system glog from interfering
 #   ✓ ROS2 Jazzy base image compatibility maintained
@@ -2795,7 +2801,7 @@ Architecture: amd64
 Version: 999.9.9
 Description: Placeholder for compiled glog development files (in /usr/local)
  This is a dummy package to prevent apt from installing libglog-dev.
- Real installation: /usr/local (compiled from source v0.7.1)
+ Real installation: /usr/local (compiled from source v0.6.0)
 EOF
 
 # Layer 2: Create dummy package for libglog runtime library (handles libglog0v5, libglog1, etc.)
@@ -2819,7 +2825,7 @@ Architecture: amd64
 Version: 999.9.9
 Description: Placeholder for compiled glog runtime library (in /usr/local)
  This is a dummy package to prevent apt from installing libglog runtime.
- Real installation: /usr/local (compiled from source v0.7.1)
+ Real installation: /usr/local (compiled from source v0.6.0)
 EOF
 
 # Add both packages to dpkg status using safe function
@@ -2841,7 +2847,7 @@ apt-mark hold libglog0 2>/dev/null || true
 # Layer 5: APT preferences pinning (highest priority protection)
 cat > /etc/apt/preferences.d/99-protect-compiled-glog << 'EOF'
 # CRITICAL: Prevent APT from overwriting compiled glog from source
-# Custom glog v0.7.1 compiled with optimizations in /usr/local
+# Custom glog v0.6.0 compiled with optimizations in /usr/local
 # Priority explanation:
 #   -1 = never install (blocks all versions from repositories)
 #   Pin: version 999.9.9 = our dummy package version
@@ -2884,11 +2890,11 @@ echo "Compatibility Configuration Summary:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Package        | glog Usage         | Version/Type"
 echo "---------------|--------------------|-----------------------"
-echo "glog (custom)  | Compiled           | 0.7.1 (/usr/local)"
+echo "glog (custom)  | Compiled           | 0.6.0 (/usr/local)"
 echo "Ceres Solver   | Internal MINIGLOG  | Bundled (isolated)"
 echo "g2o            | None               | No dependency"
 echo "GTSAM          | None               | No dependency"
-echo "COLMAP         | External glog      | 0.7.1 (required)"
+echo "COLMAP         | External glog      | 0.6.0 (compatible)"
 echo "Open3D         | None               | No dependency"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "✓ Compatibility design: Maximum stability, no conflicts"
@@ -2918,7 +2924,7 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 # 
 # COMPATIBILITY NOTE: MINIGLOG=ON (uses Ceres internal mini-glog)
 #   Why: Isolates Ceres from external glog changes, preventing ABI conflicts
-#   Result: Ceres uses bundled mini-glog, COLMAP uses external glog 0.7.1
+#   Result: Ceres uses bundled mini-glog, COLMAP uses external glog 0.6.0
 #   Benefit: Maximum stability, each library uses appropriate glog version
 #   Alternative: MINIGLOG=OFF would make Ceres use external glog (not recommended)
 #
@@ -4279,10 +4285,10 @@ echo "✓ COLMAP source downloaded"
 # Note: OpenCV_DIR is auto-detected via CMAKE_PREFIX_PATH
 # Note: BOOST_STATIC is deprecated/removed in COLMAP 3.12.6
 #
-# COMPATIBILITY: COLMAP uses external glog 0.7.1 (compiled in Block 8.1.5)
+# COMPATIBILITY: COLMAP uses external glog 0.6.0 (compiled in Block 8.1.5)
 #   - Explicitly set -Dglog_DIR to ensure it finds our custom glog
 #   - COLMAP 3.12.6 requires glog 0.6.0+ APIs (CHECK_EQ, CHECK_GE, etc.)
-#   - Our glog 0.7.1 provides all required APIs
+#   - Our glog 0.6.0 provides all required APIs without 0.7.x breaking changes
 #
 echo "Configuring COLMAP with CUDA optimizations..."
 
