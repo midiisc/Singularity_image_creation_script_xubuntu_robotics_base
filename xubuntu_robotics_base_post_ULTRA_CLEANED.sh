@@ -3466,6 +3466,8 @@ echo -e "\n${BLUE}### PHASE 4: Compiling OpenCV from source ###${NC}"
 # Purpose: Ensure clean build environment
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# Ensure we're not inside the directory before removing it
+cd / || true
 rm -rf /tmp/opencv /tmp/opencv_contrib
 
 #--- Sub-block 10.3: Configure OpenCV version and paths ---
