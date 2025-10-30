@@ -2968,41 +2968,46 @@ if ! ldconfig -p | grep -q "libceres.so"; then
 fi
 
 #--- Sub-block 8.5.1: Protect compiled Ceres from APT overwrites ---
-# Critical: Prevent apt from installing libceres-dev which would overwrite our optimized version
-# Create a dummy package to satisfy dependencies without installing actual package
+# Critical: Prevent APT from installing ANY system Ceres packages
+# Strategy: Use APT pinning with negative priority (consistent with glog and OpenCV)
 echo "Protecting compiled Ceres from APT overwrites..."
-mkdir -p /var/lib/dpkg/info
-mkdir -p /var/lib/dpkg/status.d
-cat > /var/lib/dpkg/info/libceres-dev.list << 'EOF'
-# Dummy package list to prevent apt from installing libceres-dev
-# Our optimized Ceres is in /usr/local
-EOF
-cat > /var/lib/dpkg/info/libceres-dev.md5sums << 'EOF'
-# Dummy md5sums file to prevent apt md5sums control file errors
-EOF
-cat > /var/lib/dpkg/status.d/libceres-dev << 'EOF'
+
+# Create APT preferences directory
+mkdir -p /etc/apt/preferences.d
+
+# Block ALL system Ceres packages using APT pinning with negative priority
+cat > /etc/apt/preferences.d/block-system-ceres << 'EOF'
+# Block system Ceres packages (prevent installation)
+# Our optimized Ceres Solver 2.2.0 is compiled from source in /usr/local
+# Negative priority (-1) means APT will never install these packages
+
 Package: libceres-dev
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled Ceres Solver (in /usr/local)
- This is a dummy package to prevent apt from installing libceres-dev
- which would conflict with our custom-compiled optimized version.
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres3
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres2
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres1
+Pin: release *
+Pin-Priority: -1
 EOF
 
-# Append to main dpkg status (remove any existing entries first to prevent duplicates)
-if [ -f /var/lib/dpkg/status.d/libceres-dev ]; then
-  safe_add_dummy_package "libceres-dev" "/var/lib/dpkg/status.d/libceres-dev"
+if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
+    echo "✓ Created APT preferences to block system Ceres packages"
+    echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
+    echo "  - Method: APT pinning with Pin-Priority: -1"
+else
+    echo "✗ ERROR: Failed to create Ceres protection file"
+    exit 1
 fi
 
-# Mark as held to prevent removal/upgrade
-echo "libceres-dev hold" | dpkg --set-selections
-
-echo "✓ Ceres protected from APT overwrites"
+echo "✓ Ceres protected from APT overwrites (APT pinning method)"
 
 # Cleanup
 cd / && rm -rf /tmp/ceres-solver
@@ -3060,34 +3065,42 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   fi
 
   #--- Sub-block 8.9.1: Protect compiled G2O from APT overwrites ---
+  # Critical: Prevent APT from installing ANY system G2O packages
+  # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, and OpenCV)
   echo "Protecting compiled G2O from APT overwrites..."
-  mkdir -p /var/lib/dpkg/status.d
-  mkdir -p /var/lib/dpkg/info
-  cat > /var/lib/dpkg/info/libg2o-dev.list << 'EOF'
-# Dummy package list to prevent apt from installing libg2o-dev
-# Our optimized G2O is in /usr/local
-EOF
-  cat > /var/lib/dpkg/info/libg2o-dev.md5sums << 'EOF'
-# Dummy md5sums file to prevent apt md5sums control file errors
-EOF
-  cat > /var/lib/dpkg/status.d/libg2o-dev << 'EOF'
+  
+  # Create APT preferences directory
+  mkdir -p /etc/apt/preferences.d
+  
+  # Block ALL system G2O packages using APT pinning with negative priority
+  cat > /etc/apt/preferences.d/block-system-g2o << 'EOF'
+# Block system G2O packages (prevent installation)
+# Our optimized G2O 20241228_git is compiled from source in /usr/local
+# Negative priority (-1) means APT will never install these packages
+
 Package: libg2o-dev
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled G2O (in /usr/local)
- This is a dummy package to prevent apt from installing libg2o-dev.
+Pin: release *
+Pin-Priority: -1
+
+Package: libg2o0
+Pin: release *
+Pin-Priority: -1
+
+Package: libg2o20130302
+Pin: release *
+Pin-Priority: -1
 EOF
-  # Append to main dpkg status (remove any existing entries first to prevent duplicates)
-  if [ -f /var/lib/dpkg/status.d/libg2o-dev ]; then
-    safe_add_dummy_package "libg2o-dev" "/var/lib/dpkg/status.d/libg2o-dev"
+  
+  if [ -f "/etc/apt/preferences.d/block-system-g2o" ]; then
+      echo "✓ Created APT preferences to block system G2O packages"
+      echo "  - Blocks: libg2o-dev, libg2o0, libg2o20130302"
+      echo "  - Method: APT pinning with Pin-Priority: -1"
+  else
+      echo "✗ ERROR: Failed to create G2O protection file"
+      exit 1
   fi
-  echo "libg2o-dev hold" | dpkg --set-selections
-  echo "✓ G2O protected from APT overwrites"
+  
+  echo "✓ G2O protected from APT overwrites (APT pinning method)"
 
   # Cleanup
   cd / && rm -rf /tmp/g2o
@@ -3152,34 +3165,42 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   fi
 
   #--- Sub-block 8.13.1: Protect compiled GTSAM from APT overwrites ---
+  # Critical: Prevent APT from installing ANY system GTSAM packages
+  # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, G2O, and OpenCV)
   echo "Protecting compiled GTSAM from APT overwrites..."
-  mkdir -p /var/lib/dpkg/status.d
-  mkdir -p /var/lib/dpkg/info
-  cat > /var/lib/dpkg/info/libgtsam-dev.list << 'EOF'
-# Dummy package list to prevent apt from installing libgtsam-dev
-# Our optimized GTSAM is in /usr/local
-EOF
-  cat > /var/lib/dpkg/info/libgtsam-dev.md5sums << 'EOF'
-# Dummy md5sums file to prevent apt md5sums control file errors
-EOF
-  cat > /var/lib/dpkg/status.d/libgtsam-dev << 'EOF'
+  
+  # Create APT preferences directory
+  mkdir -p /etc/apt/preferences.d
+  
+  # Block ALL system GTSAM packages using APT pinning with negative priority
+  cat > /etc/apt/preferences.d/block-system-gtsam << 'EOF'
+# Block system GTSAM packages (prevent installation)
+# Our optimized GTSAM 4.2.0 is compiled from source in /usr/local
+# Negative priority (-1) means APT will never install these packages
+
 Package: libgtsam-dev
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled GTSAM (in /usr/local)
- This is a dummy package to prevent apt from installing libgtsam-dev.
+Pin: release *
+Pin-Priority: -1
+
+Package: libgtsam4
+Pin: release *
+Pin-Priority: -1
+
+Package: libgtsam-unstable4
+Pin: release *
+Pin-Priority: -1
 EOF
-  # Append to main dpkg status (remove any existing entries first to prevent duplicates)
-  if [ -f /var/lib/dpkg/status.d/libgtsam-dev ]; then
-    safe_add_dummy_package "libgtsam-dev" "/var/lib/dpkg/status.d/libgtsam-dev"
+  
+  if [ -f "/etc/apt/preferences.d/block-system-gtsam" ]; then
+      echo "✓ Created APT preferences to block system GTSAM packages"
+      echo "  - Blocks: libgtsam-dev, libgtsam4, libgtsam-unstable4"
+      echo "  - Method: APT pinning with Pin-Priority: -1"
+  else
+      echo "✗ ERROR: Failed to create GTSAM protection file"
+      exit 1
   fi
-  echo "libgtsam-dev hold" | dpkg --set-selections
-  echo "✓ GTSAM protected from APT overwrites"
+  
+  echo "✓ GTSAM protected from APT overwrites (APT pinning method)"
 
   # Cleanup
   cd / && rm -rf /tmp/gtsam
@@ -3789,97 +3810,64 @@ echo "Build complete!"
 echo "==============="
 
 #--- Sub-block 10.13.1: Protect compiled OpenCV from APT overwrites ---
-# Critical: Prevent apt from installing libopencv-dev which would overwrite our optimized version
+# Critical: Prevent APT from installing ANY system OpenCV packages
+# Strategy: Use APT pinning with negative priority to block ALL libopencv-* packages
+# Benefits: Simple, robust, survives apt-mark unhold, no dummy packages needed
 echo "Protecting compiled OpenCV from APT overwrites..."
 
-# Clean up any existing OpenCV package entries that might cause conflicts
-echo "Cleaning up existing OpenCV package entries..."
-# Note: OpenCV package cleanup will be handled by safe_add_dummy_package function
+# Create APT preferences directory
+mkdir -p /etc/apt/preferences.d
 
-# Create dummy dpkg entries for OpenCV packages (similar to Ceres/G2O/GTSAM)
-# This prevents "missing list control file" errors
-echo "Creating dummy dpkg entries for OpenCV packages..."
-mkdir -p /var/lib/dpkg/info
-mkdir -p /var/lib/dpkg/status.d
+# Block ALL system OpenCV packages using wildcard pinning with negative priority
+# Pin-Priority: -1 means "never install this package"
+cat > /etc/apt/preferences.d/block-system-opencv << 'EOF'
+# Block ALL system OpenCV packages (prevent installation of any libopencv-* package)
+# Our optimized OpenCV 4.12.0 is compiled from source in /usr/local
+# Negative priority (-1) means APT will never install these packages
+Package: libopencv-*
+Pin: release *
+Pin-Priority: -1
 
-for pkg in "${opencv_packages[@]}"; do
-    # Create .list file
-    cat > "/var/lib/dpkg/info/${pkg}.list" << EOF
-# Dummy package list to prevent apt from installing ${pkg}
-# Our optimized OpenCV is in /usr/local
+# Also block the main opencv packages
+Package: opencv-data
+Pin: release *
+Pin-Priority: -1
+
+Package: libcv-dev
+Pin: release *
+Pin-Priority: -1
+
+Package: libhighgui-dev
+Pin: release *
+Pin-Priority: -1
 EOF
-    
-    # Create .md5sums file
-    cat > "/var/lib/dpkg/info/${pkg}.md5sums" << EOF
-# Dummy md5sums file to prevent apt md5sums control file errors
-EOF
-done
 
-# Use apt-mark hold (preferred method)
-echo "Applying OpenCV protection using apt-mark hold..."
-opencv_packages=(
-    "libopencv-dev"
-    "libopencv-core-dev"
-    "libopencv-imgproc-dev"
-    "libopencv-highgui-dev" 
-    "libopencv-contrib-dev"
-)
-
-protected_count=0
-for pkg in "${opencv_packages[@]}"; do
-    echo "  Protecting package: $pkg"
-    
-    # Create dpkg status entry using safe function
-    cat > "/var/lib/dpkg/status.d/${pkg}" << EOF
-Package: ${pkg}
-Status: install ok installed
-Priority: optional
-Section: libdevel
-Installed-Size: 1
-Maintainer: Custom Build
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled OpenCV (in /usr/local)
- This is a dummy package to prevent apt from installing ${pkg}
- which would conflict with our custom-compiled optimized version.
-EOF
-    safe_add_dummy_package "${pkg}" "/var/lib/dpkg/status.d/${pkg}"
-    
-    if apt-mark hold "$pkg" 2>/dev/null; then
-        echo "    ✓ Held: $pkg"
-        protected_count=$((protected_count + 1))
-    else
-        echo "    ⚠ Could not hold: $pkg (non-fatal)"
-    fi
-done
-
-# Create apt preferences for additional protection
-echo "Creating apt preferences for additional protection..."
-mkdir -p /etc/apt/preferences.d 2>/dev/null || true
-
-cat > /etc/apt/preferences.d/opencv-protection << 'PREFEOF'
-# Protect compiled OpenCV from APT overwrites
-Package: libopencv-dev libopencv-core-dev libopencv-imgproc-dev libopencv-highgui-dev libopencv-contrib-dev
-Pin: version 999.9.9
-Pin-Priority: 1001
-PREFEOF
-
-if [ -f "/etc/apt/preferences.d/opencv-protection" ]; then
-    echo "✓ Created apt preferences for OpenCV protection"
-    protected_count=$((protected_count + 1))
-fi
-
-echo "✓ OpenCV protected from APT overwrites (${protected_count} packages protected)"
-
-# Verify dpkg database integrity
-echo "Verifying dpkg database integrity..."
-if dpkg --audit 2>/dev/null; then
-    echo "✓ Dpkg database is clean and consistent"
+# Verify the preferences file was created
+if [ -f "/etc/apt/preferences.d/block-system-opencv" ]; then
+    echo "✓ Created APT preferences to block ALL system OpenCV packages"
+    echo "  - Blocks: libopencv-* (all OpenCV development and runtime packages)"
+    echo "  - Method: APT pinning with Pin-Priority: -1"
+    echo "  - Survives: apt-mark unhold and apt-get operations"
 else
-    echo "⚠ Dpkg database has issues, but continuing..."
+    echo "✗ ERROR: Failed to create OpenCV protection file"
+    exit 1
 fi
 
-echo "✓ OpenCV protection completed ($protected_count methods applied)"
+# Update APT cache to apply the new preferences
+echo "Updating APT cache to apply OpenCV protection..."
+apt-get update || true
+
+# Verify protection is active by checking if apt would install opencv packages
+echo "Verifying OpenCV protection..."
+if apt-cache policy libopencv-dev 2>/dev/null | grep -q "Pin-Priority: -1"; then
+    echo "✓ OpenCV protection verified - system packages are blocked"
+elif ! apt-cache show libopencv-dev &>/dev/null; then
+    echo "✓ OpenCV protection verified - system packages not available"
+else
+    echo "⚠ Warning: Could not verify OpenCV protection, but continuing..."
+fi
+
+echo "✓ OpenCV protection completed (APT pinning method)"
 
 #--- Sub-block 10.14: Cleanup OpenCV build files ---
 # Purpose: Remove temporary build files
@@ -4122,6 +4110,9 @@ apt-get -y autoremove || true
 # Purpose: Clear package holds that might cause conflicts
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# Note: This is safe for OpenCV - we use APT pinning (Pin-Priority: -1) which survives unhold
+# Note: APT pinning in /etc/apt/preferences.d/block-system-opencv prevents libopencv-* installation
+echo "Clearing package holds (OpenCV protected by APT pinning, not affected)..."
 apt-mark unhold $(dpkg --get-selections | grep hold | awk '{print $1}') 2>/dev/null || true
 
 #--- Sub-block 13.4: Install essential package tools ---
@@ -4430,6 +4421,48 @@ if python3 -c "import pycolmap; print(f'PyCOLMAP version: {pycolmap.__version__}
 else
     echo "⚠ PyCOLMAP Python module not available (non-fatal)"
 fi
+
+#--- Sub-block 13A.5.1: Protect compiled COLMAP from APT overwrites ---
+# Critical: Prevent APT from installing ANY system COLMAP packages
+# Strategy: Use APT pinning with negative priority (consistent with other compiled libraries)
+echo "Protecting compiled COLMAP from APT overwrites..."
+
+# Create APT preferences directory
+mkdir -p /etc/apt/preferences.d
+
+# Block ALL system COLMAP packages using APT pinning with negative priority
+cat > /etc/apt/preferences.d/block-system-colmap << 'EOF'
+# Block system COLMAP packages (prevent installation)
+# Our optimized COLMAP 3.12.6 is compiled from source in /usr/local with CUDA support
+# Negative priority (-1) means APT will never install these packages
+
+Package: colmap
+Pin: release *
+Pin-Priority: -1
+
+Package: colmap-dev
+Pin: release *
+Pin-Priority: -1
+
+Package: libcolmap
+Pin: release *
+Pin-Priority: -1
+
+Package: libcolmap-dev
+Pin: release *
+Pin-Priority: -1
+EOF
+
+if [ -f "/etc/apt/preferences.d/block-system-colmap" ]; then
+    echo "✓ Created APT preferences to block system COLMAP packages"
+    echo "  - Blocks: colmap, colmap-dev, libcolmap, libcolmap-dev"
+    echo "  - Method: APT pinning with Pin-Priority: -1"
+else
+    echo "✗ ERROR: Failed to create COLMAP protection file"
+    exit 1
+fi
+
+echo "✓ COLMAP protected from APT overwrites (APT pinning method)"
 
 #--- Sub-block 13A.6: Cleanup COLMAP build ---
 # Purpose: Remove build files to save space
