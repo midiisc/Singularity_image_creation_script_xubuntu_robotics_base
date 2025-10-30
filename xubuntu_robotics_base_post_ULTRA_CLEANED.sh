@@ -101,7 +101,16 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # stdbuf -oL makes output line-buffered (immediate write on newline)
     # This ensures most output is written immediately, reducing data loss
     # IMPORTANT: exec redirects ALL subsequent output - each line written ONCE
-    exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2>&1
+    # Gracefully degrade if stdbuf is not available (minimal containers)
+    if command -v stdbuf >/dev/null 2>&1 && command -v tee >/dev/null 2>&1; then
+        exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2>&1
+    elif command -v tee >/dev/null 2>&1; then
+        # Fallback: tee without stdbuf (no line buffering but still works)
+        exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
+    else
+        echo "  ⚠ Warning: 'tee' command not available, logging disabled"
+        echo "  Build will continue without log file"
+    fi
     
     # Start background sync job to periodically flush log file to disk
     # This ensures data is saved even if build is interrupted
