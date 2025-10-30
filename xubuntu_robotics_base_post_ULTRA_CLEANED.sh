@@ -498,6 +498,148 @@ fi
 }
 # End probe_and_set_mirrors function (self-contained)
 
+#--- Sub-block 3.3: Mirror verification function ---
+# Purpose: Verify that sources.list uses the fastest mirror
+# Dependencies: FASTEST_MIRROR variable
+# Outputs: Diagnostic messages, returns 0 if OK, 1 if issues found
+verify_fastest_mirror() {
+    if [ -z "${FASTEST_MIRROR:-}" ]; then
+        echo "[warn] FASTEST_MIRROR not set - cannot verify"
+        return 1
+    fi
+    
+    if [ "$FASTEST_MIRROR" = "http://archive.ubuntu.com/ubuntu" ]; then
+        echo "[info] Using default Ubuntu mirror (no verification needed)"
+        return 0
+    fi
+    
+    echo "[info] Verifying fastest mirror usage..."
+    
+    local issues_found=0
+    
+    # Check main sources.list
+    if [ -f /etc/apt/sources.list ]; then
+        # Count lines using fastest mirror
+        local fast_count=$(grep -v "^#" /etc/apt/sources.list | grep -c "deb.*${FASTEST_MIRROR}" 2>/dev/null || echo 0)
+        # Count lines using archive.ubuntu.com
+        local slow_count=$(grep -v "^#" /etc/apt/sources.list | grep -c "deb.*archive\.ubuntu\.com" 2>/dev/null || echo 0)
+        
+        if [ $slow_count -gt 0 ]; then
+            echo "[ERROR] Found $slow_count lines still using archive.ubuntu.com in sources.list:"
+            grep -v "^#" /etc/apt/sources.list | grep "archive\.ubuntu\.com" | sed 's/^/  /'
+            issues_found=$((issues_found + slow_count))
+        else
+            echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
+        fi
+        
+        if [ $fast_count -gt 0 ]; then
+            echo "[info] ✓ sources.list: ${fast_count} lines using ${FASTEST_MIRROR}"
+        fi
+    else
+        echo "[warn] /etc/apt/sources.list not found"
+        return 1
+    fi
+    
+    # Check sources.list.d/ files (excluding PPAs)
+    if [ -d /etc/apt/sources.list.d ]; then
+        local found_issues=0
+        shopt -s nullglob  # Handle case where no .list files exist
+        for sources_file in /etc/apt/sources.list.d/*.list; do
+            [ -f "$sources_file" ] || continue
+            
+            # Skip PPA files
+            if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
+                continue
+            fi
+            
+            # Check for archive.ubuntu.com in non-PPA files
+            if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
+                echo "[ERROR] Found archive.ubuntu.com in $(basename "$sources_file"):"
+                grep -v "^#" "$sources_file" | grep "archive\.ubuntu\.com" | sed 's/^/  /'
+                found_issues=1
+            fi
+        done
+        shopt -u nullglob  # Restore default behavior
+        
+        if [ $found_issues -eq 0 ]; then
+            echo "[info] ✓ sources.list.d/: No archive.ubuntu.com found (good)"
+        else
+            issues_found=$((issues_found + 1))
+        fi
+    fi
+    
+    # Summary
+    if [ $issues_found -eq 0 ]; then
+        echo "[info] ✅ VERIFICATION PASSED: All Ubuntu sources use ${FASTEST_MIRROR}"
+        return 0
+    else
+        echo "[ERROR] ❌ VERIFICATION FAILED: Found $issues_found issue(s) - some sources still use archive.ubuntu.com"
+        return 1
+    fi
+}
+export -f verify_fastest_mirror
+
+#--- Sub-block 3.4: Mirror re-application function ---
+# Purpose: Re-apply fastest mirror to all sources (for use after add-apt-repository)
+# Dependencies: FASTEST_MIRROR variable
+# Outputs: Updated sources.list and sources.list.d/ files
+reapply_fastest_mirror() {
+    if [ -z "${FASTEST_MIRROR:-}" ]; then
+        echo "[warn] FASTEST_MIRROR not set - skipping re-application"
+        return 1
+    fi
+    
+    if [ "$FASTEST_MIRROR" = "http://archive.ubuntu.com/ubuntu" ]; then
+        echo "[info] Using default Ubuntu mirror (no re-application needed)"
+        return 0
+    fi
+    
+    echo "[info] Re-applying fastest mirror to all Ubuntu repositories..."
+    
+    # Update main sources.list
+    if [ -f /etc/apt/sources.list ]; then
+        # First pass: specifically target archive.ubuntu.com (what add-apt-repository adds)
+        sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        # Second pass: catch any other Ubuntu mirror URLs for consistency
+        sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        echo "[info] ✓ Updated /etc/apt/sources.list"
+    else
+        echo "[warn] /etc/apt/sources.list not found"
+    fi
+    
+    # Update sources.list.d/ files (excluding PPAs)
+    if [ -d /etc/apt/sources.list.d ]; then
+        local updated_count=0
+        shopt -s nullglob  # Handle case where no .list files exist
+        for sources_file in /etc/apt/sources.list.d/*.list; do
+            [ -f "$sources_file" ] || continue
+            
+            # Skip PPA files (they must use ppa.launchpad.net)
+            if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
+                continue
+            fi
+            
+            # Update Ubuntu mirror URLs in this file
+            if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
+                sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+                echo "[info] ✓ Updated: $(basename "$sources_file")"
+                updated_count=$((updated_count + 1))
+            fi
+        done
+        shopt -u nullglob  # Restore default behavior
+        
+        if [ $updated_count -eq 0 ]; then
+            echo "[info] sources.list.d/: No Ubuntu repositories to update"
+        fi
+    fi
+    
+    echo "[info] ✓ Fastest mirror re-application complete"
+    
+    # Verify the changes
+    verify_fastest_mirror
+}
+export -f reapply_fastest_mirror
+
 #===============================================================================
 # BLOCK 4: CACHE MONITORING SYSTEM
 #===============================================================================
@@ -949,7 +1091,15 @@ else
   echo "    [warn] /etc/apt/sources.list not found"
 fi
 
-echo "✓ Mirror selection completed - all subsequent apt operations will use fastest mirror"
+echo ""
+echo "==> Verifying mirror configuration..."
+# Run verification to ensure mirror was properly applied
+if verify_fastest_mirror; then
+    echo "✓ Mirror selection completed and verified - all subsequent apt operations will use fastest mirror"
+else
+    echo "[warn] Mirror verification found issues - attempting to re-apply..."
+    reapply_fastest_mirror || echo "[ERROR] Failed to fix mirror issues"
+fi
 
 #--- Sub-block 6.9.8: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
@@ -962,7 +1112,13 @@ echo -e "\n\033[1;34m===> Enabling the 'universe' repository for additional pack
 add-apt-repository -y universe
 add-apt-repository -y ppa:mozillateam/ppa
 add-apt-repository -y ppa:agornostal/ulauncher
-echo "✓ Additional repositories enabled"
+
+echo ""
+echo "==> Re-applying fastest mirror after add-apt-repository (which uses default URLs)..."
+# Use the reapply_fastest_mirror function to update all sources
+reapply_fastest_mirror
+
+echo "✓ Additional repositories enabled and verified"
 
 #--- Sub-block 6.9.9: Synchronize base image with repositories ---
 # Purpose: Resolve inconsistencies between base image and APT sources
@@ -1944,6 +2100,11 @@ if [ ! -f /etc/apt/sources.list.d/mozillateam-ubuntu-ppa-${CODENAME}.list ]; the
     echo "deb http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/ulauncher-ppa.list
     echo "deb-src http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/ulauncher-ppa.list
 fi
+
+# Verify fastest mirror is still in place (safeguard after PPA operations)
+echo ""
+echo "==> Verifying fastest mirror after PPA operations (safeguard check)..."
+verify_fastest_mirror || echo "[warn] Mirror verification after PPA operations found issues"
 
 #--- Sub-block 6.13.25: Add PPA GPG keys ---
 # Critical: Import signing keys for all configured PPAs
