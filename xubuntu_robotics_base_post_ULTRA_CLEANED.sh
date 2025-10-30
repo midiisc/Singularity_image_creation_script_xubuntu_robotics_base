@@ -105,19 +105,26 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     
     # Start background sync job to periodically flush log file to disk
     # This ensures data is saved even if build is interrupted
-    (
-        while true; do
-            sleep ${BUILD_LOG_SYNC_INTERVAL}
-            # Sync this specific log file to disk
-            if [ -f "${BUILD_LOG_FILE}" ]; then
-                sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
-            fi
-        done
-    ) &
-    SYNC_PID=$!
-    
-    # Store sync PID so we can clean it up if needed
-    export BUILD_LOG_SYNC_PID=${SYNC_PID}
+    # Only start if sleep command is available (may not be in minimal base images)
+    if command -v sleep >/dev/null 2>&1; then
+        (
+            while true; do
+                sleep ${BUILD_LOG_SYNC_INTERVAL}
+                # Sync this specific log file to disk
+                if [ -f "${BUILD_LOG_FILE}" ]; then
+                    sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
+                fi
+            done
+        ) &
+        SYNC_PID=$!
+        
+        # Store sync PID so we can clean it up if needed
+        export BUILD_LOG_SYNC_PID=${SYNC_PID}
+    else
+        echo "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
+        echo "  Log will still be captured, but manual sync only on exit"
+        export BUILD_LOG_SYNC_PID=""
+    fi
     
     # Trap to ensure sync job is killed when script exits (normal or abrupt)
     # This function is called on: EXIT (normal), INT (Ctrl+C), TERM (kill)
