@@ -254,6 +254,49 @@ debug_glibc() {
 # End function (self-contained)
 
 #===============================================================================
+# BLOCK 2.5: BUILD JOB CALCULATION FUNCTION (FOR PARALLEL COMPILATION)
+#===============================================================================
+# Purpose: Calculate optimal number of parallel build jobs based on CPU and memory
+# Self-contained: Yes (no external dependencies)
+# Outputs: Number of jobs suitable for parallel compilation
+# Usage: BUILD_JOBS=$(calculate_build_jobs)
+#-------------------------------------------------------------------------------
+
+calculate_build_jobs() {
+    # Get system resources
+    local mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
+    local cpu_cores=$(nproc)
+    
+    # Calculate jobs based on CPU (use half cores to prevent overload)
+    local jobs_by_cpu=$((cpu_cores / 2))
+    
+    # Calculate jobs based on memory (assume 3GB per C++ compilation job for safety)
+    # This accounts for template-heavy code like COLMAP, Ceres, OpenCV
+    local jobs_by_mem=$((mem_gb / 3))
+    
+    # Use the minimum of the two (most conservative)
+    local jobs=$jobs_by_cpu
+    if [ $jobs_by_mem -lt $jobs ]; then
+        jobs=$jobs_by_mem
+        echo "  ℹ Memory-limited: Using $jobs jobs (RAM: ${mem_gb}GB allows ~$jobs parallel C++ jobs)" >&2
+    fi
+    
+    # Ensure at least 1 job
+    if [ $jobs -lt 1 ]; then
+        jobs=1
+    fi
+    
+    # Allow override via environment variable (for testing/debugging)
+    if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
+        jobs=$BUILD_JOBS_OVERRIDE
+        echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=$jobs" >&2
+    fi
+    
+    echo $jobs
+}
+# End function (self-contained)
+
+#===============================================================================
 # BLOCK 3: MIRROR PROBING FUNCTIONS (MUST BE EARLY FOR APT OPERATIONS)
 #===============================================================================
 # Purpose: Test and select fastest Ubuntu mirror BEFORE any apt-get operations
@@ -2321,6 +2364,57 @@ echo -e "\n${YELLOW}[PHASE 1 | Sanity Check] Reinstalling core C++ compiler to f
 apt-get install --reinstall -y g++ build-essential
 echo -e "${GREEN}✓ Compiler toolchain verified.${NC}"
 
+#--- Sub-block 7.5.5: EARLY PROTECTION - Block system Ceres packages ---
+# CRITICAL: Apply APT pinning NOW to prevent accidental Ceres installation
+# This must happen BEFORE any other apt operations that might pull in Ceres
+# Dependencies: None (foundational protection)
+# Outputs: APT preferences file
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "EARLY PROTECTION: Blocking system Ceres packages via APT pinning"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Create APT preferences directory
+mkdir -p /etc/apt/preferences.d
+
+# Block ALL system Ceres packages using APT pinning with negative priority
+# This prevents ANY apt operation from installing system Ceres
+cat > /etc/apt/preferences.d/block-system-ceres << 'EOF'
+# Block system Ceres packages (prevent installation)
+# We will compile Ceres from source in /usr/local (Block 8)
+# Negative priority (-1) means APT will never install these packages
+
+Package: libceres-dev
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres3
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres2
+Pin: release *
+Pin-Priority: -1
+
+Package: libceres1
+Pin: release *
+Pin-Priority: -1
+EOF
+
+if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
+    echo "✓ Created APT preferences to block system Ceres packages"
+    echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
+    echo "  - Method: APT pinning with Pin-Priority: -1"
+    echo "  - Effect: No apt operation can install system Ceres"
+else
+    echo "✗ ERROR: Failed to create Ceres protection file"
+    exit 1
+fi
+
+echo "✓ System Ceres packages are now blocked (early protection active)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 #--- Sub-block 7.6: Configure tmux for ROS workflows ---
 # Purpose: Optimize tmux for multi-pane ROS development
 # Dependencies: Block 17 (Conda/Miniforge)
@@ -2554,7 +2648,7 @@ clone_with_retry() {
 #   - Uses standard system library paths
 #
 # COMPATIBILITY DESIGN:
-#   - Ceres: Uses MINIGLOG=ON (internal bundled mini-glog) → ISOLATED, NO CONFLICT
+#   - Ceres: Uses MINIGLOG=OFF (links to system glog 0.6.0) → UNIFIED WITH COLMAP
 #   - COLMAP: Uses system glog 0.6.0-2.1build1 (Ubuntu's patched version) → COMPATIBLE
 #   - g2o: No glog dependency → NO CONFLICT
 #   - GTSAM: No glog dependency → NO CONFLICT
@@ -2572,118 +2666,6 @@ echo "  - Includes Ubuntu's compatibility patches for COLMAP"
 echo "  - No compilation needed"
 echo ""
 monitor_cache "After glog setup (system package)"
-
-#--- Sub-block 8.2: Compile Ceres Solver ---
-# Purpose: Build Ceres optimization library from source (COMPILE FIRST - g2o can link to it)
-# Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
-# Note: Changed from Sub-block 8.1.5 dependency (glog source) - now uses system glog package
-# Outputs: Optimized Ceres library
-echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
-# Ensure we're not inside the directory before removing it
-cd / || true
-rm -rf /tmp/ceres-solver
-# Using CERES_VERSION from config.sh
-if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
-    echo "ERROR: Failed to clone Ceres Solver after all retry attempts"
-    exit 1
-fi
-# Use explicit, separate commands for navigation
-cd /tmp/ceres-solver || { echo "ERROR: Failed to access ceres-solver directory"; exit 1; }
-# Remove existing build directory if it exists (critical for Singularity rebuilds)
-rm -rf build
-mkdir -p build
-cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
-
-#--- Sub-block 8.3: Configure Ceres with CMake ---
-# Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
-# 
-# COMPATIBILITY NOTE: MINIGLOG=ON (uses Ceres internal mini-glog)
-#   Why: Isolates Ceres from external glog changes, preventing ABI conflicts
-#   Result: Ceres uses bundled mini-glog, COLMAP uses system glog 0.6.0-2.1build1
-#   Benefit: Maximum stability, each library uses appropriate glog version
-#   Alternative: MINIGLOG=OFF would make Ceres use external glog (not recommended)
-#
-cmake .. \
-  -G Ninja \
-  -D CMAKE_BUILD_TYPE=Release \
-  -D CMAKE_INSTALL_PREFIX=/usr/local \
-  -D CMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
-  -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
-  -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
-  -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
-  -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-  -D BUILD_SHARED_LIBS=ON \
-  -D MINIGLOG=ON \
-  -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
-  -D BLA_VENDOR=OpenBLAS \
-  -D LAPACK=ON \
-  -D EIGENMETIS=ON \
-  -D EIGENSPARSE=ON \
-  -D SUITESPARSE=ON \
-  -D USE_CUDA=ON \
-  -D BUILD_EXAMPLES=OFF \
-  -D BUILD_TESTING=OFF \
-  -D BUILD_BENCHMARKS=OFF \
-  -D CMAKE_CUDA_ARCHITECTURES="86;89;90" \
-  -D CMAKE_CXX_STANDARD=17 \
-  -D CMAKE_CXX_STANDARD_REQUIRED=ON \
-  -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
-
-#--- Sub-block 8.4: Build and install Ceres ---
-# Critical: Compile with ninja using half CPU cores
-ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build Ceres"; exit 1; }
-ninja install || { echo "ERROR: Failed to install Ceres"; exit 1; }
-ldconfig
-
-# CRITICAL: Check dpkg status file for corruption before proceeding
-echo "Checking dpkg status file integrity..."
-if ! dpkg --audit > /dev/null 2>&1; then
-    echo "⚠ WARNING: dpkg status file may be corrupted. Attempting repair..."
-    
-    # Check specifically for duplicate Package entries
-    DUPLICATES=$(awk '/^Package:/ {count[$2]++} END {for (pkg in count) if (count[pkg] > 1) print pkg}' /var/lib/dpkg/status)
-    
-    if [ -n "$DUPLICATES" ]; then
-        echo "  Found duplicate package entries: $(echo $DUPLICATES | tr '\n' ', ')"
-        echo "  Creating clean dpkg status file..."
-        
-        # Backup the corrupted file
-        cp /var/lib/dpkg/status /var/lib/dpkg/status.corrupted.backup
-        
-        # Remove ALL duplicate entries using awk (keep only first occurrence)
-        awk '
-            /^Package:/ {
-                pkg = $2
-                if (seen[pkg]) {
-                    skip = 1
-                    next
-                }
-                seen[pkg] = 1
-                skip = 0
-            }
-            !skip || /^$/ {
-                if (/^$/ && skip) {
-                    skip = 0
-                    next
-                }
-                print
-            }
-        ' /var/lib/dpkg/status.corrupted.backup > /var/lib/dpkg/status.new
-        
-        # Verify the new file is valid
-        if [ -s /var/lib/dpkg/status.new ] && grep -q "^Package:" /var/lib/dpkg/status.new; then
-            mv /var/lib/dpkg/status.new /var/lib/dpkg/status
-            echo "  ✓ dpkg status file repaired successfully"
-            echo "  Corrupted backup saved to: /var/lib/dpkg/status.corrupted.backup"
-        else
-            echo "  ✗ ERROR: Failed to repair dpkg status file"
-            rm -f /var/lib/dpkg/status.new
-            exit 1
-        fi
-    fi
-else
-    echo "✓ dpkg status file integrity verified"
-fi
 
 #--- Sub-block 8.1.5.1: Verify System glog Installation ---
 # Purpose: Verify Ubuntu's glog 0.6.0 is installed and check for version conflicts
@@ -2794,6 +2776,19 @@ monitor_cache "After glog verification"
 # Note: Uses internal MINIGLOG (bundled), NOT system glog - fully isolated
 # Outputs: Optimized Ceres library
 echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
+
+# CRITICAL: Remove system Ceres to prevent conflicts
+# System Ceres 2.2.0 uses older configuration, we'll build from source
+# Using MINIGLOG=OFF to share system glog 0.6.0 with COLMAP (unified approach)
+if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+    echo "⚠️  Removing system Ceres packages to compile from source..."
+    echo "  (We'll build Ceres with system glog 0.6.0 for consistency with COLMAP)"
+    apt-get remove -y libceres-dev libceres2 2>/dev/null || true
+    apt-get autoremove -y
+    echo "✓ System Ceres removed"
+else
+    echo "✓ No system Ceres found (clean state)"
+fi
 # Ensure we're not inside the directory before removing it
 cd / || true
 rm -rf /tmp/ceres-solver
@@ -2812,11 +2807,11 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #--- Sub-block 8.3: Configure Ceres with CMake ---
 # Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
 # 
-# COMPATIBILITY NOTE: MINIGLOG=ON (uses Ceres internal mini-glog)
-#   Why: Isolates Ceres from external glog changes, preventing ABI conflicts
-#   Result: Ceres uses bundled mini-glog, COLMAP uses system glog 0.6.0
-#   Benefit: Maximum stability, each library uses appropriate glog version
-#   Alternative: MINIGLOG=OFF would make Ceres use external glog (not recommended)
+# COMPATIBILITY NOTE: MINIGLOG=OFF (uses system glog 0.6.0)
+#   Why: Unified approach - both Ceres and COLMAP use same glog version
+#   Result: Ceres uses system glog 0.6.0, COLMAP uses system glog 0.6.0
+#   Benefit: Single glog version, consistent logging, proven compatible
+#   Verified: COLMAP 3.12.6 + Ceres 2.2.0 + glog 0.6.0 = Working combination
 #
 cmake .. \
   -G Ninja \
@@ -2828,7 +2823,7 @@ cmake .. \
   -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
   -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
   -D BUILD_SHARED_LIBS=ON \
-  -D MINIGLOG=ON \
+  -D MINIGLOG=OFF \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
   -D BLA_VENDOR=OpenBLAS \
   -D LAPACK=ON \
@@ -2845,8 +2840,22 @@ cmake .. \
   -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
 
 #--- Sub-block 8.4: Build and install Ceres ---
-# Critical: Compile with ninja using half CPU cores
-ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build Ceres"; exit 1; }
+# Critical: Compile with ninja using memory-aware job calculation
+BUILD_JOBS=$(calculate_build_jobs)
+echo "Building Ceres with $BUILD_JOBS parallel jobs..."
+echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+echo ""
+
+# Build with fallback to single-threaded on failure
+if ! ninja -j${BUILD_JOBS}; then
+    echo ""
+    echo "⚠️  Parallel build failed, retrying single-threaded..."
+    if ! ninja -j1; then
+        echo "ERROR: Failed to build Ceres even with single-threaded compilation"
+        exit 1
+    fi
+fi
+
 ninja install || { echo "ERROR: Failed to install Ceres"; exit 1; }
 ldconfig
 
@@ -2857,47 +2866,29 @@ if ! ldconfig -p | grep -q "libceres.so"; then
   PHASE3_ALL_SUCCESS=false
 fi
 
-#--- Sub-block 8.5.1: Protect compiled Ceres from APT overwrites ---
-# Critical: Prevent APT from installing ANY system Ceres packages
-# Strategy: Use APT pinning with negative priority (consistent with glog and OpenCV)
-echo "Protecting compiled Ceres from APT overwrites..."
-
-# Create APT preferences directory
-mkdir -p /etc/apt/preferences.d
-
-# Block ALL system Ceres packages using APT pinning with negative priority
-cat > /etc/apt/preferences.d/block-system-ceres << 'EOF'
-# Block system Ceres packages (prevent installation)
-# Our optimized Ceres Solver 2.2.0 is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-
-Package: libceres-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres3
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres2
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres1
-Pin: release *
-Pin-Priority: -1
-EOF
-
-if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
-    echo "✓ Created APT preferences to block system Ceres packages"
-    echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
-    echo "  - Method: APT pinning with Pin-Priority: -1"
-else
-    echo "✗ ERROR: Failed to create Ceres protection file"
-    exit 1
-fi
-
-echo "✓ Ceres protected from APT overwrites (APT pinning method)"
+  #--- Sub-block 8.5.1: Verify Ceres APT protection is active ---
+  # Critical: Confirm APT pinning is still protecting compiled Ceres
+  # Note: APT pinning was applied early in Block 7.5.5 (before any apt operations)
+  # Strategy: Just verify it's still in place
+  echo "Verifying Ceres APT protection..."
+  
+  if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
+      echo "✓ APT preferences file exists (early protection active)"
+      echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
+      echo "  - Applied in: Block 7.5.5 (before apt operations)"
+      
+      # Double-check no system Ceres packages slipped through
+      if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+          echo "✗ ERROR: System Ceres packages detected despite APT pinning!"
+          dpkg -l | grep libceres
+          exit 1
+      fi
+  else
+      echo "✗ ERROR: Ceres protection file missing (should have been created in Block 7.5.5)"
+      exit 1
+  fi
+  
+  echo "✓ Ceres protected from APT overwrites (verified)"
 
 # Cleanup
 cd / && rm -rf /tmp/ceres-solver
@@ -3675,12 +3666,23 @@ echo "Configuration summary:"
 grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 
 #--- Sub-block 10.10: Build OpenCV with ninja ---
-# Critical: Compile OpenCV using half CPU cores to prevent OOM
+# Critical: Compile OpenCV using memory-aware job calculation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-JOBS=$(($(nproc) / 2))
-echo "Building with $JOBS parallel jobs..."
-ninja -j$JOBS || { echo "ERROR: Failed to build OpenCV"; exit 1; }
+BUILD_JOBS=$(calculate_build_jobs)
+echo "Building OpenCV with $BUILD_JOBS parallel jobs..."
+echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+echo ""
+
+# Build with fallback to single-threaded on failure
+if ! ninja -j${BUILD_JOBS}; then
+    echo ""
+    echo "⚠️  Parallel build failed, retrying single-threaded..."
+    if ! ninja -j1; then
+        echo "ERROR: Failed to build OpenCV even with single-threaded compilation"
+        exit 1
+    fi
+fi
 
 #--- Sub-block 10.11: Install OpenCV ---
 # Purpose: Install compiled OpenCV libraries to system
@@ -3994,6 +3996,40 @@ echo "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc
 
 debug_glibc "After building ROS2 CV_Bridge"
 
+#--- Sub-block 12.8: POST-ROS CHECK - Verify no system Ceres was installed ---
+# CRITICAL: Ensure ROS dependencies didn't pull in system Ceres packages
+# Dependencies: Block 12 (ROS overlay compilation)
+# Outputs: Warning if system Ceres detected
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "POST-ROS CHECK: Verifying no system Ceres was installed"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1 || dpkg -s libceres3 >/dev/null 2>&1; then
+    echo "⚠️  WARNING: System Ceres packages were installed during ROS operations!"
+    dpkg -l | grep libceres | sed 's/^/  /'
+    echo ""
+    echo "Removing system Ceres to prevent conflicts with /usr/local Ceres..."
+    apt-get remove -y libceres-dev libceres2 libceres3 2>/dev/null || true
+    apt-get autoremove -y
+    ldconfig
+    echo "✓ System Ceres removed"
+else
+    echo "✓ No system Ceres packages detected after ROS operations"
+fi
+
+# Verify our compiled Ceres is still present
+if ! ldconfig -p | grep -q "libceres.so"; then
+    echo "✗ ERROR: Compiled Ceres (/usr/local) is missing!"
+    echo "  This should not happen. Check Block 8 (Ceres compilation)"
+    exit 1
+else
+    echo "✓ Compiled Ceres (/usr/local) is present and ready"
+fi
+
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 #===============================================================================
 # BLOCK 13: ADDITIONAL ROBOTICS/ML LIBRARIES
 #===============================================================================
@@ -4163,10 +4199,101 @@ apt-get install -y --no-install-recommends \
     libboost-graph-dev \
     libboost-thread-dev \
     libgflags-dev \
+    libcurl4-openssl-dev \
     || echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
 # Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
 echo "✓ COLMAP dependencies installed"
+
+#--- Sub-block 13A.1.5: PRE-FLIGHT CHECKS - Verify glog and Ceres before COLMAP ---
+# CRITICAL: Verify dependency versions to prevent compilation failures
+# Dependencies: Block 7 (glog), Block 8 (Ceres)
+# Outputs: Diagnostic information
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "PRE-FLIGHT CHECK: Verifying glog and Ceres before COLMAP"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# 1. Check glog version (CRITICAL)
+echo "1. Checking glog installation:"
+GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
+GLOG_SONAME=$(ls -la /usr/lib/x86_64-linux-gnu/libglog.so 2>/dev/null | awk '{print $NF}')
+if [ "$GLOG_VERSION" != "unknown" ]; then
+    echo "  ✓ glog version: ${GLOG_VERSION}"
+    echo "  ✓ glog soname: ${GLOG_SONAME}"
+    echo "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo '/usr/lib/x86_64-linux-gnu')"
+    
+    # Verify it's glog 0.6.x (required for COLMAP 3.12.6)
+    GLOG_MAJOR=$(echo $GLOG_VERSION | cut -d. -f1)
+    GLOG_MINOR=$(echo $GLOG_VERSION | cut -d. -f2)
+    if [ "$GLOG_MAJOR" -eq 0 ] && [ "$GLOG_MINOR" -eq 6 ]; then
+        echo "  ✓ glog 0.6.x detected - COMPATIBLE with COLMAP 3.12.6"
+    else
+        echo "  ⚠️  WARNING: glog ${GLOG_VERSION} detected - expected 0.6.x for COLMAP 3.12.6"
+    fi
+else
+    echo "  ✗ ERROR: glog not found via pkg-config!"
+    exit 1
+fi
+
+# 2. Check for multiple glog installations (CONFLICT RISK)
+echo ""
+echo "2. Checking for multiple glog installations:"
+GLOG_COUNT=$(find /usr /usr/local -name "libglog.so*" 2>/dev/null | wc -l)
+if [ "$GLOG_COUNT" -gt 3 ]; then  # .so, .so.1, .so.0.6.0 = 3 files expected
+    echo "  ⚠️  WARNING: Found ${GLOG_COUNT} glog library files (potential conflict)"
+    find /usr /usr/local -name "libglog.so*" 2>/dev/null | sed 's/^/    /'
+else
+    echo "  ✓ Single glog installation detected (clean state)"
+fi
+
+# 3. Check Ceres installation and glog linkage
+echo ""
+echo "3. Checking Ceres installation:"
+if ldconfig -p | grep -q "libceres.so"; then
+    CERES_LOCATION=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
+    echo "  ✓ Ceres found: ${CERES_LOCATION}"
+    
+    # Check if Ceres links to glog
+    if ldd "${CERES_LOCATION}" 2>/dev/null | grep -q "libglog"; then
+        CERES_GLOG=$(ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog)
+        echo "  ✓ Ceres glog linkage:"
+        echo "    ${CERES_GLOG}"
+        
+        # Verify it's not "not found"
+        if echo "${CERES_GLOG}" | grep -q "not found"; then
+            echo "  ✗ ERROR: Ceres cannot find glog library!"
+            exit 1
+        fi
+    else
+        echo "  ℹ Ceres uses internal MINIGLOG (isolated from system glog)"
+    fi
+else
+    echo "  ✗ ERROR: Ceres not found in linker cache!"
+    echo "  Ceres must be compiled before COLMAP (Block 8 → Block 13A)"
+    exit 1
+fi
+
+# 4. Check for system Ceres packages (should be blocked)
+echo ""
+echo "4. Checking for conflicting system Ceres packages:"
+if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+    echo "  ⚠️  WARNING: System Ceres packages detected!"
+    dpkg -l | grep libceres | sed 's/^/    /'
+    echo "  This may cause conflicts with compiled Ceres in /usr/local"
+else
+    echo "  ✓ No system Ceres packages (clean state)"
+fi
+
+# 5. Summary
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "PRE-FLIGHT CHECK SUMMARY:"
+echo "  glog: ${GLOG_VERSION} (${GLOG_SONAME})"
+echo "  Ceres: Installed in /usr/local"
+echo "  Status: Ready for COLMAP compilation"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
 
 #--- Sub-block 13A.2: Download COLMAP source ---
 # Purpose: Clone COLMAP with specific version
@@ -4222,14 +4349,33 @@ if [ ! -f "/usr/lib/x86_64-linux-gnu/libglog.so" ]; then
     echo "  Expected: /usr/lib/x86_64-linux-gnu/libglog.so"
     exit 1
 fi
+
+# Check for conflicting glog installations
+if [ -d "/usr/local/lib/cmake/glog" ] || [ -f "/usr/local/lib/libglog.so" ]; then
+    echo "⚠ WARNING: Conflicting glog found in /usr/local"
+    echo "  This may cause compilation issues with COLMAP"
+    echo "  System will use -DCMAKE_IGNORE_PATH to prefer system glog"
+    find /usr/local -name "*glog*" -type f 2>/dev/null | head -5 || true
+fi
+
 echo "✓ System glog is available for COLMAP"
 echo "  Location: /usr/lib/x86_64-linux-gnu"
 echo "  CMake config: /usr/lib/x86_64-linux-gnu/cmake/glog"
+echo "  Version: $(pkg-config --modversion libglog 2>/dev/null || echo 'unknown')"
 
 # Clean build directory (critical for rebuilds)
 echo ""
 echo "🧹 Cleaning build directory for fresh COLMAP build..."
-rm -rf build CMakeCache.txt
+# Clear ccache to prevent corruption from previous failed builds
+echo "  Clearing ccache..."
+if command -v ccache >/dev/null 2>&1; then
+    CCACHE_BEFORE=$(ccache -s 2>/dev/null | grep "cache size" || echo "unknown")
+    ccache -C 2>/dev/null || true
+    echo "  ✓ ccache cleared (was: ${CCACHE_BEFORE})"
+else
+    echo "  ℹ ccache not available (OK)"
+fi
+rm -rf build CMakeCache.txt CMakeFiles
 mkdir -p build && cd build
 echo "✓ Clean build directory created"
 
@@ -4258,11 +4404,13 @@ cmake .. \
     -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -DCMAKE_PREFIX_PATH="/usr/local;/usr" \
-    -DCMAKE_IGNORE_PATH="/usr/local/lib/cmake/glog;/usr/local/include/glog" \
+    -DCMAKE_IGNORE_PATH="/usr/local/lib/cmake/glog;/usr/local/include/glog;/usr/local/lib/cmake/gflags;/usr/local/include/gflags" \
     -DEigen3_DIR=/usr/local/share/eigen3/cmake \
     -DCeres_DIR=/usr/local/lib/cmake/Ceres \
     -Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog \
-    -Dgflags_DIR=/usr/local/lib/cmake/gflags \
+    -Dgflags_DIR=/usr/lib/x86_64-linux-gnu/cmake/gflags \
+    -Dglog_ROOT=/usr \
+    -Dgflags_ROOT=/usr \
     2>&1 | tee /tmp/colmap_cmake.log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
@@ -4274,7 +4422,13 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo "Last 50 lines of CMake log:"
     tail -50 /tmp/colmap_cmake.log
     echo ""
-    echo "Full log saved to: /tmp/colmap_cmake.log"
+    echo "📊 Diagnostic checks:"
+    echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
+    echo "  Ceres: $(ldconfig -p | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')"
+    echo "  CUDA: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
+    echo ""
+    echo "Full CMake log saved to: /tmp/colmap_cmake.log"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 1
 fi
 
@@ -4305,12 +4459,10 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Building COLMAP with Ninja (this may take 15-20 minutes)..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Use half cores to prevent memory issues during compilation
-BUILD_JOBS=$(($(nproc) / 2))
-if [ "$BUILD_JOBS" -lt 1 ]; then
-    BUILD_JOBS=1
-fi
+# Use memory-aware job calculation to prevent memory issues
+BUILD_JOBS=$(calculate_build_jobs)
 echo "Using $BUILD_JOBS parallel jobs for COLMAP build..."
+echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with Ninja (better error messages than make)
@@ -4331,34 +4483,107 @@ if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
         tail -100 /tmp/colmap_build.log
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "Diagnostic Analysis:"
+        echo "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
-        # Check for common issues
-        if grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found"; then
+        # 1. Check for glog-specific errors
+        echo ""
+        echo "1️⃣ CHECKING FOR GLOG-RELATED ERRORS:"
+        if grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
             echo "❌ glog-related errors detected:"
-            grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -10
+            grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
             echo ""
-            echo "Possible solutions:"
-            echo "  1. Verify glog version: pkg-config --modversion libglog"
-            echo "  2. Check for multiple glog installations:"
-            echo "     ldconfig -p | grep glog"
-            echo "     find /usr/include /usr/local/include -name 'logging.h' 2>/dev/null | grep glog"
-            echo "  3. If /usr/local glog found, remove it or add to CMAKE_IGNORE_PATH"
+            echo "📊 Current glog environment:"
+            echo "  glog version: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
+            echo "  glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo 'NOT FOUND')"
+            echo "  glog libraries found:"
+            ldconfig -p | grep glog | sed 's/^/    /'
+            echo "  glog headers found:"
+            find /usr /usr/local -path "*/include/glog/logging.h" 2>/dev/null | sed 's/^/    /'
+        else
+            echo "✓ No glog-specific errors detected"
         fi
         
-        if grep -i "not found\|missing\|undefined reference" /tmp/colmap_build.log | head -10; then
+        # 2. Check for Ceres-related errors
+        echo ""
+        echo "2️⃣ CHECKING FOR CERES-RELATED ERRORS:"
+        if grep -i "ceres\|CHECK_OP\|CheckOpString\|MINIGLOG" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
+            echo "❌ Ceres/CHECK macro errors detected:"
+            grep -i "ceres\|CHECK_OP\|CheckOpString" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
             echo ""
-            echo "❌ Dependency/linking issues detected"
+            echo "📊 Current Ceres environment:"
+            echo "  Ceres library:"
+            ldconfig -p | grep libceres | sed 's/^/    /' || echo "    NOT FOUND"
+            echo "  Ceres → glog linkage:"
+            CERES_LIB=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
+            if [ -n "$CERES_LIB" ]; then
+                ldd "$CERES_LIB" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
+            fi
+            echo "  System Ceres packages:"
+            dpkg -l | grep libceres | sed 's/^/    /' || echo "    None (expected)"
+        else
+            echo "✓ No Ceres-specific errors detected"
         fi
         
-        if grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log; then
-            echo ""
-            echo "❌ Memory issue detected - try reducing BUILD_JOBS further"
+        # 3. Check for general compilation errors
+        echo ""
+        echo "3️⃣ FIRST COMPILATION ERROR (with context):"
+        # Find the first actual error (not warning)
+        FIRST_ERROR_LINE=$(grep -n "error:" /tmp/colmap_build.log | head -1 | cut -d: -f1)
+        if [ -n "$FIRST_ERROR_LINE" ]; then
+            START_LINE=$((FIRST_ERROR_LINE - 5))
+            [ $START_LINE -lt 1 ] && START_LINE=1
+            END_LINE=$((FIRST_ERROR_LINE + 10))
+            sed -n "${START_LINE},${END_LINE}p" /tmp/colmap_build.log | sed 's/^/  /'
+        else
+            echo "  No 'error:' lines found (may be linker or other failure)"
         fi
+        
+        # 4. Check for linking errors
+        echo ""
+        echo "4️⃣ CHECKING FOR LINKING ERRORS:"
+        if grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log >/dev/null 2>&1; then
+            echo "❌ Linking errors detected:"
+            grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log | tail -10 | sed 's/^/  /'
+        else
+            echo "✓ No linking errors detected"
+        fi
+        
+        # 5. Check for memory issues
+        echo ""
+        echo "5️⃣ CHECKING FOR MEMORY ISSUES:"
+        if grep -i "killed\|out of memory\|oom\|c++: fatal error: Killed" /tmp/colmap_build.log >/dev/null 2>&1; then
+            echo "❌ Memory issue detected:"
+            grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log | tail -5 | sed 's/^/  /'
+            echo ""
+            echo "💡 Solution: Reduce BUILD_JOBS (current: ${BUILD_JOBS})"
+        else
+            echo "✓ No memory issues detected"
+        fi
+        
+        # 6. Environment summary
+        echo ""
+        echo "6️⃣ ENVIRONMENT SUMMARY AT FAILURE:"
+        echo "  CMake version: $(cmake --version 2>/dev/null | head -1 || echo 'unknown')"
+        echo "  Ninja version: $(ninja --version 2>/dev/null || echo 'unknown')"
+        echo "  GCC version: $(gcc --version 2>/dev/null | head -1 || echo 'unknown')"
+        echo "  ccache status: $(command -v ccache >/dev/null 2>&1 && echo 'available' || echo 'not available')"
+        echo "  Available memory: $(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo 'unknown')"
+        echo "  Build jobs: ${BUILD_JOBS}"
         
         echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "📋 NEXT STEPS FOR DEBUGGING:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "1. Check full log: /tmp/colmap_build.log"
+        echo "2. Check CMake log: /tmp/colmap_cmake.log"
+        echo "3. Verify glog: pkg-config --modversion libglog"
+        echo "4. Verify Ceres: ldconfig -p | grep libceres"
+        echo "5. Check PRE-FLIGHT output (earlier in build log)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
         echo "Full build log saved to: /tmp/colmap_build.log"
+        echo "Full CMake log saved to: /tmp/colmap_cmake.log"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
@@ -4659,12 +4884,21 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "Building Open3D with Ninja (this may take 15-20 minutes)..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Use all cores for Open3D (generally well-parallelized)
-BUILD_JOBS=$(nproc)
+# Use memory-aware job calculation (was full nproc - risky for OOM)
+BUILD_JOBS=$(calculate_build_jobs)
 echo "Using $BUILD_JOBS parallel jobs for Open3D build..."
+echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
-ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log
+# Build with fallback to single-threaded on failure
+if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log; then
+    echo ""
+    echo "⚠️  Parallel build failed, retrying single-threaded..."
+    if ! ninja -j1 2>&1 | tee -a /tmp/open3d_build.log; then
+        echo "ERROR: Failed to build Open3D even with single-threaded compilation"
+        exit 1
+    fi
+fi
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
