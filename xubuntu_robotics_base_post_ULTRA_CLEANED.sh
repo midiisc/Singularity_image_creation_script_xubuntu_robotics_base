@@ -4547,6 +4547,7 @@ cmake .. \
     -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DBUILD_SHARED_LIBS=ON \
     -DCUDA_ENABLED=ON \
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DCGAL_ENABLED=ON \
@@ -4860,7 +4861,7 @@ rm -f /tmp/colmap_*.log
 echo "✓ COLMAP build cleaned up"
 
 #--- Sub-block 13A.7: Install Open3D dependencies ---
-# Purpose: Install requirements for Open3D compilation (requires Clang for Filament)
+# Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "Installing Open3D dependencies..."
@@ -4874,9 +4875,6 @@ apt-get install -y --no-install-recommends \
     libassimp-dev \
     xorg-dev \
     libglu1-mesa-dev \
-    clang-14 \
-    libc++-14-dev \
-    libc++abi-14-dev \
     python3-dev \
     python3-pip \
     pybind11-dev \
@@ -4884,14 +4882,7 @@ apt-get install -y --no-install-recommends \
 
 echo "✓ Open3D dependencies installed"
 
-# Ensure Clang is available
-if ! command -v clang++ &> /dev/null; then
-    echo "Setting up Clang symlinks..."
-    update-alternatives --install /usr/bin/clang clang /usr/bin/clang-14 100
-    update-alternatives --install /usr/bin/clang++ clang++ /usr/bin/clang++-14 100
-fi
-
-# Create python symlink if needed (for Filament build scripts)
+# Create python symlink if needed
 if ! command -v python &> /dev/null; then
     echo "Creating python → python3 symlink..."
     ln -sf /usr/bin/python3 /usr/bin/python
@@ -4931,8 +4922,8 @@ else
 fi
 
 #--- Sub-block 13A.9: Configure Open3D with CMake ---
-# Critical: Enable CUDA for point cloud processing (requires Clang for Filament ABI)
-# Dependencies: CUDA, Eigen, Clang
+# Critical: Enable CUDA for point cloud processing (Filament build is disabled)
+# Dependencies: CUDA, Eigen, GCC/G++
 # Outputs: Open3D build configuration
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA optimizations..."
@@ -4945,20 +4936,35 @@ mkdir -p build && cd build
 echo "✓ Clean build directory created"
 echo ""
 
+# Prefer ccache if available (as recommended in Open3D docs)
+CCACHE_FLAGS=""
+if command -v ccache >/dev/null 2>&1; then
+    echo "Using ccache for C++ and CUDA compilations"
+    CCACHE_FLAGS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache"
+fi
+
 # CMake configuration with Ninja generator
 echo "⚙️ Running CMake configuration with Ninja generator..."
 cmake .. \
     -GNinja \
+    ${CCACHE_FLAGS} \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DCMAKE_CXX_COMPILER=clang++ \
-    -DCMAKE_C_COMPILER=clang \
+    -DCMAKE_CXX_COMPILER=g++ \
+    -DCMAKE_C_COMPILER=gcc \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
+    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_CUDA_MODULE=ON \
     -DBUILD_GUI=ON \
-    -DBUILD_WEBRTC=OFF \
+    -DBUILD_WEBRTC=ON \
+    -DENABLE_HEADLESS_RENDERING=ON \
+    -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
+    -DTHREADS_PREFER_PTHREAD_FLAG=ON \
+    -DBUILD_AZURE_KINECT=OFF \
+    -DBUILD_LIBREALSENSE=OFF \
+    -DBUILD_JUPYTER_EXTENSION=ON \
     -DBUILD_PYTHON_MODULE=ON \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_UNIT_TESTS=OFF \
@@ -4968,6 +4974,16 @@ cmake .. \
     -DUSE_SYSTEM_GLFW=OFF \
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
     -DUSE_BLAS=ON \
+    -DBLA_VENDOR=OpenBLAS \
+    -DOpenBLAS_LIB=/usr/lib/x86_64-linux-gnu/libopenblas.so \
+    -DOpenBLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/ \
+    -DBLAS_LIBRARIES=/usr/lib/x86_64-linux-gnu/libopenblas.so \
+    -DLAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3;/usr/lib/x86_64-linux-gnu/liblapack.so" \
+    -DLAPACK_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapack.so \
+    -DLAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3 \
+    -DLAPACK_LIBRARY_DEBUG=/usr/lib/x86_64-linux-gnu/liblapack.so.3 \
+    -DLAPACK_CBLAS_H=/usr/include/x86_64-linux-gnu/cblas.h \
+    -DLAPACK_LAPACKE_H=/usr/include/lapacke.h \
     -DWITH_OPENMP=ON \
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
@@ -4986,55 +5002,15 @@ cmake .. \
 # Check if configuration succeeded
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
-    echo "⚠ Open3D CUDA configuration failed, trying CPU-only version..."
-    rm -rf *
-    cmake .. \
-        -GNinja \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DCMAKE_CXX_COMPILER=clang++ \
-        -DCMAKE_C_COMPILER=clang \
-        -DCMAKE_CXX_STANDARD=17 \
-        -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-        -DBUILD_SHARED_LIBS=ON \
-        -DBUILD_CUDA_MODULE=OFF \
-        -DBUILD_GUI=ON \
-        -DBUILD_WEBRTC=OFF \
-        -DBUILD_PYTHON_MODULE=ON \
-        -DBUILD_EXAMPLES=OFF \
-        -DBUILD_UNIT_TESTS=OFF \
-        -DBUILD_FILAMENT_FROM_SOURCE=OFF \
-        -DUSE_SYSTEM_EIGEN3=ON \
-        -DUSE_SYSTEM_GLEW=ON \
-        -DUSE_SYSTEM_GLFW=OFF \
-        -DUSE_SYSTEM_LIBREALSENSE=OFF \
-        -DUSE_BLAS=ON \
-        -DWITH_OPENMP=ON \
-        -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
-        -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
-        -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
-        -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
-        -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
-        -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-        -DCMAKE_PREFIX_PATH="/usr/local" \
-        -DGLIBCXX_USE_CXX11_ABI=ON \
-        -DEigen3_DIR=/usr/local/share/eigen3/cmake \
-        -DOpenCV_DIR=/usr/local/lib/cmake/opencv4 \
-        -DPython3_EXECUTABLE=/usr/bin/python3 \
-        2>&1 | tee /tmp/open3d_cmake_cpu.log
-    
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then
-        echo ""
-        echo "✗ Open3D configuration failed completely"
-        echo "Last 50 lines of CMake log:"
-        tail -50 /tmp/open3d_cmake_cpu.log
-        exit 1
-    fi
-    echo "✓ Open3D configured (CPU-only, using Ninja)"
-else
-    echo ""
-    echo "✓ Open3D configured with CUDA support (using Ninja)"
+    echo "✗ Open3D CUDA configuration failed (no CPU-only fallback by design)"
+    echo "  Review /tmp/open3d_cmake.log and fix CUDA/toolchain settings."
+    echo "Last 80 lines of CMake log:"
+    tail -80 /tmp/open3d_cmake.log || true
+    exit 1
 fi
+
+echo ""
+echo "✓ Open3D configured with CUDA support (using Ninja)"
 
 #--- Sub-block 13A.10: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
