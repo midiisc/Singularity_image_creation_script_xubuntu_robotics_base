@@ -4111,9 +4111,19 @@ apt-get -y autoremove || true
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Note: This is safe for OpenCV - we use APT pinning (Pin-Priority: -1) which survives unhold
-# Note: APT pinning in /etc/apt/preferences.d/block-system-opencv prevents libopencv-* installation
-echo "Clearing package holds (OpenCV protected by APT pinning, not affected)..."
-apt-mark unhold $(dpkg --get-selections | grep hold | awk '{print $1}') 2>/dev/null || true
+# Note: APT pinning in /etc/apt/preferences.d/ blocks all custom-compiled libraries
+echo "Clearing package holds (custom libraries protected by APT pinning)..."
+
+# Robust method: Get held packages, validate, and unhold with proper quoting
+HELD_PACKAGES=$(dpkg --get-selections 2>/dev/null | grep -E '[[:space:]]hold$' | awk '{print $1}' || true)
+if [ -n "${HELD_PACKAGES}" ]; then
+    echo "  Found held packages, releasing holds..."
+    # Use xargs with -r (no-run-if-empty) for safety and proper quoting
+    echo "${HELD_PACKAGES}" | xargs -r apt-mark unhold 2>/dev/null || true
+    echo "  ✓ Package holds cleared"
+else
+    echo "  No held packages found (already clear)"
+fi
 
 #--- Sub-block 13.4: Install essential package tools ---
 # Purpose: Ensure pkg-config is available
