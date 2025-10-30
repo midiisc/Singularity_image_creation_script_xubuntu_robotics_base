@@ -238,7 +238,209 @@ debug_glibc() {
 # End function (self-contained)
 
 #===============================================================================
-# BLOCK 3: CACHE MONITORING SYSTEM
+# BLOCK 3: MIRROR PROBING FUNCTIONS (MUST BE EARLY FOR APT OPERATIONS)
+#===============================================================================
+# Purpose: Test and select fastest Ubuntu mirror BEFORE any apt-get operations
+# Self-contained: Yes (complete mirror selection system)
+# Dependencies: curl (available in Ubuntu base images)
+# Outputs: FASTEST_MIRROR variable, updated /etc/apt/sources.list
+# Note: Moved early to ensure ALL package downloads use fastest mirror
+#-------------------------------------------------------------------------------
+
+#--- Sub-block 3.1: Mirror test function (for parallel execution) ---
+# Purpose: Test a single mirror's speed for parallel execution with xargs
+# Dependencies: curl (from Ubuntu base image)
+# Outputs: Speed score written to PROBE_RESULTS file
+# NOTE: Must be top-level function (not nested) to allow export -f
+test_mirror() {
+    local URL="$1"
+    local CODENAME="$2"
+    local PROBE_RESULTS="$3"
+
+    [[ -z "${URL}" ]] && return
+
+    # Download Packages.gz (~20MB) to measure actual bandwidth
+    set +e
+    local CURL_OUTPUT CURL_EXIT_CODE
+
+    # Download Packages.gz (typically 15-25MB) to measure bandwidth
+    CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" 2>/dev/null)"
+    CURL_EXIT_CODE=$?
+
+    # If large file fails, try Release file as fallback
+    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
+      CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
+        CURL_EXIT_CODE=$?
+      # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
+      if [[ $CURL_EXIT_CODE -eq 0 ]] && [[ -n "$CURL_OUTPUT" ]] && [[ "$CURL_OUTPUT" != "0.000000" ]]; then
+        CURL_OUTPUT=$(printf "%.3f" "$(echo "$CURL_OUTPUT 10" | awk '{print $1 * $2}' 2>/dev/null || echo "$CURL_OUTPUT")")
+      fi
+    fi
+    set -e
+
+    # Write results (flock doesn't work reliably in xargs subshells, using simple append)
+    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
+      echo "999.9 ${URL}" >> "$PROBE_RESULTS"
+    else
+      echo "${CURL_OUTPUT} ${URL}" >> "$PROBE_RESULTS"
+    fi
+}
+
+# Export function for parallel execution with xargs
+export -f test_mirror
+
+#--- Sub-block 3.2: Mirror probing and selection function ---
+# Purpose: Find fastest Ubuntu mirror and update all APT sources
+# Dependencies: test_mirror function, curl
+# Outputs: FASTEST_MIRROR (exported), updated /etc/apt/sources.list and sources.list.d/
+probe_and_set_mirrors() {
+export LC_NUMERIC=C # Prevents printf errors with decimals
+echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
+
+# Detect Ubuntu codename correctly (noble for 24.04, jammy for 22.04, etc.)
+CODENAME="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || echo "${BASE_OS_CODENAME}")"
+echo "[info] Detected Ubuntu codename: ${CODENAME}"
+PROBE_RESULTS="$(mktemp)"
+export CODENAME PROBE_RESULTS  # Export for subshell access
+
+  # Attempt to dynamically fetch 100Gbps+ mirrors from official Launchpad page
+  echo "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
+  MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
+  
+  if [ -n "$MIRRORS_HTML" ]; then
+    echo "[info] Successfully fetched mirror list ($(echo "$MIRRORS_HTML" | wc -c) bytes). Parsing..."
+    
+    # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
+    DYNAMIC_MIRRORS=$(echo "$MIRRORS_HTML" | \
+      tr '\n' ' ' | \
+      sed 's|<tr>|\n<tr>|g' | \
+      grep -E '([1-9][0-9]{2,}|[1-9][0-9]0) Gbps' | \
+      grep 'distromirrorstatusUP' | \
+      grep -oE 'href="(https?://[^"]+/(ubuntu|archive)[^"]*)"' | \
+      sed 's|href="||g; s|"||g; s|https://|http://|g; s|/$||' | \
+      sort -u | \
+      head -20)  # Limit to top 20 mirrors for performance
+    
+    MIRROR_COUNT=$(echo "$DYNAMIC_MIRRORS" | grep -c . || echo 0)
+    
+    # Explicit check for non-empty and sufficient mirrors
+    if [ -n "$DYNAMIC_MIRRORS" ] && [ "$MIRROR_COUNT" -ge 10 ]; then
+      CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
+      for mirror in $DYNAMIC_MIRRORS; do
+        # Skip empty lines
+        [ -z "$mirror" ] && continue
+        CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} ${mirror}"
+      done
+      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors"
+    else
+      echo "[warn] Only ${MIRROR_COUNT} dynamic mirrors found. Using curated static list."
+      CANDIDATE_MIRRORS=""  # Will trigger fallback below
+    fi
+  else
+    echo "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
+    CANDIDATE_MIRRORS=""  # Will trigger fallback
+  fi
+  
+  # Fallback to curated static list if dynamic fetch failed
+  if [ -z "$CANDIDATE_MIRRORS" ]; then
+    echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
+    CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
+    # Australia (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.aarnet.edu.au/pub/ubuntu/archive"
+    # Germany (400 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.fau.de/ubuntu"
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.uni-stuttgart.de/ubuntu"
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.halifax.rwth-aachen.de/ubuntu"
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.netcologne.de/ubuntu"
+    # Netherlands (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ubuntu.mirror.pcextreme.nl/ubuntu"
+    # United Kingdom (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.ox.ac.uk/sites/archive.ubuntu.com/ubuntu"
+    # United States (400 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.wikimedia.org/ubuntu"
+    # United States (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ocf.berkeley.edu/ubuntu"
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.math.princeton.edu/pub/ubuntu"
+    # Canada (200 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.csclub.uwaterloo.ca/ubuntu"
+    # China (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ustc.edu.cn/ubuntu"
+    # Japan (100 Gbps)
+    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.jaist.ac.jp/pub/Linux/ubuntu"
+  fi
+
+# Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
+MIRROR_TOTAL=$(echo "$CANDIDATE_MIRRORS" | wc -w)
+echo "Testing ${MIRROR_TOTAL} mirrors in parallel (max 6 concurrent)..."
+echo "${CANDIDATE_MIRRORS}" | tr ' ' '\n' | xargs -P 6 -I {} bash -c 'test_mirror "{}" "$CODENAME" "$PROBE_RESULTS"'
+
+# Display mirror probe results
+echo "--- Mirror Probe Results (speed score, url): ---"
+if [ -s "$PROBE_RESULTS" ]; then
+    LC_NUMERIC=C sort -n "$PROBE_RESULTS" | sed 's/^/ /' || echo "[warn] Failed to sort results"
+else
+    echo "[warn] No probe results written - all mirrors may have failed"
+fi
+
+# Extract the fastest mirror that responded in under 15 seconds
+FASTEST_MIRROR="$(LC_NUMERIC=C sort -n "$PROBE_RESULTS" 2>/dev/null | awk 'NF==2 && $1 < 15.0 {print $2; exit}')"
+rm -f "$PROBE_RESULTS"
+
+if [[ -z "$FASTEST_MIRROR" ]]; then
+    echo "[warn] All mirror probes failed or took >15 seconds. Using default ubuntu archive."
+    FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
+fi
+echo "==> Selected fastest mirror: $FASTEST_MIRROR"
+
+# Export the variable so it persists after function ends and is available globally
+export FASTEST_MIRROR
+
+# Apply the fastest mirror to the main APT sources
+if [ -f /etc/apt/sources.list ]; then
+  sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+  echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+  
+  # Verify the update was successful
+  if grep -q "${FASTEST_MIRROR}" /etc/apt/sources.list 2>/dev/null; then
+    echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
+  else
+    echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+  fi
+else
+  echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
+fi
+
+# Also update sources.list.d/ files (excluding PPAs which should stay on ppa.launchpad.net)
+echo "[info] Updating sources.list.d/ files with fastest mirror (excluding PPAs)..."
+if [ -d /etc/apt/sources.list.d ]; then
+    # Enable nullglob to handle case where no .list files exist
+    shopt -s nullglob
+    for sources_file in /etc/apt/sources.list.d/*.list; do
+        # Double-check file exists (redundant with nullglob, but defensive)
+        [ -f "$sources_file" ] || continue
+        
+        # Skip PPA files (they should always use ppa.launchpad.net)
+        if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
+            echo "[info] Skipping PPA file: $(basename "$sources_file")"
+            continue
+        fi
+        
+        # Update Ubuntu mirror URLs in this file
+        if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
+            sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+            echo "[info] Updated: $(basename "$sources_file")"
+        fi
+    done
+    shopt -u nullglob  # Restore default behavior
+    echo "[info] ✓ sources.list.d/ update complete"
+else
+    echo "[info] /etc/apt/sources.list.d/ not found or empty"
+fi
+}
+# End probe_and_set_mirrors function (self-contained)
+
+#===============================================================================
+# BLOCK 4: CACHE MONITORING SYSTEM
 #===============================================================================
 # Purpose: Track cache growth throughout build phases
 # Self-contained: Yes (complete function definitions)
@@ -639,6 +841,56 @@ test_file="/root/.cache/write_test"
 setup_gpg_verification() {
     echo "==> Setting up GPG verification for .deb packages..."
 }
+
+#===============================================================================
+# BLOCK 6.11: EARLY MIRROR SELECTION (BEFORE ANY APT OPERATIONS)
+#===============================================================================
+# Purpose: Select fastest Ubuntu mirror BEFORE any package downloads
+# Self-contained: Yes
+# Dependencies: curl (available in Ubuntu base images), mirror functions (BLOCK 3)
+# Outputs: FASTEST_MIRROR (exported), updated /etc/apt/sources.list
+# Critical: This MUST run BEFORE first apt-get update to ensure all downloads use fast mirror
+#-------------------------------------------------------------------------------
+
+#--- Sub-block 6.11.1: Check curl availability ---
+# Purpose: Ensure curl is available for mirror probing
+# Dependencies: Ubuntu base image (includes curl by default)
+# Outputs: curl availability confirmed
+echo "==> Checking curl availability for mirror probing..."
+if ! command -v curl &> /dev/null; then
+    echo "[warn] curl not found in base image. Installing curl first..."
+    # Use /usr/bin/apt-get directly to avoid any wrapper issues
+    /usr/bin/apt-get update -o Acquire::Retries=3
+    /usr/bin/apt-get install -y --no-install-recommends curl
+    echo "✓ curl installed"
+else
+    echo "✓ curl is available"
+fi
+
+#--- Sub-block 6.11.2: Execute mirror probing ---
+# Critical: Select fastest mirror BEFORE any significant apt operations
+# Dependencies: curl, test_mirror() and probe_and_set_mirrors() functions (BLOCK 3)
+# Outputs: FASTEST_MIRROR variable (exported), updated sources
+echo "==> Executing mirror probing BEFORE package installations..."
+probe_and_set_mirrors
+
+#--- Sub-block 6.11.3: Display selected mirror ---
+# Purpose: Confirm mirror selection for build logs
+# Dependencies: FASTEST_MIRROR (set by probe_and_set_mirrors)
+# Outputs: Log output
+echo "==> Mirror configuration complete:"
+echo "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
+echo "    This variable is now available globally for all apt operations"
+
+# Show first few lines of updated sources.list for verification
+echo "==> Contents of /etc/apt/sources.list (first 5 lines):"
+if [ -f /etc/apt/sources.list ]; then
+  head -n 5 /etc/apt/sources.list | sed 's/^/    /'
+else
+  echo "    [warn] /etc/apt/sources.list not found"
+fi
+
+echo "✓ Mirror selection completed - all subsequent apt operations will use fastest mirror"
 
 #--- Sub-block 6.9.8: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
@@ -1525,207 +1777,12 @@ early_verify_cached_files
 # Outputs: Environment variables, configuration
 setup_gpg_verification
 
-#--- Sub-block 6.13.14: Mirror test function (must be global for export) ---
-# Purpose: Test a single mirror for parallel execution
-# Dependencies: None (foundational)
-# Outputs: Speed score written to PROBE_RESULTS file
-# NOTE: This MUST be a top-level function (not nested) to allow export -f
-test_mirror() {
-    local URL="$1"
-    local CODENAME="$2"
-    local PROBE_RESULTS="$3"
+#--- Sub-block 6.13.14: Mirror functions moved to BLOCK 3 ---
+# Note: Mirror probing functions (test_mirror, probe_and_set_mirrors) have been
+# moved to BLOCK 3 (lines 250-436) and executed early in BLOCK 6.11 (lines 841-889)
+# This ensures ALL apt-get operations use the fastest mirror from the start.
+# The old code here has been removed to avoid duplication.
 
-    [[ -z "${URL}" ]] && return
-
-    # Download Packages.gz (~20MB) to measure actual bandwidth
-    # Simple approach: just use download time directly (lower = better)
-    set +e
-    local CURL_OUTPUT CURL_EXIT_CODE
-
-    # Download Packages.gz (typically 15-25MB) to measure bandwidth
-    CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" 2>/dev/null)"
-    CURL_EXIT_CODE=$?
-
-    # If large file fails, try Release file as fallback
-    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
-      CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
-        CURL_EXIT_CODE=$?
-      # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
-      if [[ $CURL_EXIT_CODE -eq 0 ]] && [[ -n "$CURL_OUTPUT" ]] && [[ "$CURL_OUTPUT" != "0.000000" ]]; then
-        # Use shell arithmetic instead of awk for better compatibility
-        CURL_OUTPUT=$(printf "%.3f" "$(echo "$CURL_OUTPUT 10" | awk '{print $1 * $2}' 2>/dev/null || echo "$CURL_OUTPUT")")
-      fi
-    fi
-    set -e
-
-    # Write results (flock doesn't work reliably in xargs subshells, using simple append)
-    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
-      echo "999.9 ${URL}" >> "$PROBE_RESULTS"
-    else
-      echo "${CURL_OUTPUT} ${URL}" >> "$PROBE_RESULTS"
-    fi
-}
-
-# Export function for parallel execution with xargs
-export -f test_mirror
-
-#--- Sub-block 6.13.15: Mirror probing and selection function ---
-# Purpose: Find fastest Ubuntu mirror for package downloads
-# Dependencies: test_mirror function (defined above)
-# Outputs: Environment variables, configuration
-probe_and_set_mirrors() {
-export LC_NUMERIC=C # Prevents printf errors with decimals
-echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
-# Detect Ubuntu codename correctly (noble for 24.04, jammy for 22.04, etc.)
-CODENAME="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || echo "${BASE_OS_CODENAME}")"
-echo "[info] Detected Ubuntu codename: ${CODENAME}"
-PROBE_RESULTS="$(mktemp)"
-export CODENAME PROBE_RESULTS  # Export for subshell access
-
-  # Attempt to dynamically fetch 100Gbps+ mirrors from official Launchpad page
-  echo "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
-  MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
-  
-  if [ -n "$MIRRORS_HTML" ]; then
-    echo "[info] Successfully fetched mirror list ($(echo "$MIRRORS_HTML" | wc -c) bytes). Parsing..."
-    
-    # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
-    # Method: Extract table rows containing both "100+ Gbps" AND "Up to date" status
-    # Then extract HTTP/HTTPS URLs from those rows
-    DYNAMIC_MIRRORS=$(echo "$MIRRORS_HTML" | \
-      tr '\n' ' ' | \
-      sed 's|<tr>|\n<tr>|g' | \
-      grep -E '([1-9][0-9]{2,}|[1-9][0-9]0) Gbps' | \
-      grep 'distromirrorstatusUP' | \
-      grep -oE 'href="(https?://[^"]+/(ubuntu|archive)[^"]*)"' | \
-      sed 's|href="||g; s|"||g; s|https://|http://|g; s|/$||' | \
-      sort -u | \
-      head -20)  # Limit to top 20 mirrors for performance
-    
-    MIRROR_COUNT=$(echo "$DYNAMIC_MIRRORS" | grep -c . || echo 0)
-    
-    # Explicit check for non-empty and sufficient mirrors
-    if [ -n "$DYNAMIC_MIRRORS" ] && [ "$MIRROR_COUNT" -ge 10 ]; then
-      CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
-      for mirror in $DYNAMIC_MIRRORS; do
-        # Skip empty lines
-        [ -z "$mirror" ] && continue
-        CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} ${mirror}"
-      done
-      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors"
-    else
-      echo "[warn] Only ${MIRROR_COUNT} dynamic mirrors found. Using curated static list."
-      CANDIDATE_MIRRORS=""  # Will trigger fallback below
-    fi
-  else
-    echo "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
-    CANDIDATE_MIRRORS=""  # Will trigger fallback
-  fi
-  
-  # Fallback to curated static list if dynamic fetch failed
-  if [ -z "$CANDIDATE_MIRRORS" ]; then
-    echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
-    CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
-    # Australia (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.aarnet.edu.au/pub/ubuntu/archive"
-    # Germany (400 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.fau.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.uni-stuttgart.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.halifax.rwth-aachen.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.netcologne.de/ubuntu"
-    # Netherlands (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ubuntu.mirror.pcextreme.nl/ubuntu"
-    # United Kingdom (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.ox.ac.uk/sites/archive.ubuntu.com/ubuntu"
-    # United States (400 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.wikimedia.org/ubuntu"
-    # United States (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ocf.berkeley.edu/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.math.princeton.edu/pub/ubuntu"
-    # Canada (200 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.csclub.uwaterloo.ca/ubuntu"
-    # China (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ustc.edu.cn/ubuntu"
-    # Japan (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.jaist.ac.jp/pub/Linux/ubuntu"
-  fi
-
-#--- Sub-block: Section continuation (1298) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-# Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
-MIRROR_TOTAL=$(echo "$CANDIDATE_MIRRORS" | wc -w)
-echo "Testing ${MIRROR_TOTAL} mirrors in parallel (max 6 concurrent)..."
-# Fix: Remove -n 1 (incompatible with -I), use tr to split, use double quotes for variable expansion
-  echo "${CANDIDATE_MIRRORS}" | tr ' ' '\n' | xargs -P 6 -I {} bash -c 'test_mirror "{}" "$CODENAME" "$PROBE_RESULTS"'
-
-  # --- Mirror Probe Results (speed score, url): ---
-echo "--- Mirror Probe Results (speed score, url): ---"
-  if [ -s "$PROBE_RESULTS" ]; then
-    LC_NUMERIC=C sort -n "$PROBE_RESULTS" | sed 's/^/ /' || echo "[warn] Failed to sort results"
-  else
-    echo "[warn] No probe results written - all mirrors may have failed"
-  fi
-# Extract the fastest mirror that responded in under 15 seconds
-
-#--- Sub-block: Code section 1285 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-FASTEST_MIRROR="$(LC_NUMERIC=C sort -n "$PROBE_RESULTS" 2>/dev/null | awk 'NF==2 && $1 < 15.0 {print $2; exit}')"
-rm -f "$PROBE_RESULTS"
-if [[ -z "$FASTEST_MIRROR" ]]; then
-    echo "[warn] All mirror probes failed or took >15 seconds. Using default ubuntu archive."
-    FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
-fi
-echo "==> Selected fastest mirror: $FASTEST_MIRROR"
-
-# Export the variable so it persists after function ends and is available globally
-export FASTEST_MIRROR
-
-# Apply the fastest mirror to the main APT sources (more specific pattern to avoid false matches)
-if [ -f /etc/apt/sources.list ]; then
-  sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-  echo "[info] Updated /etc/apt/sources.list with fastest mirror"
-  
-  # Verify the update was successful by checking sources.list content
-  if grep -q "${FASTEST_MIRROR}" /etc/apt/sources.list 2>/dev/null; then
-    echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
-  else
-    echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
-  fi
-else
-  echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
-fi
-}
-# End probe_and_set_mirrors function (self-contained)
-
-#--- Sub-block 6.13.14.1: Execute mirror probing EARLY ---
-# Critical: Select fastest Ubuntu mirror BEFORE any apt-get operations
-# Dependencies: test_mirror function, curl (from base image)
-# Outputs: Updated /etc/apt/sources.list with fastest mirror
-echo "==> Executing mirror probing BEFORE package installations..."
-probe_and_set_mirrors
-
-# Display the selected mirror and confirm it's exported
-echo "==> Mirror configuration complete:"
-echo "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
-echo "    This variable is now available globally for wget/curl/apt operations"
-
-# Show first few lines of updated sources.list for verification
-echo "==> Contents of /etc/apt/sources.list (first 5 lines):"
-if [ -f /etc/apt/sources.list ]; then
-  head -n 5 /etc/apt/sources.list | sed 's/^/    /'
-else
-  echo "    [warn] /etc/apt/sources.list not found"
-fi
-
-#--- Sub-block 6.7.1: Mirror selection complete ---
-# Purpose: Selected mirrors written to sources.list
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 6.13.16: Configure dpkg to exclude documentation ---
 # Purpose: Save space by excluding man pages and non-essential docs
 # Dependencies: None (foundational)
