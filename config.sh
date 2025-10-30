@@ -51,6 +51,18 @@ export BASE_IMAGE="${BASE_IMAGE_REPO}:${ROS_DISTRO}-${BASE_IMAGE_VARIANT}-${BASE
 export MINIFORGE_VER="25.3.1-0"
 export MICROMAMBA_VER="2.3.2-0"
 
+# Python Packages (Data Formats)
+export H5PY_VERSION="3.9.0"
+export ZARR_VERSION="2.16.0"
+
+# Python Packages (Messaging/IPC)
+export PYZMQ_VERSION="25.1.0"
+export MSGPACK_VERSION="1.0.7"
+
+# Python Packages (Julia Bridge)
+export JULIACALL_VERSION="0.9.14"
+export JULIAPKG_VERSION="0.1.10"
+
 # Remote Desktop
 export TURBOVNC_VER="3.2.1"
 export VIRTUALGL_VER="3.1.4"
@@ -68,7 +80,6 @@ export OPENCV_VERSION="4.12.0"
 
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"
-export GLOG_VERSION="0.5.0"  # COLMAP 3.12.6 requires glog 0.5.0 (incompatible with 0.6.0+ breaking API changes)
 export OPEN3D_VERSION="0.19.0"
 
 # NVIDIA Video Codec SDK

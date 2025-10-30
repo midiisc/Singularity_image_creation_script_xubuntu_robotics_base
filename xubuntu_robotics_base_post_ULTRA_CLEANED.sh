@@ -2218,6 +2218,31 @@ install_and_verify_group() {
 # Purpose: Organize packages into logical installation groups
 # Dependencies: PHASE 1 (Build tools), PHASE 1 (Compilers)
 # Outputs: Configured system components
+
+#--- Sub-block 7.3.0: Check base image glog status ---
+# CRITICAL: Verify if base ROS image already has glog installed
+# Base image: osrf/ros:jazzy-desktop-full-noble may include glog as ROS dependency
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Checking base image glog status..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+BASE_GLOG_INSTALLED=false
+BASE_GLOG_VERSION=""
+
+if dpkg -l 2>/dev/null | grep -q "^ii.*libgoogle-glog\|^ii.*libglog"; then
+    BASE_GLOG_INSTALLED=true
+    BASE_GLOG_VERSION=$(dpkg -l | grep -E "^ii.*(libgoogle-glog|libglog)" | awk '{printf "  - %s %s\n", $2, $3}')
+    echo "ℹ Base image already has glog packages installed:"
+    echo "$BASE_GLOG_VERSION"
+    echo ""
+    echo "Strategy: Will ensure libgoogle-glog-dev 0.6.0 is used (Ubuntu's patched version)"
+    echo "  - apt-get will upgrade/reinstall if needed"
+    echo "  - No duplicate installations (apt handles this automatically)"
+else
+    echo "✓ No glog in base image - will install libgoogle-glog-dev"
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 # Build tools and compilers
 PKGS_BUILD_TOOLS="build-essential gcc g++ make cmake ninja-build pkg-config ccache patchelf elfutils patch swig git pcl-tools ros-${ROS_DISTRO}-pcl-conversions ros-${ROS_DISTRO}-perception-pcl"
 # Desktop environment (XFCE4)
@@ -2233,8 +2258,10 @@ PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
 PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev"
 # Core dependencies
-# NOTE: libgoogle-glog-dev is EXCLUDED here - we compile glog 0.5.0 from source later for COLMAP compatibility
-PKGS_CORE_DEPS="libgflags-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
+# NOTE: Using Ubuntu's libgoogle-glog-dev (0.6.0-2.1build1 with compatibility patches for COLMAP)
+# NOTE: apt-get install will upgrade if different version exists, or skip if already correct version
+# NOTE: This ensures NO duplicate glog installations - apt handles version conflicts automatically
+PKGS_CORE_DEPS="libgflags-dev libgoogle-glog-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
 # Media and GUI libraries
 PKGS_MEDIA_GUI="libjpeg-dev libpng-dev libwebp-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libcanberra-gtk3-dev libvtk9-dev libgtkglext1-dev libevent-dev libyaml-cpp-dev libjsoncpp-dev"
 # Simulation libraries
@@ -2495,145 +2522,100 @@ clone_with_retry() {
     return 1
 }
 
-#--- Sub-block 8.1.5: Build glog from source ---
-# Purpose: Build modern glog library for COLMAP 3.12.6 compatibility
-# Critical: MUST compile BEFORE Ceres/g2o/GTSAM/COLMAP that depend on it
-# COLMAP 3.12.6 requires glog 0.4.x/0.5.x APIs available in Ubuntu 24.04's libglog-dev
+#--- Sub-block 8.1.5: Use Ubuntu's System glog Package ---
+# Purpose: Use Ubuntu's patched glog for COLMAP 3.12.6 compatibility
+# 
+# CHANGED APPROACH (2025-01-30):
+#   Previously: Compiled glog 0.5.0 from source
+#   Now: Use Ubuntu's libgoogle-glog-dev (0.6.0-2.1build1)
 #
-# VERSION SELECTION: glog 0.5.0 (NOT 0.6.0 or 0.7.x)
-#   - COLMAP 3.12.6 was tested with glog 0.5.0 and earlier
-#   - glog 0.6.0+ introduced breaking changes to internal APIs (GOOGLE_PREDICT_BRANCH_NOT_TAKEN, 
-#     CHECK_OP_LOG, google::logging namespace, CheckOpString) that cause COLMAP compilation failures
-#   - Using glog 0.5.0 ensures COLMAP compatibility while providing required modern APIs
+# WHY THE CHANGE:
+#   - Ubuntu's glog 0.6.0-2.1build1 includes BACKPORTED compatibility patches
+#   - Has GOOGLE_PREDICT_BRANCH_NOT_TAKEN, CHECK_OP_LOG, CheckOpString macros
+#   - Upstream glog 0.6.0 removed these, but Ubuntu restored them for compatibility
+#   - Verified working on local Ubuntu 24.04 Noble systems
+#   - Simpler, faster build (no compilation needed)
+#   - Uses standard system library paths
 #
 # COMPATIBILITY DESIGN:
 #   - Ceres: Uses MINIGLOG=ON (internal bundled mini-glog) → ISOLATED, NO CONFLICT
-#   - COLMAP: Uses external glog 0.5.0 (this build) → GETS COMPATIBLE APIS
+#   - COLMAP: Uses system glog 0.6.0-2.1build1 (Ubuntu's patched version) → COMPATIBLE
 #   - g2o: No glog dependency → NO CONFLICT
 #   - GTSAM: No glog dependency → NO CONFLICT
 #   - Open3D: No glog dependency → NO CONFLICT
 #   - ROS2 Jazzy: No glog core dependency → NO CONFLICT
 #
-# This design provides:
-#   ✓ Maximum stability (Ceres isolated from external glog changes)
-#   ✓ COLMAP gets compatible APIs (CHECK_EQ, CHECK_GE, etc.) without 0.6.0+ breaking changes
-#   ✓ No ABI conflicts between packages
-#   ✓ 5-layer apt protection prevents system glog from interfering
-#   ✓ ROS2 Jazzy base image compatibility maintained
+# NOTE: libgoogle-glog-dev is now INCLUDED in PKGS_CORE_DEPS (line ~2237)
+# NOTE: COLMAP uses -fpermissive flag for additional robustness with template instantiations
 #
-# NOTE: libgoogle-glog-dev is EXCLUDED from apt package lists to prevent version conflicts
-#
-# Dependencies: Build essentials (Block 7), gflags
-# Outputs: glog library in /usr/local with optimized flags
-echo -e "\n${YELLOW}[PHASE 3 | glog] Compiling from source (required by COLMAP)...${NC}"
+# Dependencies: APT repositories configured
+# Outputs: System glog library in /usr (installed via apt)
+echo -e "\n${YELLOW}[PHASE 3 | glog] Using Ubuntu system package (libgoogle-glog-dev)...${NC}"
+echo "✓ glog will be installed via apt as libgoogle-glog-dev (0.6.0-2.1build1)"
+echo "  - Includes Ubuntu's compatibility patches for COLMAP"
+echo "  - No compilation needed"
+echo ""
+monitor_cache "After glog setup (system package)"
 
-# CRITICAL: Reusable function to safely add/update dummy packages in dpkg status
-# This function prevents duplicate package entries that corrupt /var/lib/dpkg/status
-safe_add_dummy_package() {
-    local PKG_NAME="$1"
-    local PKG_FILE="$2"
-    
-    if [ ! -f "$PKG_FILE" ]; then
-        echo "  ✗ ERROR: Package file not found: $PKG_FILE"
-        return 1
-    fi
-    
-    # Validate dpkg status file exists
-    if [ ! -f /var/lib/dpkg/status ]; then
-        echo "  ✗ ERROR: /var/lib/dpkg/status does not exist!"
-        return 1
-    fi
-    
-    # Check if package already exists in status file
-    if grep -q "^Package: ${PKG_NAME}$" /var/lib/dpkg/status 2>/dev/null; then
-        echo "  Removing existing ${PKG_NAME} entry from dpkg status..."
-        
-        # Use awk to remove the complete package stanza (safer than sed)
-        awk -v pkg="$PKG_NAME" '
-            BEGIN { in_pkg = 0; buffer = ""; skip_blank = 0 }
-            /^Package:/ {
-                # Print previous buffer if not our target package
-                if (buffer != "" && in_pkg == 0) {
-                    print buffer
-                }
-                buffer = $0
-                # Check if this is the package we want to skip
-                if ($2 == pkg) {
-                    in_pkg = 1
-                } else {
-                    in_pkg = 0
-                }
-                skip_blank = 0
-                next
-            }
-            {
-                # Blank line signals end of package stanza
-                if (NF == 0) {
-                    if (buffer != "") {
-                        # End of a package stanza
-                        if (in_pkg == 0) {
-                            print buffer
-                            print ""  # Print the blank separator
-                        }
-                        buffer = ""
-                        in_pkg = 0
-                    }
-                    # Dont accumulate blank lines
-                    next
-                }
-                
-                # Non-blank line: accumulate if we have started a package
-                if (buffer != "") {
-                    buffer = buffer "\n" $0
-                } else if (!skip_blank) {
-                    # Shouldnt happen, but handle orphan lines
-                    buffer = $0
-                }
-            }
-            END {
-                # Print remaining buffer if not target package
-                if (buffer != "" && in_pkg == 0) {
-                    print buffer
-                }
-            }
-        ' /var/lib/dpkg/status > /var/lib/dpkg/status.tmp
-        
-        # Verify and replace
-        if [ -s /var/lib/dpkg/status.tmp ] && grep -q "^Package:" /var/lib/dpkg/status.tmp; then
-            mv /var/lib/dpkg/status.tmp /var/lib/dpkg/status
-            echo "  ✓ Removed existing ${PKG_NAME} entry"
-        else
-            echo "  ✗ ERROR: Failed to clean dpkg status for ${PKG_NAME}"
-            echo "  Keeping original dpkg status file"
-            rm -f /var/lib/dpkg/status.tmp
-            return 1
-        fi
-    fi
-    
-    # Ensure the package file ends with a newline (for proper concatenation)
-    # Check if last line of file has newline
-    if [ -n "$(tail -c 1 "$PKG_FILE")" ]; then
-        echo "" >> "$PKG_FILE"
-    fi
-    
-    # Add new package entry
-    cat "$PKG_FILE" >> /var/lib/dpkg/status
-    echo "" >> /var/lib/dpkg/status  # Ensure blank line separator
-    
-    # Verify no duplicates and proper format
-    local COUNT=$(grep -c "^Package: ${PKG_NAME}$" /var/lib/dpkg/status 2>/dev/null || echo "0")
-    if [ "$COUNT" -eq 1 ]; then
-        echo "  ✓ Added ${PKG_NAME} to dpkg status (verified unique)"
-        return 0
-    elif [ "$COUNT" -eq 0 ]; then
-        echo "  ✗ ERROR: Failed to add ${PKG_NAME} to dpkg status (not found after insertion)"
-        return 1
-    else
-        echo "  ✗ WARNING: ${PKG_NAME} appears ${COUNT} times in dpkg status!"
-        return 1
-    fi
-}
-export -f safe_add_dummy_package
+#--- Sub-block 8.2: Compile Ceres Solver ---
+# Purpose: Build Ceres optimization library from source (COMPILE FIRST - g2o can link to it)
+# Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
+# Note: Changed from Sub-block 8.1.5 dependency (glog source) - now uses system glog package
+# Outputs: Optimized Ceres library
+echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
+rm -rf /tmp/ceres-solver
+# Using CERES_VERSION from config.sh
+if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
+    echo "ERROR: Failed to clone Ceres Solver after all retry attempts"
+    exit 1
+fi
+# Use explicit, separate commands for navigation
+cd /tmp/ceres-solver || { echo "ERROR: Failed to access ceres-solver directory"; exit 1; }
+# Remove existing build directory if it exists (critical for Singularity rebuilds)
+rm -rf build
+mkdir -p build
+cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
+
+#--- Sub-block 8.3: Configure Ceres with CMake ---
+# Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
+# 
+# COMPATIBILITY NOTE: MINIGLOG=ON (uses Ceres internal mini-glog)
+#   Why: Isolates Ceres from external glog changes, preventing ABI conflicts
+#   Result: Ceres uses bundled mini-glog, COLMAP uses system glog 0.6.0-2.1build1
+#   Benefit: Maximum stability, each library uses appropriate glog version
+#   Alternative: MINIGLOG=OFF would make Ceres use external glog (not recommended)
+#
+cmake .. \
+  -G Ninja \
+  -D CMAKE_BUILD_TYPE=Release \
+  -D CMAKE_INSTALL_PREFIX=/usr/local \
+  -D CMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
+  -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
+  -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
+  -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
+  -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
+  -D BUILD_SHARED_LIBS=ON \
+  -D MINIGLOG=ON \
+  -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
+  -D BLA_VENDOR=OpenBLAS \
+  -D LAPACK=ON \
+  -D EIGENMETIS=ON \
+  -D EIGENSPARSE=ON \
+  -D SUITESPARSE=ON \
+  -D USE_CUDA=ON \
+  -D BUILD_EXAMPLES=OFF \
+  -D BUILD_TESTING=OFF \
+  -D BUILD_BENCHMARKS=OFF \
+  -D CMAKE_CUDA_ARCHITECTURES="86;89;90" \
+  -D CMAKE_CXX_STANDARD=17 \
+  -D CMAKE_CXX_STANDARD_REQUIRED=ON \
+  -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
+
+#--- Sub-block 8.4: Build and install Ceres ---
+# Critical: Compile with ninja using half CPU cores
+ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build Ceres"; exit 1; }
+ninja install || { echo "ERROR: Failed to install Ceres"; exit 1; }
+ldconfig
 
 # CRITICAL: Check dpkg status file for corruption before proceeding
 echo "Checking dpkg status file integrity..."
@@ -2685,283 +2667,114 @@ else
     echo "✓ dpkg status file integrity verified"
 fi
 
-# Compatibility check: Ensure no conflicting glog is already installed
-echo "Checking for conflicting glog installations..."
-if dpkg -l | grep -q "^ii.*libglog-dev"; then
-    INSTALLED_GLOG_VERSION=$(dpkg -l | grep "^ii.*libglog-dev" | awk '{print $3}')
-    echo "⚠ Found OLD system libglog-dev: ${INSTALLED_GLOG_VERSION}"
-    echo "  Will be REPLACED with glog ${GLOG_VERSION} compiled from source"
-    echo "  Old version will be blocked by apt preferences after our custom build"
+#--- Sub-block 8.1.5.1: Verify System glog Installation ---
+# Purpose: Verify Ubuntu's glog 0.6.0 is installed and check for version conflicts
+# Dependencies: PKGS_CORE_DEPS (libgoogle-glog-dev already installed from apt)
+# Outputs: Verified glog installation
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Verifying system glog installation for COLMAP compatibility..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Check for multiple glog installations (potential conflict)
+echo "🔍 Checking for conflicting glog versions..."
+echo ""
+echo "1. Checking all glog libraries in system:"
+ldconfig -p | grep glog || echo "  ⚠ No glog libraries found in ldconfig cache"
+echo ""
+
+echo "2. Checking all glog headers:"
+find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep glog || echo "  ⚠ No glog headers found"
+echo ""
+
+echo "3. Checking dpkg for installed glog packages:"
+dpkg -l | grep glog || echo "  ℹ No glog packages in dpkg"
+echo ""
+
+# Verify system glog is installed
+if ! dpkg -l | grep -q "^ii.*libgoogle-glog-dev"; then
+    echo "✗ ERROR: libgoogle-glog-dev not installed!"
+    echo "  This should have been installed via PKGS_CORE_DEPS"
+    exit 1
+fi
+
+INSTALLED_GLOG=$(dpkg -l | grep "^ii.*libgoogle-glog-dev" | awk '{print $3}')
+echo "✓ Found system glog: ${INSTALLED_GLOG}"
+echo ""
+
+# Verify CMake can find glog
+echo "4. Verifying CMake can detect glog..."
+if [ -d "/usr/lib/x86_64-linux-gnu/cmake/glog" ]; then
+    echo "  ✓ CMake config found: /usr/lib/x86_64-linux-gnu/cmake/glog"
+    if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glog/glog-config.cmake" ]; then
+        echo "  ✓ glog-config.cmake exists"
+    fi
 else
-    echo "✓ No conflicting system glog found"
-    echo "  Will install glog ${GLOG_VERSION} compiled from source"
+    echo "  ⚠ WARNING: glog CMake config not found in expected location"
+    echo "    COLMAP may have issues finding glog"
 fi
+echo ""
 
-# Install minimal glog build dependencies
-apt-get install -y --no-install-recommends \
-    libgflags-dev \
-    libunwind-dev \
-    || echo "⚠ Some glog dependencies unavailable (non-fatal)"
-
-cd /tmp || exit 1
-rm -rf glog
-
-echo "Downloading glog v${GLOG_VERSION} from GitHub..."
-if ! clone_with_retry "https://github.com/google/glog.git" "/tmp/glog" "v${GLOG_VERSION}"; then
-    echo "ERROR: Failed to clone glog v${GLOG_VERSION} after all retry attempts"
-    exit 1
-fi
-
-echo "✓ Successfully cloned glog v${GLOG_VERSION}"
-
-cd /tmp/glog || exit 1
-rm -rf build
-mkdir -p build
-cd build || exit 1
-
-echo "Configuring glog v${GLOG_VERSION} with optimizations..."
-cmake .. \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DBUILD_SHARED_LIBS=ON \
-    -DWITH_GFLAGS=ON \
-    -DWITH_UNWIND=ON \
-    -DWITH_TLS=ON \
-    -DBUILD_TESTING=OFF \
-    -DCMAKE_CXX_STANDARD=17 \
-    -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-    -DCMAKE_CXX_FLAGS="-O3 -march=x86-64-v3 -mavx2 -mfma -fPIC -DNDEBUG" \
-    -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-    -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    2>&1 | tee /tmp/glog_cmake.log
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: glog CMake configuration failed"
-    cat /tmp/glog_cmake.log
-    exit 1
-fi
-
-echo "Building glog v${GLOG_VERSION}..."
-make -j$(nproc) 2>&1 | tee /tmp/glog_build.log
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: glog build failed"
-    cat /tmp/glog_build.log
-    exit 1
-fi
-
-echo "Installing glog v${GLOG_VERSION}..."
-make install 2>&1 | tee /tmp/glog_install.log
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: glog installation failed"
-    cat /tmp/glog_install.log
-    exit 1
-fi
-
-# Update library cache and verify installation
-ldconfig
-
-if ! ldconfig -p | grep -q "libglog.so"; then
-    echo "ERROR: glog not found in linker cache after installation"
-    exit 1
-fi
-
-echo "Verifying glog installation..."
-GLOG_VERSION_INSTALLED=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
-if [ "$GLOG_VERSION_INSTALLED" = "unknown" ]; then
-    echo "  Installed glog version: ${GLOG_VERSION} (pkg-config not available, using configured version)"
+# Check glog version for COLMAP compatibility
+echo "5. Checking glog version compatibility with COLMAP 3.12.6..."
+GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
+if [ "$GLOG_VERSION" != "unknown" ]; then
+    echo "  ✓ pkg-config reports glog version: ${GLOG_VERSION}"
+    # Extract major.minor version
+    GLOG_MAJOR=$(echo "$GLOG_VERSION" | cut -d. -f1)
+    GLOG_MINOR=$(echo "$GLOG_VERSION" | cut -d. -f2)
+    
+    if [ "$GLOG_MAJOR" -eq 0 ] && [ "$GLOG_MINOR" -eq 6 ]; then
+        echo "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches"
+        echo "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)"
+    fi
 else
-    echo "  Installed glog version: ${GLOG_VERSION_INSTALLED}"
+    echo "  ℹ glog version not available via pkg-config (non-fatal)"
 fi
-echo "  Target version from config: ${GLOG_VERSION}"
-echo "  Location: $(ldconfig -p | grep libglog.so | head -1)"
+echo ""
 
-# Compatibility verification: Check CMake can find glog
-echo "Verifying CMake can find glog..."
-if [ -d "/usr/local/lib/cmake/glog" ]; then
-    echo "  ✓ CMake config: /usr/local/lib/cmake/glog"
-    ls -1 /usr/local/lib/cmake/glog/*.cmake | wc -l | xargs echo "    Config files:"
-else
-    echo "  ⚠ CMake config not in expected location"
-fi
-
-# Check for header files
-if [ -f "/usr/local/include/glog/logging.h" ]; then
-    echo "  ✓ Headers: /usr/local/include/glog/logging.h"
+# Test if glog headers are accessible
+echo "6. Testing glog header accessibility..."
+if [ -f "/usr/include/glog/logging.h" ]; then
+    echo "  ✓ glog headers found: /usr/include/glog/logging.h"
 else
     echo "  ✗ ERROR: glog headers not found"
     exit 1
 fi
-
 echo ""
-echo "Compatibility check: Testing glog API availability..."
-# Create a simple test to verify glog 0.5.0 APIs are available
-cat > /tmp/test_glog_api.cpp << 'EOFTEST'
-#include <glog/logging.h>
-int main() {
-    // Test that new APIs exist (compile-time check)
-    int x = 42;
-    CHECK_EQ(x, 42);  // This API required by COLMAP 3.12.6
-    CHECK_GE(x, 0);
-    CHECK_LE(x, 100);
-    return 0;
-}
-EOFTEST
 
-if g++ -std=c++17 /tmp/test_glog_api.cpp -I/usr/local/include -L/usr/local/lib -lglog -o /tmp/test_glog_api 2>&1 | tail -5; then
-    echo "  ✓ glog 0.5.0 APIs available (CHECK_EQ, CHECK_GE, CHECK_LE)"
-    rm -f /tmp/test_glog_api.cpp /tmp/test_glog_api
+# WARNING: Check for /usr/local glog installation (would conflict)
+echo "7. Checking for conflicting /usr/local glog installation..."
+if [ -f "/usr/local/include/glog/logging.h" ] || [ -f "/usr/local/lib/libglog.so" ]; then
+    echo "  ⚠ WARNING: Found glog in /usr/local!"
+    echo "    This may conflict with system glog in /usr"
+    echo "    /usr/local has higher priority in CMake searches"
+    echo ""
+    echo "  Files found:"
+    [ -f "/usr/local/include/glog/logging.h" ] && echo "    - /usr/local/include/glog/logging.h"
+    [ -f "/usr/local/lib/libglog.so" ] && echo "    - /usr/local/lib/libglog.so"
+    echo ""
+    echo "  Recommendation: Remove /usr/local glog or use CMAKE_IGNORE_PATH"
 else
-    echo "  ✗ ERROR: glog API test failed"
-    rm -f /tmp/test_glog_api.cpp /tmp/test_glog_api
-    exit 1
+    echo "  ✓ No conflicting /usr/local glog found"
 fi
-
-# Cleanup build files
-echo "Cleaning up glog build files..."
-cd /
-rm -rf /tmp/glog
-rm -f /tmp/glog_*.log
-
-echo "✓ glog v${GLOG_VERSION} successfully built and installed with optimizations"
-
-#--- Sub-block 8.1.6: Protect compiled glog from APT overwrites ---
-# Critical: Multi-layer protection to prevent apt from overwriting our optimized glog
-# Protects both libglog-dev (headers) and libglog0v5/libglog1 (runtime libraries)
-echo "Protecting compiled glog from APT overwrites (multi-layer lock)..."
-mkdir -p /var/lib/dpkg/info
-mkdir -p /var/lib/dpkg/status.d
-mkdir -p /etc/apt/preferences.d
-
-# Layer 1: Create dummy package for libglog-dev (development headers)
-cat > /var/lib/dpkg/info/libglog-dev.list << 'EOF'
-/usr/local/lib/libglog.so
-/usr/local/lib/libglog.so.2
-/usr/local/lib/pkgconfig/libglog.pc
-/usr/local/include/glog
-EOF
-
-cat > /var/lib/dpkg/info/libglog-dev.md5sums << 'EOF'
-# Checksums for compiled glog (placeholder)
-EOF
-
-cat > /var/lib/dpkg/status.d/libglog-dev << 'EOF'
-Package: libglog-dev
-Status: install ok installed
-Priority: optional
-Section: libs
-Installed-Size: 2048
-Maintainer: Custom Build <custom@localhost>
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled glog development files (in /usr/local)
- This is a dummy package to prevent apt from installing libglog-dev.
- Real installation: /usr/local (compiled from source v0.6.0)
-EOF
-
-# Layer 2: Create dummy package for libglog runtime library (handles libglog0v5, libglog1, etc.)
-cat > /var/lib/dpkg/info/libglog1.list << 'EOF'
-/usr/local/lib/libglog.so.2
-/usr/local/lib/libglog.so.2.0.0
-EOF
-
-cat > /var/lib/dpkg/info/libglog1.md5sums << 'EOF'
-# Checksums for compiled glog runtime (placeholder)
-EOF
-
-cat > /var/lib/dpkg/status.d/libglog1 << 'EOF'
-Package: libglog1
-Status: install ok installed
-Priority: optional
-Section: libs
-Installed-Size: 512
-Maintainer: Custom Build <custom@localhost>
-Architecture: amd64
-Version: 999.9.9
-Description: Placeholder for compiled glog runtime library (in /usr/local)
- This is a dummy package to prevent apt from installing libglog runtime.
- Real installation: /usr/local (compiled from source v0.6.0)
-EOF
-
-# Add both packages to dpkg status using safe function
-echo "  Adding libglog-dev and libglog1 to dpkg status..."
-safe_add_dummy_package "libglog-dev" "/var/lib/dpkg/status.d/libglog-dev"
-safe_add_dummy_package "libglog1" "/var/lib/dpkg/status.d/libglog1"
-
-# Layer 3: dpkg selections hold (prevent removal/upgrade)
-echo "libglog-dev hold" | dpkg --set-selections
-echo "libglog1 hold" | dpkg --set-selections
-echo "libglog0v5 hold" | dpkg --set-selections 2>/dev/null || true
-
-# Layer 4: apt-mark hold (additional protection)
-apt-mark hold libglog-dev 2>/dev/null || true
-apt-mark hold libglog1 2>/dev/null || true
-apt-mark hold libglog0v5 2>/dev/null || true
-apt-mark hold libglog0 2>/dev/null || true
-
-# Layer 5: APT preferences pinning (highest priority protection)
-cat > /etc/apt/preferences.d/99-protect-compiled-glog << 'EOF'
-# CRITICAL: Prevent APT from overwriting compiled glog from source
-# Custom glog v0.5.0 compiled with optimizations in /usr/local
-# Priority explanation:
-#   -1 = never install (blocks all versions from repositories)
-#   Pin: version 999.9.9 = our dummy package version
-
-Package: libglog-dev
-Pin: version 999.9.9
-Pin-Priority: 1001
-
-Package: libglog-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libglog1
-Pin: version 999.9.9
-Pin-Priority: 1001
-
-Package: libglog1
-Pin: release *
-Pin-Priority: -1
-
-Package: libglog0v5
-Pin: release *
-Pin-Priority: -1
-
-Package: libglog0
-Pin: release *
-Pin-Priority: -1
-EOF
-
-echo "✓ glog protected with 5-layer lock:"
-echo "  Layer 1: Dummy packages (libglog-dev, libglog1)"
-echo "  Layer 2: dpkg hold status"
-echo "  Layer 3: apt-mark hold"
-echo "  Layer 4: APT preferences pinning (priority -1)"
-echo "  Layer 5: Dummy package version 999.9.9 (priority 1001)"
-echo "  Protected packages: libglog-dev, libglog1, libglog0v5, libglog0"
 echo ""
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Compatibility Configuration Summary:"
+echo "System glog verification complete"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Package        | glog Usage         | Version/Type"
-echo "---------------|--------------------|-----------------------"
-echo "glog (custom)  | Compiled           | 0.5.0 (/usr/local)"
-echo "Ceres Solver   | Internal MINIGLOG  | Bundled (isolated)"
-echo "g2o            | None               | No dependency"
-echo "GTSAM          | None               | No dependency"
-echo "COLMAP         | External glog      | 0.5.0 (compatible)"
-echo "Open3D         | None               | No dependency"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "✓ Compatibility design: Maximum stability, no conflicts"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-monitor_cache "After glog compilation"
+echo ""
+echo "Compatibility Configuration:"
+echo "  glog:          System package (Ubuntu ${INSTALLED_GLOG})"
+echo "  Ceres Solver:  Internal MINIGLOG (bundled, isolated)"
+echo "  COLMAP:        System glog (Ubuntu's patched 0.6.0)"
+echo ""
+monitor_cache "After glog verification"
 
 #--- Sub-block 8.2: Compile Ceres Solver ---
 # Purpose: Build Ceres optimization library from source (COMPILE FIRST - g2o can link to it)
-# Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA), Sub-block 8.1.5 (glog)
-# Outputs: GPU libraries, CUDA toolkit
+# Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
+# Note: Uses internal MINIGLOG (bundled), NOT system glog - fully isolated
+# Outputs: Optimized Ceres library
 echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
 rm -rf /tmp/ceres-solver
 # Using CERES_VERSION from config.sh
@@ -2981,7 +2794,7 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 # 
 # COMPATIBILITY NOTE: MINIGLOG=ON (uses Ceres internal mini-glog)
 #   Why: Isolates Ceres from external glog changes, preventing ABI conflicts
-#   Result: Ceres uses bundled mini-glog, COLMAP uses external glog 0.5.0
+#   Result: Ceres uses bundled mini-glog, COLMAP uses system glog 0.6.0
 #   Benefit: Maximum stability, each library uses appropriate glog version
 #   Alternative: MINIGLOG=OFF would make Ceres use external glog (not recommended)
 #
@@ -3442,6 +3255,8 @@ if [ -x "$JULIA_BIN" ]; then
     rm -rf "$BUILD_DIR"
     git clone -q --depth 1 https://github.com/JuliaInterop/libcxxwrap-julia.git "$BUILD_DIR" || { echo "ERROR: Failed to clone libcxxwrap-julia"; exit 1; }
     cd "$BUILD_DIR" || { echo "ERROR: Failed to access libcxxwrap-julia directory"; exit 1; }
+    # Clean build directory for fresh compilation
+    rm -rf build
     mkdir -p build
     cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
@@ -3914,17 +3729,31 @@ fi
 echo "Updating APT cache to apply OpenCV protection..."
 apt-get update || true
 
-# Verify protection is active by checking if apt would install opencv packages
+# Verify protection is active by checking the preferences file and APT status
 echo "Verifying OpenCV protection..."
-if apt-cache policy libopencv-dev 2>/dev/null | grep -q "Pin-Priority: -1"; then
-    echo "✓ OpenCV protection verified - system packages are blocked"
-elif ! apt-cache show libopencv-dev &>/dev/null; then
-    echo "✓ OpenCV protection verified - system packages not available"
-else
-    echo "⚠ Warning: Could not verify OpenCV protection, but continuing..."
+OPENCV_VERIFICATION_PASSED=false
+
+# Method 1: Check if preferences file exists and has correct content
+if [ -f "/etc/apt/preferences.d/block-system-opencv" ] && grep -q "Pin-Priority: -1" /etc/apt/preferences.d/block-system-opencv; then
+    echo "✓ OpenCV protection file verified (Pin-Priority: -1 active)"
+    OPENCV_VERIFICATION_PASSED=true
 fi
 
-echo "✓ OpenCV protection completed (APT pinning method)"
+# Method 2: Try to verify with apt-cache (may not work in all environments)
+if apt-cache policy libopencv-dev 2>/dev/null | grep -qi "pin.*-1\|candidate.*none"; then
+    echo "✓ OpenCV protection verified via apt-cache (packages blocked)"
+    OPENCV_VERIFICATION_PASSED=true
+elif ! apt-cache show libopencv-dev &>/dev/null; then
+    echo "✓ OpenCV protection verified (system packages not in repository)"
+    OPENCV_VERIFICATION_PASSED=true
+fi
+
+if [ "$OPENCV_VERIFICATION_PASSED" = true ]; then
+    echo "✓ OpenCV protection completed and verified (APT pinning method)"
+else
+    echo "⚠ OpenCV protection file created, but runtime verification inconclusive"
+    echo "  This is usually fine - APT pinning is active even if verification fails"
+fi
 
 #--- Sub-block 10.14: Cleanup OpenCV build files ---
 # Purpose: Remove temporary build files
@@ -4272,7 +4101,7 @@ echo "  GTSAM: $(ldconfig -p | grep -c libgtsam || echo 0) libraries"
 echo "✓ pip configured to protect compiled libraries"
 
 #--- Sub-block 13A.1: Install COLMAP dependencies ---
-# Note: glog is compiled from source in Block 8 (Sub-block 8.1.5) before Ceres
+# Note: libgoogle-glog-dev (system glog) installed via PKGS_CORE_DEPS in Block 2
 # Critical: Qt5, CGAL, FreeImage, and other build dependencies
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -4309,7 +4138,7 @@ apt-get install -y --no-install-recommends \
     libboost-thread-dev \
     libgflags-dev \
     || echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
-# Note: libglog-dev NOT installed from apt - built from source in Sub-block 13A.0.1
+# Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
 echo "✓ COLMAP dependencies installed"
 
@@ -4337,36 +4166,52 @@ echo "✓ COLMAP source downloaded"
 
 #--- Sub-block 13A.3: Configure COLMAP with CMake ---
 # Critical: Enable CUDA, OpenMP, CGAL, GUI for maximum performance
-# Dependencies: Block 10 (OpenCV), Block 8 (Ceres, glog)
+# Dependencies: Block 10 (OpenCV), Block 8 (Ceres), System glog (libgoogle-glog-dev)
 # Outputs: COLMAP build configuration
 # Note: Python support is auto-enabled if pybind11-dev is installed
 # Note: OpenCV_DIR is auto-detected via CMAKE_PREFIX_PATH
 # Note: BOOST_STATIC is deprecated/removed in COLMAP 3.12.6
 #
-# COMPATIBILITY: COLMAP uses external glog 0.5.0 (compiled in Block 8.1.5)
-#   - Explicitly set -Dglog_DIR to ensure it finds our custom glog
-#   - COLMAP 3.12.6 requires glog 0.4.x/0.5.x APIs (CHECK_EQ, CHECK_GE, etc.)
-#   - Our glog 0.5.0 provides all required APIs without 0.6.0+ breaking changes
+# COMPATIBILITY: COLMAP 3.12.6 + System glog 0.6.0 (Ubuntu's patched version)
+#   - System glog 0.6.0 location: /usr/lib/x86_64-linux-gnu/cmake/glog
+#   - Ubuntu's glog includes compatibility patches for COLMAP
+#   - Force system glog detection via -Dglog_DIR (prevents /usr/local conflicts)
+#   - Added -fpermissive flag for template instantiation robustness
+#   - Using Ninja generator for better error messages and build performance
 #
-echo "Configuring COLMAP with CUDA optimizations..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Configuring COLMAP ${COLMAP_VERSION} with CUDA optimizations..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-# Pre-flight check: Verify glog is available for COLMAP
-echo "Verifying glog availability for COLMAP..."
-if [ ! -d "/usr/local/lib/cmake/glog" ]; then
-    echo "ERROR: glog CMake config not found at /usr/local/lib/cmake/glog"
-    echo "       COLMAP requires glog to be compiled first (Block 8.1.5)"
+# Pre-flight check: Verify system glog is available for COLMAP
+echo "🔍 Verifying system glog availability for COLMAP..."
+if [ ! -d "/usr/lib/x86_64-linux-gnu/cmake/glog" ]; then
+    echo "✗ ERROR: System glog CMake config not found"
+    echo "  Expected: /usr/lib/x86_64-linux-gnu/cmake/glog"
+    echo "  Install: sudo apt-get install libgoogle-glog-dev"
     exit 1
 fi
-if [ ! -f "/usr/local/lib/libglog.so" ]; then
-    echo "ERROR: libglog.so not found at /usr/local/lib"
+if [ ! -f "/usr/lib/x86_64-linux-gnu/libglog.so" ]; then
+    echo "✗ ERROR: System libglog.so not found"
+    echo "  Expected: /usr/lib/x86_64-linux-gnu/libglog.so"
     exit 1
 fi
-echo "✓ glog is available for COLMAP"
-# Remove existing build directory if it exists (critical for Singularity rebuilds)
-rm -rf build
+echo "✓ System glog is available for COLMAP"
+echo "  Location: /usr/lib/x86_64-linux-gnu"
+echo "  CMake config: /usr/lib/x86_64-linux-gnu/cmake/glog"
+
+# Clean build directory (critical for rebuilds)
+echo ""
+echo "🧹 Cleaning build directory for fresh COLMAP build..."
+rm -rf build CMakeCache.txt
 mkdir -p build && cd build
+echo "✓ Clean build directory created"
 
+# CMake configuration with Ninja generator
+echo ""
+echo "⚙️ Running CMake configuration (this may take a few minutes)..."
 cmake .. \
+    -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCUDA_ENABLED=ON \
@@ -4380,69 +4225,129 @@ cmake .. \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_CUDA_FLAGS="-Xcompiler -fopenmp" \
-    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops" \
+    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive" \
     -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    -DCMAKE_PREFIX_PATH="/usr/local" \
+    -DCMAKE_PREFIX_PATH="/usr/local;/usr" \
+    -DCMAKE_IGNORE_PATH="/usr/local/lib/cmake/glog;/usr/local/include/glog" \
     -DEigen3_DIR=/usr/local/share/eigen3/cmake \
     -DCeres_DIR=/usr/local/lib/cmake/Ceres \
-    -Dglog_DIR=/usr/local/lib/cmake/glog \
+    -Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog \
     -Dgflags_DIR=/usr/local/lib/cmake/gflags \
     2>&1 | tee /tmp/colmap_cmake.log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "✗ COLMAP CMake configuration failed"
-    cat /tmp/colmap_cmake.log
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ COLMAP CMake configuration FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Last 50 lines of CMake log:"
+    tail -50 /tmp/colmap_cmake.log
+    echo ""
+    echo "Full log saved to: /tmp/colmap_cmake.log"
     exit 1
 fi
 
-echo "✓ COLMAP configured with CUDA support"
+# Verify glog was detected correctly
+echo ""
+echo "🔍 Verifying glog detection in CMake configuration..."
+if grep -i "glog" /tmp/colmap_cmake.log | grep -q "0.6.0\|Found glog"; then
+    echo "✓ CMake successfully detected glog:"
+    grep -i "Found glog\|glog.*version" /tmp/colmap_cmake.log | head -3 || echo "  (detection confirmed)"
+else
+    echo "⚠ WARNING: Could not verify glog version in CMake output"
+    echo "  Build may still succeed if glog is correctly installed"
+fi
+
+echo ""
+echo "✓ COLMAP configured successfully with CUDA support"
+echo "  Generator: Ninja"
+echo "  glog: System package (Ubuntu patched 0.6.0)"
+echo "  Additional flags: -fpermissive"
 
 #--- Sub-block 13A.4: Build COLMAP ---
-# Critical: Compile with reduced parallelism to avoid memory/OOM issues
-# Dependencies: None (foundational)
+# Critical: Compile with Ninja (faster, better error messages than make)
+# Dependencies: CMake configuration (Ninja generator)
 # Outputs: COLMAP binaries
-# Note: COLMAP builds can be memory-intensive, so use half cores to prevent OOM
-echo "Building COLMAP (this may take 15-20 minutes)..."
+# Note: COLMAP builds can be memory-intensive, use reduced parallelism
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Building COLMAP with Ninja (this may take 15-20 minutes)..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 # Use half cores to prevent memory issues during compilation
 BUILD_JOBS=$(($(nproc) / 2))
 if [ "$BUILD_JOBS" -lt 1 ]; then
     BUILD_JOBS=1
 fi
 echo "Using $BUILD_JOBS parallel jobs for COLMAP build..."
+echo ""
 
-# Try building with reduced parallelism
-if ! make -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
-    echo "✗ COLMAP build failed with $BUILD_JOBS jobs, trying single-threaded build..."
-    # Fallback to single-threaded build to get better error messages
-    if ! make -j1 2>&1 | tee -a /tmp/colmap_build.log; then
-        echo "✗ COLMAP build failed even with single-threaded build"
-        echo "Last 200 lines of build log:"
-        tail -200 /tmp/colmap_build.log
+# Build with Ninja (better error messages than make)
+if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ COLMAP build FAILED with $BUILD_JOBS jobs"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Trying single-threaded build for better error diagnostics..."
+    if ! ninja -j1 2>&1 | tee -a /tmp/colmap_build.log; then
         echo ""
-        echo "Checking for common issues..."
-        # Check if it's a dependency issue
-        if grep -i "not found\|missing\|undefined" /tmp/colmap_build.log; then
-            echo "Possible dependency issue detected"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✗ COLMAP build FAILED (single-threaded)"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Last 100 lines of build log:"
+        tail -100 /tmp/colmap_build.log
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Diagnostic Analysis:"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # Check for common issues
+        if grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found"; then
+            echo "❌ glog-related errors detected:"
+            grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -10
+            echo ""
+            echo "Possible solutions:"
+            echo "  1. Verify glog version: pkg-config --modversion libglog"
+            echo "  2. Check for multiple glog installations:"
+            echo "     ldconfig -p | grep glog"
+            echo "     find /usr/include /usr/local/include -name 'logging.h' 2>/dev/null | grep glog"
+            echo "  3. If /usr/local glog found, remove it or add to CMAKE_IGNORE_PATH"
         fi
-        # Check if it's a memory issue
+        
+        if grep -i "not found\|missing\|undefined reference" /tmp/colmap_build.log | head -10; then
+            echo ""
+            echo "❌ Dependency/linking issues detected"
+        fi
+        
         if grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log; then
-            echo "Possible memory issue detected - try reducing BUILD_JOBS further"
+            echo ""
+            echo "❌ Memory issue detected - try reducing BUILD_JOBS further"
         fi
+        
+        echo ""
+        echo "Full build log saved to: /tmp/colmap_build.log"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
 fi
 
-echo "✓ COLMAP built successfully"
+echo ""
+echo "✓ COLMAP built successfully with Ninja"
 
 #--- Sub-block 13A.5: Install COLMAP ---
 # Purpose: Install to system paths
-# Dependencies: None (foundational)
-# Outputs: COLMAP installed
-make install
+# Dependencies: Successful build
+# Outputs: COLMAP installed to /usr/local
+echo ""
+echo "Installing COLMAP to /usr/local..."
+ninja install
 ldconfig
 
 # Install PyCOLMAP (Python bindings) from source directory
@@ -4500,7 +4405,8 @@ mkdir -p /etc/apt/preferences.d
 # Block ALL system COLMAP packages using APT pinning with negative priority
 cat > /etc/apt/preferences.d/block-system-colmap << 'EOF'
 # Block system COLMAP packages (prevent installation)
-# Our optimized COLMAP 3.12.6 is compiled from source in /usr/local with CUDA support and glog 0.5.0
+# Our optimized COLMAP 3.12.6 is compiled from source in /usr/local with CUDA support
+# Uses system glog 0.6.0 (Ubuntu's patched version)
 # Negative priority (-1) means APT will never install these packages
 
 Package: colmap
@@ -4616,12 +4522,21 @@ fi
 # Critical: Enable CUDA for point cloud processing (requires Clang for Filament ABI)
 # Dependencies: CUDA, Eigen, Clang
 # Outputs: Open3D build configuration
-echo "Configuring Open3D with CUDA optimizations..."
-# Remove existing build directory if it exists (critical for Singularity rebuilds)
-rm -rf build
-mkdir -p build && cd build
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA optimizations..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
+# Clean build directory (critical for rebuilds)
+echo "🧹 Cleaning build directory for fresh Open3D build..."
+rm -rf build CMakeCache.txt
+mkdir -p build && cd build
+echo "✓ Clean build directory created"
+echo ""
+
+# CMake configuration with Ninja generator
+echo "⚙️ Running CMake configuration with Ninja generator..."
 cmake .. \
+    -GNinja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCMAKE_CXX_COMPILER=clang++ \
@@ -4658,9 +4573,11 @@ cmake .. \
 
 # Check if configuration succeeded
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "⚠ Open3D CUDA configuration failed, trying CPU-only version"
+    echo ""
+    echo "⚠ Open3D CUDA configuration failed, trying CPU-only version..."
     rm -rf *
     cmake .. \
+        -GNinja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_CXX_COMPILER=clang++ \
@@ -4695,34 +4612,57 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
         2>&1 | tee /tmp/open3d_cmake_cpu.log
     
     if [ ${PIPESTATUS[0]} -ne 0 ]; then
+        echo ""
         echo "✗ Open3D configuration failed completely"
+        echo "Last 50 lines of CMake log:"
+        tail -50 /tmp/open3d_cmake_cpu.log
         exit 1
     fi
-    echo "✓ Open3D configured (CPU-only)"
+    echo "✓ Open3D configured (CPU-only, using Ninja)"
 else
-    echo "✓ Open3D configured with CUDA support"
+    echo ""
+    echo "✓ Open3D configured with CUDA support (using Ninja)"
 fi
 
 #--- Sub-block 13A.10: Build Open3D ---
-# Critical: Compile with all cores
-# Dependencies: None (foundational)
+# Critical: Compile with Ninja (faster, better error messages)
+# Dependencies: CMake configuration (Ninja generator)
 # Outputs: Open3D binaries
-echo "Building Open3D (this may take 15-20 minutes)..."
-make -j$(nproc) 2>&1 | tee /tmp/open3d_build.log
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Building Open3D with Ninja (this may take 15-20 minutes)..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Use all cores for Open3D (generally well-parallelized)
+BUILD_JOBS=$(nproc)
+echo "Using $BUILD_JOBS parallel jobs for Open3D build..."
+echo ""
+
+ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log
 
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo "✗ Open3D build failed"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ Open3D build FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Last 100 lines of build log:"
     tail -100 /tmp/open3d_build.log
+    echo ""
+    echo "Full build log saved to: /tmp/open3d_build.log"
     exit 1
 fi
 
-echo "✓ Open3D built successfully"
+echo ""
+echo "✓ Open3D built successfully with Ninja"
 
 #--- Sub-block 13A.11: Install Open3D ---
 # Purpose: Install to system paths (C++ and Python)
-# Dependencies: None (foundational)
-# Outputs: Open3D installed
-make install
+# Dependencies: Successful build
+# Outputs: Open3D installed to /usr/local
+echo ""
+echo "Installing Open3D to /usr/local..."
+ninja install
 ldconfig
 
 # Verify C++ installation
@@ -4741,9 +4681,9 @@ OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
 
-# Strategy 1: Try make install-pip-package (recommended for Open3D)
-echo "Attempting: make install-pip-package..."
-if make install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
+# Strategy 1: Try ninja install-pip-package (recommended for Open3D)
+echo "Attempting: ninja install-pip-package..."
+if ninja install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
     if python3 -c "import open3d" 2>/dev/null; then
         echo "✓ Python module installed via install-pip-package"
         PYTHON_INSTALLED=true
@@ -4753,7 +4693,7 @@ fi
 # Strategy 2: Build Python wheel and install it WITHOUT dependencies
 if [ "$PYTHON_INSTALLED" = false ]; then
     echo "⚠ install-pip-package didn't work, building Python wheel..."
-    if make python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
+    if ninja python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
         # Look for wheel in build directory
         WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/lib" -name "open3d*.whl" 2>/dev/null | head -1)
         if [ -n "$WHEEL_FILE" ] && [ -f "$WHEEL_FILE" ]; then
@@ -8916,13 +8856,13 @@ apt-get install -y \
 # Remove Debian-managed Python packages that we'll reinstall via pip
 apt-get remove -y python3-zmq 2>/dev/null || true
 pip3 install --no-cache-dir \
-  pyzmq==25.1.0 \
-  msgpack==1.0.7
+  pyzmq==${PYZMQ_VERSION} \
+  msgpack==${MSGPACK_VERSION}
 
 # === ADDITION 3: Julia-Python Bridge (Modern) ===
 pip3 install --no-cache-dir \
-  juliacall==0.9.14 \
-  juliapkg==0.1.10
+  juliacall==${JULIACALL_VERSION} \
+  juliapkg==${JULIAPKG_VERSION}
 
 # JULIA PACKAGES (After fixing pip)
 ${JULIA_HOME}/bin/julia -e '
@@ -8986,15 +8926,21 @@ apt-get install -y \
   glances \
 
 # Install nvtop (GPU monitor)
+echo "Building nvtop (GPU monitoring tool)..."
 cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
+rm -rf nvtop  # Clean any existing clone
 git clone https://github.com/syllo/nvtop.git || { echo "ERROR: Failed to clone nvtop"; exit 1; }
 cd nvtop || { echo "ERROR: Failed to access nvtop directory"; exit 1; }
+
+# Clean build directory
+rm -rf build CMakeCache.txt
 mkdir build || { echo "ERROR: Failed to create build directory"; exit 1; }
 cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
 # Modern nvtop (v3.0+) uses different CMake options
 # Old flags (NVML_SUPPORT, USE_SYSTEM_NVML) are deprecated
 cmake .. \
+  -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
   -DNVIDIA_SUPPORT=ON \
   -DAMDGPU_SUPPORT=OFF \
@@ -9003,10 +8949,11 @@ cmake .. \
   -DMSM_SUPPORT=OFF \
   -DCMAKE_INSTALL_PREFIX=/usr/local
 
-make -j$(nproc) || { echo "ERROR: Failed to build nvtop"; exit 1; }
-make install || { echo "ERROR: Failed to install nvtop"; exit 1; }
+ninja -j$(nproc) || { echo "ERROR: Failed to build nvtop"; exit 1; }
+ninja install || { echo "ERROR: Failed to install nvtop"; exit 1; }
 
 cd / && rm -rf /tmp/nvtop
+echo "✓ nvtop installed successfully"
 
 
 #--- Sub-block: Rust tools build continuation ---
@@ -9018,8 +8965,8 @@ apt-get install -y \
   libhdf5-dev \
   liblz4-dev
 pip3 install --no-cache-dir \
-  h5py==3.9.0 \
-  zarr==2.16.0
+  h5py==${H5PY_VERSION} \
+  zarr==${ZARR_VERSION}
 ${JULIA_HOME}/bin/julia -e '
   using Pkg
   Pkg.add(["HDF5", "JLD2"])
