@@ -2563,6 +2563,8 @@ monitor_cache "After glog setup (system package)"
 # Note: Changed from Sub-block 8.1.5 dependency (glog source) - now uses system glog package
 # Outputs: Optimized Ceres library
 echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
+# Ensure we're not inside the directory before removing it
+cd / || true
 rm -rf /tmp/ceres-solver
 # Using CERES_VERSION from config.sh
 if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
@@ -2776,6 +2778,8 @@ monitor_cache "After glog verification"
 # Note: Uses internal MINIGLOG (bundled), NOT system glog - fully isolated
 # Outputs: Optimized Ceres library
 echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
+# Ensure we're not inside the directory before removing it
+cd / || true
 rm -rf /tmp/ceres-solver
 # Using CERES_VERSION from config.sh
 if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
@@ -2889,6 +2893,8 @@ debug_glibc "After installing CERES"
 # Outputs: Configured system components
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "\n${YELLOW}[PHASE 3 | g2o] Compiling from source...${NC}"
+  # Ensure we're not inside the directory before removing it
+  cd / || true
   rm -rf /tmp/g2o
   # Using G2O_VERSION from config.sh
   if ! clone_with_retry "https://github.com/RainerKuemmerle/g2o.git" "/tmp/g2o" "${G2O_VERSION}"; then
@@ -2983,6 +2989,8 @@ debug_glibc "After installing g2o"
 # Outputs: Configured system components
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "${YELLOW}[PHASE 3 | GTSAM] Compiling from source...${NC}"
+  # Ensure we're not inside the directory before removing it
+  cd / || true
   rm -rf /tmp/gtsam
   # Using GTSAM_VERSION from config.sh
   if ! clone_with_retry "https://github.com/borglab/gtsam.git" "/tmp/gtsam" "${GTSAM_VERSION}"; then
