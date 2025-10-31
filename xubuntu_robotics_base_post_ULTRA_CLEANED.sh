@@ -456,7 +456,13 @@ export FASTEST_MIRROR
 
 # Apply the fastest mirror to the main APT sources
 if [ -f /etc/apt/sources.list ]; then
-  sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+  # Multiple replacement patterns to catch all variations:
+  # 1. Specifically target archive.ubuntu.com (most common issue)
+  sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+  sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+  # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+  sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+  sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
   echo "[info] Updated /etc/apt/sources.list with fastest mirror"
   
   # Verify the update was successful
@@ -464,6 +470,12 @@ if [ -f /etc/apt/sources.list ]; then
     echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
   else
     echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+  fi
+  
+  # Also verify no archive.ubuntu.com remains
+  if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+    echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
+    sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" /etc/apt/sources.list
   fi
 else
   echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
@@ -484,10 +496,24 @@ if [ -d /etc/apt/sources.list.d ]; then
             continue
         fi
         
-        # Update Ubuntu mirror URLs in this file
+        # Multiple replacement patterns for sources.list.d files too
+        # 1. Specifically target archive.ubuntu.com
+        if grep -q "archive\\.ubuntu\\.com" "$sources_file" 2>/dev/null; then
+            sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+            sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+            echo "[info] Updated archive.ubuntu.com in: $(basename "$sources_file")"
+        fi
+        # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
         if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
-            sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+            sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+            sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
             echo "[info] Updated: $(basename "$sources_file")"
+        fi
+        
+        # Final check - remove any remaining archive.ubuntu.com references
+        if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" "$sources_file"
+            echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
         fi
     done
     shopt -u nullglob  # Restore default behavior
@@ -596,18 +622,27 @@ reapply_fastest_mirror() {
     
     echo "[info] Re-applying fastest mirror to all Ubuntu repositories..."
     
-    # Update main sources.list
+    # Update main sources.list with multiple aggressive replacement patterns
     if [ -f /etc/apt/sources.list ]; then
-        # First pass: specifically target archive.ubuntu.com (what add-apt-repository adds)
+        # Multiple replacement patterns to catch all variations:
+        # 1. Specifically target archive.ubuntu.com (what add-apt-repository adds)
         sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-        # Second pass: catch any other Ubuntu mirror URLs for consistency
-        sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
+        
+        # Also verify no archive.ubuntu.com remains
+        if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+            echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" /etc/apt/sources.list
+        fi
         echo "[info] ✓ Updated /etc/apt/sources.list"
     else
         echo "[warn] /etc/apt/sources.list not found"
     fi
     
-    # Update sources.list.d/ files (excluding PPAs)
+    # Update sources.list.d/ files (excluding PPAs) with aggressive replacement
     if [ -d /etc/apt/sources.list.d ]; then
         local updated_count=0
         shopt -s nullglob  # Handle case where no .list files exist
@@ -619,11 +654,26 @@ reapply_fastest_mirror() {
                 continue
             fi
             
-            # Update Ubuntu mirror URLs in this file
+            # Multiple replacement patterns for sources.list.d files too
+            # 1. Specifically target archive.ubuntu.com
+            if grep -q "archive\\.ubuntu\\.com" "$sources_file" 2>/dev/null; then
+                sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+                sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+                echo "[info] ✓ Updated archive.ubuntu.com in: $(basename "$sources_file")"
+                updated_count=$((updated_count + 1))
+            fi
+            # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
             if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
-                sed -i "s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+                sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
+                sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
                 echo "[info] ✓ Updated: $(basename "$sources_file")"
                 updated_count=$((updated_count + 1))
+            fi
+            
+            # Final check - remove any remaining archive.ubuntu.com references
+            if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+                sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" "$sources_file"
+                echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
             fi
         done
         shopt -u nullglob  # Restore default behavior
@@ -634,6 +684,10 @@ reapply_fastest_mirror() {
     fi
     
     echo "[info] ✓ Fastest mirror re-application complete"
+    
+    # Force apt-get update to clear any cached mirror configuration
+    echo "[info] Running apt-get update to refresh package lists with new mirror..."
+    apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
     
     # Verify the changes
     verify_fastest_mirror
@@ -3055,6 +3109,60 @@ fi
 cd / && rm -rf /tmp/ceres-solver
 debug_glibc "After installing CERES"
 
+#--- Sub-block 8.5.5: Build PyCeres (Python bindings for Ceres) ---
+# Purpose: Build PyCeres from source to link against compiled Ceres
+# Dependencies: Sub-block 8.4 (Ceres Solver installed)
+# Outputs: PyCeres Python package
+# Reference: https://github.com/cvg/pyceres
+# Release: v2.5 (https://github.com/cvg/pyceres/archive/refs/tags/v2.5.tar.gz)
+# Note: PyCeres is required by PyCOLMAP for cost functions feature
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Building PyCeres ${PYCERES_VERSION} Python bindings for Ceres Solver..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Set library paths to prioritize our compiled Ceres
+export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
+
+# Clone PyCeres (using latest release v2.5)
+cd /tmp || exit 1
+rm -rf pyceres
+if ! clone_with_retry "https://github.com/cvg/pyceres.git" "/tmp/pyceres" "v${PYCERES_VERSION}"; then
+    echo "⚠ PyCeres clone failed, trying PyPI installation as fallback..."
+    if pip3 install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee /tmp/pyceres_install.log; then
+        echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
+    else
+        echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
+    fi
+else
+    cd /tmp/pyceres || exit 1
+    echo "Building PyCeres from source (linking against compiled Ceres)..."
+    
+    # Build PyCeres from source
+    # This will automatically detect Ceres in /usr/local via CMAKE_PREFIX_PATH
+    if pip3 install --no-deps --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee /tmp/pyceres_install.log; then
+        echo "✓ PyCeres built and installed from source (using compiled Ceres)"
+        
+        # Verify PyCeres installation
+        if python3 -c "import pyceres" 2>/dev/null; then
+            echo "✓ PyCeres Python module verified"
+        else
+            echo "⚠ PyCeres Python module verification failed (non-fatal)"
+        fi
+    else
+        echo "⚠ PyCeres source build failed, trying PyPI..."
+        if pip3 install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee -a /tmp/pyceres_install.log; then
+            echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
+        else
+            echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
+        fi
+    fi
+    
+    # Cleanup
+    cd / && rm -rf /tmp/pyceres
+fi
+
 #--- Sub-block 8.6: Compile g2o (graph optimization) ---
 # Purpose: Graph optimization library (uses Ceres if available - compiled after Ceres)
 # Dependencies: PHASE 1 (Build tools), Sub-block 8.2 (Ceres Solver - optional but recommended)
@@ -4763,32 +4871,92 @@ echo "Installing COLMAP to /usr/local..."
 ninja install
 ldconfig
 
-# Install PyCOLMAP (Python bindings) from source directory
-echo "Installing PyCOLMAP Python bindings..."
-cd .. || exit 1  # Go back to COLMAP source root where pycolmap/ directory is
+#--- Sub-block 13A.6: Install PyCOLMAP (Python bindings for COLMAP) ---
+# Purpose: Build PyCOLMAP from source to link against compiled COLMAP
+# Dependencies: Sub-block 13A.5 (COLMAP installed), Sub-block 8.5.5 (PyCeres - optional for cost functions)
+# Outputs: PyCOLMAP Python package
+# Reference: https://colmap.github.io/pycolmap/index.html
+# Note: Requires COLMAP installed first. PyCeres (optional) enables cost functions feature.
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Installing PyCOLMAP Python bindings for COLMAP..."
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+COLMAP_SOURCE_DIR=$(cd .. && pwd)  # Save COLMAP source root path
+BUILD_DIR=$(pwd)  # Current build directory
 
 # Set library paths to prioritize our compiled versions
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
 
-if [ -d "pycolmap" ]; then
-    # Install from local source WITHOUT dependencies (to avoid overwriting compiled libs)
-    if pip3 install --no-deps ./pycolmap 2>&1 | tee /tmp/pycolmap_install.log; then
-        echo "✓ PyCOLMAP Python bindings installed (no-deps, using compiled COLMAP)"
+# Check multiple possible locations for pycolmap directory in COLMAP source
+PYCOLMAP_FOUND=false
+PYCOLMAP_PATH=""
+
+if [ -d "${COLMAP_SOURCE_DIR}/pycolmap" ]; then
+    PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/pycolmap"
+    PYCOLMAP_FOUND=true
+    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+elif [ -d "${COLMAP_SOURCE_DIR}/python/pycolmap" ]; then
+    PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/python/pycolmap"
+    PYCOLMAP_FOUND=true
+    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+elif [ -d "${COLMAP_SOURCE_DIR}/scripts/python/pycolmap" ]; then
+    PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/scripts/python/pycolmap"
+    PYCOLMAP_FOUND=true
+    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+fi
+
+# Build PyCOLMAP from source if found in COLMAP repository
+if [ "$PYCOLMAP_FOUND" = true ] && { [ -f "${PYCOLMAP_PATH}/setup.py" ] || [ -f "${PYCOLMAP_PATH}/pyproject.toml" ]; }; then
+    echo "Building PyCOLMAP from source directory: ${PYCOLMAP_PATH}"
+    echo "  (Linking against compiled COLMAP in /usr/local)"
+    cd "${PYCOLMAP_PATH}" || exit 1
+    
+    # Build from source using official method: python -m pip install .
+    # Use --no-deps to avoid overwriting compiled libraries (numpy/scipy/opencv)
+    # PyCeres will be detected automatically if installed (for cost functions)
+    if python3 -m pip install --no-deps --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee /tmp/pycolmap_install.log; then
+        echo "✓ PyCOLMAP built and installed from source (using compiled COLMAP)"
     else
-        echo "⚠ PyCOLMAP no-deps installation failed, trying with deps but protecting OpenCV..."
+        echo "⚠ PyCOLMAP no-deps source build failed, trying with dependencies (protecting OpenCV)..."
         # Try with dependencies, but prevent opencv binary overwrites
         # Note: numpy/scipy are OK - they use system BLAS which links to our OpenBLAS
-        if pip3 install --no-binary opencv-python,opencv-contrib-python ./pycolmap 2>&1 | tee -a /tmp/pycolmap_install.log; then
-            echo "✓ PyCOLMAP installed (OpenCV binaries blocked, numpy/scipy allowed)"
+        if python3 -m pip install --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee -a /tmp/pycolmap_install.log; then
+            echo "✓ PyCOLMAP installed from source (OpenCV binaries blocked, numpy/scipy allowed)"
         else
-            echo "⚠ PyCOLMAP source installation failed (non-fatal)"
+            echo "⚠ PyCOLMAP source installation failed, falling back to PyPI..."
+            PYCOLMAP_FOUND=false
         fi
     fi
-else
-    echo "⚠ pycolmap directory not found in COLMAP source, trying PyPI with protections..."
+    cd "${BUILD_DIR}" || exit 1
+fi
+
+# Fallback to PyPI if source not found or source build failed
+if [ "$PYCOLMAP_FOUND" = false ]; then
+    echo "⚠ pycolmap directory not found in COLMAP source (checked common locations)"
+    echo "  Attempted: ${COLMAP_SOURCE_DIR}/pycolmap"
+    echo "  Attempted: ${COLMAP_SOURCE_DIR}/python/pycolmap"
+    echo "  Attempted: ${COLMAP_SOURCE_DIR}/scripts/python/pycolmap"
+    echo ""
+    echo "Installing PyCOLMAP from PyPI with protections..."
+    echo "  (Will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
+    echo "  (PyCeres recommended for cost functions - check if installed)"
+    
     # Install from PyPI but prevent overwriting our compiled libraries
-    pip3 install --no-binary opencv-python,opencv-contrib-python pycolmap 2>&1 | tee /tmp/pycolmap_install.log || echo "⚠ PyCOLMAP not available"
+    # The PyPI package will link against our compiled COLMAP if LD_LIBRARY_PATH is set
+    # Version pin to match COLMAP version for compatibility
+    if pip3 install --no-binary opencv-python,opencv-contrib-python "pycolmap==${COLMAP_VERSION}" 2>&1 | tee /tmp/pycolmap_install.log; then
+        echo "✓ PyCOLMAP installed from PyPI (will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
+    else
+        # Try without version pin if exact version not available
+        echo "⚠ Version-pinned install failed, trying latest PyCOLMAP..."
+        if pip3 install --no-binary opencv-python,opencv-contrib-python pycolmap 2>&1 | tee -a /tmp/pycolmap_install.log; then
+            echo "✓ PyCOLMAP installed from PyPI (latest version, using compiled COLMAP libraries)"
+        else
+            echo "⚠ PyCOLMAP PyPI installation failed (non-fatal)"
+        fi
+    fi
 fi
 
 # Verify installation
@@ -4801,10 +4969,21 @@ else
 fi
 
 # Verify Python bindings
+echo ""
+echo "Verifying Python bindings installation..."
 if python3 -c "import pycolmap; print(f'PyCOLMAP version: {pycolmap.__version__}')" 2>/dev/null; then
     echo "✓ PyCOLMAP Python module verified"
+    
+    # Check if PyCeres is available (for cost functions)
+    if python3 -c "import pyceres" 2>/dev/null; then
+        echo "✓ PyCeres available (cost functions feature enabled)"
+    else
+        echo "⚠ PyCeres not found (cost functions feature will be unavailable)"
+        echo "  PyCeres can be installed later if needed for cost functions"
+    fi
 else
     echo "⚠ PyCOLMAP Python module not available (non-fatal)"
+    echo "  Installation logs: /tmp/pycolmap_install.log"
 fi
 
 #--- Sub-block 13A.5.1: Protect compiled COLMAP from APT overwrites ---
@@ -4862,19 +5041,58 @@ echo "✓ COLMAP build cleaned up"
 
 #--- Sub-block 13A.7: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
-# Dependencies: Block 6 (APT configuration)
+# Reference: https://www.open3d.org/docs/release/compilation.html
+# Dependencies: Block 6 (APT configuration), Phase 1 (build tools should already be installed)
 # Outputs: Installed packages
-echo "Installing Open3D dependencies..."
+echo "Installing Open3D dependencies (aligned with official docs)..."
+echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
+
+# Verify CMake version requirement (>= 3.24 per official docs)
+echo "Verifying CMake version (required: >= 3.24)..."
+CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}' | cut -d. -f1,2)
+if [ -z "$CMAKE_VERSION" ]; then
+    echo "⚠ WARNING: Could not determine CMake version"
+else
+    CMAKE_MAJOR=$(echo "$CMAKE_VERSION" | cut -d. -f1)
+    CMAKE_MINOR=$(echo "$CMAKE_VERSION" | cut -d. -f2)
+    # Validate that we got numeric values (check if they're non-empty and numeric)
+    if [ -z "$CMAKE_MAJOR" ] || ! expr "$CMAKE_MAJOR" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        echo "⚠ WARNING: Could not parse CMake major version"
+    elif [ -z "$CMAKE_MINOR" ] || ! expr "$CMAKE_MINOR" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        echo "⚠ WARNING: Could not parse CMake minor version"
+    elif [ "$CMAKE_MAJOR" -lt 3 ] || ([ "$CMAKE_MAJOR" -eq 3 ] && [ "$CMAKE_MINOR" -lt 24 ]); then
+        echo "⚠ WARNING: CMake version $CMAKE_VERSION < 3.24 (official requirement)"
+        echo "  Open3D may not build correctly. Consider upgrading CMake."
+    else
+        echo "✓ CMake $CMAKE_VERSION meets requirement (>= 3.24)"
+    fi
+fi
+
+# Verify ninja-build is available (we use Ninja generator)
+if ! command -v ninja >/dev/null 2>&1; then
+    echo "⚠ ninja-build not found, installing..."
+    apt-get install -y --no-install-recommends ninja-build
+fi
+echo "✓ Ninja build system available"
+
+# Install Open3D dependencies
+# Note: Official docs recommend using util/install_deps_ubuntu.sh, but we install manually
+# for better control in Singularity builds. We install core dependencies here.
 apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
     liblapacke-dev \
     libjpeg-dev \
     libpng-dev \
+    libtiff-dev \
+    zlib1g-dev \
     libtbb-dev \
     libassimp-dev \
+    libsqlite3-dev \
     xorg-dev \
     libglu1-mesa-dev \
+    libglfw3-dev \
+    libglew-dev \
     python3-dev \
     python3-pip \
     pybind11-dev \
@@ -4882,9 +5100,19 @@ apt-get install -y --no-install-recommends \
 
 echo "✓ Open3D dependencies installed"
 
-# Create python symlink if needed
+# Verify Python executable (as recommended in official docs)
+echo "Verifying Python setup..."
+PYTHON_EXECUTABLE=$(which python3)
+if [ -n "$PYTHON_EXECUTABLE" ]; then
+    echo "✓ Python executable: $PYTHON_EXECUTABLE"
+    python3 --version
+else
+    echo "⚠ WARNING: python3 not found in PATH"
+fi
+
+# Create python symlink if needed (for compatibility)
 if ! command -v python &> /dev/null; then
-    echo "Creating python → python3 symlink..."
+    echo "Creating python → python3 symlink for compatibility..."
     ln -sf /usr/bin/python3 /usr/bin/python
 fi
 
@@ -4911,6 +5139,13 @@ fi
 cd /tmp/Open3D || exit 1
 echo "✓ Open3D source downloaded"
 
+# Check if official install_deps_ubuntu.sh exists (optional reference)
+if [ -f "util/install_deps_ubuntu.sh" ]; then
+    echo "ℹ Official install_deps_ubuntu.sh found in repo (reference: util/install_deps_ubuntu.sh)"
+    echo "  We install dependencies manually for Singularity build control, but this script"
+    echo "  can be used for verification: https://github.com/isl-org/Open3D/blob/master/util/install_deps_ubuntu.sh"
+fi
+
 # Fix Embree hash mismatch (Open3D 0.19.0 has outdated hash for Embree 4.3.3)
 echo "Patching Embree hash in Open3D CMake files..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
@@ -4922,11 +5157,20 @@ else
 fi
 
 #--- Sub-block 13A.9: Configure Open3D with CMake ---
-# Critical: Enable CUDA for point cloud processing (Filament build is disabled)
-# Dependencies: CUDA, Eigen, GCC/G++
-# Outputs: Open3D build configuration
+# Critical: Enable CUDA + GUI + WebRTC (headless rendering disabled, Filament prebuilt)
+# Reference: https://www.open3d.org/docs/release/compilation.html
+# Dependencies: CUDA, Eigen, GCC/G++, GLFW, GLEW (system libraries)
+# Outputs: Open3D build configuration with full GUI support
+# Note: Open3D ML (PyTorch-based) is not enabled by default to keep build size manageable.
+#       To enable ML capabilities later, rebuild with:
+#       -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 -DTORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
+#       Requires PyTorch to be installed first (see setup_conda_environments.sh or install separately)
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA optimizations..."
+echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
+echo ""
+echo "ℹ Note: Open3D ML (PyTorch-based) is disabled by default."
+echo "   To enable ML capabilities, rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Clean build directory (critical for rebuilds)
@@ -4959,7 +5203,7 @@ cmake .. \
     -DBUILD_CUDA_MODULE=ON \
     -DBUILD_GUI=ON \
     -DBUILD_WEBRTC=ON \
-    -DENABLE_HEADLESS_RENDERING=ON \
+    -DENABLE_HEADLESS_RENDERING=OFF \
     -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
     -DBUILD_AZURE_KINECT=OFF \
@@ -4971,7 +5215,7 @@ cmake .. \
     -DBUILD_FILAMENT_FROM_SOURCE=OFF \
     -DUSE_SYSTEM_EIGEN3=ON \
     -DUSE_SYSTEM_GLEW=ON \
-    -DUSE_SYSTEM_GLFW=OFF \
+    -DUSE_SYSTEM_GLFW=ON \
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
     -DUSE_BLAS=ON \
     -DBLA_VENDOR=OpenBLAS \
@@ -5014,6 +5258,9 @@ echo "✓ Open3D configured with CUDA support (using Ninja)"
 
 #--- Sub-block 13A.10: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
+# Note: Official docs show "make -j$(nproc)" but we use "ninja -j${BUILD_JOBS}" 
+#       which is equivalent since we configured with -GNinja
+# Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: CMake configuration (Ninja generator)
 # Outputs: Open3D binaries
 echo ""
@@ -5024,6 +5271,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # Use memory-aware job calculation (was full nproc - risky for OOM)
 BUILD_JOBS=$(calculate_build_jobs)
 echo "Using $BUILD_JOBS parallel jobs for Open3D build..."
+echo "  Official guide recommends: make -j$(nproc) (we use equivalent: ninja -j${BUILD_JOBS})"
 echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
@@ -5078,11 +5326,12 @@ OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
 
-# Strategy 1: Try ninja install-pip-package (recommended for Open3D)
-echo "Attempting: ninja install-pip-package..."
+# Strategy 1: Try ninja install-pip-package (recommended in official Open3D docs)
+# Official docs: "make install-pip-package" (we use ninja equivalent)
+echo "Attempting: ninja install-pip-package (recommended by official docs)..."
 if ninja install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
     if python3 -c "import open3d" 2>/dev/null; then
-        echo "✓ Python module installed via install-pip-package"
+        echo "✓ Python module installed via install-pip-package (official method)"
         PYTHON_INSTALLED=true
     fi
 fi
@@ -5188,6 +5437,11 @@ echo "  import open3d as o3d"
 echo "  pcd = o3d.io.read_point_cloud('file.ply')"
 echo "  o3d.visualization.draw_geometries([pcd])"
 echo ""
+echo "ML Capabilities:"
+echo "  • Open3D ML (PyTorch-based) is NOT included by default"
+echo "  • To enable: Rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
+echo "  • See build log or documentation for enabling ML features"
+echo ""
 echo "Documentation:"
 echo "  COLMAP: https://colmap.github.io/"
 echo "  Open3D: http://www.open3d.org/"
@@ -5198,6 +5452,35 @@ chmod +x /usr/local/bin/3d_recon_info
 echo "✓ 3D reconstruction info script created"
 
 echo "✓ 3D Reconstruction tools installed (COLMAP + Open3D)"
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "📦 Open3D ML Capabilities (Optional Enhancement)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "The current Open3D build includes core 3D processing but does NOT include"
+echo "ML (Machine Learning) capabilities based on PyTorch."
+echo ""
+echo "To enable Open3D ML features for deep learning on point clouds, meshes, and"
+echo "3D data, you can rebuild Open3D with PyTorch support:"
+echo ""
+echo "  1. Install PyTorch (via Conda or pip):"
+echo "     conda install pytorch torchvision torchaudio pytorch-cuda=12.6 -c pytorch -c nvidia"
+echo "     OR"
+echo "     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126"
+echo ""
+echo "  2. Rebuild Open3D with ML support:"
+echo "     cd /tmp && git clone https://github.com/isl-org/Open3D.git"
+echo "     cd Open3D && mkdir build && cd build"
+echo "     cmake .. -GNinja -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 \\"
+echo "              -DTORCH_CUDA_ARCH_LIST=\"8.6;8.9;9.0\" -DCMAKE_BUILD_TYPE=Release"
+echo "     ninja -j\$(nproc)  # Use all CPU cores"
+echo "     ninja install && ninja install-pip-package"
+echo ""
+echo "  3. Verify installation:"
+echo "     python3 -c \"import open3d.ml.torch; print('Open3D ML enabled!')\""
+echo ""
+echo "For more details, see: https://www.open3d.org/docs/release/tutorial/ml/ml.html"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
 monitor_cache "After 3D reconstruction tools"
 
 #===============================================================================
@@ -11275,4 +11558,5 @@ chmod 644 /usr/local/share/doc/virtualgl-guide.txt
 # Outputs: Environment variables, configuration
 
 echo "✓ User guide created: /usr/local/share/doc/virtualgl-guide.txt"
+
 

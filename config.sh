@@ -74,6 +74,7 @@ export JULIA_LTS_VER="1.10.5"
 
 # SLAM/Robotics Libraries
 export CERES_VERSION="2.2.0"
+export PYCERES_VERSION="2.5"
 export G2O_VERSION="20241228_git"
 export GTSAM_VERSION="4.2.0"
 export OPENCV_VERSION="4.12.0"
