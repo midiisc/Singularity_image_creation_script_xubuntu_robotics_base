@@ -5115,7 +5115,7 @@ VERIFY_ERROR=0
 
 # Check g++
 if command -v g++ >/dev/null 2>&1; then
-    echo "✓ g++ installed ($(g++ --version | head -1))"
+    echo "✓ g++ installed"
 else
     echo "✗ ERROR: g++ not installed"
     VERIFY_ERROR=1
