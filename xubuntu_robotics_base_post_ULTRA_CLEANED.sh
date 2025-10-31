@@ -5216,6 +5216,10 @@ fi
 # OPTIONAL but helpful dependencies (non-fatal if unavailable)
 echo "Installing optional robotics/Open3D libraries..."
 # Additional dependencies for robust Open3D build:
+#   - libfmt-dev: C++ formatting library (enables USE_SYSTEM_FMT=ON, faster builds)
+#   - libassimp-dev: 3D model loading library (enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)
+#   - pybind11-dev: Python bindings library (enables USE_SYSTEM_PYBIND11=ON, faster builds)
+#   - libtbb-dev: Threading Building Blocks (already installed for OpenCV/GTSAM, enables USE_SYSTEM_TBB=ON)
 #   - liburiparser-dev: URI parsing (used by some 3D formats)
 #   - libcurl4-openssl-dev: HTTP client support (if USE_SYSTEM_CURL=ON)
 #   - liblz4-dev: Fast compression (used by some data formats)
@@ -5228,6 +5232,8 @@ apt-get install -y --no-install-recommends \
     libpcl-dev \
     libnetcdf-dev \
     libfmt-dev \
+    libassimp-dev \
+    pybind11-dev \
     libspdlog-dev \
     liburiparser-dev \
     libcurl4-openssl-dev \
@@ -5250,7 +5256,16 @@ if dpkg -l | grep -q "^ii.*libnetcdf-dev"; then
     echo "✓ NetCDF installed (scientific data formats)"
 fi
 if dpkg -l | grep -q "^ii.*libfmt-dev"; then
-    echo "✓ fmt installed (C++ formatting library)"
+    echo "✓ fmt installed (C++ formatting library - enables USE_SYSTEM_FMT=ON)"
+fi
+if dpkg -l | grep -q "^ii.*libassimp-dev"; then
+    echo "✓ Assimp installed (3D model loading - enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)"
+fi
+if dpkg -l | grep -q "^ii.*pybind11-dev"; then
+    echo "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
+fi
+if dpkg -l | grep -q "^ii.*libtbb-dev"; then
+    echo "✓ TBB installed (Threading Building Blocks - enables USE_SYSTEM_TBB=ON, better performance)"
 fi
 if dpkg -l | grep -q "^ii.*libspdlog-dev"; then
     echo "✓ spdlog installed (C++ logging library)"
