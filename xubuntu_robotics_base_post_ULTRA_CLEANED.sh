@@ -5074,6 +5074,14 @@ fi
 # for better control in Singularity builds. We install core dependencies here.
 # Note: nodejs and npm are required for BUILD_WEBRTC=ON (WebRTC support)
 # Note: libssl-dev is already installed via PKGS_CORE_DEPS in Block 7
+# Additional libraries for robotics/Open3D context:
+#   - libopenblas-dev/libopenblas64-dev: OpenBLAS development libraries (CRITICAL for fixing build errors)
+#   - libomp-dev/libomp5: OpenMP support for parallel operations
+#   - libflann-dev: Fast Library for Approximate Nearest Neighbors (point cloud processing)
+#   - libpcl-dev: Point Cloud Library (robotics/3D processing) - may be in universe repo
+#   - libnetcdf-dev: Network Common Data Form (scientific data formats)
+#   - libfmt-dev: Modern C++ formatting library (used by many scientific libraries)
+#   - libspdlog-dev: Fast C++ logging library (used by Open3D and other modern C++ libraries)
 echo "Updating apt package lists before installing Open3D dependencies..."
 apt-get update -o Acquire::Retries=3
 
@@ -5083,10 +5091,15 @@ if ! command -v ninja >/dev/null 2>&1; then
     apt-get install -y --no-install-recommends ninja-build
 fi
 echo "✓ Ninja build system available"
+
+# CRITICAL dependencies (required for Open3D build)
+echo "Installing CRITICAL Open3D dependencies..."
 if ! apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
     liblapacke-dev \
+    libopenblas-dev \
+    libopenblas64-dev \
     libjpeg-dev \
     libpng-dev \
     libtiff-dev \
@@ -5100,6 +5113,8 @@ if ! apt-get install -y --no-install-recommends \
     g++ \
     libc++-dev \
     libc++abi-dev \
+    libomp-dev \
+    libomp5 \
     nodejs \
     npm; then
     echo ""
@@ -5118,7 +5133,38 @@ if ! apt-get install -y --no-install-recommends \
     exit 1
 fi
 
-echo "✓ Open3D dependencies installed"
+echo "✓ Critical Open3D dependencies installed"
+
+# OPTIONAL but helpful dependencies (non-fatal if unavailable)
+echo "Installing optional robotics/Open3D libraries..."
+apt-get install -y --no-install-recommends \
+    libflann-dev \
+    libpcl-dev \
+    libnetcdf-dev \
+    libfmt-dev \
+    libspdlog-dev \
+    2>&1 | grep -v "Unable to locate package" || true
+
+# Check which optional packages were installed
+if dpkg -l | grep -q "^ii.*libflann-dev"; then
+    echo "✓ FLANN installed (point cloud nearest neighbor search)"
+fi
+if dpkg -l | grep -q "^ii.*libpcl-dev"; then
+    echo "✓ PCL installed (Point Cloud Library)"
+else
+    echo "ℹ PCL not available (may require universe repo - optional)"
+fi
+if dpkg -l | grep -q "^ii.*libnetcdf-dev"; then
+    echo "✓ NetCDF installed (scientific data formats)"
+fi
+if dpkg -l | grep -q "^ii.*libfmt-dev"; then
+    echo "✓ fmt installed (C++ formatting library)"
+fi
+if dpkg -l | grep -q "^ii.*libspdlog-dev"; then
+    echo "✓ spdlog installed (C++ logging library)"
+fi
+
+echo "✓ Open3D dependencies installation complete"
 
 # Verify critical dependencies were actually installed
 echo "Verifying critical Open3D dependencies..."
@@ -5148,6 +5194,29 @@ elif dpkg -l | grep -q libglfw3-dev; then
 else
     echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
     VERIFY_ERROR=1
+fi
+
+# Check OpenBLAS (CRITICAL - required to prevent build errors)
+if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
+   dpkg -l | grep -q "^ii.*libopenblas-dev"; then
+    echo "✓ OpenBLAS development package installed"
+else
+    echo "⚠ WARNING: libopenblas-dev may not be installed correctly"
+    VERIFY_ERROR=1
+fi
+
+# Check OpenMP (optional but recommended for parallel operations)
+if ldconfig -p | grep -q libomp || dpkg -l | grep -q "^ii.*libomp"; then
+    echo "✓ OpenMP library installed"
+else
+    echo "⚠ WARNING: OpenMP not found (parallel operations may be limited)"
+fi
+
+# Check FLANN (optional - used for nearest neighbor searches)
+if dpkg -l | grep -q "^ii.*libflann-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
+    echo "✓ FLANN library installed"
+else
+    echo "ℹ FLANN not found (optional - may be in universe repo)"
 fi
 
 if [ $VERIFY_ERROR -eq 1 ]; then
@@ -5307,6 +5376,51 @@ else
     echo "⚠ find_dependencies.cmake not found, cannot patch C++ library detection"
 fi
 
+# Patch to force Open3D to use system OpenBLAS and prevent building from source
+# CRITICAL: This prevents the "openblas/lib/libopenblas.a missing" error
+echo "Patching Open3D to use system OpenBLAS (prevent bundled build)..."
+if [ -f "3rdparty/find_dependencies.cmake" ]; then
+    # Disable OpenBLAS building from source by setting flags early in CMake
+    # We'll do this by adding a check that forces USE_SYSTEM_OPENBLAS
+    sed -i 's/set(USE_SYSTEM_OPENBLAS.*OFF.*)/set(USE_SYSTEM_OPENBLAS ON)/g' \
+        3rdparty/find_dependencies.cmake 2>/dev/null || true
+    # Also disable building OpenBLAS if any BUILD_OPENBLAS variable exists
+    sed -i 's/set(BUILD_OPENBLAS.*ON.*)/set(BUILD_OPENBLAS OFF)/g' \
+        3rdparty/find_dependencies.cmake 2>/dev/null || true
+    echo "✓ OpenBLAS patch applied (will use system OpenBLAS)"
+else
+    echo "⚠ find_dependencies.cmake not found, skipping OpenBLAS patch"
+fi
+
+# Verify system OpenBLAS is available before proceeding
+echo "Verifying system OpenBLAS installation..."
+if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
+   [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" ]; then
+    echo "✓ System OpenBLAS shared library found"
+else
+    echo "⚠ WARNING: System OpenBLAS shared library not found in expected location"
+    echo "  Searching for OpenBLAS libraries..."
+    find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -3 || echo "  No OpenBLAS libraries found"
+fi
+
+# Verify OpenBLAS headers
+if [ -f "/usr/include/x86_64-linux-gnu/cblas.h" ] || [ -f "/usr/include/cblas.h" ]; then
+    echo "✓ OpenBLAS headers found"
+else
+    echo "⚠ WARNING: OpenBLAS headers not found"
+    echo "  This may cause compilation issues"
+fi
+
+# Verify OpenMP is available (required for Open3D parallel operations)
+echo "Verifying OpenMP installation..."
+if [ -f "/usr/lib/x86_64-linux-gnu/libomp.so" ] || \
+   ldconfig -p | grep -q libomp; then
+    echo "✓ OpenMP library found"
+else
+    echo "⚠ WARNING: OpenMP library not found"
+    echo "  Some Open3D parallel features may be unavailable"
+fi
+
 #--- Sub-block 13A.9: Configure Open3D with CMake ---
 # Critical: CUDA-ONLY build with GUI support (no CPU fallback)
 # Reference: https://www.open3d.org/docs/release/compilation.html
@@ -5331,6 +5445,16 @@ echo "🧹 Cleaning build directory for fresh Open3D build..."
 rm -rf build CMakeCache.txt
 mkdir -p build && cd build
 echo "✓ Clean build directory created"
+echo ""
+
+#--- Sub-block 13A.9.1: Configure build environment variables for OpenBLAS ---
+# Critical: Set LIBRARY_PATH and PKG_CONFIG_PATH for OpenBLAS detection (matching OpenCV approach)
+# This ensures CMake can find OpenBLAS libraries in /usr/lib/x86_64-linux-gnu
+# Dependencies: None (foundational)
+# Outputs: Environment variables for CMake
+export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
+export LIBRARY_PATH="${LIBRARY_PATH:+${LIBRARY_PATH}:}/usr/lib/x86_64-linux-gnu"
+echo "✓ Build environment configured for system OpenBLAS detection"
 echo ""
 
 # Prefer ccache if available (as recommended in Open3D docs)
@@ -5479,6 +5603,8 @@ cmake .. \
     -DUSE_SYSTEM_GLFW=ON \
     ${GLFW_CMAKE_FLAGS:+${GLFW_CMAKE_FLAGS} }\
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
+    -DUSE_SYSTEM_OPENBLAS=ON \
+    -DBUILD_OPENBLAS=OFF \
     -DUSE_BLAS=ON \
     -DBLA_VENDOR=OpenBLAS \
     -DOpenBLAS_LIB=/usr/lib/x86_64-linux-gnu/libopenblas.so \
@@ -5500,7 +5626,7 @@ cmake .. \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -DCMAKE_PREFIX_PATH="/usr/local;/usr;/usr/lib/x86_64-linux-gnu${GLFW_CMAKE_PREFIX:+;$GLFW_CMAKE_PREFIX}" \
     -DCMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu;/usr/lib64;/usr/lib" \
-    -DCMAKE_INCLUDE_PATH="/usr/include" \
+    -DCMAKE_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include" \
     -DGLIBCXX_USE_CXX11_ABI=ON \
     -DEigen3_DIR=/usr/local/share/eigen3/cmake \
     -DOpenCV_DIR=/usr/local/lib/cmake/opencv4 \
