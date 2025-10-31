@@ -5068,13 +5068,6 @@ else
     fi
 fi
 
-# Verify ninja-build is available (we use Ninja generator)
-if ! command -v ninja >/dev/null 2>&1; then
-    echo "⚠ ninja-build not found, installing..."
-    apt-get install -y --no-install-recommends ninja-build
-fi
-echo "✓ Ninja build system available"
-
 # Install Open3D dependencies
 # Note: Official docs recommend using util/install_deps_ubuntu.sh, but we install manually
 # for better control in Singularity builds. We install core dependencies here.
@@ -5082,6 +5075,13 @@ echo "✓ Ninja build system available"
 # Note: libssl-dev is already installed via PKGS_CORE_DEPS in Block 7
 echo "Updating apt package lists before installing Open3D dependencies..."
 apt-get update -o Acquire::Retries=3
+
+# Verify ninja-build is available (we use Ninja generator)
+if ! command -v ninja >/dev/null 2>&1; then
+    echo "⚠ ninja-build not found, installing..."
+    apt-get install -y --no-install-recommends ninja-build
+fi
+echo "✓ Ninja build system available"
 apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
