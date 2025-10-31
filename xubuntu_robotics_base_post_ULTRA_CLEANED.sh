@@ -5109,14 +5109,42 @@ apt-get install -y --no-install-recommends \
 
 echo "✓ Open3D dependencies installed"
 
-# Verify GLFW3 was actually installed
-echo "Verifying GLFW3 installation..."
+# Verify critical dependencies were actually installed
+echo "Verifying critical Open3D dependencies..."
+VERIFY_ERROR=0
+
+# Check g++
+if command -v g++ >/dev/null 2>&1; then
+    echo "✓ g++ installed ($(g++ --version | head -1))"
+else
+    echo "✗ ERROR: g++ not installed"
+    VERIFY_ERROR=1
+fi
+
+# Check libc++abi-dev
+if dpkg -l | grep -q "^ii.*libc++abi-dev"; then
+    echo "✓ libc++abi-dev installed"
+else
+    echo "✗ ERROR: libc++abi-dev not installed"
+    VERIFY_ERROR=1
+fi
+
+# Check GLFW3
 if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake" ]; then
     echo "✓ GLFW3 CMake config found"
 elif dpkg -l | grep -q libglfw3-dev; then
     echo "✓ libglfw3-dev package installed"
 else
     echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
+    VERIFY_ERROR=1
+fi
+
+if [ $VERIFY_ERROR -eq 1 ]; then
+    echo ""
+    echo "⚠ WARNING: Some critical Open3D dependencies are missing!"
+    echo "  The build may fail. Check the apt-get install output above."
+else
+    echo "✓ All critical dependencies verified"
 fi
 
 # Verify C++ standard library is available (required for Open3D CMake)
