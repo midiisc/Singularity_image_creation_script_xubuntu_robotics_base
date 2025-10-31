@@ -5078,6 +5078,8 @@ echo "✓ Ninja build system available"
 # Install Open3D dependencies
 # Note: Official docs recommend using util/install_deps_ubuntu.sh, but we install manually
 # for better control in Singularity builds. We install core dependencies here.
+# Note: nodejs and npm are required for BUILD_WEBRTC=ON (WebRTC support)
+# Note: libssl-dev is already installed via PKGS_CORE_DEPS in Block 7
 apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
@@ -5099,6 +5101,8 @@ apt-get install -y --no-install-recommends \
     libstdc++-dev \
     g++ \
     libc++-dev \
+    nodejs \
+    npm \
     || echo "⚠ Some Open3D dependencies unavailable (non-fatal)"
 
 echo "✓ Open3D dependencies installed"
@@ -5254,18 +5258,20 @@ else
 fi
 
 #--- Sub-block 13A.9: Configure Open3D with CMake ---
-# Critical: Enable CUDA + GUI + WebRTC (headless rendering disabled, Filament prebuilt)
+# Critical: CUDA-ONLY build with GUI support (no CPU fallback)
 # Reference: https://www.open3d.org/docs/release/compilation.html
-# Dependencies: CUDA, Eigen, GCC/G++, GLFW, GLEW (system libraries)
-# Outputs: Open3D build configuration with full GUI support
+# Dependencies: CUDA (REQUIRED), Eigen, GCC/G++, GLFW, GLEW (system libraries)
+# Outputs: Open3D build configuration with CUDA + GUI (strictly no CPU-only fallback)
 # Note: Open3D ML (PyTorch-based) is not enabled by default to keep build size manageable.
 #       To enable ML capabilities later, rebuild with:
 #       -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 -DTORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
 #       Requires PyTorch to be installed first (see setup_conda_environments.sh or install separately)
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA optimizations..."
+echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA-ONLY support (GUI enabled)..."
 echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
 echo ""
+echo "⚠ CRITICAL: This build requires CUDA - NO CPU fallback will be available"
+echo "   If CUDA is not available, the build will FAIL"
 echo "ℹ Note: Open3D ML (PyTorch-based) is disabled by default."
 echo "   To enable ML capabilities, rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -5343,15 +5349,40 @@ cmake .. \
 # Check if configuration succeeded
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
-    echo "✗ Open3D CUDA configuration failed (no CPU-only fallback by design)"
-    echo "  Review /tmp/open3d_cmake.log and fix CUDA/toolchain settings."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ Open3D CUDA configuration FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "ERROR: CUDA is REQUIRED for this build - no CPU fallback available"
+    echo "  Please ensure:"
+    echo "    1. CUDA toolkit is installed (version ${CUDA_VERSION})"
+    echo "    2. CUDA compiler (nvcc) is available in PATH"
+    echo "    3. GPU with compatible architecture is available"
+    echo "    4. CMake can find CUDA libraries"
+    echo ""
+    echo "Review /tmp/open3d_cmake.log for detailed error information."
+    echo "Last 80 lines of CMake log:"
+    tail -80 /tmp/open3d_cmake.log || true
+    exit 1
+fi
+
+# Verify CUDA was actually detected (not just CPU-only)
+if grep -q "CUDA.*found.*NO\|CUDA.*NOT.*found\|Could NOT find CUDA" /tmp/open3d_cmake.log 2>/dev/null; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ CUDA NOT DETECTED - Build cannot proceed"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "ERROR: CUDA was not detected during CMake configuration"
+    echo "  This build REQUIRES CUDA - CPU-only fallback is not available"
+    echo ""
     echo "Last 80 lines of CMake log:"
     tail -80 /tmp/open3d_cmake.log || true
     exit 1
 fi
 
 echo ""
-echo "✓ Open3D configured with CUDA support (using Ninja)"
+echo "✓ Open3D configured with CUDA support (CUDA-ONLY, no CPU fallback)"
 
 #--- Sub-block 13A.10: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
@@ -5373,16 +5404,35 @@ echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
-if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log; then
+# Note: Use separate variable to capture exit status correctly
+BUILD_SUCCESS=false
+if ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log; then
+    BUILD_SUCCESS=true
+else
+    NINJA_EXIT=${PIPESTATUS[0]}
     echo ""
-    echo "⚠️  Parallel build failed, retrying single-threaded..."
-    if ! ninja -j1 2>&1 | tee -a /tmp/open3d_build.log; then
-        echo "ERROR: Failed to build Open3D even with single-threaded compilation"
+    echo "⚠️  Parallel build failed (exit code: ${NINJA_EXIT}), retrying single-threaded..."
+    if ninja -j1 2>&1 | tee -a /tmp/open3d_build.log; then
+        BUILD_SUCCESS=true
+    else
+        SINGLE_EXIT=${PIPESTATUS[0]}
+        echo ""
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "✗ Open3D build FAILED"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Parallel build exit code: ${NINJA_EXIT}"
+        echo "Single-threaded build exit code: ${SINGLE_EXIT}"
+        echo ""
+        echo "Last 100 lines of build log:"
+        tail -100 /tmp/open3d_build.log
+        echo ""
+        echo "Full build log saved to: /tmp/open3d_build.log"
         exit 1
     fi
 fi
 
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
+if [ "$BUILD_SUCCESS" = false ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✗ Open3D build FAILED"
@@ -5404,7 +5454,16 @@ echo "✓ Open3D built successfully with Ninja"
 # Outputs: Open3D installed to /usr/local
 echo ""
 echo "Installing Open3D to /usr/local..."
-ninja install
+if ! ninja install 2>&1 | tee /tmp/open3d_install.log; then
+    echo ""
+    echo "⚠️  Open3D installation failed"
+    echo "Last 50 lines of install log:"
+    tail -50 /tmp/open3d_install.log
+    echo ""
+    echo "⚠ Continuing (C++ libraries may still be usable)..."
+else
+    echo "✓ Open3D C++ libraries installed"
+fi
 ldconfig
 
 # Verify C++ installation
@@ -5437,8 +5496,12 @@ fi
 if [ "$PYTHON_INSTALLED" = false ]; then
     echo "⚠ install-pip-package didn't work, building Python wheel..."
     if ninja python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
-        # Look for wheel in build directory
-        WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/lib" -name "open3d*.whl" 2>/dev/null | head -1)
+        # Look for wheel in multiple possible locations
+        # Open3D might put wheels in lib/, dist/, or root build directory
+        WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}" \
+            -path "${OPEN3D_BUILD_DIR}/lib/*" -name "open3d*.whl" \
+            -o -path "${OPEN3D_BUILD_DIR}/dist/*" -name "open3d*.whl" \
+            -o -name "open3d*.whl" 2>/dev/null | head -1)
         if [ -n "$WHEEL_FILE" ] && [ -f "$WHEEL_FILE" ]; then
             echo "Found wheel: $WHEEL_FILE"
             # Install WITHOUT dependencies to avoid overwriting compiled libraries
@@ -5447,7 +5510,7 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                 PYTHON_INSTALLED=true
             fi
         else
-            echo "⚠ Wheel file not found in ${OPEN3D_BUILD_DIR}/lib"
+            echo "⚠ Wheel file not found in ${OPEN3D_BUILD_DIR} (searched lib/, dist/, and root)"
         fi
     fi
 fi
@@ -5466,24 +5529,55 @@ if [ "$PYTHON_INSTALLED" = false ]; then
     fi
 fi
 
-# Strategy 4: Fallback to PyPI with protections (prebuilt, but won't have our optimizations)
+# Strategy 4: REMOVED - No PyPI fallback (CUDA-only build requirement)
+# We do NOT fall back to PyPI because:
+# 1. PyPI packages typically don't have CUDA support
+# 2. This build is CUDA-ONLY with no CPU fallback
+# 3. We need the wheel built from source with CUDA enabled
+
+# Verify Python module installation (CUDA-enabled wheel required)
 if [ "$PYTHON_INSTALLED" = false ]; then
-    echo "⚠ All local installation methods failed, trying PyPI as last resort..."
-    # Install from PyPI but prevent overwriting compiled OpenCV
-    # Note: numpy/scipy are OK - system packages already installed and link to our OpenBLAS
-    if pip3 install --no-binary opencv-python,opencv-contrib-python open3d 2>&1 | tee -a /tmp/open3d_python_install.log; then
-        echo "✓ Open3D installed from PyPI (OpenCV binaries blocked)"
-        PYTHON_INSTALLED=true
-    fi
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ Open3D Python module installation FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "ERROR: Failed to install Open3D Python module from CUDA-enabled build"
+    echo "  All installation strategies failed:"
+    echo "    • ninja install-pip-package"
+    echo "    • Building and installing wheel"
+    echo "    • Direct package installation"
+    echo ""
+    echo "  Installation logs: /tmp/open3d_python_install.log"
+    echo ""
+    echo "  NOTE: PyPI fallback is NOT available (CUDA-only build requirement)"
+    echo "        You must install from the CUDA-enabled wheel built from source"
+    echo ""
+    exit 1
 fi
 
-# Verify Python module installation
+# Verify Python module installation and CUDA support
+echo ""
+echo "Verifying Open3D Python module with CUDA support..."
 if python3 -c "import open3d; print(f'Open3D version: {open3d.__version__}')" 2>/dev/null; then
-    echo "✓ Open3D Python module verified and working"
+    echo "✓ Open3D Python module verified"
+    
+    # Check if CUDA is available in the module (if device module is accessible)
+    if python3 -c "import open3d; import open3d.core; print('CUDA devices:', open3d.core.cuda.device_count())" 2>/dev/null; then
+        CUDA_DEVICES=$(python3 -c "import open3d; import open3d.core; print(open3d.core.cuda.device_count())" 2>/dev/null || echo "0")
+        if [ "$CUDA_DEVICES" -gt 0 ]; then
+            echo "✓ CUDA support verified (${CUDA_DEVICES} device(s) detected)"
+        else
+            echo "⚠ CUDA support may not be available (0 devices detected)"
+            echo "  This may be expected if running in a container without GPU access"
+        fi
+    else
+        echo "✓ Open3D Python module installed (CUDA support compiled-in)"
+    fi
 else
-    echo "⚠ Open3D Python module not available (non-fatal)"
+    echo "✗ Open3D Python module verification failed"
     echo "  Installation logs: /tmp/open3d_python_install.log"
-    echo "  You can manually install later with: pip3 install open3d"
+    exit 1
 fi
 
 #--- Sub-block 13A.12: Cleanup Open3D build ---
