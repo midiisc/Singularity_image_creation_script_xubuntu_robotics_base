@@ -5101,6 +5101,7 @@ apt-get install -y --no-install-recommends \
     libstdc++-dev \
     g++ \
     libc++-dev \
+    libc++abi-dev \
     nodejs \
     npm \
     || echo "⚠ Some Open3D dependencies unavailable (non-fatal)"
@@ -5190,6 +5191,7 @@ fi
 
 # Fix C++ library detection issue (Open3D CMake sometimes can't find c++ library)
 # The find_library(CPP_LIBRARY c++) call at line 1381 fails, so we make it more flexible
+# Also prevents CMake from looking in wrong directories like /tmp/Open3D
 echo "Patching C++ library detection in Open3D CMake files..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
     # Use Python to robustly patch the find_library call for CPP_LIBRARY
@@ -5203,55 +5205,53 @@ try:
     with open(file_path, 'r') as f:
         content = f.read()
     
-    # Pattern to match various forms of: find_library(CPP_LIBRARY ... c++ ...)
-    # This matches:
-    # - find_library(CPP_LIBRARY c++)
-    # - find_library(CPP_LIBRARY "c++")
-    # - find_library(CPP_LIBRARY c++ ...)
-    # etc.
-    pattern = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s*\)'
-    replacement = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    original_content = content
     
-    new_content = re.sub(pattern, replacement, content)
+    # Pattern 1: Match find_library(CPP_LIBRARY c++) with possible whitespace
+    # This must match the exact pattern, including any trailing whitespace/newlines
+    pattern1 = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s*\)'
+    replacement1 = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    content = re.sub(pattern1, replacement1, content)
     
-    if new_content != content:
+    # Pattern 2: Match find_library(CPP_LIBRARY c++ with possible additional arguments
+    # This handles cases like find_library(CPP_LIBRARY c++ REQUIRED)
+    if content == original_content:
+        pattern2 = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s+'
+        replacement2 = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH '
+        content = re.sub(pattern2, replacement2, content)
+    
+    # Pattern 3: Match find_library(CPP_LIBRARY "c++") with quotes
+    if content == original_content:
+        pattern3 = r'find_library\s*\(\s*CPP_LIBRARY\s+"c\+\+"\s*\)'
+        content = re.sub(pattern3, replacement1, content)
+    
+    if content != original_content:
         with open(file_path, 'w') as f:
-            f.write(new_content)
+            f.write(content)
         print("✓ C++ library detection patched successfully")
         sys.exit(0)
     else:
-        # Try more specific pattern variations that might have additional arguments
-        patterns = [
-            # Pattern without closing paren (might have additional args like MODULE, REQUIRED, etc.)
-            (r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+', 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH'),
-            # Pattern with quotes around c++
-            (r'find_library\s*\(\s*CPP_LIBRARY\s+"c\+\+"\s*\)', 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'),
-        ]
-        
-        for pattern, replacement in patterns:
-            new_content = re.sub(pattern, replacement, content)
-            if new_content != content:
-                with open(file_path, 'w') as f:
-                    f.write(new_content)
-                print("✓ C++ library detection patched (alternative pattern)")
-                sys.exit(0)
-        
-        print("⚠ CPP_LIBRARY pattern not found, will rely on library paths")
+        print("⚠ CPP_LIBRARY pattern not found in expected format, trying sed fallback")
         sys.exit(1)
 except Exception as e:
     print(f"⚠ Error patching C++ library detection: {e}")
-    sys.exit(1)
+    import traceback
+    traceback.print_exc()
+    sys.exit(2)
 PYTHON_PATCH
     PATCH_STATUS=$?
-    # Exit code 1 means pattern not found (acceptable), 0 means success
-    # Only try fallback if Python script had an error (exit code > 1)
-    if [ "$PATCH_STATUS" -gt 1 ]; then
-        echo "⚠ Python patch failed with error, trying fallback sed method..."
-        # Fallback to sed if Python fails
-        # Use extended regex (-E) to properly escape + in c++
-        # Escape parentheses and + in pattern, escape / in replacement paths
-        sed -i -E 's/find_library\(CPP_LIBRARY c\+\+\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH)/g' \
+    # Exit code 0 = success, 1 = pattern not found (may be acceptable), 2+ = error
+    if [ "$PATCH_STATUS" -eq 1 ]; then
+        echo "⚠ Python didn't find exact pattern, trying sed fallback..."
+        # Fallback to sed - try multiple patterns
+        sed -i -E 's/find_library\(CPP_LIBRARY\s+["\x27]?c\+\+["\x27]?\s*\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH)/g' \
             3rdparty/find_dependencies.cmake 2>/dev/null || true
+        # Also try without quotes
+        sed -i -E 's/find_library\(CPP_LIBRARY\s+c\+\+([^)]*)\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH\1)/g' \
+            3rdparty/find_dependencies.cmake 2>/dev/null || true
+        echo "✓ Applied sed fallback patches"
+    elif [ "$PATCH_STATUS" -ge 2 ]; then
+        echo "⚠ Python patch had an error, but continuing anyway..."
     fi
 else
     echo "⚠ find_dependencies.cmake not found, cannot patch C++ library detection"
@@ -5290,6 +5290,113 @@ if command -v ccache >/dev/null 2>&1; then
     CCACHE_FLAGS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache"
 fi
 
+# Detect GLFW CMake config file and paths
+# GLFW3 provides a CMake config file, so we should use glfw3_DIR if available
+echo "Detecting GLFW CMake config and library paths..."
+
+# Initialize variables to avoid unbound variable errors
+GLFW_CONFIG_DIR=""
+GLFW_CMAKE_FLAGS=""
+GLFW_CMAKE_PREFIX=""
+GLFW_DIR=""
+GLFW_LIB_PATH=""
+GLFW_INCLUDE_PATH=""
+GLFW_LIB_DIR=""
+GLFW_INCLUDE_DIR=""
+
+# Find GLFW CMake config file (handle multiple results with head -1)
+GLFW_CONFIG_DIR=$(find /usr/lib /usr/lib/x86_64-linux-gnu -path "*/cmake/glfw3/glfw3Config.cmake" 2>/dev/null | head -1)
+
+if [ -n "$GLFW_CONFIG_DIR" ] && [ -f "$GLFW_CONFIG_DIR" ]; then
+    # Extract directory containing glfw3Config.cmake (parent of the config file)
+    GLFW_DIR=$(dirname "$GLFW_CONFIG_DIR")
+    if [ -d "$GLFW_DIR" ]; then
+        echo "✓ GLFW CMake config found: $GLFW_CONFIG_DIR"
+        echo "  Setting glfw3_DIR to: $GLFW_DIR"
+        # Use glfw3_DIR (preferred method when config file exists)
+        # CMake handles paths with spaces automatically, no need for quotes in -D flags
+        GLFW_CMAKE_FLAGS="-Dglfw3_DIR=$GLFW_DIR"
+        # Store the cmake directory for CMAKE_PREFIX_PATH (parent of glfw3 dir)
+        # CMake searches <prefix>/lib/cmake/ and <prefix>/<package>/, so we add the parent
+        GLFW_CMAKE_PREFIX=$(dirname "$GLFW_DIR")  # e.g., /usr/lib/x86_64-linux-gnu/cmake
+        if [ -d "$GLFW_CMAKE_PREFIX" ]; then
+            echo "  GLFW cmake prefix directory: $GLFW_CMAKE_PREFIX"
+        else
+            GLFW_CMAKE_PREFIX=""
+        fi
+    else
+        echo "⚠ GLFW config directory invalid: $GLFW_DIR"
+        GLFW_CONFIG_DIR=""
+    fi
+fi
+
+# Fallback: try to find library and include paths manually if config not found
+if [ -z "$GLFW_CONFIG_DIR" ] || [ -z "$GLFW_DIR" ]; then
+    echo "⚠ GLFW CMake config not found, trying manual detection..."
+    # Find GLFW library (handle multiple results)
+    GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "libglfw.so*" -type f 2>/dev/null | head -1)
+    
+    # Find GLFW include - split find commands to avoid -o operator issues
+    GLFW_INCLUDE_PATH=$(find /usr/include -name "glfw3.h" -type f 2>/dev/null | head -1)
+    if [ -z "$GLFW_INCLUDE_PATH" ]; then
+        GLFW_INCLUDE_PATH=$(find /usr/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1)
+    fi
+    
+    if [ -n "$GLFW_LIB_PATH" ] && [ -f "$GLFW_LIB_PATH" ]; then
+        GLFW_LIB_DIR=$(dirname "$GLFW_LIB_PATH")
+        echo "✓ GLFW library found: $GLFW_LIB_PATH"
+    else
+        echo "⚠ GLFW library not found in standard locations"
+        GLFW_LIB_DIR="/usr/lib/x86_64-linux-gnu"
+        GLFW_LIB_PATH=""
+    fi
+    
+    if [ -n "$GLFW_INCLUDE_PATH" ] && [ -f "$GLFW_INCLUDE_PATH" ]; then
+        # Handle both /usr/include/GLFW/glfw3.h and /usr/include/glfw3.h
+        # Properly quote nested dirname calls
+        if echo "$GLFW_INCLUDE_PATH" | grep -q "/GLFW/"; then
+            GLFW_INCLUDE_DIR=$(dirname "$(dirname "$GLFW_INCLUDE_PATH")")
+        else
+            GLFW_INCLUDE_DIR=$(dirname "$GLFW_INCLUDE_PATH")
+        fi
+        echo "✓ GLFW include found: $GLFW_INCLUDE_PATH"
+        echo "  GLFW include directory: $GLFW_INCLUDE_DIR"
+    else
+        echo "⚠ GLFW include not found in standard locations"
+        GLFW_INCLUDE_DIR="/usr/include"
+        GLFW_INCLUDE_PATH=""
+    fi
+    
+    # Use explicit paths as fallback (CMake handles spaces automatically)
+    if [ -n "$GLFW_LIB_PATH" ] && [ -n "$GLFW_INCLUDE_DIR" ]; then
+        GLFW_CMAKE_FLAGS="-DGLFW3_LIBRARY=$GLFW_LIB_PATH -DGLFW3_INCLUDE_DIR=$GLFW_INCLUDE_DIR"
+        echo "  Using explicit GLFW paths: lib=$GLFW_LIB_PATH, include=$GLFW_INCLUDE_DIR"
+    elif [ -n "$GLFW_INCLUDE_DIR" ]; then
+        GLFW_CMAKE_FLAGS="-DGLFW3_INCLUDE_DIR=$GLFW_INCLUDE_DIR"
+        echo "  Using GLFW include directory for CMake search: $GLFW_INCLUDE_DIR"
+    else
+        echo "⚠ Could not determine GLFW paths, CMake will attempt auto-detection"
+        GLFW_CMAKE_FLAGS=""
+    fi
+fi
+
+# Ensure variables are set (avoid unbound variable errors)
+: "${GLFW_CMAKE_FLAGS:=}"
+: "${GLFW_CMAKE_PREFIX:=}"
+
+# Detect C++ library path explicitly (to avoid CMake looking in wrong places like /tmp/Open3D)
+echo "Detecting C++ standard library for explicit CMake configuration..."
+if [ -z "${CPP_LIBRARY:-}" ]; then
+    CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
+    if [ -n "$CPP_LIB_PATH" ] && [ -f "$CPP_LIB_PATH" ]; then
+        export CPP_LIBRARY="$CPP_LIB_PATH"
+        echo "✓ C++ library detected: $CPP_LIBRARY"
+    else
+        echo "⚠ C++ standard library not found in standard locations"
+        export CPP_LIBRARY=""
+    fi
+fi
+
 # CMake configuration with Ninja generator
 echo "⚙️ Running CMake configuration with Ninja generator..."
 cmake .. \
@@ -5319,6 +5426,7 @@ cmake .. \
     -DUSE_SYSTEM_EIGEN3=ON \
     -DUSE_SYSTEM_GLEW=ON \
     -DUSE_SYSTEM_GLFW=ON \
+    ${GLFW_CMAKE_FLAGS:+${GLFW_CMAKE_FLAGS} }\
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
     -DUSE_BLAS=ON \
     -DBLA_VENDOR=OpenBLAS \
@@ -5339,7 +5447,9 @@ cmake .. \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    -DCMAKE_PREFIX_PATH="/usr/local" \
+    -DCMAKE_PREFIX_PATH="/usr/local;/usr;/usr/lib/x86_64-linux-gnu${GLFW_CMAKE_PREFIX:+;$GLFW_CMAKE_PREFIX}" \
+    -DCMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu;/usr/lib64;/usr/lib" \
+    -DCMAKE_INCLUDE_PATH="/usr/include" \
     -DGLIBCXX_USE_CXX11_ABI=ON \
     -DEigen3_DIR=/usr/local/share/eigen3/cmake \
     -DOpenCV_DIR=/usr/local/lib/cmake/opencv4 \
