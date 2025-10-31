@@ -5080,6 +5080,8 @@ echo "✓ Ninja build system available"
 # for better control in Singularity builds. We install core dependencies here.
 # Note: nodejs and npm are required for BUILD_WEBRTC=ON (WebRTC support)
 # Note: libssl-dev is already installed via PKGS_CORE_DEPS in Block 7
+echo "Updating apt package lists before installing Open3D dependencies..."
+apt-get update -o Acquire::Retries=3
 apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
@@ -5098,7 +5100,6 @@ apt-get install -y --no-install-recommends \
     python3-dev \
     python3-pip \
     pybind11-dev \
-    libstdc++-dev \
     g++ \
     libc++-dev \
     libc++abi-dev \
@@ -5107,6 +5108,16 @@ apt-get install -y --no-install-recommends \
     || echo "⚠ Some Open3D dependencies unavailable (non-fatal)"
 
 echo "✓ Open3D dependencies installed"
+
+# Verify GLFW3 was actually installed
+echo "Verifying GLFW3 installation..."
+if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake" ]; then
+    echo "✓ GLFW3 CMake config found"
+elif dpkg -l | grep -q libglfw3-dev; then
+    echo "✓ libglfw3-dev package installed"
+else
+    echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
+fi
 
 # Verify C++ standard library is available (required for Open3D CMake)
 # Open3D's CMake searches for unversioned "c++" library, which can be either:
@@ -5305,7 +5316,8 @@ GLFW_LIB_DIR=""
 GLFW_INCLUDE_DIR=""
 
 # Find GLFW CMake config file (handle multiple results with head -1)
-GLFW_CONFIG_DIR=$(find /usr/lib /usr/lib/x86_64-linux-gnu -path "*/cmake/glfw3/glfw3Config.cmake" 2>/dev/null | head -1)
+# Search in all standard locations where glfw3Config.cmake might be installed
+GLFW_CONFIG_DIR=$(find /usr /usr/local \( -name "glfw3Config.cmake" -o -name "glfw3-config.cmake" \) -path "*/cmake/glfw3/*" 2>/dev/null | head -1)
 
 if [ -n "$GLFW_CONFIG_DIR" ] && [ -f "$GLFW_CONFIG_DIR" ]; then
     # Extract directory containing glfw3Config.cmake (parent of the config file)
@@ -5333,13 +5345,13 @@ fi
 # Fallback: try to find library and include paths manually if config not found
 if [ -z "$GLFW_CONFIG_DIR" ] || [ -z "$GLFW_DIR" ]; then
     echo "⚠ GLFW CMake config not found, trying manual detection..."
-    # Find GLFW library (handle multiple results)
-    GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu -name "libglfw.so*" -type f 2>/dev/null | head -1)
+    # Find GLFW library (handle multiple results) - search in all standard locations
+    GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib -name "libglfw.so*" -type f 2>/dev/null | head -1)
     
     # Find GLFW include - split find commands to avoid -o operator issues
-    GLFW_INCLUDE_PATH=$(find /usr/include -name "glfw3.h" -type f 2>/dev/null | head -1)
+    GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -name "glfw3.h" -type f 2>/dev/null | head -1)
     if [ -z "$GLFW_INCLUDE_PATH" ]; then
-        GLFW_INCLUDE_PATH=$(find /usr/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1)
+        GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1)
     fi
     
     if [ -n "$GLFW_LIB_PATH" ] && [ -f "$GLFW_LIB_PATH" ]; then
