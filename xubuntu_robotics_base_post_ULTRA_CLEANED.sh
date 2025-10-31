@@ -5096,9 +5096,37 @@ apt-get install -y --no-install-recommends \
     python3-dev \
     python3-pip \
     pybind11-dev \
+    libstdc++-dev \
+    g++ \
+    libc++-dev \
     || echo "⚠ Some Open3D dependencies unavailable (non-fatal)"
 
 echo "✓ Open3D dependencies installed"
+
+# Verify C++ standard library is available (required for Open3D CMake)
+# Open3D's CMake searches for unversioned "c++" library, which can be either:
+# - libstdc++ (GCC's C++ library) - primary for this build
+# - libc++ (Clang's C++ library) - compatibility/fallback
+echo "Verifying C++ standard library availability..."
+CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libstdc++.so*" 2>/dev/null | head -1)
+if [ -n "$CPP_LIB_PATH" ]; then
+    echo "✓ C++ standard library (libstdc++ - GCC) found"
+    echo "  Located at: $CPP_LIB_PATH"
+    export CPP_LIBRARY="$CPP_LIB_PATH"
+else
+    # Also check for libc++ (Clang's C++ library) for compatibility
+    CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libc++.so*" 2>/dev/null | head -1)
+    if [ -n "$CPP_LIB_PATH" ]; then
+        echo "✓ C++ standard library (libc++ - Clang) found (compatibility)"
+        echo "  Located at: $CPP_LIB_PATH"
+        export CPP_LIBRARY="$CPP_LIB_PATH"
+    fi
+fi
+
+if [ -z "$CPP_LIBRARY" ]; then
+    echo "⚠ WARNING: No C++ standard library found in standard locations"
+    echo "  Open3D CMake may fail during configuration"
+fi
 
 # Verify Python executable (as recommended in official docs)
 echo "Verifying Python setup..."
@@ -5154,6 +5182,75 @@ if [ -f "3rdparty/find_dependencies.cmake" ]; then
     echo "✓ Embree hash patched"
 else
     echo "⚠ find_dependencies.cmake not found, skipping Embree hash fix"
+fi
+
+# Fix C++ library detection issue (Open3D CMake sometimes can't find c++ library)
+# The find_library(CPP_LIBRARY c++) call at line 1381 fails, so we make it more flexible
+echo "Patching C++ library detection in Open3D CMake files..."
+if [ -f "3rdparty/find_dependencies.cmake" ]; then
+    # Use Python to robustly patch the find_library call for CPP_LIBRARY
+    # This handles various formatting variations in the CMake file
+    python3 << 'PYTHON_PATCH'
+import re
+import sys
+
+file_path = "3rdparty/find_dependencies.cmake"
+try:
+    with open(file_path, 'r') as f:
+        content = f.read()
+    
+    # Pattern to match various forms of: find_library(CPP_LIBRARY ... c++ ...)
+    # This matches:
+    # - find_library(CPP_LIBRARY c++)
+    # - find_library(CPP_LIBRARY "c++")
+    # - find_library(CPP_LIBRARY c++ ...)
+    # etc.
+    pattern = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s*\)'
+    replacement = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    
+    new_content = re.sub(pattern, replacement, content)
+    
+    if new_content != content:
+        with open(file_path, 'w') as f:
+            f.write(new_content)
+        print("✓ C++ library detection patched successfully")
+        sys.exit(0)
+    else:
+        # Try more specific pattern variations that might have additional arguments
+        patterns = [
+            # Pattern without closing paren (might have additional args like MODULE, REQUIRED, etc.)
+            (r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+', 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH'),
+            # Pattern with quotes around c++
+            (r'find_library\s*\(\s*CPP_LIBRARY\s+"c\+\+"\s*\)', 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'),
+        ]
+        
+        for pattern, replacement in patterns:
+            new_content = re.sub(pattern, replacement, content)
+            if new_content != content:
+                with open(file_path, 'w') as f:
+                    f.write(new_content)
+                print("✓ C++ library detection patched (alternative pattern)")
+                sys.exit(0)
+        
+        print("⚠ CPP_LIBRARY pattern not found, will rely on library paths")
+        sys.exit(1)
+except Exception as e:
+    print(f"⚠ Error patching C++ library detection: {e}")
+    sys.exit(1)
+PYTHON_PATCH
+    PATCH_STATUS=$?
+    # Exit code 1 means pattern not found (acceptable), 0 means success
+    # Only try fallback if Python script had an error (exit code > 1)
+    if [ "$PATCH_STATUS" -gt 1 ]; then
+        echo "⚠ Python patch failed with error, trying fallback sed method..."
+        # Fallback to sed if Python fails
+        # Use extended regex (-E) to properly escape + in c++
+        # Escape parentheses and + in pattern, escape / in replacement paths
+        sed -i -E 's/find_library\(CPP_LIBRARY c\+\+\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH)/g' \
+            3rdparty/find_dependencies.cmake 2>/dev/null || true
+    fi
+else
+    echo "⚠ find_dependencies.cmake not found, cannot patch C++ library detection"
 fi
 
 #--- Sub-block 13A.9: Configure Open3D with CMake ---
