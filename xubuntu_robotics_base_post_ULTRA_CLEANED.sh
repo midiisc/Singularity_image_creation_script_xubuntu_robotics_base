@@ -2538,6 +2538,8 @@ PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev"
 PKGS_CORE_DEPS="libgflags-dev libgoogle-glog-dev libprotobuf-dev protobuf-compiler libhdf5-dev libffi-dev libssl-dev libbz2-dev liblzma-dev ca-certificates-java libgoogle-perftools-dev libtcmalloc-minimal4t64 libcpu-features-dev libva-dev libavcodec-dev libavformat-dev libswscale-dev"
 # Media and GUI libraries
 PKGS_MEDIA_GUI="libjpeg-dev libpng-dev libwebp-dev libavcodec-dev libavformat-dev libswscale-dev libavutil-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libgtk-3-dev libcanberra-gtk3-dev libvtk9-dev libgtkglext1-dev libevent-dev libyaml-cpp-dev libjsoncpp-dev"
+# OpenGL and 3D graphics libraries (CRITICAL: Install early for all 3D tools)
+PKGS_OPENGL_3D="xorg-dev libglu1-mesa-dev libglfw3-dev libglew-dev freeglut3-dev mesa-common-dev libgl1-mesa-dev libgl-dev"
 # Simulation libraries
 PKGS_SIM="libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libbullet-dev libode-dev libassimp-dev libtinyxml2-dev"
 # Serialization libraries
@@ -2568,6 +2570,7 @@ install_and_verify_group "CPUParallelism" $PKGS_CPU_PARALLEL
 install_and_verify_group "SparseMath_SLAM" $PKGS_SPARSE_SLAM
 install_and_verify_group "CoreDependencies" $PKGS_CORE_DEPS
 install_and_verify_group "Media_and_GUI" $PKGS_MEDIA_GUI
+install_and_verify_group "OpenGL_3D" $PKGS_OPENGL_3D
 install_and_verify_group "Simulation" $PKGS_SIM
 install_and_verify_group "Serialization" $PKGS_SERIALIZATION
 
@@ -4453,8 +4456,6 @@ apt-get install -y --no-install-recommends \
     libmpfr-dev \
     libsqlite3-dev \
     libflann-dev \
-    libglew-dev \
-    freeglut3-dev \
     libflame-dev \
     libblas-dev \
     liblapack-dev \
@@ -5093,10 +5094,6 @@ if ! apt-get install -y --no-install-recommends \
     libtbb-dev \
     libassimp-dev \
     libsqlite3-dev \
-    xorg-dev \
-    libglu1-mesa-dev \
-    libglfw3-dev \
-    libglew-dev \
     python3-dev \
     python3-pip \
     pybind11-dev \
