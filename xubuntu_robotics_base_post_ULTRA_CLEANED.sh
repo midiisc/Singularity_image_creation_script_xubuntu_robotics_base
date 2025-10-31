@@ -686,6 +686,10 @@ reapply_fastest_mirror() {
     echo "[info] ✓ Fastest mirror re-application complete"
     
     # Force apt-get update to clear any cached mirror configuration
+    # CRITICAL: Clear package list cache first so Release files are re-downloaded from new mirror
+    # Otherwise apt-get --print-uris will still return archive.ubuntu.com URLs
+    echo "[info] Clearing package list cache to force fresh download from fastest mirror..."
+    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
     echo "[info] Running apt-get update to refresh package lists with new mirror..."
     apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
     
@@ -1149,11 +1153,25 @@ echo ""
 echo "==> Verifying mirror configuration..."
 # Run verification to ensure mirror was properly applied
 if verify_fastest_mirror; then
-    echo "✓ Mirror selection completed and verified - all subsequent apt operations will use fastest mirror"
+    echo "✓ Mirror selection completed and verified"
 else
     echo "[warn] Mirror verification found issues - attempting to re-apply..."
     reapply_fastest_mirror || echo "[ERROR] Failed to fix mirror issues"
 fi
+
+#--- Sub-block 6.11.4: Force apt-get update after mirror change ---
+# CRITICAL: apt-get --print-uris reads URIs from cached Release files in /var/lib/apt/lists/
+# If package lists weren't refreshed after mirror change, --print-uris will still return
+# archive.ubuntu.com URLs even though sources.list points to the fastest mirror.
+# This update ensures Release files are re-downloaded from the new mirror.
+echo ""
+echo "==> Refreshing package lists with fastest mirror (required for apt-aria to use correct URLs)..."
+echo "    This ensures apt-get --print-uris will return URIs from ${FASTEST_MIRROR} instead of archive.ubuntu.com"
+# Clear old package list cache to force fresh download from new mirror
+rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+# Update package lists from the new mirror
+/usr/bin/apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
+echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirror"
 
 #--- Sub-block 6.9.8: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
@@ -5094,6 +5112,9 @@ echo "✓ Ninja build system available"
 
 # CRITICAL dependencies (required for Open3D build)
 echo "Installing CRITICAL Open3D dependencies..."
+# Note: Install LLVM-11 packages to avoid libunwind conflict with Python exceptions
+# LLVM-18's libc++ includes libunwind that conflicts with system libunwind.so.8
+# LLVM-11's libc++ doesn't have this integration, avoiding Python crashes
 if ! apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
@@ -5111,8 +5132,6 @@ if ! apt-get install -y --no-install-recommends \
     python3-pip \
     pybind11-dev \
     g++ \
-    libc++-dev \
-    libc++abi-dev \
     libomp-dev \
     libomp5 \
     nodejs \
@@ -5135,14 +5154,87 @@ fi
 
 echo "✓ Critical Open3D dependencies installed"
 
+# Install LLVM-11 packages to avoid libunwind conflict with Python exceptions
+# LLVM-18's libc++ includes libunwind that conflicts with system libunwind.so.8
+# LLVM-11's libc++ doesn't have this integration, avoiding Python crashes
+echo ""
+echo "Installing LLVM-11 packages (to avoid libunwind conflict with Python exceptions)..."
+echo "  This prevents Open3D's Filament renderer from using LLVM-18's libc++ with integrated libunwind"
+
+# Try installing LLVM-11 packages (may require adding LLVM repository)
+LLVM11_INSTALLED=false
+if apt-get install -y --no-install-recommends \
+    libllvm11 \
+    libc++-11 \
+    libc++abi-11 \
+    libc++-11-dev \
+    libc++abi-11-dev \
+    2>&1 | tee /tmp/llvm11_install.log; then
+    LLVM11_INSTALLED=true
+    echo "✓ LLVM-11 packages installed successfully"
+elif grep -q "Unable to locate package\|Package.*not found" /tmp/llvm11_install.log 2>/dev/null; then
+    echo "⚠ LLVM-11 packages not available in default repositories"
+    echo "  Attempting to add LLVM APT repository for LLVM-11..."
+    
+    # Add LLVM repository for version 11 (using jammy as base, compatible with noble)
+    if command -v wget >/dev/null 2>&1; then
+        # Use modern GPG key installation (apt-key is deprecated)
+        wget -O /tmp/llvm-snapshot.gpg.key https://apt.llvm.org/llvm-snapshot.gpg.key 2>/dev/null || true
+        if [ -f /tmp/llvm-snapshot.gpg.key ]; then
+            install -m 0644 /tmp/llvm-snapshot.gpg.key /etc/apt/trusted.gpg.d/llvm-snapshot.asc 2>/dev/null || true
+            rm -f /tmp/llvm-snapshot.gpg.key
+        fi
+        echo "deb http://apt.llvm.org/jammy/ llvm-toolchain-jammy-11 main" > /etc/apt/sources.list.d/llvm-11.list 2>/dev/null || true
+        apt-get update -o Acquire::Retries=3 2>/dev/null || true
+        
+        # Try installing again
+        if apt-get install -y --no-install-recommends \
+            libllvm11 \
+            libc++-11 \
+            libc++abi-11 \
+            libc++-11-dev \
+            libc++abi-11-dev \
+            2>&1 | tee /tmp/llvm11_install.log; then
+            LLVM11_INSTALLED=true
+            echo "✓ LLVM-11 packages installed from LLVM repository"
+        else
+            echo "⚠ LLVM-11 installation failed - Open3D may use LLVM-18 (libunwind conflict possible)"
+        fi
+    else
+        echo "⚠ wget not available to add LLVM repository - LLVM-11 not installed"
+    fi
+else
+    echo "⚠ LLVM-11 installation had errors - check /tmp/llvm11_install.log"
+fi
+
+if [ "$LLVM11_INSTALLED" = false ]; then
+    echo "  Note: Open3D will auto-detect available LLVM version (likely LLVM-18)"
+    echo "  Warning about libunwind conflict with Python exceptions may appear"
+    echo "  Python code using exceptions may be affected"
+fi
+
 # OPTIONAL but helpful dependencies (non-fatal if unavailable)
 echo "Installing optional robotics/Open3D libraries..."
+# Additional dependencies for robust Open3D build:
+#   - liburiparser-dev: URI parsing (used by some 3D formats)
+#   - libcurl4-openssl-dev: HTTP client support (if USE_SYSTEM_CURL=ON)
+#   - liblz4-dev: Fast compression (used by some data formats)
+#   - libzstd-dev: Zstandard compression (modern compression format)
+#   - libgtest-dev: GoogleTest (if building tests, though we disable them)
+#   - cmake-data: Additional CMake modules (helps with dependency detection)
+#   - pkg-config: Package configuration tool (helps CMake find libraries)
 apt-get install -y --no-install-recommends \
     libflann-dev \
     libpcl-dev \
     libnetcdf-dev \
     libfmt-dev \
     libspdlog-dev \
+    liburiparser-dev \
+    libcurl4-openssl-dev \
+    liblz4-dev \
+    libzstd-dev \
+    cmake-data \
+    pkg-config \
     2>&1 | grep -v "Unable to locate package" || true
 
 # Check which optional packages were installed
@@ -5178,11 +5270,23 @@ else
     VERIFY_ERROR=1
 fi
 
-# Check libc++abi-dev
-if dpkg -l | grep -q "^ii.*libc++abi-dev"; then
-    echo "✓ libc++abi-dev installed"
+# Check LLVM-11 packages (required to avoid libunwind conflict with Python exceptions)
+if dpkg -l | grep -q "^ii.*libllvm11"; then
+    echo "✓ LLVM-11 runtime library installed"
 else
-    echo "✗ ERROR: libc++abi-dev not installed"
+    echo "⚠ WARNING: libllvm11 not installed (libunwind conflict possible)"
+    VERIFY_ERROR=1
+fi
+if dpkg -l | grep -q "^ii.*libc\+\+-11-dev"; then
+    echo "✓ LLVM-11 libc++ development package installed"
+else
+    echo "⚠ WARNING: libc++-11-dev not installed (libunwind conflict possible)"
+    VERIFY_ERROR=1
+fi
+if dpkg -l | grep -q "^ii.*libc\+\+abi-11-dev"; then
+    echo "✓ LLVM-11 libc++abi development package installed"
+else
+    echo "⚠ WARNING: libc++abi-11-dev not installed (libunwind conflict possible)"
     VERIFY_ERROR=1
 fi
 
@@ -5378,37 +5482,84 @@ fi
 
 # Patch to force Open3D to use system OpenBLAS and prevent building from source
 # CRITICAL: This prevents the "openblas/lib/libopenblas.a missing" error
+# NOTE: Open3D uses USE_SYSTEM_BLAS (NOT USE_SYSTEM_OPENBLAS - that flag doesn't exist)
+# Reference: OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md
 echo "Patching Open3D to use system OpenBLAS (prevent bundled build)..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
-    # Disable OpenBLAS building from source by setting flags early in CMake
-    # We'll do this by adding a check that forces USE_SYSTEM_OPENBLAS
-    sed -i 's/set(USE_SYSTEM_OPENBLAS.*OFF.*)/set(USE_SYSTEM_OPENBLAS ON)/g' \
+    # Force USE_SYSTEM_BLAS=ON to use system OpenBLAS instead of building from source
+    # This patch ensures that even if find_package(BLAS) fails initially, 
+    # we still prefer system libraries over building from source
+    # Open3D will call find_package(BLAS) which respects BLA_VENDOR=OpenBLAS and BLAS_LIBRARIES
+    sed -i 's/if (USE_SYSTEM_BLAS)/if (TRUE)  # Patched: Force USE_SYSTEM_BLAS always/g' \
         3rdparty/find_dependencies.cmake 2>/dev/null || true
-    # Also disable building OpenBLAS if any BUILD_OPENBLAS variable exists
-    sed -i 's/set(BUILD_OPENBLAS.*ON.*)/set(BUILD_OPENBLAS OFF)/g' \
-        3rdparty/find_dependencies.cmake 2>/dev/null || true
-    echo "✓ OpenBLAS patch applied (will use system OpenBLAS)"
+    echo "✓ OpenBLAS patch applied (will use system OpenBLAS via USE_SYSTEM_BLAS=ON)"
+    echo "  CMake will use find_package(BLAS) with BLA_VENDOR=OpenBLAS"
 else
     echo "⚠ find_dependencies.cmake not found, skipping OpenBLAS patch"
 fi
 
 # Verify system OpenBLAS is available before proceeding
 echo "Verifying system OpenBLAS installation..."
-if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
-   [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" ]; then
-    echo "✓ System OpenBLAS shared library found"
+OPENBLAS_SO_LIB=""
+if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ]; then
+    OPENBLAS_SO_LIB="/usr/lib/x86_64-linux-gnu/libopenblas.so"
+    echo "✓ System OpenBLAS shared library found: ${OPENBLAS_SO_LIB}"
+elif [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" ]; then
+    OPENBLAS_SO_LIB="/usr/lib/x86_64-linux-gnu/libopenblas.so.0"
+    echo "✓ System OpenBLAS shared library found: ${OPENBLAS_SO_LIB}"
 else
     echo "⚠ WARNING: System OpenBLAS shared library not found in expected location"
     echo "  Searching for OpenBLAS libraries..."
-    find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -3 || echo "  No OpenBLAS libraries found"
+    OPENBLAS_SEARCH=$(find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -1)
+    if [ -n "$OPENBLAS_SEARCH" ]; then
+        OPENBLAS_SO_LIB="$OPENBLAS_SEARCH"
+        echo "  Found OpenBLAS library: ${OPENBLAS_SO_LIB}"
+    else
+        echo "  ⚠ No OpenBLAS libraries found - Open3D may build from source or fail"
+    fi
+fi
+
+# Prepare BLAS_LIBRARIES flag if OpenBLAS library found
+BLAS_LIBRARIES_FLAG=""
+LAPACK_LIBRARIES_FLAG=""
+if [ -n "$OPENBLAS_SO_LIB" ]; then
+    BLAS_LIBRARIES_FLAG="-DBLAS_LIBRARIES=${OPENBLAS_SO_LIB}"
+    # OpenBLAS includes LAPACK, so use same library for LAPACK
+    LAPACK_LIBRARIES_FLAG="-DLAPACK_LIBRARIES=${OPENBLAS_SO_LIB}"
+    echo "  Will use BLAS_LIBRARIES=${OPENBLAS_SO_LIB} in CMake configuration"
+    echo "  Will use LAPACK_LIBRARIES=${OPENBLAS_SO_LIB} in CMake configuration"
 fi
 
 # Verify OpenBLAS headers
-if [ -f "/usr/include/x86_64-linux-gnu/cblas.h" ] || [ -f "/usr/include/cblas.h" ]; then
-    echo "✓ OpenBLAS headers found"
+OPENBLAS_HEADER_DIR=""
+if [ -f "/usr/include/x86_64-linux-gnu/cblas.h" ]; then
+    OPENBLAS_HEADER_DIR="/usr/include/x86_64-linux-gnu"
+    echo "✓ OpenBLAS headers found at ${OPENBLAS_HEADER_DIR}"
+elif [ -f "/usr/include/cblas.h" ]; then
+    OPENBLAS_HEADER_DIR="/usr/include"
+    echo "✓ OpenBLAS headers found at ${OPENBLAS_HEADER_DIR}"
 else
     echo "⚠ WARNING: OpenBLAS headers not found"
     echo "  This may cause compilation issues"
+fi
+
+# Verify LAPACKE is available (required for Open3D when using system BLAS)
+echo "Verifying LAPACKE installation..."
+LAPACKE_FOUND=false
+if ldconfig -p | grep -q liblapacke; then
+    LAPACKE_FOUND=true
+    echo "✓ LAPACKE library found via ldconfig"
+elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so.3" ]; then
+    LAPACKE_FOUND=true
+    echo "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so.3"
+elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so" ]; then
+    LAPACKE_FOUND=true
+    echo "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so"
+fi
+
+if [ "$LAPACKE_FOUND" = false ]; then
+    echo "⚠ WARNING: LAPACKE not found - Open3D may fall back to building BLAS from source"
+    echo "  Consider installing: liblapacke-dev"
 fi
 
 # Verify OpenMP is available (required for Open3D parallel operations)
@@ -5462,6 +5613,56 @@ CCACHE_FLAGS=""
 if command -v ccache >/dev/null 2>&1; then
     echo "Using ccache for C++ and CUDA compilations"
     CCACHE_FLAGS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache"
+fi
+
+# Detect OpenCV_DIR (similar to how OpenCV build sets it)
+echo "Detecting OpenCV CMake config directory..."
+OPENCV_DIR=""
+OPENCV_CONFIG_FILE=$(find /usr/local /usr \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) -path "*/cmake/opencv4/*" 2>/dev/null | head -1)
+if [ -n "$OPENCV_CONFIG_FILE" ] && [ -f "$OPENCV_CONFIG_FILE" ]; then
+    OPENCV_DIR=$(dirname "$OPENCV_CONFIG_FILE")
+    echo "✓ OpenCV CMake config found: ${OPENCV_CONFIG_FILE}"
+    echo "  Setting OpenCV_DIR to: ${OPENCV_DIR}"
+else
+    # Default to standard installation path (OpenCV from source installs here)
+    OPENCV_DIR="/usr/local/lib/cmake/opencv4"
+    if [ -f "${OPENCV_DIR}/OpenCVConfig.cmake" ] || [ -f "${OPENCV_DIR}/opencv-config.cmake" ]; then
+        echo "✓ OpenCV CMake config found at default location: ${OPENCV_DIR}"
+    else
+        echo "⚠ WARNING: OpenCV CMake config not found at ${OPENCV_DIR}"
+        echo "  Searching for OpenCV installation..."
+        OPENCV_SEARCH=$(find /usr /usr/local \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) 2>/dev/null | head -1)
+        if [ -n "$OPENCV_SEARCH" ]; then
+            OPENCV_DIR=$(dirname "$OPENCV_SEARCH")
+            echo "  Found OpenCV at: ${OPENCV_DIR}"
+        else
+            echo "  ⚠ OpenCV not found - Open3D build may fail if CUDA module requires it"
+            OPENCV_DIR="/usr/local/lib/cmake/opencv4"  # Use default even if not found
+        fi
+    fi
+fi
+
+# Detect Eigen3_DIR (similar to how Eigen3 is typically installed)
+echo "Detecting Eigen3 CMake config directory..."
+EIGEN3_DIR=""
+EIGEN3_CONFIG_FILE=$(find /usr/local /usr \( -name "Eigen3Config.cmake" -o -name "eigen3-config.cmake" \) -path "*/cmake/eigen3/*" 2>/dev/null | head -1)
+if [ -n "$EIGEN3_CONFIG_FILE" ] && [ -f "$EIGEN3_CONFIG_FILE" ]; then
+    EIGEN3_DIR=$(dirname "$EIGEN3_CONFIG_FILE")
+    echo "✓ Eigen3 CMake config found: ${EIGEN3_CONFIG_FILE}"
+    echo "  Setting Eigen3_DIR to: ${EIGEN3_DIR}"
+else
+    # Default to standard installation paths
+    for EIGEN3_SEARCH_DIR in "/usr/local/share/eigen3/cmake" "/usr/share/eigen3/cmake" "/usr/lib/cmake/eigen3"; do
+        if [ -d "$EIGEN3_SEARCH_DIR" ] && ([ -f "${EIGEN3_SEARCH_DIR}/Eigen3Config.cmake" ] || [ -f "${EIGEN3_SEARCH_DIR}/eigen3-config.cmake" ]); then
+            EIGEN3_DIR="$EIGEN3_SEARCH_DIR"
+            echo "✓ Eigen3 CMake config found at: ${EIGEN3_DIR}"
+            break
+        fi
+    done
+    if [ -z "$EIGEN3_DIR" ]; then
+        EIGEN3_DIR="/usr/local/share/eigen3/cmake"  # Use default
+        echo "⚠ WARNING: Eigen3 CMake config not found - using default: ${EIGEN3_DIR}"
+    fi
 fi
 
 # Detect GLFW CMake config file and paths
@@ -5559,7 +5760,41 @@ fi
 : "${GLFW_CMAKE_FLAGS:=}"
 : "${GLFW_CMAKE_PREFIX:=}"
 
+# Detect LLVM-11 libc++ to avoid libunwind conflict with Python exceptions
+# CRITICAL: Open3D's Filament renderer uses libc++ which can conflict with system libunwind.so.8
+# LLVM-18+ includes libunwind that interferes with Python exceptions - use LLVM-11 instead
+echo "Detecting LLVM-11 libc++ libraries (to avoid libunwind conflict with Python exceptions)..."
+CLANG_LIBDIR_11=""
+if [ -d "/usr/lib/llvm-11/lib" ]; then
+    CLANG_LIBDIR_11="/usr/lib/llvm-11/lib"
+    echo "✓ LLVM-11 libc++ found: ${CLANG_LIBDIR_11}"
+    # Verify libc++ and libc++abi exist
+    if [ -f "${CLANG_LIBDIR_11}/libc++.so" ] || [ -f "${CLANG_LIBDIR_11}/libc++.so.1" ]; then
+        echo "  ✓ libc++ library found"
+    else
+        echo "  ⚠ libc++ not found in LLVM-11, trying system locations"
+        CLANG_LIBDIR_11=""
+    fi
+    if [ -f "${CLANG_LIBDIR_11}/libc++abi.so" ] || [ -f "${CLANG_LIBDIR_11}/libc++abi.so.1" ]; then
+        echo "  ✓ libc++abi library found"
+    else
+        echo "  ⚠ libc++abi not found in LLVM-11"
+        CLANG_LIBDIR_11=""
+    fi
+else
+    echo "⚠ LLVM-11 not found in /usr/lib/llvm-11/lib"
+    echo "  Attempting to find alternative LLVM-11 installation..."
+    CLANG_LIBDIR_11=$(find /usr/lib/llvm-11* /usr/lib/x86_64-linux-gnu/llvm-11* -name "libc++.so*" -type f 2>/dev/null | head -1 | sed 's|/libc++.*||')
+    if [ -n "$CLANG_LIBDIR_11" ] && [ -d "$CLANG_LIBDIR_11" ]; then
+        echo "  ✓ Found LLVM-11 libc++ in: ${CLANG_LIBDIR_11}"
+    else
+        echo "  ⚠ LLVM-11 not found - Open3D may use LLVM-18 (libunwind conflict possible)"
+        CLANG_LIBDIR_11=""
+    fi
+fi
+
 # Detect C++ library path explicitly (to avoid CMake looking in wrong places like /tmp/Open3D)
+echo ""
 echo "Detecting C++ standard library for explicit CMake configuration..."
 if [ -z "${CPP_LIBRARY:-}" ]; then
     CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
@@ -5573,14 +5808,75 @@ if [ -z "${CPP_LIBRARY:-}" ]; then
 fi
 
 # CMake configuration with Ninja generator
+echo ""
 echo "⚙️ Running CMake configuration with Ninja generator..."
+
+# Prepare LLVM-11 CLANG_LIBDIR flag if available (prevents libunwind conflict)
+# NOTE: LLVM-11 is ONLY used for Open3D's Filament renderer (GUI/visualization)
+# Scope: Limited to Open3D Filament build - does NOT affect system-wide LLVM usage
+# Impact: Other parts of the image continue using system LLVM (default) or GCC
+# Rationale: LLVM-18+ includes libunwind.so that conflicts with Python exceptions in Filament
+CLANG_LIBDIR_FLAG=""
+if [ -n "$CLANG_LIBDIR_11" ] && [ -d "$CLANG_LIBDIR_11" ]; then
+    CLANG_LIBDIR_FLAG="-DCLANG_LIBDIR=${CLANG_LIBDIR_11}"
+    echo "  Using LLVM-11 libc++: ${CLANG_LIBDIR_11} (Open3D Filament only - avoids libunwind conflict)"
+    echo "  Note: This does NOT affect other LLVM usage in the image (system defaults remain)"
+else
+    echo "  ⚠ LLVM-11 not configured - Open3D may use LLVM-18 (libunwind conflict possible)"
+    echo "  Note: Other parts of the image are unaffected (use system LLVM/GCC as normal)"
+fi
+
+# Prepare additional system library flags for robust dependency detection
+SYSTEM_LIB_FLAGS=""
+
+# Use system libraries when available for better compatibility and faster builds
+# Check if libraries exist before enabling USE_SYSTEM_* flags
+if dpkg -l | grep -q "^ii.*libfmt-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libfmt.so" ]; then
+    SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_FMT=ON"
+    echo "  Will use system fmt library"
+fi
+
+if dpkg -l | grep -q "^ii.*libtbb-dev" || ldconfig -p | grep -q libtbb; then
+    SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_TBB=ON"
+    echo "  Will use system TBB library"
+fi
+
+if dpkg -l | grep -q "^ii.*libassimp-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libassimp.so" ]; then
+    SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_ASSIMP=ON"
+    echo "  Will use system Assimp library"
+fi
+
+if dpkg -l | grep -q "^ii.*pybind11-dev" || [ -f "/usr/include/pybind11/pybind11.h" ]; then
+    SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_PYBIND11=ON"
+    echo "  Will use system pybind11 library"
+fi
+
+# CUDA configuration flags for better performance
+CUDA_FLAGS=""
+if [ -n "$CUDA_VERSION" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
+    CUDA_FLAGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-${CUDA_VERSION}/bin/nvcc"
+    CUDA_FLAGS="${CUDA_FLAGS} -DENABLE_CACHED_CUDA_MANAGER=ON"
+    CUDA_FLAGS="${CUDA_FLAGS} -DBUILD_WITH_CUDA_STATIC=ON"
+    echo "  Using CUDA ${CUDA_VERSION} with cached memory manager and static libraries"
+fi
+
+# Enhanced include path with OpenBLAS headers if found
+ENHANCED_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include;/usr/local/include"
+if [ -n "$OPENBLAS_HEADER_DIR" ]; then
+    ENHANCED_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH};${OPENBLAS_HEADER_DIR}"
+fi
+
+# Enhanced CMake configuration with comprehensive flags for robust compilation
+# Based on Open3D 0.19.0 documented flags (see OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md)
 cmake .. \
     -GNinja \
     ${CCACHE_FLAGS} \
+    ${CLANG_LIBDIR_FLAG} \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCMAKE_CXX_COMPILER=g++ \
     -DCMAKE_C_COMPILER=gcc \
+    ${CUDA_FLAGS:+${CUDA_FLAGS} }\
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
@@ -5597,40 +5893,42 @@ cmake .. \
     -DBUILD_PYTHON_MODULE=ON \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_UNIT_TESTS=OFF \
+    -DBUILD_BENCHMARKS=OFF \
     -DBUILD_FILAMENT_FROM_SOURCE=OFF \
+    -DDEVELOPER_BUILD=OFF \
+    -DWITH_OPENMP=ON \
+    -DWITH_IPP=ON \
+    -DWITH_MINIZIP=OFF \
+    -DGLIBCXX_USE_CXX11_ABI=ON \
+    ${SYSTEM_LIB_FLAGS:+${SYSTEM_LIB_FLAGS} }\
     -DUSE_SYSTEM_EIGEN3=ON \
     -DUSE_SYSTEM_GLEW=ON \
     -DUSE_SYSTEM_GLFW=ON \
     ${GLFW_CMAKE_FLAGS:+${GLFW_CMAKE_FLAGS} }\
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
-    -DUSE_SYSTEM_OPENBLAS=ON \
-    -DBUILD_OPENBLAS=OFF \
+    -DUSE_SYSTEM_VTK=OFF \
     -DUSE_BLAS=ON \
+    -DUSE_SYSTEM_BLAS=ON \
     -DBLA_VENDOR=OpenBLAS \
-    -DOpenBLAS_LIB=/usr/lib/x86_64-linux-gnu/libopenblas.so \
-    -DOpenBLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/ \
-    -DBLAS_LIBRARIES=/usr/lib/x86_64-linux-gnu/libopenblas.so \
-    -DLAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3;/usr/lib/x86_64-linux-gnu/liblapack.so" \
-    -DLAPACK_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapack.so \
-    -DLAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3 \
-    -DLAPACK_LIBRARY_DEBUG=/usr/lib/x86_64-linux-gnu/liblapack.so.3 \
-    -DLAPACK_CBLAS_H=/usr/include/x86_64-linux-gnu/cblas.h \
-    -DLAPACK_LAPACKE_H=/usr/include/lapacke.h \
-    -DWITH_OPENMP=ON \
+    ${BLAS_LIBRARIES_FLAG:+${BLAS_LIBRARIES_FLAG} }\
+    ${LAPACK_LIBRARIES_FLAG:+${LAPACK_LIBRARIES_FLAG} }\
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
+    -DCMAKE_CUDA_STANDARD=17 \
     -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
     -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
-    -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
+    -DCMAKE_MODULE_LINKER_FLAGS="-Wl,--no-as-needed" \
+    -DCMAKE_INSTALL_RPATH="/usr/local/lib;/usr/lib/x86_64-linux-gnu" \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -DCMAKE_PREFIX_PATH="/usr/local;/usr;/usr/lib/x86_64-linux-gnu${GLFW_CMAKE_PREFIX:+;$GLFW_CMAKE_PREFIX}" \
-    -DCMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu;/usr/lib64;/usr/lib" \
-    -DCMAKE_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include" \
-    -DGLIBCXX_USE_CXX11_ABI=ON \
-    -DEigen3_DIR=/usr/local/share/eigen3/cmake \
-    -DOpenCV_DIR=/usr/local/lib/cmake/opencv4 \
+    -DCMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu;/usr/lib64;/usr/lib;/usr/local/lib" \
+    -DCMAKE_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH}" \
+    -DEigen3_DIR="${EIGEN3_DIR}" \
+    -DOpenCV_DIR="${OPENCV_DIR}" \
     -DPython3_EXECUTABLE=/usr/bin/python3 \
+    -DPYTHON_EXECUTABLE=/usr/bin/python3 \
+    -DPYPI_PACKAGE_NAME=open3d \
     2>&1 | tee /tmp/open3d_cmake.log
 
 # Check if configuration succeeded
