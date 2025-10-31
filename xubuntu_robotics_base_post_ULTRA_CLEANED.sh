@@ -5082,7 +5082,7 @@ if ! command -v ninja >/dev/null 2>&1; then
     apt-get install -y --no-install-recommends ninja-build
 fi
 echo "✓ Ninja build system available"
-apt-get install -y --no-install-recommends \
+if ! apt-get install -y --no-install-recommends \
     libblas-dev \
     liblapack-dev \
     liblapacke-dev \
@@ -5104,8 +5104,22 @@ apt-get install -y --no-install-recommends \
     libc++-dev \
     libc++abi-dev \
     nodejs \
-    npm \
-    || echo "⚠ Some Open3D dependencies unavailable (non-fatal)"
+    npm; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "✗ CRITICAL: Open3D dependency installation FAILED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "ERROR: Cannot proceed with Open3D build without required dependencies"
+    echo "  Please check the apt-get error messages above."
+    echo "  Common causes:"
+    echo "    - Package repository issues (run: apt-get update)"
+    echo "    - Network connectivity problems"
+    echo "    - Conflicting package versions"
+    echo "    - Insufficient disk space"
+    echo ""
+    exit 1
+fi
 
 echo "✓ Open3D dependencies installed"
 
