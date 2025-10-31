@@ -5207,10 +5207,51 @@ else
     echo "⚠ LLVM-11 installation had errors - check /tmp/llvm11_install.log"
 fi
 
-if [ "$LLVM11_INSTALLED" = false ]; then
-    echo "  Note: Open3D will auto-detect available LLVM version (likely LLVM-18)"
-    echo "  Warning about libunwind conflict with Python exceptions may appear"
-    echo "  Python code using exceptions may be affected"
+if [ "$LLVM11_INSTALLED" = "false" ]; then
+    echo "  Note: LLVM-11 not available - will use system LLVM (likely LLVM-14 or LLVM-18)"
+    echo "  Installing available LLVM libc++ packages as fallback..."
+    
+    # Try LLVM-14 first (often more stable than LLVM-18)
+    LLVM_FALLBACK_INSTALLED=false
+    # Capture exit code properly - need to check apt-get, not grep
+    apt-get install -y --no-install-recommends \
+        libc++-14-dev \
+        libc++abi-14-dev \
+        2>&1 | grep -v "Unable to locate package" | grep -v "E: Unable to locate package" | tee /tmp/llvm14_install.log
+    APT_EXIT_CODE=${PIPESTATUS[0]}
+    if [ "$APT_EXIT_CODE" -eq 0 ]; then
+        # Verify packages were actually installed (not just grep filtered errors)
+        if dpkg -l | grep -q "^ii.*libc\+\+-14-dev\|^ii.*libc\+\+abi-14-dev"; then
+            LLVM_FALLBACK_INSTALLED=true
+            echo "  ✓ LLVM-14 libc++ packages installed (preferred fallback)"
+        else
+            echo "  ℹ LLVM-14 packages attempted but not installed (may not be available)"
+        fi
+    fi
+    
+    # Try LLVM-18 if LLVM-14 failed
+    if [ "$LLVM_FALLBACK_INSTALLED" = "false" ]; then
+        apt-get install -y --no-install-recommends \
+            libc++-18-dev \
+            libc++abi-18-dev \
+            2>&1 | grep -v "Unable to locate package" | grep -v "E: Unable to locate package" | tee /tmp/llvm18_install.log
+        APT_EXIT_CODE=${PIPESTATUS[0]}
+        if [ "$APT_EXIT_CODE" -eq 0 ]; then
+            # Verify packages were actually installed
+            if dpkg -l | grep -q "^ii.*libc\+\+-18-dev\|^ii.*libc\+\+abi-18-dev"; then
+                LLVM_FALLBACK_INSTALLED=true
+                echo "  ✓ LLVM-18 libc++ packages installed as fallback (may have libunwind conflict)"
+            else
+                echo "  ℹ LLVM-18 packages attempted but not installed (may not be available)"
+            fi
+        fi
+    fi
+    
+    if [ "$LLVM_FALLBACK_INSTALLED" = "false" ]; then
+        echo "  ⚠ LLVM libc++ packages not found - Open3D will attempt auto-detection"
+        echo "  Warning about libunwind conflict with Python exceptions may appear"
+        echo "  Python code using exceptions may be affected"
+    fi
 fi
 
 # OPTIONAL but helpful dependencies (non-fatal if unavailable)
@@ -5428,12 +5469,15 @@ else
 fi
 
 # Fix C++ library detection issue (Open3D CMake sometimes can't find c++ library)
-# The find_library(CPP_LIBRARY c++) call at line 1381 fails, so we make it more flexible
+# The find_library(CPP_LIBRARY c++) calls at lines 1339, 1381-1382 fail, so we make them more flexible
 # Also prevents CMake from looking in wrong directories like /tmp/Open3D
 echo "Patching C++ library detection in Open3D CMake files..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
-    # Use Python to robustly patch the find_library call for CPP_LIBRARY
-    # This handles various formatting variations in the CMake file
+    # Use Python to robustly patch the find_library calls for CPP_LIBRARY and CPPABI_LIBRARY
+    # The actual patterns in Open3D 0.19.0 are:
+    #   Line 1339: find_library(CPP_LIBRARY    c++ PATHS ${llvm_lib_dir} NO_DEFAULT_PATH)
+    #   Line 1381: find_library(CPP_LIBRARY    c++    PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
+    #   Line 1382: find_library(CPPABI_LIBRARY c++abi PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
     python3 << 'PYTHON_PATCH'
 import re
 import sys
@@ -5445,31 +5489,36 @@ try:
     
     original_content = content
     
-    # Pattern 1: Match find_library(CPP_LIBRARY c++) with possible whitespace
-    # This must match the exact pattern, including any trailing whitespace/newlines
-    pattern1 = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s*\)'
-    replacement1 = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    # Pattern 1: Match find_library(CPP_LIBRARY c++ PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
+    # This is the REQUIRED call that causes FATAL_ERROR if not found
+    pattern1 = r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)'
+    replacement1 = 'find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-18/lib /usr/lib/llvm-17/lib /usr/lib/llvm-16/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)'
     content = re.sub(pattern1, replacement1, content)
     
-    # Pattern 2: Match find_library(CPP_LIBRARY c++ with possible additional arguments
-    # This handles cases like find_library(CPP_LIBRARY c++ REQUIRED)
-    if content == original_content:
-        pattern2 = r'find_library\s*\(\s*CPP_LIBRARY\s+["\']?c\+\+["\']?\s+'
-        replacement2 = 'find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH '
-        content = re.sub(pattern2, replacement2, content)
+    # Pattern 2: Match find_library(CPPABI_LIBRARY c++abi PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
+    pattern2 = r'find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)'
+    replacement2 = 'find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-18/lib /usr/lib/llvm-17/lib /usr/lib/llvm-16/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)'
+    content = re.sub(pattern2, replacement2, content)
     
-    # Pattern 3: Match find_library(CPP_LIBRARY "c++") with quotes
-    if content == original_content:
-        pattern3 = r'find_library\s*\(\s*CPP_LIBRARY\s+"c\+\+"\s*\)'
-        content = re.sub(pattern3, replacement1, content)
+    # Pattern 3: Match find_library(CPP_LIBRARY c++ PATHS ${llvm_lib_dir} NO_DEFAULT_PATH) in loop
+    # This is the search loop that tries versions 7-19
+    pattern3 = r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)'
+    replacement3 = 'find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    content = re.sub(pattern3, replacement3, content)
+    
+    # Pattern 4: Match find_library(CPPABI_LIBRARY c++abi PATHS ${llvm_lib_dir} NO_DEFAULT_PATH) in loop
+    pattern4 = r'find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)'
+    replacement4 = 'find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
+    content = re.sub(pattern4, replacement4, content)
     
     if content != original_content:
         with open(file_path, 'w') as f:
             f.write(content)
         print("✓ C++ library detection patched successfully")
+        print(f"  Made {len(re.findall(r'find_library.*CPP', original_content)) - len(re.findall(r'find_library.*CPP', content))} replacements")
         sys.exit(0)
     else:
-        print("⚠ CPP_LIBRARY pattern not found in expected format, trying sed fallback")
+        print("⚠ CPP_LIBRARY patterns not found in expected format, trying sed fallback")
         sys.exit(1)
 except Exception as e:
     print(f"⚠ Error patching C++ library detection: {e}")
@@ -5481,11 +5530,16 @@ PYTHON_PATCH
     # Exit code 0 = success, 1 = pattern not found (may be acceptable), 2+ = error
     if [ "$PATCH_STATUS" -eq 1 ]; then
         echo "⚠ Python didn't find exact pattern, trying sed fallback..."
-        # Fallback to sed - try multiple patterns
-        sed -i -E 's/find_library\(CPP_LIBRARY\s+["\x27]?c\+\+["\x27]?\s*\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH)/g' \
+        # Fallback to sed - fix the REQUIRED calls first (these cause FATAL_ERROR)
+        # Use extended regex (-E) for better pattern matching
+        sed -i -E 's|find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)|find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-18/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)|g' \
             3rdparty/find_dependencies.cmake 2>/dev/null || true
-        # Also try without quotes
-        sed -i -E 's/find_library\(CPP_LIBRARY\s+c\+\+([^)]*)\)/find_library(CPP_LIBRARY NAMES stdc++ c++ c++abi PATHS \/usr\/lib\/x86_64-linux-gnu \/usr\/lib64 \/usr\/lib NO_DEFAULT_PATH\1)/g' \
+        sed -i -E 's|find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)|find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-18/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)|g' \
+            3rdparty/find_dependencies.cmake 2>/dev/null || true
+        # Fix the loop searches (non-REQUIRED versions)
+        sed -i -E 's|find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)|find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)|g' \
+            3rdparty/find_dependencies.cmake 2>/dev/null || true
+        sed -i -E 's|find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)|find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)|g' \
             3rdparty/find_dependencies.cmake 2>/dev/null || true
         echo "✓ Applied sed fallback patches"
     elif [ "$PATCH_STATUS" -ge 2 ]; then
@@ -5775,36 +5829,92 @@ fi
 : "${GLFW_CMAKE_FLAGS:=}"
 : "${GLFW_CMAKE_PREFIX:=}"
 
-# Detect LLVM-11 libc++ to avoid libunwind conflict with Python exceptions
+# Detect LLVM libc++ libraries (prefer LLVM-11 to avoid libunwind conflict, fallback to LLVM-18)
 # CRITICAL: Open3D's Filament renderer uses libc++ which can conflict with system libunwind.so.8
-# LLVM-18+ includes libunwind that interferes with Python exceptions - use LLVM-11 instead
-echo "Detecting LLVM-11 libc++ libraries (to avoid libunwind conflict with Python exceptions)..."
+# LLVM-18+ includes libunwind that interferes with Python exceptions - prefer LLVM-11 if available
+echo "Detecting LLVM libc++ libraries (prefer LLVM-11, fallback to LLVM-18)..."
 CLANG_LIBDIR_11=""
-if [ -d "/usr/lib/llvm-11/lib" ]; then
-    CLANG_LIBDIR_11="/usr/lib/llvm-11/lib"
-    echo "✓ LLVM-11 libc++ found: ${CLANG_LIBDIR_11}"
-    # Verify libc++ and libc++abi exist
-    if [ -f "${CLANG_LIBDIR_11}/libc++.so" ] || [ -f "${CLANG_LIBDIR_11}/libc++.so.1" ]; then
-        echo "  ✓ libc++ library found"
-    else
-        echo "  ⚠ libc++ not found in LLVM-11, trying system locations"
-        CLANG_LIBDIR_11=""
+CLANG_LIBDIR_DETECTED=""
+
+# First try LLVM-11 (preferred to avoid libunwind conflict)
+for LLVM_DIR in "/usr/lib/llvm-11/lib" "/usr/lib/x86_64-linux-gnu/llvm-11/lib"; do
+    if [ -d "$LLVM_DIR" ]; then
+        if [ -f "${LLVM_DIR}/libc++.so" ] || [ -f "${LLVM_DIR}/libc++.so.1" ] || \
+           [ -f "${LLVM_DIR}/libc++.so.1.0" ] || find "$LLVM_DIR" -name "libc++.so*" -type f | head -1 | grep -q .; then
+            if [ -f "${LLVM_DIR}/libc++abi.so" ] || [ -f "${LLVM_DIR}/libc++abi.so.1" ] || \
+               [ -f "${LLVM_DIR}/libc++abi.so.1.0" ] || find "$LLVM_DIR" -name "libc++abi.so*" -type f | head -1 | grep -q .; then
+                CLANG_LIBDIR_11="$LLVM_DIR"
+                echo "✓ LLVM-11 libc++ found: ${CLANG_LIBDIR_11}"
+                break
+            fi
+        fi
     fi
-    if [ -f "${CLANG_LIBDIR_11}/libc++abi.so" ] || [ -f "${CLANG_LIBDIR_11}/libc++abi.so.1" ]; then
-        echo "  ✓ libc++abi library found"
-    else
-        echo "  ⚠ libc++abi not found in LLVM-11"
-        CLANG_LIBDIR_11=""
-    fi
-else
-    echo "⚠ LLVM-11 not found in /usr/lib/llvm-11/lib"
-    echo "  Attempting to find alternative LLVM-11 installation..."
-    CLANG_LIBDIR_11=$(find /usr/lib/llvm-11* /usr/lib/x86_64-linux-gnu/llvm-11* -name "libc++.so*" -type f 2>/dev/null | head -1 | sed 's|/libc++.*||')
+done
+
+# If LLVM-11 not found, try alternative paths
+if [ -z "$CLANG_LIBDIR_11" ]; then
+    CLANG_LIBDIR_11=$(find /usr/lib/llvm-11* /usr/lib/x86_64-linux-gnu/llvm-11* -name "libc++.so*" -type f 2>/dev/null | head -1 | sed 's|/libc++.*||' | head -1)
     if [ -n "$CLANG_LIBDIR_11" ] && [ -d "$CLANG_LIBDIR_11" ]; then
-        echo "  ✓ Found LLVM-11 libc++ in: ${CLANG_LIBDIR_11}"
-    else
-        echo "  ⚠ LLVM-11 not found - Open3D may use LLVM-18 (libunwind conflict possible)"
-        CLANG_LIBDIR_11=""
+        # Verify both libraries exist
+        if (find "$CLANG_LIBDIR_11" -name "libc++.so*" | grep -q .) && \
+           (find "$CLANG_LIBDIR_11" -name "libc++abi.so*" | grep -q .); then
+            echo "  ✓ Found LLVM-11 libc++ in: ${CLANG_LIBDIR_11}"
+        else
+            CLANG_LIBDIR_11=""
+        fi
+    fi
+fi
+
+# Fallback: Try LLVM-14 (often works better than LLVM-18), then LLVM-18, then other versions
+if [ -z "$CLANG_LIBDIR_11" ]; then
+    echo "⚠ LLVM-11 not found - trying LLVM-14 first (known to work on Ubuntu systems)"
+    for LLVM_DIR in "/usr/lib/llvm-14/lib" "/usr/lib/x86_64-linux-gnu/llvm-14/lib"; do
+        if [ -d "$LLVM_DIR" ]; then
+            if (find "$LLVM_DIR" -name "libc++.so*" -type f | head -1 | grep -q .) && \
+               (find "$LLVM_DIR" -name "libc++abi.so*" -type f | head -1 | grep -q .); then
+                CLANG_LIBDIR_DETECTED="$LLVM_DIR"
+                echo "  ✓ LLVM-14 libc++ found: ${CLANG_LIBDIR_DETECTED}"
+                echo "    Note: LLVM-14 may link to libunwind, but is known to work on Ubuntu systems"
+                break
+            fi
+        fi
+    done
+    
+    # If LLVM-14 not found, try LLVM-18 (Ubuntu 24.04 default)
+    if [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+        echo "  Trying LLVM-18 as fallback (Ubuntu 24.04 default)..."
+        for LLVM_DIR in "/usr/lib/llvm-18/lib" "/usr/lib/x86_64-linux-gnu/llvm-18/lib"; do
+            if [ -d "$LLVM_DIR" ]; then
+                if (find "$LLVM_DIR" -name "libc++.so*" -type f | head -1 | grep -q .) && \
+                   (find "$LLVM_DIR" -name "libc++abi.so*" -type f | head -1 | grep -q .); then
+                    CLANG_LIBDIR_DETECTED="$LLVM_DIR"
+                    echo "  ✓ LLVM-18 libc++ found: ${CLANG_LIBDIR_DETECTED}"
+                    echo "    Warning: LLVM-18 includes libunwind that may conflict with Python exceptions"
+                    break
+                fi
+            fi
+        done
+    fi
+    
+    # Try other LLVM versions if specific ones not found
+    if [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+        echo "  Searching for any available LLVM version with libc++..."
+        for LLVM_VER in 19 17 16 15 13 12 10 9 8 7; do
+            for LLVM_DIR in "/usr/lib/llvm-${LLVM_VER}/lib" "/usr/lib/x86_64-linux-gnu/llvm-${LLVM_VER}/lib"; do
+                if [ -d "$LLVM_DIR" ]; then
+                    if (find "$LLVM_DIR" -name "libc++.so*" -type f | head -1 | grep -q .) && \
+                       (find "$LLVM_DIR" -name "libc++abi.so*" -type f | head -1 | grep -q .); then
+                        CLANG_LIBDIR_DETECTED="$LLVM_DIR"
+                        echo "  ✓ Found LLVM-${LLVM_VER} libc++ in: ${CLANG_LIBDIR_DETECTED}"
+                        break 2
+                    fi
+                fi
+            done
+        done
+    fi
+    
+    if [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+        echo "  ⚠ No LLVM libc++ found - Open3D will attempt auto-detection (may fail)"
     fi
 fi
 
@@ -5826,19 +5936,127 @@ fi
 echo ""
 echo "⚙️ Running CMake configuration with Ninja generator..."
 
-# Prepare LLVM-11 CLANG_LIBDIR flag if available (prevents libunwind conflict)
-# NOTE: LLVM-11 is ONLY used for Open3D's Filament renderer (GUI/visualization)
+# Optional: Compile LLVM-11 locally if no suitable LLVM is found
+# This is a fallback option that takes significant time but ensures compatibility
+# Set BUILD_LLVM11_LOCALLY=true before running the script to enable this
+BUILD_LLVM11_LOCALLY="${BUILD_LLVM11_LOCALLY:-false}"
+LOCAL_LLVM11_DIR=""
+
+if [ "$BUILD_LLVM11_LOCALLY" = "true" ] && [ -z "$CLANG_LIBDIR_11" ] && [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Building LLVM-11 locally for Open3D (this will take 30-60 minutes)..."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    LOCAL_LLVM11_DIR="/tmp/llvm-11-build"
+    mkdir -p "$LOCAL_LLVM11_DIR"
+    cd "$LOCAL_LLVM11_DIR"
+    
+    # Clone LLVM 11 release branch (minimal clone)
+    LLVM_CLONE_SUCCESS=false
+    if [ ! -d "llvm-project" ]; then
+        echo "Cloning LLVM 11.1.0 source..."
+        if git clone --depth 1 --branch llvmorg-11.1.0 https://github.com/llvm/llvm-project.git 2>&1; then
+            LLVM_CLONE_SUCCESS=true
+        else
+            echo "  First branch failed, trying release/11.x branch..."
+            if git clone --depth 1 --branch release/11.x https://github.com/llvm/llvm-project.git 2>&1; then
+                LLVM_CLONE_SUCCESS=true
+            else
+                echo "  ✗ Failed to clone LLVM 11 source - cannot build locally"
+            fi
+        fi
+    else
+        LLVM_CLONE_SUCCESS=true  # Already exists
+    fi
+    
+    # Build only libc++ and libc++abi (not full LLVM - much faster)
+    if [ "$LLVM_CLONE_SUCCESS" = "true" ] && [ -d "llvm-project" ]; then
+        mkdir -p build-libcxx
+        cd build-libcxx
+        
+        echo "Configuring libc++ build..."
+        cmake ../llvm-project/runtimes \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="${LOCAL_LLVM11_DIR}/install" \
+            -DLLVM_ENABLE_PROJECTS="" \
+            -DLLVM_ENABLE_RUNTIMES="libcxx;libcxxabi" \
+            -DCMAKE_C_COMPILER=gcc \
+            -DCMAKE_CXX_COMPILER=g++ \
+            -DLIBCXX_ENABLE_SHARED=ON \
+            -DLIBCXXABI_ENABLE_SHARED=ON \
+            -DLIBCXX_ENABLE_STATIC=OFF \
+            -DLIBCXXABI_ENABLE_STATIC=OFF \
+            2>&1 | tee cmake.log
+        
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            echo "Building libc++ (this may take 20-40 minutes)..."
+            cmake --build . --target install -j"$(nproc)" 2>&1 | tee build.log
+            
+            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                LOCAL_LLVM11_LIBDIR="${LOCAL_LLVM11_DIR}/install/lib"
+                if [ -f "${LOCAL_LLVM11_LIBDIR}/libc++.so" ] && [ -f "${LOCAL_LLVM11_LIBDIR}/libc++abi.so" ]; then
+                    CLANG_LIBDIR_11="$LOCAL_LLVM11_LIBDIR"
+                    echo "✓ LLVM-11 libc++ built successfully: ${CLANG_LIBDIR_11}"
+                else
+                    echo "⚠ LLVM-11 build completed but libraries not found"
+                fi
+            else
+                echo "⚠ LLVM-11 build failed - check build.log"
+            fi
+        else
+            echo "⚠ LLVM-11 configuration failed - check cmake.log"
+        fi
+        
+        cd "$LOCAL_LLVM11_DIR" || cd /tmp/Open3D
+    fi
+    
+    # Ensure we're back in Open3D directory
+    cd /tmp/Open3D 2>/dev/null || {
+        echo "  ⚠ Warning: Could not return to /tmp/Open3D directory"
+        echo "  Please ensure you are in the correct directory before continuing"
+    }
+fi
+
+# Prepare CLANG_LIBDIR flag (prefer LLVM-11, fallback to detected LLVM version)
+# NOTE: CLANG_LIBDIR is ONLY used for Open3D's Filament renderer (GUI/visualization)
 # Scope: Limited to Open3D Filament build - does NOT affect system-wide LLVM usage
 # Impact: Other parts of the image continue using system LLVM (default) or GCC
 # Rationale: LLVM-18+ includes libunwind.so that conflicts with Python exceptions in Filament
 CLANG_LIBDIR_FLAG=""
+CLANG_LIBDIR_TO_USE=""
+
 if [ -n "$CLANG_LIBDIR_11" ] && [ -d "$CLANG_LIBDIR_11" ]; then
-    CLANG_LIBDIR_FLAG="-DCLANG_LIBDIR=${CLANG_LIBDIR_11}"
-    echo "  Using LLVM-11 libc++: ${CLANG_LIBDIR_11} (Open3D Filament only - avoids libunwind conflict)"
+    CLANG_LIBDIR_TO_USE="$CLANG_LIBDIR_11"
+    echo "  Using LLVM-11 libc++: ${CLANG_LIBDIR_TO_USE} (Open3D Filament only - avoids libunwind conflict)"
     echo "  Note: This does NOT affect other LLVM usage in the image (system defaults remain)"
+elif [ -n "$CLANG_LIBDIR_DETECTED" ] && [ -d "$CLANG_LIBDIR_DETECTED" ]; then
+    CLANG_LIBDIR_TO_USE="$CLANG_LIBDIR_DETECTED"
+    LLVM_VERSION_DETECTED=$(echo "$CLANG_LIBDIR_TO_USE" | sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' | head -1)
+    if [ -n "$LLVM_VERSION_DETECTED" ]; then
+        # Check if version is numeric and greater than 11
+        if expr "$LLVM_VERSION_DETECTED" : '^[0-9][0-9]*$' >/dev/null 2>&1 && [ "$LLVM_VERSION_DETECTED" -gt 11 ]; then
+            echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE} (fallback - may have libunwind conflict)"
+            echo "  Warning: LLVM version >11 may cause Python exception issues with Filament renderer"
+            echo "  Workaround: If Python exceptions fail, set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally"
+        elif expr "$LLVM_VERSION_DETECTED" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+            echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE}"
+        else
+            echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE}"
+        fi
+    else
+        echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE}"
+    fi
 else
-    echo "  ⚠ LLVM-11 not configured - Open3D may use LLVM-18 (libunwind conflict possible)"
-    echo "  Note: Other parts of the image are unaffected (use system LLVM/GCC as normal)"
+    echo "  ⚠ No LLVM libc++ detected - Open3D will attempt auto-detection"
+    echo "  This may cause configuration failures if libraries cannot be found"
+    echo "  Option: Set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally (takes 30-60 minutes)"
+fi
+
+# Only set CLANG_LIBDIR flag if we have a valid directory
+if [ -n "$CLANG_LIBDIR_TO_USE" ] && [ -d "$CLANG_LIBDIR_TO_USE" ]; then
+    CLANG_LIBDIR_FLAG="-DCLANG_LIBDIR=${CLANG_LIBDIR_TO_USE}"
 fi
 
 # Prepare additional system library flags for robust dependency detection
