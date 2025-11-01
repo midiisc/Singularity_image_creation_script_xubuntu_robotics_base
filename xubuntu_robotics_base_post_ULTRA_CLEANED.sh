@@ -5219,8 +5219,6 @@ apt-get install -y --no-install-recommends \
     libpcl-dev \
     libnetcdf-dev \
     libfmt-dev \
-    libassimp-dev \
-    pybind11-dev \
     libspdlog-dev \
     liburiparser-dev \
     libcurl4-openssl-dev \
