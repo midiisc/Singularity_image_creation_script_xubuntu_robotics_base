@@ -5169,7 +5169,7 @@ if apt-get install -y --no-install-recommends \
     libc++abi-14-dev \
     2>&1 | tee /tmp/llvm14_install.log; then
     # Verify packages were actually installed
-    if dpkg -l | grep -q "^ii.*libc\+\+-14-dev" && dpkg -l | grep -q "^ii.*libc\+\+abi-14-dev"; then
+    if dpkg -l | grep -E -q "^ii.*libc\+\+-14-dev" && dpkg -l | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
         LLVM14_INSTALLED=true
         echo "✓ LLVM-14 libc++ packages installed successfully"
     else
@@ -5259,13 +5259,13 @@ fi
 
 # Check LLVM-14 packages (stable on Ubuntu 24.04 Noble)
 # NOTE: LLVM-11 not available on Noble. LLVM-14 is more stable than LLVM-18
-if dpkg -l | grep -q "^ii.*libc\+\+-14-dev"; then
+if dpkg -l | grep -E -q "^ii.*libc\+\+-14-dev"; then
     echo "✓ LLVM-14 libc++ development package installed"
 else
     echo "⚠ WARNING: libc++-14-dev not installed (libunwind conflict possible with Python exceptions)"
     VERIFY_ERROR=1
 fi
-if dpkg -l | grep -q "^ii.*libc\+\+abi-14-dev"; then
+if dpkg -l | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
     echo "✓ LLVM-14 libc++abi development package installed"
 else
     echo "⚠ WARNING: libc++abi-14-dev not installed (libunwind conflict possible)"
