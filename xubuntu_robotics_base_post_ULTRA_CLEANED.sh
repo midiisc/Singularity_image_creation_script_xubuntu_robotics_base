@@ -5621,6 +5621,11 @@ echo ""
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
 export LIBRARY_PATH="${LIBRARY_PATH:+${LIBRARY_PATH}:}/usr/lib/x86_64-linux-gnu"
 echo "✓ Build environment configured for system OpenBLAS detection"
+
+# Setup Open3D third-party download cache (for WebRTC binaries and other deps)
+OPEN3D_DOWNLOAD_CACHE="${CONTAINER_CACHE_ROOT:-/tmp}/open3d_downloads"
+mkdir -p "${OPEN3D_DOWNLOAD_CACHE}"
+echo "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
 echo ""
 
 # Prefer ccache if available (as recommended in Open3D docs)
@@ -5998,6 +6003,18 @@ if [ -n "$OPENBLAS_HEADER_DIR" ]; then
     ENHANCED_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH};${OPENBLAS_HEADER_DIR}"
 fi
 
+# Debug: Display key configuration variables
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "CMake Configuration Summary:"
+echo "  OpenCV_DIR: ${OPENCV_DIR:-'<not set>'}"
+echo "  Eigen3_DIR: ${EIGEN3_DIR:-'<not set>'}"
+echo "  GLFW_CMAKE_PREFIX: ${GLFW_CMAKE_PREFIX:-'<not set>'}"
+echo "  BUILD_WEBRTC_FROM_SOURCE: OFF (explicit)"
+echo "  OPEN3D_WARNINGS_AS_ERRORS: OFF"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 # Enhanced CMake configuration with comprehensive flags for robust compilation
 # Based on Open3D 0.19.0 documented flags (see OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md)
 cmake .. \
@@ -6012,10 +6029,12 @@ cmake .. \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DOPEN3D_THIRD_PARTY_DOWNLOAD_DIR="${OPEN3D_DOWNLOAD_CACHE}" \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_CUDA_MODULE=ON \
     -DBUILD_GUI=ON \
     -DBUILD_WEBRTC=ON \
+    -DBUILD_WEBRTC_FROM_SOURCE=OFF \
     -DENABLE_HEADLESS_RENDERING=OFF \
     -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
