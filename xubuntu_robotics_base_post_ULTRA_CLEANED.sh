@@ -5090,7 +5090,7 @@ fi
 # Install Open3D dependencies
 # Note: Official docs recommend using util/install_deps_ubuntu.sh, but we install manually
 # for better control in Singularity builds. We install core dependencies here.
-# Note: nodejs and npm are required for BUILD_WEBRTC=ON (WebRTC support)
+# Note: WebRTC disabled (BUILD_WEBRTC=OFF) - no nodejs/npm needed
 # Note: libssl-dev is already installed via PKGS_CORE_DEPS in Block 7
 # Additional libraries for robotics/Open3D context:
 #   - libopenblas-dev/libopenblas64-dev: OpenBLAS development libraries (CRITICAL for fixing build errors)
@@ -5132,9 +5132,7 @@ if ! apt-get install -y --no-install-recommends \
     pybind11-dev \
     g++ \
     libomp-dev \
-    libomp5 \
-    nodejs \
-    npm; then
+    libomp5; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✗ CRITICAL: Open3D dependency installation FAILED"
@@ -5167,6 +5165,7 @@ LLVM14_INSTALLED=false
 if apt-get install -y --no-install-recommends \
     libc++-14-dev \
     libc++abi-14-dev \
+    libunwind-14-dev \
     2>&1 | tee /tmp/llvm14_install.log; then
     # Verify packages were actually installed
     if dpkg -l | grep -E -q "^ii.*libc\+\+-14-dev" && dpkg -l | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
@@ -5996,13 +5995,13 @@ cmake .. \
     -DBUILD_SHARED_LIBS=ON \
     -DBUILD_CUDA_MODULE=ON \
     -DBUILD_GUI=ON \
-    -DBUILD_WEBRTC=ON \
+    -DBUILD_WEBRTC=OFF \
     -DENABLE_HEADLESS_RENDERING=OFF \
     -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
     -DBUILD_AZURE_KINECT=OFF \
     -DBUILD_LIBREALSENSE=OFF \
-    -DBUILD_JUPYTER_EXTENSION=ON \
+    -DBUILD_JUPYTER_EXTENSION=OFF \
     -DBUILD_PYTHON_MODULE=ON \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_UNIT_TESTS=OFF \
