@@ -5058,15 +5058,7 @@ rm -rf /tmp/colmap
 rm -f /tmp/colmap_*.log
 echo "✓ COLMAP build cleaned up"
 
-#--- Sub-block 13A.7: Install Jupyter/ipywidgets for Open3D Jupyter extension ---
-# Purpose: Install Python packages required for BUILD_JUPYTER_EXTENSION=ON
-# Dependencies: python3-pip (Block 6)
-# Outputs: Installed Python packages
-echo "Installing Jupyter and ipywidgets for Open3D Jupyter extension..."
-pip3 install --no-cache-dir jupyter ipywidgets || echo "⚠ Jupyter/ipywidgets installation failed (may affect Jupyter extension)"
-echo "✓ Jupyter prerequisites installed"
-
-#--- Sub-block 13A.8: Install Open3D dependencies ---
+#--- Sub-block 13A.7: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
 # Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: Block 6 (APT configuration), Phase 1 (build tools should already be installed)
@@ -5098,8 +5090,8 @@ fi
 # Install Open3D dependencies
 # Note: Official docs recommend using util/install_deps_ubuntu.sh, but we install manually
 # for better control in Singularity builds. We install core dependencies here.
-# CRITICAL: BUILD_SHARED_LIBS=OFF required for WebRTC (pre-compiled WebRTC binaries are static)
-# Benefits: Self-contained, portable, high-performance, eliminates runtime linker errors
+# CRITICAL: BUILD_SHARED_LIBS=OFF for static linking (self-contained, portable, high-performance)
+# Note: WebRTC disabled - pre-compiled binaries may not be available or compatible
 # Note: libssl-dev already installed via PKGS_CORE_DEPS in Block 7
 # Additional libraries for robotics/Open3D context:
 #   - libopenblas-dev/libopenblas64-dev: OpenBLAS development libraries (CRITICAL for fixing build errors)
@@ -5207,12 +5199,6 @@ echo "Installing optional robotics/Open3D libraries..."
 #   - libgtest-dev: GoogleTest (if building tests, though we disable them)
 #   - cmake-data: Additional CMake modules (helps with dependency detection)
 #   - pkg-config: Package configuration tool (helps CMake find libraries)
-#   - WebRTC dependencies for BUILD_WEBRTC=ON:
-#     * libnss3-dev: Network Security Services (WebRTC authentication)
-#     * libasound2-dev: ALSA audio (WebRTC audio support)
-#     * libdbus-1-dev: D-Bus IPC (WebRTC desktop integration)
-#     * libxtst-dev: X11 test library (WebRTC X11 support)
-#     * nodejs, npm: JavaScript runtime for Jupyter extension build
 # NOTE: libjsoncpp-dev, libxss-dev already in PKGS_MEDIA_GUI and PKGS_CORE_LIBS
 apt-get install -y --no-install-recommends \
     libflann-dev \
@@ -5226,12 +5212,6 @@ apt-get install -y --no-install-recommends \
     libzstd-dev \
     cmake-data \
     pkg-config \
-    libnss3-dev \
-    libasound2-dev \
-    libdbus-1-dev \
-    libxtst-dev \
-    nodejs \
-    npm \
     2>&1 | grep -v "Unable to locate package" || true
 
 # Check which optional packages were installed
@@ -6015,13 +5995,13 @@ cmake .. \
     -DBUILD_SHARED_LIBS=OFF \
     -DBUILD_CUDA_MODULE=ON \
     -DBUILD_GUI=ON \
-    -DBUILD_WEBRTC=ON \
+    -DBUILD_WEBRTC=OFF \
     -DENABLE_HEADLESS_RENDERING=OFF \
     -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
     -DBUILD_AZURE_KINECT=OFF \
     -DBUILD_LIBREALSENSE=OFF \
-    -DBUILD_JUPYTER_EXTENSION=ON \
+    -DBUILD_JUPYTER_EXTENSION=OFF \
     -DBUILD_PYTHON_MODULE=ON \
     -DBUILD_EXAMPLES=OFF \
     -DBUILD_UNIT_TESTS=OFF \
