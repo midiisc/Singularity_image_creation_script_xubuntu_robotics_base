@@ -1608,7 +1608,7 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
         ["julia_key.asc"]="local|gpg"
     ["${TURBOVNC_DEB}"]="deb_with_gpg|${TURBOVNC_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
     ["${VIRTUALGL_DEB}"]="deb_with_gpg|${VIRTUALGL_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
-    ["${OPEN3D_WEBRTC_FILE}"]="binary|${OPEN3D_WEBRTC_URL}|${OPEN3D_WEBRTC_SHA256}"
+    ["${OPEN3D_WEBRTC_FILE}"]="archive|${OPEN3D_WEBRTC_URL}|${OPEN3D_WEBRTC_SHA256}"
     )
 
     # Phase 1: Ensure all required files are present in cache
@@ -1833,13 +1833,25 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
                 fi
                 ;;
             "archive")
-                # Check if archive is valid (tar.gz)
+                # Check if archive is valid (tar.gz) and validate SHA256 if provided
                 if ! tar -tzf "$file_path" >/dev/null 2>&1; then
                 echo "    ✗ Corrupted archive detected: $file_name"
                     corrupted_files+=("$file_name")
                     rm -f "$file_path"
                 else
+                    # If sha256 is provided, validate it
+                    if [ -n "$param1" ]; then
+                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
+                        if [ "$actual_sha256" = "$param1" ]; then
+                            echo "    ✓ Valid archive with correct SHA256: $file_name"
+                        else
+                        echo "    ✗ SHA256 mismatch for $file_name (expected: $param1, got: $actual_sha256)"
+                            corrupted_files+=("$file_name")
+                            rm -f "$file_path"
+                        fi
+                else
                     echo "    ✓ Valid archive: $file_name"
+                    fi
                 fi
                 ;;
         esac
@@ -2054,7 +2066,18 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
                 ;;
             "archive")
                 if [ -f "$file_path" ] && tar -tzf "$file_path" >/dev/null 2>&1; then
+                    # If sha256 is provided, validate it
+                    if [ -n "$param1" ]; then
+                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
+                        if [ "$actual_sha256" == "$param1" ]; then
+                            echo "  ✓ Verified archive with correct SHA256: $file_name"
+                        else
+                        echo "  ✗ SHA256 verification failed for $file_name (expected: $param1, got: $actual_sha256)"
+                            all_valid=false
+                        fi
+                else
                     echo "  ✓ Verified archive: $file_name"
+                    fi
                 else
                 echo "  ✗ Archive verification failed: $file_name"
                     all_valid=false
