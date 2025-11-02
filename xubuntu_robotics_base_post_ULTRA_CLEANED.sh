@@ -6151,6 +6151,23 @@ fi
 echo ""
 echo "✓ Open3D configured with CUDA support (CUDA-ONLY, no CPU fallback)"
 
+# Debug: Check if WebRTC was extracted by ExternalProject_Add after CMake config
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Post-CMake Debug: Checking WebRTC extraction..."
+WEBRTC_EXTRACTED_LIB=$(find 3rdparty/webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1)
+if [ -n "$WEBRTC_EXTRACTED_LIB" ]; then
+    echo "✓ WebRTC library extracted: $WEBRTC_EXTRACTED_LIB"
+    ls -lh "$WEBRTC_EXTRACTED_LIB"
+else
+    echo "⚠ WebRTC library not found in expected location"
+    echo "  Searching for webrtc extraction directory..."
+    find 3rdparty -type d -name "*webrtc*" 2>/dev/null | head -10
+    echo "  Expected: 3rdparty/webrtc/src/ext_webrtc/lib/libwebrtc.a"
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
 #--- Sub-block 13A.10: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
 # Note: Official docs show "make -j$(nproc)" but we use "ninja -j${BUILD_JOBS}" 
