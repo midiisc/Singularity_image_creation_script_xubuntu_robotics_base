@@ -6028,7 +6028,6 @@ echo "  OpenCV_DIR: ${OPENCV_DIR:-'<not set>'}"
 echo "  Eigen3_DIR: ${EIGEN3_DIR:-'<not set>'}"
 echo "  GLFW_CMAKE_PREFIX: ${GLFW_CMAKE_PREFIX:-'<not set>'}"
 echo "  BUILD_WEBRTC_FROM_SOURCE: OFF (explicit)"
-echo "  OPEN3D_WARNINGS_AS_ERRORS: OFF"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Final verification: Check if WebRTC binaries are in expected location before cmake
@@ -6053,7 +6052,10 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
         # Check if extraction created webrtc_release subdirectory
         if [ -d "webrtc_release" ]; then
             echo "  Archive extracted to webrtc_release/, moving contents to parent..."
+            # Move all files including hidden ones
+            shopt -s dotglob
             mv webrtc_release/* . 2>/dev/null || true
+            shopt -u dotglob
             rm -rf webrtc_release
         fi
         echo "✓ WebRTC manually extracted successfully"
@@ -6069,8 +6071,8 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
         echo "✗ Manual extraction failed!"
     fi
     
-    # Return to build directory
-    cd - >/dev/null || cd /tmp/Open3D/build || exit 1
+    # Return to build directory (we came from /tmp/Open3D/build)
+    cd - >/dev/null || exit 1
 else
     echo "⚠ WebRTC binary NOT found in Open3D cache before CMake configuration"
     echo "  Expected: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
@@ -6188,13 +6190,13 @@ echo "✓ Open3D configured with CUDA support (CUDA-ONLY, no CPU fallback)"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Post-CMake Debug: Checking WebRTC extraction..."
-WEBRTC_EXTRACTED_LIB=$(find 3rdparty/webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1)
+WEBRTC_EXTRACTED_LIB=$(find webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1)
 if [ -n "$WEBRTC_EXTRACTED_LIB" ]; then
     echo "✓ WebRTC library extracted: $WEBRTC_EXTRACTED_LIB"
     ls -lh "$WEBRTC_EXTRACTED_LIB"
 else
     echo "⚠ WebRTC library not found in expected location"
-    echo "  Expected: 3rdparty/webrtc/src/ext_webrtc/lib/libwebrtc.a"
+    echo "  Expected: webrtc/src/ext_webrtc/lib/libwebrtc.a"
     echo ""
     echo "  Comprehensive search for libwebrtc.a..."
     find . -name "libwebrtc.a" 2>/dev/null
@@ -6202,14 +6204,11 @@ else
     echo "  Searching for webrtc directories..."
     find . -type d -name "*webrtc*" 2>/dev/null
     echo ""
-    echo "  Checking if 3rdparty directory exists..."
-    ls -la 3rdparty/ 2>/dev/null || echo "  3rdparty/ does not exist!"
-    echo ""
-    echo "  Checking if webrtc subdirectory exists..."
-    ls -la 3rdparty/webrtc/ 2>/dev/null || echo "  3rdparty/webrtc/ does not exist!"
+    echo "  Checking if webrtc directory exists..."
+    ls -la webrtc/ 2>/dev/null || echo "  webrtc/ does not exist!"
     echo ""
     echo "  Checking if src subdirectory exists..."
-    ls -la 3rdparty/webrtc/src/ 2>/dev/null || echo "  3rdparty/webrtc/src/ does not exist!"
+    ls -la webrtc/src/ 2>/dev/null || echo "  webrtc/src/ does not exist!"
     echo ""
     echo "  Checking Open3D download cache for extracted files..."
     if [ -n "${OPEN3D_DOWNLOAD_CACHE:-}" ]; then
