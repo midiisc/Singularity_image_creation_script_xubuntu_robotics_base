@@ -5628,12 +5628,20 @@ mkdir -p "${OPEN3D_DOWNLOAD_CACHE}/webrtc"
 echo "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
 
 # Pre-copy WebRTC binaries if downloaded on host (VPN-friendly pre-download)
+echo "Checking for pre-downloaded WebRTC binaries..."
+echo "  Host cache: ${CONTAINER_BIN_CACHE}"
+echo "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
+echo "  Looking for: ${OPEN3D_WEBRTC_FILE}"
+ls -lh "${CONTAINER_BIN_CACHE}/" | grep -i webrtc || echo "  No WebRTC files in host cache"
+
 if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
     echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
-    cp "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
+    cp -v "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
     echo "✓ WebRTC binaries pre-copied from host cache"
+    ls -lh "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" | cat
 else
     echo "ℹ WebRTC binaries not found in host cache, will download during build"
+    echo "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
 fi
 echo ""
 
