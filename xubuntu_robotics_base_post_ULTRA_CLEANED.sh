@@ -6038,6 +6038,39 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
     WEBRTC_SIZE=$(du -h "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" | cut -f1)
     echo "✓ WebRTC binary found in Open3D cache: ${WEBRTC_SIZE}"
     echo "  Path: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+    
+    # Manual extraction to expected SOURCE_DIR location
+    # ExternalProject_Add extracts to: ${CMAKE_BINARY_DIR}/webrtc/src/ext_webrtc
+    # We're currently in /tmp/Open3D/build
+    WEBRTC_EXTRACT_DIR="webrtc/src/ext_webrtc"
+    echo ""
+    echo "Manually extracting WebRTC archive to: ${WEBRTC_EXTRACT_DIR}"
+    mkdir -p "${WEBRTC_EXTRACT_DIR}"
+    cd "${WEBRTC_EXTRACT_DIR}" || exit 1
+    
+    # Extract tar.gz and handle the webrtc_release subdirectory
+    if tar -xzf "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" 2>/dev/null; then
+        # Check if extraction created webrtc_release subdirectory
+        if [ -d "webrtc_release" ]; then
+            echo "  Archive extracted to webrtc_release/, moving contents to parent..."
+            mv webrtc_release/* . 2>/dev/null || true
+            rm -rf webrtc_release
+        fi
+        echo "✓ WebRTC manually extracted successfully"
+        
+        # Verify libwebrtc.a exists
+        if [ -f "lib/libwebrtc.a" ]; then
+            echo "✓ Verified: lib/libwebrtc.a exists"
+            ls -lh "lib/libwebrtc.a" | head -1
+        else
+            echo "⚠ WARNING: lib/libwebrtc.a not found after extraction"
+        fi
+    else
+        echo "✗ Manual extraction failed!"
+    fi
+    
+    # Return to build directory
+    cd - >/dev/null || cd /tmp/Open3D/build || exit 1
 else
     echo "⚠ WebRTC binary NOT found in Open3D cache before CMake configuration"
     echo "  Expected: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
@@ -6068,7 +6101,6 @@ cmake .. \
     -DBUILD_WEBRTC=ON \
     -DBUILD_WEBRTC_FROM_SOURCE=OFF \
     -DENABLE_HEADLESS_RENDERING=OFF \
-    -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DTHREADS_PREFER_PTHREAD_FLAG=ON \
     -DBUILD_AZURE_KINECT=OFF \
     -DBUILD_LIBREALSENSE=OFF \
