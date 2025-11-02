@@ -6030,6 +6030,20 @@ echo "  GLFW_CMAKE_PREFIX: ${GLFW_CMAKE_PREFIX:-'<not set>'}"
 echo "  BUILD_WEBRTC_FROM_SOURCE: OFF (explicit)"
 echo "  OPEN3D_WARNINGS_AS_ERRORS: OFF"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Final verification: Check if WebRTC binaries are in expected location before cmake
+echo ""
+echo "Pre-CMake Verification: Checking Open3D download cache..."
+if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
+    WEBRTC_SIZE=$(du -h "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" | cut -f1)
+    echo "✓ WebRTC binary found in Open3D cache: ${WEBRTC_SIZE}"
+    echo "  Path: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+else
+    echo "⚠ WebRTC binary NOT found in Open3D cache before CMake configuration"
+    echo "  Expected: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+    echo "  Open3D will attempt to download during configuration/build phase"
+fi
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
 # Enhanced CMake configuration with comprehensive flags for robust compilation
