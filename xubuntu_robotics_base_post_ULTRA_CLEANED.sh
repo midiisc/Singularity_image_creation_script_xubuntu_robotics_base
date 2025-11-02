@@ -6092,6 +6092,8 @@ cmake .. \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCMAKE_CXX_COMPILER=g++ \
     -DCMAKE_C_COMPILER=gcc \
+    -DCMAKE_POLICY_DEFAULT_CMP0063=NEW \
+    -DCMAKE_POLICY_DEFAULT_CMP0146=NEW \
     ${CUDA_FLAGS:+${CUDA_FLAGS} }\
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -6131,8 +6133,10 @@ cmake .. \
     ${LAPACK_LIBRARIES_FLAG:+${LAPACK_LIBRARIES_FLAG} }\
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DCMAKE_CUDA_STANDARD=17 \
-    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
-    -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
+    -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow" \
+    -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
+    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive -Wno-array-bounds -Wno-stringop-overflow -Wno-restrict -Wno-maybe-uninitialized -Wno-deprecated-declarations -Wno-unused-but-set-variable" \
+    -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -Wno-array-bounds -Wno-stringop-overflow -Wno-maybe-uninitialized" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
     -DCMAKE_MODULE_LINKER_FLAGS="-Wl,--no-as-needed" \
