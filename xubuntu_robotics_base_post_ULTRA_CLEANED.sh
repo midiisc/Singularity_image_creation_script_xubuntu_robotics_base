@@ -6121,9 +6121,8 @@ cmake .. \
     -DGLIBCXX_USE_CXX11_ABI=ON \
     ${SYSTEM_LIB_FLAGS:+${SYSTEM_LIB_FLAGS} }\
     -DUSE_SYSTEM_EIGEN3=ON \
-    -DUSE_SYSTEM_GLEW=ON \
-    -DUSE_SYSTEM_GLFW=ON \
-    ${GLFW_CMAKE_FLAGS:+${GLFW_CMAKE_FLAGS} }\
+    -DUSE_SYSTEM_GLEW=OFF \
+    -DUSE_SYSTEM_GLFW=OFF \
     -DUSE_SYSTEM_LIBREALSENSE=OFF \
     -DUSE_SYSTEM_VTK=OFF \
     -DUSE_BLAS=ON \
@@ -6144,7 +6143,7 @@ cmake .. \
     -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -DCMAKE_PREFIX_PATH="/usr/local;/usr;/usr/lib/x86_64-linux-gnu${GLFW_CMAKE_PREFIX:+;$GLFW_CMAKE_PREFIX}" \
     -DCMAKE_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu;/usr/lib64;/usr/lib;/usr/local/lib" \
-    -DCMAKE_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH}" \
+    -DCMAKE_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH};/usr/include/GLFW;/usr/include" \
     -DEigen3_DIR="${EIGEN3_DIR}" \
     -DOpenCV_DIR="${OPENCV_DIR}" \
     -DPython3_EXECUTABLE=/usr/bin/python3 \
