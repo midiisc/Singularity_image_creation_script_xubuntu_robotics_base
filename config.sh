@@ -82,6 +82,7 @@ export OPENCV_VERSION="4.12.0"
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"
 export OPEN3D_VERSION="0.19.0"
+export OPEN3D_WEBRTC_VER="60e6748"
 
 # NVIDIA Video Codec SDK
 export NVIDIA_VIDEO_SDK_VERSION="12.1.14"
@@ -154,6 +155,10 @@ export NVIDIA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/re
 export ZENOH_FILE="zenoh-${ZENOH_VERSION}-x86_64-unknown-linux-gnu.zip"
 export ZENOH_URL="https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_VERSION}/${ZENOH_FILE}"
 
+# Open3D WebRTC (prebuilt binaries for Open3D 0.19.0 with GLIBCXX_USE_CXX11_ABI=ON)
+export OPEN3D_WEBRTC_FILE="webrtc_${OPEN3D_WEBRTC_VER}_cxx-abi-1.tar.gz"
+export OPEN3D_WEBRTC_URL="https://github.com/isl-org/open3d_downloads/releases/download/webrtc-v3/${OPEN3D_WEBRTC_FILE}"
+
 #===============================================================================
 # SHA256 CHECKSUMS
 #===============================================================================
@@ -161,6 +166,7 @@ export MINIFORGE_SHA256="376b160ed8130820db0ab0f3826ac1fc85923647f75c1b8231166e3
 export MICROMAMBA_SHA256="ffc3cb8d52d4d6b354bdbb979c407719c485392b74e462cbd50811aa88e58f85"
 export YQ_SHA256="99df6047f5b577a9d25f969f7c3823ada3488de2e2115b30a0abb10d9324fd9f"
 export JULIA_SHA256="33497b93cf9dd65e8431024fd1db19cbfbe30bd796775a59d53e2df9a8de6dc0"
+export OPEN3D_WEBRTC_SHA256="0d98ddbc4164b9e7bfc50b7d4eaa912a753dabde0847d85a64f93a062ae4c335"
 
 #===============================================================================
 # GPG KEY IDS AND URLS

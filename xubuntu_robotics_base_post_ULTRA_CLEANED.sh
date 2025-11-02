@@ -5624,8 +5624,17 @@ echo "✓ Build environment configured for system OpenBLAS detection"
 
 # Setup Open3D third-party download cache (for WebRTC binaries and other deps)
 OPEN3D_DOWNLOAD_CACHE="${CONTAINER_CACHE_ROOT:-/tmp}/open3d_downloads"
-mkdir -p "${OPEN3D_DOWNLOAD_CACHE}"
+mkdir -p "${OPEN3D_DOWNLOAD_CACHE}/webrtc"
 echo "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
+
+# Pre-copy WebRTC binaries if downloaded on host (VPN-friendly pre-download)
+if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
+    echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
+    cp "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
+    echo "✓ WebRTC binaries pre-copied from host cache"
+else
+    echo "ℹ WebRTC binaries not found in host cache, will download during build"
+fi
 echo ""
 
 # Prefer ccache if available (as recommended in Open3D docs)

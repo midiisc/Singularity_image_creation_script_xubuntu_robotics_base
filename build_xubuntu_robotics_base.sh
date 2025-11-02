@@ -1504,6 +1504,7 @@ VIRTUALGL|${VIRTUALGL_URL}|${DEB_CACHE}/${VIRTUALGL_DEB}|deb
 DRAKE_KEY|${DRAKE_ASC_URL}|${BIN_CACHE}/drake.asc|file
 JULIA|${JULIA_URL}|${BIN_CACHE}/${JULIA_TARBALL}|file
 NVIDIA_KEYRING|${NVIDIA_KEYRING_URL}|${DEB_CACHE}/${NVIDIA_KEYRING_DEB}|deb
+OPEN3D_WEBRTC|${OPEN3D_WEBRTC_URL}|${BIN_CACHE}/${OPEN3D_WEBRTC_FILE}|file
 EOF
 
     # Execute downloads in parallel (max 4 concurrent)
@@ -1607,6 +1608,7 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
         ["julia_key.asc"]="local|gpg"
     ["${TURBOVNC_DEB}"]="deb_with_gpg|${TURBOVNC_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
     ["${VIRTUALGL_DEB}"]="deb_with_gpg|${VIRTUALGL_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
+    ["${OPEN3D_WEBRTC_FILE}"]="binary|${OPEN3D_WEBRTC_URL}|${OPEN3D_WEBRTC_SHA256}"
     )
 
     # Phase 1: Ensure all required files are present in cache
