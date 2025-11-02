@@ -6053,6 +6053,7 @@ cmake .. \
     ${CCACHE_FLAGS} \
     ${CLANG_LIBDIR_FLAG} \
     -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_VERBOSE_MAKEFILE=ON \
     -DCMAKE_INSTALL_PREFIX=/usr/local \
     -DCMAKE_CXX_COMPILER=g++ \
     -DCMAKE_C_COMPILER=gcc \
@@ -6161,9 +6162,27 @@ if [ -n "$WEBRTC_EXTRACTED_LIB" ]; then
     ls -lh "$WEBRTC_EXTRACTED_LIB"
 else
     echo "⚠ WebRTC library not found in expected location"
-    echo "  Searching for webrtc extraction directory..."
-    find 3rdparty -type d -name "*webrtc*" 2>/dev/null | head -10
     echo "  Expected: 3rdparty/webrtc/src/ext_webrtc/lib/libwebrtc.a"
+    echo ""
+    echo "  Comprehensive search for libwebrtc.a..."
+    find . -name "libwebrtc.a" 2>/dev/null
+    echo ""
+    echo "  Searching for webrtc directories..."
+    find . -type d -name "*webrtc*" 2>/dev/null
+    echo ""
+    echo "  Checking if 3rdparty directory exists..."
+    ls -la 3rdparty/ 2>/dev/null || echo "  3rdparty/ does not exist!"
+    echo ""
+    echo "  Checking if webrtc subdirectory exists..."
+    ls -la 3rdparty/webrtc/ 2>/dev/null || echo "  3rdparty/webrtc/ does not exist!"
+    echo ""
+    echo "  Checking if src subdirectory exists..."
+    ls -la 3rdparty/webrtc/src/ 2>/dev/null || echo "  3rdparty/webrtc/src/ does not exist!"
+    echo ""
+    echo "  Checking Open3D download cache for extracted files..."
+    if [ -n "${OPEN3D_DOWNLOAD_CACHE:-}" ]; then
+        find "${OPEN3D_DOWNLOAD_CACHE}" -type f -name "*webrtc*" 2>/dev/null
+    fi
 fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
