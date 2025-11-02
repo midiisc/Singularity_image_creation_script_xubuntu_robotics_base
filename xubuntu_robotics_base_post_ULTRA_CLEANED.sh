@@ -5062,9 +5062,50 @@ echo "✓ COLMAP build cleaned up"
 # Purpose: Install Python packages required for BUILD_JUPYTER_EXTENSION=ON
 # Dependencies: python3-pip (Block 6)
 # Outputs: Installed Python packages
-echo "Installing Jupyter and ipywidgets for Open3D Jupyter extension..."
-pip3 install --no-cache-dir jupyter ipywidgets || echo "⚠ Jupyter/ipywidgets installation failed (may affect Jupyter extension)"
-echo "✓ Jupyter prerequisites installed"
+# Note: Open3D Jupyter extension requires jupyter, jupyterlab, and ipywidgets
+echo "Installing Jupyter, JupyterLab, and ipywidgets for Open3D Jupyter extension..."
+pip3 install --no-cache-dir jupyter jupyterlab ipywidgets || echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed (may affect Jupyter extension)"
+
+# Verify Jupyter packages were installed
+echo "Verifying Jupyter packages installation..."
+JUPYTER_OK=true
+
+# Check jupyter (check for jupyter_core module and jupyter command)
+if command -v jupyter >/dev/null 2>&1; then
+    JUPYTER_VER=$(jupyter --version 2>/dev/null | head -n1 2>/dev/null || echo "unknown")
+    echo "  ✓ jupyter installed (version: ${JUPYTER_VER})"
+elif python3 -c "import jupyter_core" 2>/dev/null; then
+    JUPYTER_VER=$(python3 -c "import jupyter_core; print(getattr(jupyter_core, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+    echo "  ✓ jupyter_core module found (version: ${JUPYTER_VER})"
+else
+    echo "  ✗ ERROR: jupyter not found - Jupyter extension may fail"
+    JUPYTER_OK=false
+fi
+
+# Check jupyterlab
+if python3 -c "import jupyterlab" 2>/dev/null; then
+    JUPYTERLAB_VER=$(python3 -c "import jupyterlab; print(getattr(jupyterlab, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+    echo "  ✓ jupyterlab installed (version: ${JUPYTERLAB_VER})"
+else
+    echo "  ✗ ERROR: jupyterlab not found - Jupyter extension may fail"
+    JUPYTER_OK=false
+fi
+
+# Check ipywidgets
+if python3 -c "import ipywidgets" 2>/dev/null; then
+    IPYWIDGETS_VER=$(python3 -c "import ipywidgets; print(getattr(ipywidgets, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+    echo "  ✓ ipywidgets installed (version: ${IPYWIDGETS_VER})"
+else
+    echo "  ✗ ERROR: ipywidgets not found - Jupyter extension may fail"
+    JUPYTER_OK=false
+fi
+
+if [ "${JUPYTER_OK}" = "true" ]; then
+    echo "✓ Jupyter prerequisites installed and verified"
+else
+    echo "⚠ WARNING: Some Jupyter packages failed to install or verify"
+    echo "  Jupyter extension build may fail"
+fi
 
 #--- Sub-block 13A.8: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
@@ -5373,6 +5414,36 @@ if ! command -v python &> /dev/null; then
     ln -sf /usr/bin/python3 /usr/bin/python
 fi
 
+#--- Sub-block 13A.7.5: Install yarn for Open3D Jupyter extension ---
+# Purpose: Install yarn globally via npm (required for BUILD_JUPYTER_EXTENSION=ON)
+# Dependencies: nodejs, npm (installed in Sub-block 13A.8)
+# Outputs: yarn installed globally
+echo "Installing yarn for Open3D Jupyter extension build..."
+if command -v npm >/dev/null 2>&1; then
+    if npm install -g yarn 2>/dev/null; then
+        # Wait a moment for npm to update PATH cache
+        sleep 1
+        # Check if yarn is now available
+        if command -v yarn >/dev/null 2>&1; then
+            YARN_VERSION=$(yarn --version 2>/dev/null || echo "unknown")
+            echo "✓ yarn installed (version: ${YARN_VERSION})"
+        else
+            echo "⚠ WARNING: yarn installation reported success but yarn command not found in PATH"
+            echo "  Attempting to locate yarn in npm global bin directory..."
+            NPM_GLOBAL_BIN=$(npm config get prefix 2>/dev/null || echo "/usr/local")
+            if [ -f "${NPM_GLOBAL_BIN}/bin/yarn" ] || [ -f "${NPM_GLOBAL_BIN}/yarn" ]; then
+                echo "  Found yarn at ${NPM_GLOBAL_BIN}, adding to PATH may be needed"
+            fi
+        fi
+    else
+        echo "⚠ WARNING: Failed to install yarn via npm"
+        echo "  Open3D Jupyter extension build may fail"
+    fi
+else
+    echo "⚠ WARNING: npm not found, cannot install yarn"
+    echo "  Open3D Jupyter extension build will likely fail"
+fi
+
 #--- Sub-block 13A.8: Download Open3D source ---
 # Purpose: Clone Open3D with specific version
 # Dependencies: None (foundational)
@@ -5395,6 +5466,66 @@ fi
 
 cd /tmp/Open3D || exit 1
 echo "✓ Open3D source downloaded"
+
+#--- Sub-block 13A.8.1: Verify Jupyter extension requirements from repository ---
+# Purpose: Check Open3D repository for Jupyter extension build requirements
+# Dependencies: Open3D source downloaded
+# Outputs: Verification report of required dependencies
+if [ -f "cpp/pybind/make_python_package.cmake" ]; then
+    echo "Checking Open3D Jupyter extension requirements from repository..."
+    
+    # Check for yarn requirement in make_python_package.cmake
+    # Use -w flag to match whole words to avoid false matches (e.g., "yearn")
+    if grep -qw "yarn" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        echo "  ✓ Repository confirms yarn is required for Jupyter extension"
+        if command -v yarn >/dev/null 2>&1; then
+            YARN_VER=$(yarn --version 2>/dev/null || echo "unknown")
+            echo "    ✓ yarn found (version: ${YARN_VER})"
+        else
+            echo "    ✗ ERROR: yarn not found - Jupyter extension build will fail"
+        fi
+    fi
+    
+    # Check for node requirement (use -w to avoid matching "node_modules" or other words containing "node")
+    if grep -qw "node" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        echo "  ✓ Repository confirms node is required for Jupyter extension"
+        if command -v node >/dev/null 2>&1; then
+            NODE_VER=$(node --version 2>/dev/null || echo "unknown")
+            echo "    ✓ node found (version: ${NODE_VER})"
+        else
+            echo "    ✗ ERROR: node not found - Jupyter extension build will fail"
+        fi
+    fi
+    
+    # Check for npm requirement (use -w to match whole word)
+    if grep -qw "npm" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        echo "  ✓ Repository confirms npm may be used by Jupyter extension"
+        if command -v npm >/dev/null 2>&1; then
+            NPM_VER=$(npm --version 2>/dev/null || echo "unknown")
+            echo "    ✓ npm found (version: ${NPM_VER})"
+        else
+            echo "    ⚠ WARNING: npm not found - may be needed for Jupyter extension"
+        fi
+    fi
+    
+    # Check for Jupyter-related files/directories (more robust check)
+    JUPYTER_DIR_FOUND=false
+    if [ -d "cpp/pybind/jupyter" ]; then
+        JUPYTER_DIR_FOUND=true
+    elif [ -d "jupyter" ]; then
+        JUPYTER_DIR_FOUND=true
+    elif [ -n "$(find . -maxdepth 3 -type d -name "*jupyter*" 2>/dev/null | head -1)" ]; then
+        JUPYTER_DIR_FOUND=true
+    fi
+    
+    if [ "${JUPYTER_DIR_FOUND}" = "true" ]; then
+        echo "  ✓ Jupyter extension directory found in repository"
+    fi
+    
+    echo "✓ Jupyter extension requirements verified from repository"
+else
+    echo "⚠ make_python_package.cmake not found - cannot verify Jupyter extension requirements"
+fi
 
 # Check if official install_deps_ubuntu.sh exists (optional reference)
 if [ -f "util/install_deps_ubuntu.sh" ]; then
