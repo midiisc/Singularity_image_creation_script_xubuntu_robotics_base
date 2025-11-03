@@ -2836,3 +2836,23 @@ echo "APT cache directory: ${APT_ARCHIVE_CACHE}"
 echo "Conda cache directory: ${CONDA_CACHE}"
 echo "Pip wheels directory: ${WHEELS_CACHE}"
 echo "Julia cache directory: ${JULIA_CACHE}"
+
+# Check for Open3D wheel specifically
+# Use tr to remove whitespace from wc -l output for robust numeric comparison
+OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+if [ -n "${OPEN3D_WHEELS}" ] && [ "${OPEN3D_WHEELS}" -gt 0 ] 2>/dev/null; then
+    echo ""
+    echo "=============== OPEN3D WHEEL INFORMATION ==============="
+    # Safely get directory size, handle case where directory might not exist
+    if [ -d "${WHEELS_CACHE}/open3d" ]; then
+        OPEN3D_WHEEL_SIZE=$(du -sh "${WHEELS_CACHE}/open3d" 2>/dev/null | cut -f1 || echo "unknown")
+    else
+        OPEN3D_WHEEL_SIZE="unknown"
+    fi
+    echo "✓ Open3D CUDA wheel cached for reuse: ${OPEN3D_WHEELS} wheel(s) (${OPEN3D_WHEEL_SIZE})"
+    echo "  Location: ${WHEELS_CACHE}/open3d/"
+    echo "  This wheel can be used to install Open3D in conda environments and writable overlays"
+    # Note: * is literal here for documentation purposes
+    echo "  Usage in conda environment: pip install --no-deps \"${WHEELS_CACHE}/open3d/open3d*.whl\""
+    echo "========================================================="
+fi

@@ -6596,8 +6596,11 @@ verify_open3d_installation() {
 # Strategy 1: Try ninja install-pip-package (recommended in official Open3D docs)
 # Official method: Directly installs Python package into current environment
 # Per Open3D docs: "make install-pip-package" (ninja equivalent)
+# NOTE: When BUILD_JUPYTER_EXTENSION=ON, the Jupyter extension is built and included
+#       in the main Open3D Python package/wheel, not as a separate package.
+#       Both ninja install-pip-package and ninja python-package handle this automatically.
 echo "Strategy 1: ninja install-pip-package (official recommended method)..."
-if ninja install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
+if ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
     # Check exit status - tee doesn't preserve it
     if [ ${PIPESTATUS[0]} -eq 0 ]; then
         # Give pip a moment to finalize installation
@@ -6620,191 +6623,255 @@ fi
 # Strategy 2: Build Python wheel and install it WITHOUT dependencies
 # Per Open3D docs and CMake setup.py: ninja python-package builds wheel
 # Wheel location varies: build/lib/, build/dist/, or pip cache
+# NOTE: When BUILD_JUPYTER_EXTENSION=ON, the Jupyter extension is included in the wheel
+#       This wheel contains both the Python module and Jupyter extension together.
 if [ "$PYTHON_INSTALLED" = false ]; then
     echo ""
     echo "Strategy 2: Building Python wheel with ninja python-package..."
-    if ninja python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
+    if ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
         # Check exit status - tee doesn't preserve it
         if [ ${PIPESTATUS[0]} -eq 0 ]; then
             WHEEL_FILE=""
-        
-        # Comprehensive wheel search - check multiple locations:
-        # 1. build/lib/ (most common per Open3D CMake setup.py)
-        if [ -d "${OPEN3D_BUILD_DIR}/lib" ]; then
-            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/lib" -maxdepth 3 -type f -name "open3d*.whl" 2>/dev/null | head -1)
-        fi
-        
-        # 2. build/dist/ (alternative location for some build configs)
-        if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_BUILD_DIR}/dist" ]; then
-            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/dist" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
-        fi
-        
-        # 3. build root directory (less common)
-        if [ -z "${WHEEL_FILE}" ]; then
-            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
-        fi
-        
-        # 4. Source directory (some configurations)
-        if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_SOURCE_DIR}" ]; then
-            WHEEL_FILE=$(find "${OPEN3D_SOURCE_DIR}" -maxdepth 2 -type f -name "open3d*.whl" 2>/dev/null | head -1)
-        fi
-        
-        # 5. Check pip cache (pip may have cached wheel during python-package)
-        if [ -z "${WHEEL_FILE}" ] && [ -n "${PIP_CACHE_DIR:-}" ] && [ -d "${PIP_CACHE_DIR}" ]; then
-            WHEEL_FILE=$(find "${PIP_CACHE_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-        fi
-        
-        # 6. Check default pip cache locations
-        if [ -z "${WHEEL_FILE}" ]; then
-            for cache_dir in "/root/.cache/pip/wheels" "$HOME/.cache/pip/wheels"; do
-                if [ -d "${cache_dir}" ]; then
-                    WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-                    [ -n "${WHEEL_FILE}" ] && break
-                fi
-            done
-        fi
-        
-        # 7. Extract wheel path from pip build log and terminal output (if available)
-        # Pip logs show "Created wheel for open3d: filename=... size=... sha256=..."
-        # and "Stored in directory: /path/to/directory"
-        # Also check for "Wrote /path/to/wheel.whl" pattern
-        # Sync to ensure log file is fully flushed to disk before reading
-        sync
-        if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ]; then
-            # Look for "Stored in directory:" line which appears after wheel creation
-            STORED_DIR=$(grep -m1 "Stored in directory:" /tmp/open3d_python_install.log 2>/dev/null | \
-                sed 's/.*Stored in directory:[[:space:]]*//' | \
-                sed 's/[[:space:]]*$//' | \
-                sed "s/^['\"]//; s/['\"]\$//")
-            if [ -n "${STORED_DIR}" ] && [ -d "${STORED_DIR}" ]; then
-                # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
-                # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
-                WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-                if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                    echo "  Found wheel from pip log stored directory: ${WHEEL_FILE}"
-                fi
+            
+            # Comprehensive wheel search - check multiple locations:
+            # 1. build/lib/ (most common per Open3D CMake setup.py)
+            if [ -d "${OPEN3D_BUILD_DIR}/lib" ]; then
+                WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/lib" -maxdepth 3 -type f -name "open3d*.whl" 2>/dev/null | head -1)
             fi
             
-            # Also check for "Wrote /path/to/wheel.whl" pattern in log
-            if [ -z "${WHEEL_FILE}" ]; then
-                WHEEL_FROM_LOG=$(grep -oE "Wrote[[:space:]]+[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | \
-                    sed 's/Wrote[[:space:]]*//' | head -1)
-                if [ -n "${WHEEL_FROM_LOG}" ] && [ -f "${WHEEL_FROM_LOG}" ]; then
-                    WHEEL_FILE="${WHEEL_FROM_LOG}"
-                    echo "  Found wheel from pip log 'Wrote' pattern: ${WHEEL_FILE}"
-                fi
+            # 2. build/dist/ (alternative location for some build configs)
+            if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_BUILD_DIR}/dist" ]; then
+                WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/dist" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
             fi
             
-            # Check for "Successfully built" or similar patterns that might contain path
+            # 3. build root directory (less common)
             if [ -z "${WHEEL_FILE}" ]; then
-                BUILT_WHEEL=$(grep -oE "[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
-                if [ -n "${BUILT_WHEEL}" ] && [ -f "${BUILT_WHEEL}" ]; then
-                    WHEEL_FILE="${BUILT_WHEEL}"
-                    echo "  Found wheel path from pip log: ${WHEEL_FILE}"
-                fi
+                WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
             fi
-        fi
-        
-        # 8. Check ephemeral pip cache directories (created during build process)
-        # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
-        # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
-        if [ -z "${WHEEL_FILE}" ]; then
-            # First check specific known locations with glob patterns
-            # Use nullglob and failglob safety - check if glob expands before using
-            for pattern in "/tmp/cuda_build/pip-ephem-wheel-cache-"* \
-                          "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"*; do
-                # Check if pattern expanded to actual directories (not literal pattern)
-                if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
-                   [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
-                   [ -d "${pattern}" ]; then
-                    # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
-                    # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-                    WHEEL_FILE=$(find "${pattern}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                    if [ -z "${WHEEL_FILE}" ]; then
-                        # Also try without the nested pattern (sometimes fewer levels)
-                        WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+            
+            # 4. Source directory (some configurations)
+            if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_SOURCE_DIR}" ]; then
+                WHEEL_FILE=$(find "${OPEN3D_SOURCE_DIR}" -maxdepth 2 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+            fi
+            
+            # 5. Check pip cache (pip may have cached wheel during python-package)
+            if [ -z "${WHEEL_FILE}" ] && [ -n "${PIP_CACHE_DIR:-}" ] && [ -d "${PIP_CACHE_DIR}" ]; then
+                WHEEL_FILE=$(find "${PIP_CACHE_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+            fi
+            
+            # 6. Check default pip cache locations
+            if [ -z "${WHEEL_FILE}" ]; then
+                for cache_dir in "/root/.cache/pip/wheels" "$HOME/.cache/pip/wheels"; do
+                    if [ -d "${cache_dir}" ]; then
+                        WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                        [ -n "${WHEEL_FILE}" ] && break
                     fi
+                done
+            fi
+            
+            # 7. Extract wheel path from pip build log and terminal output (if available)
+            # CRITICAL: pip-ephem-wheel-cache directory names contain random components
+            # Best approach: Extract exact paths from pip's terminal output rather than searching random dirs
+            # Pip output format:
+            #   "Created wheel for open3d: filename=... size=... sha256=..."
+            #   "Stored in directory: /path/to/directory"
+            #   Or: "Wrote /full/path/to/wheel.whl"
+            # Sync to ensure log file is fully flushed to disk before reading
+            sync
+            if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ]; then
+                echo "  Searching pip build log for wheel location (parsing terminal output)..."
+                
+                # Priority 1: Look for "Stored in directory:" - pip's standard output format
+                # This handles random pip-ephem-wheel-cache-* directory names by extracting exact path
+                STORED_DIR=$(grep -m1 "Stored in directory:" /tmp/open3d_python_install.log 2>/dev/null | \
+                    sed 's/.*Stored in directory:[[:space:]]*//' | \
+                    sed 's/[[:space:]]*$//' | \
+                    sed "s/^['\"]//; s/['\"]\$//" | \
+                    head -1)
+                # Validate that we got a non-empty directory path and that it exists
+                if [ -n "${STORED_DIR}" ] && [ "${#STORED_DIR}" -gt 1 ] && [ -d "${STORED_DIR}" ]; then
+                    echo "  Found 'Stored in directory' in log: ${STORED_DIR}"
+                    # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
+                    # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
+                    WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                     if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                        echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
-                        break
+                        echo "  ✓ Found wheel from stored directory: ${WHEEL_FILE}"
+                    else
+                        echo "  ⚠ Wheel not found in stored directory (will try other methods)"
                     fi
                 fi
-            done
+                
+                # Priority 2: Look for "Wrote /path/to/wheel.whl" pattern (alternative pip output)
+                if [ -z "${WHEEL_FILE}" ]; then
+                    WROTE_WHEEL=$(grep -oE "Wrote[[:space:]]+/[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | \
+                        sed 's/Wrote[[:space:]]*//' | \
+                        head -1)
+                    # Validate path is absolute and file exists
+                    if [ -n "${WROTE_WHEEL}" ] && [ "${WROTE_WHEEL#/}" != "${WROTE_WHEEL}" ] && [ -f "${WROTE_WHEEL}" ]; then
+                        WHEEL_FILE="${WROTE_WHEEL}"
+                        echo "  ✓ Found wheel from 'Wrote' pattern: ${WHEEL_FILE}"
+                    fi
+                fi
+                
+                # Priority 3: Extract any absolute path to open3d*.whl from log (handles pip-ephem-wheel-cache-* with random names)
+                # Look for paths that start with / and contain open3d*.whl, especially in pip cache directories
+                if [ -z "${WHEEL_FILE}" ]; then
+                    # Match absolute paths to open3d wheels, prioritizing pip cache locations
+                    # Pattern: /(tmp|root|home)/...pip...wheel...open3d...whl
+                    BUILT_WHEEL=$(grep -oE "/(tmp|root|home)/[^[:space:]]*pip[^[:space:]]*wheel[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
+                    if [ -z "${BUILT_WHEEL}" ]; then
+                        # Fallback: any absolute path to open3d wheel (must start with /)
+                        BUILT_WHEEL=$(grep -oE "/[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
+                    fi
+                    # Validate: must be absolute path and file must exist
+                    if [ -n "${BUILT_WHEEL}" ] && [ "${BUILT_WHEEL#/}" != "${BUILT_WHEEL}" ] && [ -f "${BUILT_WHEEL}" ]; then
+                        WHEEL_FILE="${BUILT_WHEEL}"
+                        echo "  ✓ Found wheel path from log: ${WHEEL_FILE}"
+                    fi
+                fi
+            fi
             
-            # If still not found, search using find command (more robust for dynamic directories)
+            # 8. Check ephemeral pip cache directories (created during build process)
+            # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
+            # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
             if [ -z "${WHEEL_FILE}" ]; then
-                while IFS= read -r cache_dir; do
-                    if [ -n "${cache_dir}" ] && [ -d "${cache_dir}" ]; then
-                        # Try the specific nested pattern first
-                        WHEEL_FILE=$(find "${cache_dir}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                # First check specific known locations with glob patterns
+                # Use nullglob and failglob safety - check if glob expands before using
+                for pattern in "/tmp/cuda_build/pip-ephem-wheel-cache-"* \
+                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"*; do
+                    # Check if pattern expanded to actual directories (not literal pattern)
+                    if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
+                       [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
+                       [ -d "${pattern}" ]; then
+                        # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
+                        # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+                        WHEEL_FILE=$(find "${pattern}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
                         if [ -z "${WHEEL_FILE}" ]; then
-                            # Fallback to general search
-                            WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                            # Also try without the nested pattern (sometimes fewer levels)
+                            WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                         fi
                         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                             echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
                             break
                         fi
                     fi
-                done < <(find /tmp -maxdepth 2 -type d -name "pip-ephem-wheel-cache-*" 2>/dev/null | head -5)
+                done
+                
+                # If still not found, search using find command (more robust for dynamic directories)
+                if [ -z "${WHEEL_FILE}" ]; then
+                    while IFS= read -r cache_dir; do
+                        if [ -n "${cache_dir}" ] && [ -d "${cache_dir}" ]; then
+                            # Try the specific nested pattern first
+                            WHEEL_FILE=$(find "${cache_dir}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                            if [ -z "${WHEEL_FILE}" ]; then
+                                # Fallback to general search
+                                WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                            fi
+                            if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+                                echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                                break
+                            fi
+                        fi
+                    done < <(find /tmp -maxdepth 2 -type d -name "pip-ephem-wheel-cache-*" 2>/dev/null | head -5)
+                fi
             fi
-        fi
-        
-        # 9. Comprehensive recursive search in /tmp for any pip cache directories and wheels
-        # This is the most thorough search - checks all nested wheel locations
-        if [ -z "${WHEEL_FILE}" ]; then
-            # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-            WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            
+            # 9. Comprehensive recursive search in /tmp for any pip cache directories and wheels
+            # This is the most thorough search - checks all nested wheel locations
             if [ -z "${WHEEL_FILE}" ]; then
-                # Try with fewer nesting levels
-                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+                # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                if [ -z "${WHEEL_FILE}" ]; then
+                    # Try with fewer nesting levels
+                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+                fi
+                if [ -z "${WHEEL_FILE}" ]; then
+                    # General search in any wheels directory
+                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+                fi
+                if [ -z "${WHEEL_FILE}" ]; then
+                    # Final fallback - any open3d wheel in pip cache directories
+                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/*/open3d*.whl" 2>/dev/null | head -1)
+                fi
+                if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+                    echo "  Found wheel via recursive search: ${WHEEL_FILE}"
+                fi
             fi
-            if [ -z "${WHEEL_FILE}" ]; then
-                # General search in any wheels directory
-                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/open3d*.whl" 2>/dev/null | head -1)
-            fi
-            if [ -z "${WHEEL_FILE}" ]; then
-                # Final fallback - any open3d wheel in pip cache directories
-                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/*/open3d*.whl" 2>/dev/null | head -1)
-            fi
+            
             if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                echo "  Found wheel via recursive search: ${WHEEL_FILE}"
-            fi
-        fi
-        
-        if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-            echo "Found wheel: ${WHEEL_FILE}"
-            echo "  Installing wheel without dependencies (preserving compiled libs)..."
-            # Install WITHOUT dependencies to avoid overwriting compiled libraries
-            if pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
-                # Check exit status - tee doesn't preserve it
-                if [ ${PIPESTATUS[0]} -eq 0 ]; then
-                    sleep 1  # Allow installation to finalize
-                    if verify_open3d_installation; then
-                        echo "✓ Python module installed via wheel (no-deps, using compiled libs)"
-                        PYTHON_INSTALLED=true
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "Found wheel: ${WHEEL_FILE}"
+                # Safely get wheel size with error handling
+                WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
+                echo "  Wheel size: ${WHEEL_SIZE}"
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                
+                # CRITICAL: Copy wheel to persistent cache for later use
+                # Verify CACHE_ROOT is set, fallback to default if not
+                if [ -z "${CACHE_ROOT:-}" ]; then
+                    CACHE_ROOT="/container_cache"
+                    echo "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
+                fi
+                OPEN3D_WHEEL_CACHE="${CACHE_ROOT}/wheels/open3d"
+                
+                # Create cache directory with error handling
+                if mkdir -p "${OPEN3D_WHEEL_CACHE}" 2>/dev/null; then
+                    WHEEL_BASENAME=$(basename "${WHEEL_FILE}")
+                    CACHED_WHEEL="${OPEN3D_WHEEL_CACHE}/${WHEEL_BASENAME}"
+                    
+                    echo "  Copying wheel to persistent cache for later reuse..."
+                    if cp "${WHEEL_FILE}" "${CACHED_WHEEL}" 2>/dev/null && [ -f "${CACHED_WHEEL}" ]; then
+                        # Verify copy succeeded by checking file exists and getting size
+                        CACHED_SIZE=$(du -h "${CACHED_WHEEL}" 2>/dev/null | cut -f1 || echo "unknown")
+                        echo "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
+                        echo "    This wheel will be available in writable overlays and conda environments"
                     else
-                        echo "⚠ Wheel installed but verification failed"
+                        echo "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)"
                     fi
                 else
-                    echo "⚠ pip3 install failed (exit code: ${PIPESTATUS[0]})"
+                    echo "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)"
+                fi
+                
+                echo "  Installing wheel without dependencies (preserving compiled libs)..."
+                # Install WITHOUT dependencies to avoid overwriting compiled libraries
+                if pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
+                    # Check exit status - tee doesn't preserve it
+                    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                        echo "  ✓ Wheel installation completed (pip exit code: 0)"
+                        sleep 1  # Allow installation to finalize
+                        if verify_open3d_installation; then
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            echo "✓✓✓ Python module installed via wheel (no-deps, using compiled libs)"
+                            echo "  Installation verified: Open3D module is importable"
+                            # Only show cached wheel path if variable is set and file exists
+                            if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
+                                echo "  Cached wheel: ${CACHED_WHEEL}"
+                            fi
+                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                            PYTHON_INSTALLED=true
+                        else
+                            echo "⚠ Wheel installed but verification failed"
+                        fi
+                    else
+                        echo "⚠ pip3 install failed (exit code: ${PIPESTATUS[0]})"
+                    fi
+                else
+                    PIP_EXIT=${PIPESTATUS[0]:-$?}
+                    echo "⚠ pip3 install failed (exit code: ${PIP_EXIT})"
                 fi
             else
-                PIP_EXIT=${PIPESTATUS[0]:-$?}
-                echo "⚠ pip3 install failed (exit code: ${PIP_EXIT})"
-            fi
-        else
-            # Wheel not found - but python-package may have installed directly
-            # This is valid: some Open3D builds install directly without creating wheel file
-            echo "⚠ Wheel file not found after python-package build"
-            echo "  (This is OK - python-package may install directly without creating wheel)"
-            echo "  Checking if installation succeeded..."
-            sleep 2  # Allow any background installation to complete
-            if verify_open3d_installation; then
-                echo "  ✓ Open3D module is importable - installation succeeded"
-                PYTHON_INSTALLED=true
-            else
-                echo "  ⚠ Module not importable yet - will try Strategy 3"
+                # Wheel not found - but python-package may have installed directly
+                # This is valid: some Open3D builds install directly without creating wheel file
+                echo "⚠ Wheel file not found after python-package build"
+                echo "  (This is OK - python-package may install directly without creating wheel)"
+                echo "  Checking if installation succeeded..."
+                sleep 2  # Allow any background installation to complete
+                if verify_open3d_installation; then
+                    echo "  ✓ Open3D module is importable - installation succeeded"
+                    PYTHON_INSTALLED=true
+                else
+                    echo "  ⚠ Module not importable yet - will try Strategy 3"
+                fi
             fi
         fi
     fi  # Close: if ninja python-package exit status == 0
@@ -8581,6 +8648,25 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     if ${MINIFORGE_HOME}/bin/conda --version >/dev/null 2>&1; then
       echo "✓ Conda binary is working correctly"
 
+      # Update conda and related components to latest versions
+      echo "Updating conda and related components to latest versions..."
+      # Safely get version with fallback
+      CONDA_VERSION_BEFORE=$(${MINIFORGE_HOME}/bin/conda --version 2>/dev/null | head -1 || echo "unknown")
+      echo "  Conda version before update: ${CONDA_VERSION_BEFORE}"
+      
+      # Update conda itself and core components (conda, conda-build, conda-env, conda-libmamba-solver, etc.)
+      # Note: conda-libmamba-solver enables faster conda solving even when mamba is not available
+      # Redirect both stdout and stderr to suppress output but preserve error detection
+      if ${MINIFORGE_HOME}/bin/conda update -y -n base -c conda-forge \
+          conda conda-build conda-env conda-libmamba-solver >/dev/null 2>&1; then
+        printf '\033[0m\n' # Reset terminal state after conda update
+        CONDA_VERSION_AFTER=$(${MINIFORGE_HOME}/bin/conda --version 2>/dev/null | head -1 || echo "unknown")
+        echo "✓ Conda and core components updated successfully"
+        echo "  Conda version after update: ${CONDA_VERSION_AFTER}"
+      else
+        echo "[warn] Conda update failed (non-critical, continuing with existing version)"
+      fi
+
       # Install mamba as the PREFERRED solver (with conda fallback)
       echo "Installing mamba solver (PREFERRED - will fallback to conda if needed)..."
       
@@ -8594,6 +8680,24 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         # Verify mamba installation
         if ${MINIFORGE_HOME}/bin/mamba --version >/dev/null 2>&1; then
           echo "✓ Mamba binary is working correctly"
+          
+          # Update mamba to latest version (mamba includes its own solver)
+          echo "Updating mamba to latest version..."
+          # Safely get version with fallback
+          MAMBA_VERSION_BEFORE=$(${MINIFORGE_HOME}/bin/mamba --version 2>/dev/null | head -1 || echo "unknown")
+          echo "  Mamba version before update: ${MAMBA_VERSION_BEFORE}"
+          
+          # Update mamba itself (includes libmamba solver)
+          # Redirect both stdout and stderr to suppress output but preserve error detection
+          if ${MINIFORGE_HOME}/bin/mamba update -y -n base -c conda-forge mamba >/dev/null 2>&1; then
+            printf '\033[0m\n' # Reset terminal state after mamba update
+            MAMBA_VERSION_AFTER=$(${MINIFORGE_HOME}/bin/mamba --version 2>/dev/null | head -1 || echo "unknown")
+            echo "✓ Mamba updated successfully"
+            echo "  Mamba version after update: ${MAMBA_VERSION_AFTER}"
+          else
+            echo "[warn] Mamba update failed (non-critical, continuing with existing version)"
+          fi
+          
           MAMBA_AVAILABLE=1
         else
           echo "[warn] Mamba binary verification failed, will use conda as fallback"
