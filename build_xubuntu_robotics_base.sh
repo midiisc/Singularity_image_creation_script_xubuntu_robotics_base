@@ -942,13 +942,31 @@ fi
 log "✓ Comprehensive cleanup verified successful"
 
 #===============================================================================
+# BLOCK 12.5: SOURCE CONFIGURATION
+#===============================================================================
+# Purpose: Load configuration and unified functions (including analyze_build_log)
+# Dependencies: config.sh must exist in same directory
+# Outputs: Configuration variables and functions loaded
+#-------------------------------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+    source "${SCRIPT_DIR}/config.sh"
+else
+    echo "ERROR: config.sh not found in ${SCRIPT_DIR}"
+    exit 1
+fi
+
+#===============================================================================
 # BLOCK 13: POST-BUILD CLEANUP TRAP
 #===============================================================================
 # Purpose: Ensure cleanup runs even if build fails or is interrupted
 # Self-contained: Yes (complete function + trap)
-# Dependencies: comprehensive_cleanup()
+# Dependencies: comprehensive_cleanup(), analyze_build_log() from config.sh
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
+
+# Note: analyze_build_log() function is now defined in config.sh (unified)
+# This ensures a single source of truth for log analysis patterns and logic
 
 #--- Sub-block 13.1: Define cleanup exit handler ---
 # Critical: Captures exit code, runs cleanup, then exits with original code
@@ -961,6 +979,10 @@ cleanup_on_exit() {
     echo "=========================================="
     echo "POST-BUILD CLEANUP (exit code: $exit_code)"
     echo "=========================================="
+    
+    # Analyze build log for errors/warnings with context before cleanup
+    analyze_build_log || true
+    
     comprehensive_cleanup || true  # Run cleanup, ignore failures at exit
 
     exit $exit_code  # Exit with original code

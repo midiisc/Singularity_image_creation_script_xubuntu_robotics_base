@@ -337,19 +337,20 @@ try_launch_on_node() {
   echo -e "${CYAN}═══ Attempt #$((FALLBACK_ATTEMPT + 1))/$MAX_FALLBACK_ATTEMPTS${NC}" >&2
   echo -e "${CYAN}    Targeting node: $node${NC}" >&2
   
-  local sing_opts="--nv"
+  # Use array for singularity options to handle paths with spaces safely
+  local sing_opts=("--nv")
   
   if [ -n "$OVERLAY_ABS" ]; then
     echo -e "${GREEN}    Mounting overlay: $(basename "$OVERLAY_ABS")${NC}" >&2
-    sing_opts="$sing_opts --overlay $OVERLAY_ABS:rw"
+    sing_opts+=("--overlay" "${OVERLAY_ABS}:rw")
   else
     echo -e "${YELLOW}    No overlay - using tmpfs${NC}" >&2
-    sing_opts="$sing_opts --writable-tmpfs"
+    sing_opts+=("--writable-tmpfs")
   fi
   
-  [ -d "$HOME/data" ] && sing_opts="$sing_opts --bind $HOME/data:/data:rw"
-  [ -d "$HOME/workspace" ] && sing_opts="$sing_opts --bind $HOME/workspace:/workspace:rw"
-  [ -d "/scratch/$USER" ] && sing_opts="$sing_opts --bind /scratch/$USER:/scratch:rw"
+  [ -d "$HOME/data" ] && sing_opts+=("--bind" "${HOME}/data:/data:rw")
+  [ -d "$HOME/workspace" ] && sing_opts+=("--bind" "${HOME}/workspace:/workspace:rw")
+  [ -d "/scratch/$USER" ] && sing_opts+=("--bind" "/scratch/$USER:/scratch:rw")
   
   echo "" >&2
   
@@ -360,7 +361,7 @@ try_launch_on_node() {
     -p "$PARTITION" \
     --immediate="$QUEUE_WAIT_TIMEOUT" \
     --pty \
-    singularity exec $sing_opts $IMAGE_ABS bash
+    singularity exec "${sing_opts[@]}" "$IMAGE_ABS" bash
   
   local exit_code=$?
   

@@ -212,9 +212,15 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         export BUILD_LOG_SYNC_PID=""
     fi
     
+    # Note: analyze_build_log() function is now defined in config.sh (unified)
+    # The function will be available after sourcing /etc/config.sh (which happens earlier)
+    # This ensures a single source of truth for log analysis patterns and logic
+    
     # Trap to ensure sync job is killed when script exits (normal or abrupt)
     # This function is called on: EXIT (normal), INT (Ctrl+C), TERM (kill)
     cleanup_logging() {
+        local exit_code=$?
+        
         # Kill the background sync job
         if [ -n "${BUILD_LOG_SYNC_PID:-}" ]; then
             kill ${BUILD_LOG_SYNC_PID} 2>/dev/null || true
@@ -223,11 +229,18 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # This captures any output generated between last sync and exit
         if [ -f "${BUILD_LOG_FILE}" ]; then
             sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
+            
+            # Analyze build log for errors/warnings with context
+            analyze_build_log || true
+            
             echo ""
             echo "═══════════════════════════════════════════════════════════════"
             echo "  BUILD LOG END: $(date)"
-            echo "  Exit status: $?"
+            echo "  Exit status: $exit_code"
             echo "  Log file: ${BUILD_LOG_FILE}"
+            if [ -n "${BUILD_ERROR_LOG:-}" ] && [ -f "${BUILD_ERROR_LOG}" ]; then
+                echo "  Error log: ${BUILD_ERROR_LOG}"
+            fi
             echo "  Final sync completed: All output saved to disk"
             echo "═══════════════════════════════════════════════════════════════"
         fi
@@ -6874,12 +6887,11 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                 fi
             fi
         fi
-    fi  # Close: if ninja python-package exit status == 0
     else
         # Capture exit status when if condition fails
         NINJA_EXIT=${PIPESTATUS[0]:-$?}
         echo "⚠ ninja python-package failed (exit code: ${NINJA_EXIT}) - check logs"
-    fi
+    fi  # Close: if ninja python-package
 fi
 
 # Strategy 3: Install directly from Python package directory WITHOUT dependencies
@@ -11022,41 +11034,215 @@ echo "✓ Vulkan support installed"
 
 #--- Sub-block 21.3: Xpra modern X11 forwarding ---
 # Critical: Seamless application forwarding with HTML5 client
-# Dependencies: Block 6 (APT configuration)
+# Dependencies: Block 6 (APT configuration), Python 3, pip
 # Outputs: Installed packages
-echo "==> Installing Xpra for modern X11 forwarding..."
+echo "==> Installing Xpra ${XPRA_VERSION} from GitHub for modern X11 forwarding..."
 
-# xpra-html5 may not be available in all repositories, install xpra first
-apt-get install -y --no-install-recommends xpra || echo "⚠ xpra installation failed"
+# Initialize installation status variables
+XPRA_INSTALLED=false
 
-# Try to install xpra-html5 separately (may not be available)
-if apt-get install -y --no-install-recommends xpra-html5 2>/dev/null; then
-  echo "✓ xpra-html5 installed"
+# CRITICAL: Install Xpra dependencies BEFORE installing Xpra to avoid libavcodec60 removal
+# libavcodec60 is required by Xpra for video encoding/decoding
+# We install all multimedia libraries first to satisfy dependencies
+apt-get install -y --no-install-recommends \
+    python3-pip \
+    python3-dev \
+    python3-wheel \
+    python3-setuptools \
+    python3-cryptography \
+    python3-pil \
+    python3-lz4 \
+    python3-netifaces \
+    python3-websockify \
+    libavcodec60 \
+    libavutil58 \
+    libavformat60 \
+    libswscale7 \
+    libavresample4 \
+    || echo "⚠ Some Xpra dependencies may not be available"
+
+# Fix any broken dependencies that may have occurred
+apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non-critical)"
+
+# Install Xpra from PyPI (uses version from config.sh)
+# Using PyPI ensures we get the latest from GitHub releases
+cd /tmp
+echo "  Installing Xpra ${XPRA_VERSION} from PyPI..."
+if pip3 install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
+    echo "✓ Xpra ${XPRA_VERSION} installed from PyPI"
+    XPRA_INSTALLED=true
 else
-  echo "⚠ xpra-html5 package not found in repository (non-critical - xpra core installed)"
-  echo "  HTML5 client may still work via xpra's built-in HTML5 support"
+    echo "⚠ Xpra ${XPRA_VERSION} pip installation failed, trying without version pin..."
+    if pip3 install --no-cache-dir "xpra[server]" 2>&1 | tee -a /tmp/xpra_install.log; then
+        echo "✓ Xpra installed from PyPI (latest available)"
+        XPRA_INSTALLED=true
+    else
+        echo "⚠ Xpra pip installation failed, checking log..."
+        tail -20 /tmp/xpra_install.log || true
+        echo "  Installing from Xpra official repository as fallback..."
+        # Add Xpra official repository as fallback
+        echo "deb https://xpra.org/ stable main" > /etc/apt/sources.list.d/xpra.list
+        wget -qO- https://xpra.org/gpg.asc | apt-key add - 2>/dev/null || true
+        apt-get update -qq
+        if apt-get install -y --no-install-recommends xpra 2>/dev/null; then
+            echo "✓ Xpra installed from official repository"
+            XPRA_INSTALLED=true
+        else
+            echo "✗ Xpra installation failed from all sources"
+            XPRA_INSTALLED=false
+        fi
+    fi
 fi
 
-# Create Xpra launcher
+# Install Xpra HTML5 client from GitHub (version from config.sh)
+echo "==> Installing Xpra HTML5 client v${XPRA_HTML5_VERSION} from GitHub..."
+XPRA_HTML5_INSTALLED=false
+XPRA_HTML5_TAG="v${XPRA_HTML5_VERSION}"
+XPRA_HTML5_DIR="/usr/local/share/xpra/www"
+
+# Create directory and change to /tmp
+if ! mkdir -p "${XPRA_HTML5_DIR}" 2>/dev/null; then
+    echo "⚠ Failed to create Xpra HTML5 directory ${XPRA_HTML5_DIR}"
+    XPRA_HTML5_INSTALLED=false
+elif ! cd /tmp 2>/dev/null; then
+    echo "⚠ Failed to change to /tmp directory"
+    XPRA_HTML5_INSTALLED=false
+else
+    # Continue with installation if directory creation and cd succeeded
+    # Download and extract HTML5 client from GitHub release
+    if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/tags/${XPRA_HTML5_TAG}.tar.gz" -O /tmp/xpra-html5.tar.gz; then
+        if tar -xzf /tmp/xpra-html5.tar.gz 2>/dev/null; then
+            XPRA_HTML5_EXTRACTED=$(ls -d xpra-html5-* 2>/dev/null | head -1)
+            if [ -n "${XPRA_HTML5_EXTRACTED}" ] && [ -d "${XPRA_HTML5_EXTRACTED}/html5" ]; then
+                if cp -r "${XPRA_HTML5_EXTRACTED}/html5"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                    echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR}"
+                    XPRA_HTML5_INSTALLED=true
+                else
+                    echo "⚠ Failed to copy Xpra HTML5 client files"
+                    XPRA_HTML5_INSTALLED=false
+                fi
+            else
+                echo "⚠ Failed to find html5 directory in extracted archive"
+                XPRA_HTML5_INSTALLED=false
+            fi
+            rm -rf /tmp/xpra-html5.tar.gz /tmp/xpra-html5-* 2>/dev/null || true
+        else
+            echo "⚠ Failed to extract Xpra HTML5 client archive"
+            XPRA_HTML5_INSTALLED=false
+            rm -f /tmp/xpra-html5.tar.gz 2>/dev/null || true
+        fi
+    else
+        echo "⚠ Failed to download Xpra HTML5 client v${XPRA_HTML5_VERSION}"
+        echo "  Attempting to download from master branch as fallback..."
+        if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/heads/master.tar.gz" -O /tmp/xpra-html5-master.tar.gz; then
+            if tar -xzf /tmp/xpra-html5-master.tar.gz 2>/dev/null; then
+                XPRA_HTML5_MASTER=$(ls -d xpra-html5-master 2>/dev/null | head -1)
+                if [ -n "${XPRA_HTML5_MASTER}" ] && [ -d "${XPRA_HTML5_MASTER}/html5" ]; then
+                    if cp -r "${XPRA_HTML5_MASTER}/html5"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                        echo "✓ Xpra HTML5 client installed from master branch"
+                        XPRA_HTML5_INSTALLED=true
+                    else
+                        echo "⚠ Failed to copy Xpra HTML5 client files from master"
+                        XPRA_HTML5_INSTALLED=false
+                    fi
+                else
+                    echo "⚠ Failed to find html5 directory in master archive"
+                    XPRA_HTML5_INSTALLED=false
+                fi
+            else
+                echo "⚠ Failed to extract master branch archive"
+                XPRA_HTML5_INSTALLED=false
+            fi
+            rm -rf /tmp/xpra-html5-master* 2>/dev/null || true
+        else
+            echo "⚠ Failed to download master branch archive"
+            XPRA_HTML5_INSTALLED=false
+        fi
+    fi
+fi
+
+# Create Xpra launcher with HTML5 support
 cat > /usr/local/bin/start_xpra.sh << 'XPRA'
 #!/usr/bin/env bash
-# Xpra Application Streaming
+# Xpra Application Streaming with HTML5 client
 
 DISPLAY_NUM=${1:-10}
-PORT=$((10000 + DISPLAY_NUM))
+PORT=${2:-10000}
 
-echo "Starting Xpra on display :${DISPLAY_NUM}"
-echo "HTML5 client: http://localhost:${PORT}"
+echo "=========================================="
+echo "Xpra Application Streaming"
+echo "=========================================="
+echo "Display: :${DISPLAY_NUM}"
+echo "TCP Port: ${PORT}"
+echo "HTML5 Client: http://localhost:${PORT}/"
+echo ""
+echo "Usage:"
+echo "  start_xpra.sh [display] [port]"
+echo "  Example: start_xpra.sh 10 10000"
+echo "=========================================="
+echo ""
 
+# Set up Xpra HTML5 web directory
+XPRA_HTML5_DIR="/usr/local/share/xpra/www"
+if [ -d "$XPRA_HTML5_DIR" ]; then
+    export XPRA_WEB_DIR="$XPRA_HTML5_DIR"
+    echo "✓ HTML5 client available at ${XPRA_HTML5_DIR}"
+else
+    echo "⚠ HTML5 client not found (using built-in if available)"
+fi
+
+echo "Starting Xpra server..."
 xpra start :${DISPLAY_NUM} \
   --bind-tcp=0.0.0.0:${PORT} \
   --html=on \
   --start=startxfce4 \
-  --daemon=no
+  --daemon=no \
+  --webdir="${XPRA_HTML5_DIR:-/usr/share/xpra/www}" \
+  --notifications=no \
+  --clipboard=yes \
+  --printing=no
+
+echo ""
+echo "Xpra stopped"
 XPRA
 chmod +x /usr/local/bin/start_xpra.sh
 
-echo "✓ Xpra installed (HTML5 seamless window streaming)"
+# Create Xpra seamless mode launcher (for single applications)
+cat > /usr/local/bin/xpra_seamless.sh << 'XPRA_SEAMLESS'
+#!/usr/bin/env bash
+# Xpra Seamless Mode - Stream individual applications
+
+APP=${1:-xterm}
+DISPLAY_NUM=${2:-10}
+PORT=${3:-10000}
+
+echo "Starting Xpra in seamless mode for: ${APP}"
+echo "Connect: http://localhost:${PORT}/"
+echo ""
+
+xpra start --start="${APP}" \
+  --bind-tcp=0.0.0.0:${PORT} \
+  --html=on \
+  --daemon=no \
+  --webdir="/usr/local/share/xpra/www" \
+  --notifications=no \
+  --clipboard=yes
+XPRA_SEAMLESS
+chmod +x /usr/local/bin/xpra_seamless.sh
+
+if [ "$XPRA_INSTALLED" = true ]; then
+    echo "✓ Xpra installed successfully"
+    if [ "$XPRA_HTML5_INSTALLED" = true ]; then
+        echo "✓ Xpra HTML5 client installed successfully"
+    else
+        echo "⚠ Xpra HTML5 client not installed (may use built-in)"
+    fi
+else
+    echo "⚠ Xpra installation may have issues - check logs"
+fi
+echo "  Available commands:"
+echo "    start_xpra.sh [display] [port]  - Full desktop"
+echo "    xpra_seamless.sh [app] [display] [port]  - Single application"
 
 #--- Sub-block 21.4: x11vnc alternative VNC server ---
 # Critical: Lightweight VNC server that attaches to existing X sessions
@@ -11733,18 +11919,18 @@ echo ""
 install_rust_tool "du-dust" "${DU_DUST_VERSION}" "disk usage" "2-3"
 echo ""
 
-# ox text editor - with binary fallback if compilation fails
-# Note: ox is available on crates.io, but may have compilation issues
-echo "Installing ox (text editor)..."
+# ox text editor - install from GitHub releases (version from config.sh)
+# Source: https://github.com/curlpipe/ox
+echo "Installing ox ${OX_VERSION} (text editor) from GitHub..."
 OX_INSTALLED=false
 
-# Try installing from crates.io (capture output to check for real success)
-cargo install ox --root /opt/rust/tools 2>&1 | tee /tmp/ox_install.log
-# Check cargo exit status (not tee) using PIPESTATUS
-if [ ${PIPESTATUS[0]} -eq 0 ]; then
+# Method 1: Try installing from GitHub using cargo (recommended)
+echo "  Method 1: Installing from GitHub repository..."
+# Cargo install --tag expects the tag as it appears on GitHub (without "v" prefix per API)
+if cargo install --git https://github.com/curlpipe/ox --tag "${OX_VERSION}" --root /opt/rust/tools 2>&1 | tee /tmp/ox_install.log; then
   # Verify binary was actually installed
   if [ -x "/opt/rust/tools/bin/ox" ]; then
-    echo "✓ ox installed from crates.io"
+    echo "✓ ox ${OX_VERSION} installed from GitHub (cargo install)"
     INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
     OX_INSTALLED=true
   else
@@ -11752,28 +11938,71 @@ if [ ${PIPESTATUS[0]} -eq 0 ]; then
     OX_INSTALLED=false
   fi
 else
-  echo "[warn] ox compilation from crates.io failed, trying pre-built binary..."
+  echo "[warn] ox compilation from GitHub failed, trying pre-built binary..."
   OX_INSTALLED=false
 fi
 
-# Try binary fallback if compilation failed or binary not found
+# Method 2: Try Debian package installation (recommended for Debian/Ubuntu)
 if [ "$OX_INSTALLED" = false ]; then
-  # Try downloading from GitHub releases
-  OX_VERSION="0.4.3"  # Latest stable version
-  OX_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox-${OX_VERSION}-x86_64-unknown-linux-gnu"
+  echo "  Method 2: Installing Debian package from GitHub releases..."
+  # Confirmed from GitHub release page: ox_0.7.7-1_amd64.deb
+  # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox_0.7.7-1_amd64.deb
+  OX_DEB_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox_${OX_VERSION}-1_amd64.deb"
   
-  echo "  Attempting to download ox binary from GitHub..."
-  if curl -fsSL -o "/tmp/ox" "${OX_URL}" 2>/dev/null; then
+  if wget -q "${OX_DEB_URL}" -O "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+    # Try dpkg first, if it fails due to dependencies, fix and retry
+    if dpkg -i "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+      DPKG_SUCCESS=true
+    else
+      # Fix dependencies and retry
+      if apt-get install -f -y >/dev/null 2>&1 && dpkg -i "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+        DPKG_SUCCESS=true
+      else
+        DPKG_SUCCESS=false
+      fi
+    fi
+    
+    if [ "${DPKG_SUCCESS:-false}" = true ]; then
+      # Verify installation
+      if command -v ox >/dev/null 2>&1 || [ -x "/usr/bin/ox" ]; then
+        echo "✓ ox ${OX_VERSION} installed from Debian package"
+        INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
+        OX_INSTALLED=true
+        rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
+      else
+        echo "[warn] Debian package installed but binary not found, trying raw binary..."
+        OX_INSTALLED=false
+        rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
+      fi
+    else
+      echo "[warn] Debian package installation failed, trying raw binary..."
+      OX_INSTALLED=false
+      rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
+    fi
+  else
+    echo "[warn] Debian package download failed, trying raw binary..."
+    OX_INSTALLED=false
+  fi
+fi
+
+# Method 3: Try pre-built binary from GitHub releases if Debian package failed
+if [ "$OX_INSTALLED" = false ]; then
+  echo "  Method 3: Downloading pre-built binary from GitHub releases..."
+  # Confirmed from GitHub release page: binary name is "ox"
+  # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox
+  OX_BINARY_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox"
+  
+  if curl -fsSL -o "/tmp/ox" "${OX_BINARY_URL}" 2>/dev/null; then
     # Verify downloaded file exists and is not empty
     if [ -f "/tmp/ox" ] && [ -s "/tmp/ox" ]; then
       # Check if it's a valid binary
-      if file "/tmp/ox" | grep -qE "(ELF|executable|binary)"; then
+      if file "/tmp/ox" 2>/dev/null | grep -qE "(ELF|executable|binary)"; then
         chmod +x "/tmp/ox"
         mkdir -p /opt/rust/tools/bin
         mv "/tmp/ox" "/opt/rust/tools/bin/ox"
         # Final verification
         if [ -x "/opt/rust/tools/bin/ox" ]; then
-          echo "✓ ox installed from pre-built binary (v${OX_VERSION})"
+          echo "✓ ox ${OX_VERSION} installed from pre-built binary"
           INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
           OX_INSTALLED=true
         else
@@ -11787,11 +12016,16 @@ if [ "$OX_INSTALLED" = false ]; then
       fi
     else
       echo "✗ ox binary download failed - file is empty or missing"
+      rm -f "/tmp/ox"
       FAILED_TOOLS="${FAILED_TOOLS} ox"
     fi
   else
-    echo "✗ ox binary download failed - URL not accessible or network error"
-    echo "  URL: ${OX_URL}"
+    echo "✗ ox ${OX_VERSION} installation failed from all methods"
+    echo "  Tried:"
+    echo "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}"
+    echo "    2. Debian package: ${OX_DEB_URL}"
+    echo "    3. Binary: ${OX_BINARY_URL}"
+    echo "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}"
     FAILED_TOOLS="${FAILED_TOOLS} ox"
   fi
 fi
