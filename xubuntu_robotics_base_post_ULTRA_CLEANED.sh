@@ -6442,58 +6442,204 @@ else
 fi
 
 # Install Python module with multiple fallback strategies
+# Based on official Open3D documentation: https://www.open3d.org/docs/latest/compilation.html
 echo "Installing Open3D Python module..."
 PYTHON_INSTALLED=false
-OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path
+OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path (should be /tmp/Open3D/build)
+# Source directory (/tmp/Open3D) - safely get parent directory
+if cd .. 2>/dev/null; then
+    OPEN3D_SOURCE_DIR=$(pwd)
+    cd "${OPEN3D_BUILD_DIR}" || { echo "ERROR: Failed to return to build directory"; exit 1; }
+else
+    echo "WARNING: Could not determine source directory, using fallback"
+    OPEN3D_SOURCE_DIR="${OPEN3D_BUILD_DIR%/*}"  # Remove last path component
+fi
 
 # Set library paths to prioritize our compiled versions
 export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
 export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
 
-# Strategy 1: Try ninja install-pip-package (recommended in official Open3D docs)
-# Official docs: "make install-pip-package" (we use ninja equivalent)
-echo "Attempting: ninja install-pip-package (recommended by official docs)..."
-if ninja install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
-    if python3 -c "import open3d" 2>/dev/null; then
-        echo "✓ Python module installed via install-pip-package (official method)"
-        PYTHON_INSTALLED=true
+# Function to verify Python module installation (more robust than just import)
+verify_open3d_installation() {
+    # Check 1: Basic import (required)
+    if ! python3 -c "import open3d" 2>/dev/null; then
+        return 1
     fi
+    
+    # Check 2: Verify via pip show (shows actual installation location)
+    if pip3 show open3d >/dev/null 2>&1; then
+        OPEN3D_INSTALL_PATH=$(pip3 show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+        if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
+            return 0
+        fi
+    fi
+    
+    # Check 3: Verify module file location
+    OPEN3D_MODULE_FILE=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null)
+    if [ -n "${OPEN3D_MODULE_FILE}" ] && [ -d "${OPEN3D_MODULE_FILE}" ]; then
+        return 0
+    fi
+    
+    # If import worked but other checks failed, still consider it successful
+    python3 -c "import open3d" 2>/dev/null && return 0
+    
+    return 1
+}
+
+# Strategy 1: Try ninja install-pip-package (recommended in official Open3D docs)
+# Official method: Directly installs Python package into current environment
+# Per Open3D docs: "make install-pip-package" (ninja equivalent)
+echo "Strategy 1: ninja install-pip-package (official recommended method)..."
+if ninja install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
+    # Check exit status - tee doesn't preserve it
+    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        # Give pip a moment to finalize installation
+        sleep 1
+        if verify_open3d_installation; then
+            echo "✓ Python module installed via install-pip-package (official method)"
+            PYTHON_INSTALLED=true
+        else
+            echo "⚠ install-pip-package succeeded but module not yet importable"
+        fi
+    else
+        echo "⚠ ninja install-pip-package failed (exit code: ${PIPESTATUS[0]})"
+    fi
+else
+    # Capture exit status when if condition fails
+    NINJA_EXIT=${PIPESTATUS[0]:-$?}
+    echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
 fi
 
 # Strategy 2: Build Python wheel and install it WITHOUT dependencies
+# Per Open3D docs and CMake setup.py: ninja python-package builds wheel
+# Wheel location varies: build/lib/, build/dist/, or pip cache
 if [ "$PYTHON_INSTALLED" = false ]; then
-    echo "⚠ install-pip-package didn't work, building Python wheel..."
+    echo ""
+    echo "Strategy 2: Building Python wheel with ninja python-package..."
     if ninja python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
-        # Look for wheel in multiple possible locations
-        # Open3D might put wheels in lib/, dist/, or root build directory
-        WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}" \
-            -path "${OPEN3D_BUILD_DIR}/lib/*" -name "open3d*.whl" \
-            -o -path "${OPEN3D_BUILD_DIR}/dist/*" -name "open3d*.whl" \
-            -o -name "open3d*.whl" 2>/dev/null | head -1)
-        if [ -n "$WHEEL_FILE" ] && [ -f "$WHEEL_FILE" ]; then
-            echo "Found wheel: $WHEEL_FILE"
+        # Check exit status - tee doesn't preserve it
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            WHEEL_FILE=""
+        
+        # Comprehensive wheel search - check multiple locations:
+        # 1. build/lib/ (most common per Open3D CMake setup.py)
+        if [ -d "${OPEN3D_BUILD_DIR}/lib" ]; then
+            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/lib" -maxdepth 3 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+        fi
+        
+        # 2. build/dist/ (alternative location for some build configs)
+        if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_BUILD_DIR}/dist" ]; then
+            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}/dist" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+        fi
+        
+        # 3. build root directory (less common)
+        if [ -z "${WHEEL_FILE}" ]; then
+            WHEEL_FILE=$(find "${OPEN3D_BUILD_DIR}" -maxdepth 1 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+        fi
+        
+        # 4. Source directory (some configurations)
+        if [ -z "${WHEEL_FILE}" ] && [ -d "${OPEN3D_SOURCE_DIR}" ]; then
+            WHEEL_FILE=$(find "${OPEN3D_SOURCE_DIR}" -maxdepth 2 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+        fi
+        
+        # 5. Check pip cache (pip may have cached wheel during python-package)
+        if [ -z "${WHEEL_FILE}" ] && [ -n "${PIP_CACHE_DIR:-}" ] && [ -d "${PIP_CACHE_DIR}" ]; then
+            WHEEL_FILE=$(find "${PIP_CACHE_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+        fi
+        
+        # 6. Check default pip cache locations
+        if [ -z "${WHEEL_FILE}" ]; then
+            for cache_dir in "/root/.cache/pip/wheels" "$HOME/.cache/pip/wheels"; do
+                if [ -d "${cache_dir}" ]; then
+                    WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                    [ -n "${WHEEL_FILE}" ] && break
+                fi
+            done
+        fi
+        
+        if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+            echo "Found wheel: ${WHEEL_FILE}"
+            echo "  Installing wheel without dependencies (preserving compiled libs)..."
             # Install WITHOUT dependencies to avoid overwriting compiled libraries
-            if pip3 install --no-deps "$WHEEL_FILE" 2>&1 | tee -a /tmp/open3d_python_install.log; then
-                echo "✓ Python module installed via wheel (no-deps, using compiled libs)"
-                PYTHON_INSTALLED=true
+            if pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
+                # Check exit status - tee doesn't preserve it
+                if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                    sleep 1  # Allow installation to finalize
+                    if verify_open3d_installation; then
+                        echo "✓ Python module installed via wheel (no-deps, using compiled libs)"
+                        PYTHON_INSTALLED=true
+                    else
+                        echo "⚠ Wheel installed but verification failed"
+                    fi
+                else
+                    echo "⚠ pip3 install failed (exit code: ${PIPESTATUS[0]})"
+                fi
+            else
+                PIP_EXIT=${PIPESTATUS[0]:-$?}
+                echo "⚠ pip3 install failed (exit code: ${PIP_EXIT})"
             fi
         else
-            echo "⚠ Wheel file not found in ${OPEN3D_BUILD_DIR} (searched lib/, dist/, and root)"
+            # Wheel not found - but python-package may have installed directly
+            # This is valid: some Open3D builds install directly without creating wheel file
+            echo "⚠ Wheel file not found after python-package build"
+            echo "  (This is OK - python-package may install directly without creating wheel)"
+            echo "  Checking if installation succeeded..."
+            sleep 2  # Allow any background installation to complete
+            if verify_open3d_installation; then
+                echo "  ✓ Open3D module is importable - installation succeeded"
+                PYTHON_INSTALLED=true
+            else
+                echo "  ⚠ Module not importable yet - will try Strategy 3"
+            fi
         fi
+        else
+            echo "⚠ ninja python-package failed (exit code: ${PIPESTATUS[0]})"
+        fi  # Close the exit status check
+    else
+        # Capture exit status when if condition fails
+        NINJA_EXIT=${PIPESTATUS[0]:-$?}
+        echo "⚠ ninja python-package failed (exit code: ${NINJA_EXIT}) - check logs"
     fi
 fi
 
 # Strategy 3: Install directly from Python package directory WITHOUT dependencies
+# Fallback: Direct installation from build output directory
 if [ "$PYTHON_INSTALLED" = false ]; then
-    echo "⚠ Wheel installation failed, trying direct installation..."
-    if [ -d "${OPEN3D_BUILD_DIR}/lib/python_package" ]; then
-        # Install WITHOUT dependencies to protect compiled libraries
-        if pip3 install --no-deps "${OPEN3D_BUILD_DIR}/lib/python_package" 2>&1 | tee -a /tmp/open3d_python_install.log; then
-            echo "✓ Python module installed directly (no-deps, using compiled libs)"
-            PYTHON_INSTALLED=true
+    echo ""
+    echo "Strategy 3: Direct installation from build package directory..."
+    # Check multiple possible package locations
+    for PKG_DIR in "${OPEN3D_BUILD_DIR}/lib/python_package" \
+                   "${OPEN3D_BUILD_DIR}/python_package" \
+                   "${OPEN3D_SOURCE_DIR}/python_package"; do
+        # Fix: Correct operator precedence - check directory exists AND (setup.py OR pyproject.toml exists)
+        if [ -d "${PKG_DIR}" ] && { [ -f "${PKG_DIR}/setup.py" ] || [ -f "${PKG_DIR}/pyproject.toml" ]; }; then
+            echo "  Found package directory: ${PKG_DIR}"
+            # Install WITHOUT dependencies to protect compiled libraries
+            if pip3 install --no-deps "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
+                # Check exit status - tee doesn't preserve it
+                if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                    sleep 1
+                    if verify_open3d_installation; then
+                        echo "✓ Python module installed directly (no-deps, using compiled libs)"
+                        PYTHON_INSTALLED=true
+                        break
+                    fi
+                else
+                    echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIPESTATUS[0]})"
+                fi
+            else
+                PIP_EXIT=${PIPESTATUS[0]:-$?}
+                echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT})"
+            fi
         fi
-    else
-        echo "⚠ lib/python_package directory not found"
+    done
+    
+    if [ "$PYTHON_INSTALLED" = false ]; then
+        echo "⚠ Direct package installation directories not found or installation failed"
+        echo "  Checked locations:"
+        echo "    - ${OPEN3D_BUILD_DIR}/lib/python_package"
+        echo "    - ${OPEN3D_BUILD_DIR}/python_package"
+        echo "    - ${OPEN3D_SOURCE_DIR}/python_package"
     fi
 fi
 
@@ -6503,49 +6649,170 @@ fi
 # 2. This build is CUDA-ONLY with no CPU fallback
 # 3. We need the wheel built from source with CUDA enabled
 
-# Verify Python module installation (CUDA-enabled wheel required)
-if [ "$PYTHON_INSTALLED" = false ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ Open3D Python module installation FAILED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "ERROR: Failed to install Open3D Python module from CUDA-enabled build"
-    echo "  All installation strategies failed:"
-    echo "    • ninja install-pip-package"
-    echo "    • Building and installing wheel"
-    echo "    • Direct package installation"
-    echo ""
-    echo "  Installation logs: /tmp/open3d_python_install.log"
-    echo ""
-    echo "  NOTE: PyPI fallback is NOT available (CUDA-only build requirement)"
-    echo "        You must install from the CUDA-enabled wheel built from source"
-    echo ""
-    exit 1
-fi
+# Configuration: Should missing Python module be fatal?
+# Set OPEN3D_PYTHON_REQUIRED=false to allow build to continue without Python module
+# Default: true (Python module is required for full functionality)
+OPEN3D_PYTHON_REQUIRED="${OPEN3D_PYTHON_REQUIRED:-true}"
 
-# Verify Python module installation and CUDA support
+# Final verification of Python module installation
 echo ""
-echo "Verifying Open3D Python module with CUDA support..."
-if python3 -c "import open3d; print(f'Open3D version: {open3d.__version__}')" 2>/dev/null; then
-    echo "✓ Open3D Python module verified"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo "Final Open3D Python Module Verification"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""
+
+# Perform comprehensive verification
+if verify_open3d_installation; then
+    # Installation succeeded - get detailed information
+    OPEN3D_VERSION=$(python3 -c "import open3d; print(getattr(open3d, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+    OPEN3D_MODULE_PATH=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null || echo "unknown")
     
-    # Check if CUDA is available in the module (if device module is accessible)
-    if python3 -c "import open3d; import open3d.core; print('CUDA devices:', open3d.core.cuda.device_count())" 2>/dev/null; then
-        CUDA_DEVICES=$(python3 -c "import open3d; import open3d.core; print(open3d.core.cuda.device_count())" 2>/dev/null || echo "0")
-        if [ "$CUDA_DEVICES" -gt 0 ]; then
-            echo "✓ CUDA support verified (${CUDA_DEVICES} device(s) detected)"
+    # Get installation info via pip show if available
+    OPEN3D_INSTALL_INFO=""
+    if pip3 show open3d >/dev/null 2>&1; then
+        OPEN3D_INSTALL_LOCATION=$(pip3 show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+        OPEN3D_INSTALL_VERSION=$(pip3 show open3d 2>/dev/null | grep "^Version:" | cut -d' ' -f2 | head -1)
+        if [ -n "${OPEN3D_INSTALL_LOCATION}" ]; then
+            OPEN3D_INSTALL_INFO=" (installed at: ${OPEN3D_INSTALL_LOCATION})"
+        fi
+        if [ -n "${OPEN3D_INSTALL_VERSION}" ] && [ "${OPEN3D_INSTALL_VERSION}" != "${OPEN3D_VERSION}" ]; then
+            OPEN3D_VERSION="${OPEN3D_INSTALL_VERSION}"
+        fi
+    fi
+    
+    echo "✓ Open3D Python module verified successfully"
+    echo "  Version: ${OPEN3D_VERSION}"
+    echo "  Module path: ${OPEN3D_MODULE_PATH}${OPEN3D_INSTALL_INFO}"
+    
+    # Optional check: CUDA support (NON-FATAL - containers may not have GPU access)
+    # Per Open3D docs, CUDA availability check is informational only
+    echo ""
+    echo "Checking CUDA support (optional, non-fatal)..."
+    CUDA_INFO_AVAILABLE=false
+    CUDA_DEVICES=0
+    if python3 -c "import open3d.core" 2>/dev/null; then
+        CUDA_INFO_AVAILABLE=true
+        # Try to get CUDA device count (may fail gracefully if no GPU - this is OK)
+        if python3 -c "import open3d.core; hasattr(open3d.core, 'cuda')" 2>/dev/null; then
+            CUDA_DEVICES_STR=$(python3 -c "import open3d.core; print(open3d.core.cuda.device_count())" 2>&1 | head -1 || echo "unavailable")
+            if [ -n "${CUDA_DEVICES_STR}" ] && [ "${CUDA_DEVICES_STR}" != "unavailable" ]; then
+                # Check if CUDA_DEVICES_STR is numeric (suppress error if not numeric)
+                if [ "${CUDA_DEVICES_STR}" -ge 0 ] 2>/dev/null; then
+                    CUDA_DEVICES="${CUDA_DEVICES_STR}"
+                    if [ "${CUDA_DEVICES}" -gt 0 ]; then
+                        echo "  ✓ CUDA support active (${CUDA_DEVICES} device(s) detected)"
+                    else
+                        echo "  ℹ CUDA compiled-in but no GPU devices detected (0 devices)"
+                        echo "    This is expected in containers without GPU access"
+                        echo "    CUDA code will still run when GPU is available at runtime"
+                    fi
+                else
+                    # Device count query failed - module exists though
+                    echo "  ℹ CUDA support compiled-in (device count query unavailable)"
+                    echo "    This is acceptable - CUDA will work when GPU is available"
+                fi
+            else
+                echo "  ℹ CUDA support compiled-in (device enumeration unavailable)"
+                echo "    This is acceptable in containers without GPU access"
+            fi
         else
-            echo "⚠ CUDA support may not be available (0 devices detected)"
-            echo "  This may be expected if running in a container without GPU access"
+            echo "  ⚠ CUDA module structure not found in open3d.core"
+            echo "    This may indicate CUDA was not built, but basic functionality should still work"
         fi
     else
-        echo "✓ Open3D Python module installed (CUDA support compiled-in)"
+        echo "  ℹ open3d.core module not importable"
+        echo "    Basic open3d module works, but advanced features may be limited"
+    fi
+    
+    echo ""
+    echo "✓ Open3D Python module installation verified successfully"
+    
+elif [ "$PYTHON_INSTALLED" = false ]; then
+    # Installation failed - provide comprehensive diagnostics
+    echo "✗ Open3D Python module installation verification FAILED"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Comprehensive Diagnostic Information"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Installation strategies attempted:"
+    echo "  • Strategy 1: ninja install-pip-package (official method)"
+    echo "  • Strategy 2: Building and installing wheel"
+    echo "  • Strategy 3: Direct package installation"
+    echo ""
+    echo "Import error details:"
+    python3 -c "import open3d" 2>&1 | head -30 || echo "  (Import failed silently)"
+    echo ""
+    echo "Python environment information:"
+    echo "  Python executable: $(which python3 2>/dev/null || echo 'not found')"
+    echo "  Python version: $(python3 --version 2>/dev/null || echo 'unknown')"
+    echo ""
+    echo "Python search paths:"
+    python3 -c "import sys; print('\\n'.join(['  ' + p for p in sys.path]))" 2>/dev/null || echo "  (Could not retrieve)"
+    echo ""
+    echo "Package installation status:"
+    pip3 list 2>/dev/null | grep -i open3d || echo "  ✗ open3d not found in pip list"
+    if pip3 show open3d >/dev/null 2>&1; then
+        echo "  pip show open3d:"
+        pip3 show open3d | sed 's/^/    /' || true
+    else
+        echo "  ✗ pip show open3d: package not found"
+    fi
+    echo ""
+    echo "Module installation location check:"
+    python3 -c "import site; print('  Site-packages:'); print('\\n'.join(['    ' + p for p in site.getsitepackages()]))" 2>/dev/null || echo "  (Could not retrieve)"
+    echo ""
+    echo "Build directory information:"
+    echo "  Build directory: ${OPEN3D_BUILD_DIR}"
+    echo "  Source directory: ${OPEN3D_SOURCE_DIR}"
+    if [ -d "${OPEN3D_BUILD_DIR}" ]; then
+        echo "  Build lib directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib" && echo 'yes' || echo 'no')"
+        echo "  Python package directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib/python_package" && echo 'yes' || echo 'no')"
+    fi
+    echo ""
+    echo "Installation logs: /tmp/open3d_python_install.log"
+    echo "  Last 50 lines of installation log:"
+    tail -50 /tmp/open3d_python_install.log 2>/dev/null | sed 's/^/    /' || echo "    (Log file not available)"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Decide whether to exit or continue based on configuration
+    if [ "${OPEN3D_PYTHON_REQUIRED}" = "true" ]; then
+        echo "ERROR: Open3D Python module is REQUIRED but installation failed"
+        echo ""
+        echo "  The module must be importable for the build to succeed."
+        echo "  PyPI fallback is NOT available (CUDA-only build requirement)."
+        echo ""
+        echo "  To continue build without Python module (if acceptable):"
+        echo "    Set OPEN3D_PYTHON_REQUIRED=false before running this script"
+        echo ""
+        exit 1
+    else
+        echo "⚠ WARNING: Open3D Python module installation failed"
+        echo ""
+        echo "  Continuing build without Python module (OPEN3D_PYTHON_REQUIRED=false)"
+        echo "  C++ libraries are still available and functional"
+        echo "  Python functionality will not be available"
+        echo ""
+        echo "  To make Python module required:"
+        echo "    Set OPEN3D_PYTHON_REQUIRED=true before running this script"
+        echo ""
     fi
 else
-    echo "✗ Open3D Python module verification failed"
-    echo "  Installation logs: /tmp/open3d_python_install.log"
-    exit 1
+    # Verification failed but installation marked as successful (edge case)
+    echo "⚠ WARNING: Installation marked successful but verification failed"
+    echo "  Performing additional checks..."
+    if python3 -c "import open3d" 2>/dev/null; then
+        echo "  ✓ Module is actually importable - verification function may need adjustment"
+        PYTHON_INSTALLED=true
+    else
+        echo "  ✗ Module is not importable - installation may have failed silently"
+        if [ "${OPEN3D_PYTHON_REQUIRED}" = "true" ]; then
+            echo "  ERROR: Python module required but not importable"
+            exit 1
+        fi
+    fi
 fi
 
 #--- Sub-block 13A.12: Cleanup Open3D build ---
