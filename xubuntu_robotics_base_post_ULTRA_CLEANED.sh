@@ -49,14 +49,20 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT:-2}" -gt 0 ]; then
         echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
         
-        # Count existing log files matching the pattern
-        EXISTING_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*.log" -type f 2>/dev/null | wc -l)
+        # Count existing log files matching the patterns
+        # Regular build logs
+        EXISTING_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*.log" -type f ! -name "*_errors.log" 2>/dev/null | wc -l)
+        # Error logs
+        EXISTING_ERROR_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*_errors.log" -type f 2>/dev/null | wc -l)
         
+        echo "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
+        
+        # Clean up regular build logs
         if [ "$EXISTING_LOGS" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
             # List all log files sorted by modification time (newest first)
             # Keep only N most recent files, remove the rest
             # Use ls -t for sorting by modification time (works on all systems)
-            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | \
+            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | grep -v "_errors.log$" | \
                 tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | \
                 while read -r old_log; do
                     if [ -f "$old_log" ]; then
@@ -64,9 +70,24 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                         rm -f "$old_log"
                     fi
                 done
-            echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
+        fi
+        
+        # Clean up error logs
+        if [ "$EXISTING_ERROR_LOGS" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*_errors.log 2>/dev/null | \
+                tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | \
+                while read -r old_error_log; do
+                    if [ -f "$old_error_log" ]; then
+                        echo "  Removing old error log: $(basename "$old_error_log")"
+                        rm -f "$old_error_log"
+                    fi
+                done
+        fi
+        
+        if [ "$EXISTING_LOGS" -le "${BUILD_LOG_KEEP_COUNT:-2}" ] && [ "$EXISTING_ERROR_LOGS" -le "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+            echo "✓ No old logs to clean up (found ${EXISTING_LOGS} build logs, ${EXISTING_ERROR_LOGS} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
         else
-            echo "✓ No old logs to clean up (found $EXISTING_LOGS logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
+            echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
         fi
     fi
 
@@ -87,41 +108,97 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Create timestamp: YYYYMMDD_Day_HHMM_AMPM
     BUILD_TIMESTAMP=$(date +"%Y%m%d")_${DAY_NAME}_${HOUR_12}${MINUTE}_${AMPM}
     BUILD_LOG_FILE="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}.log"
+    BUILD_ERROR_LOG="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}_errors.log"
 
     # Start logging to file while preserving terminal output
     # This creates a background process that tees output to both terminal and log file
     echo "✓ Build logging enabled: ${BUILD_LOG_FILE}"
+    echo "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
     echo "  Log directory: ${BUILD_LOG_DIR}"
     echo "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
     echo "  Keeping ${BUILD_LOG_KEEP_COUNT} most recent logs"
     echo "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL} seconds"
     echo ""
     
-    # Use line-buffered tee with process substitution
+    # Initialize error log with header
+    if [ -z "${BUILD_ERROR_LOG}" ] || [ ! -f "${BUILD_ERROR_LOG}" ]; then
+        touch "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    fi
+    echo "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    echo "Error Log Started: $(date)" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    echo "Build Log: ${BUILD_LOG_FILE}" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    echo "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    
+    # Error/Warning Filter Function for container builds
+    # This function filters error and warning messages and writes them to error log
+    # Catches: errors, warnings, debug messages, diagnostic output, wheel paths,
+    # build failures, compilation issues, and all problematic output
+    filter_errors_warnings() {
+        # Ensure BUILD_ERROR_LOG is available
+        local error_log="${BUILD_ERROR_LOG:-}"
+        if [ -z "$error_log" ]; then
+            # If BUILD_ERROR_LOG not set, just pass through without filtering
+            while IFS= read -r line; do
+                echo "$line"
+            done
+            return
+        fi
+        
+        local line
+        while IFS= read -r line; do
+            # Echo all lines to stdout (which goes to main log via tee)
+            echo "$line"
+            
+            # Comprehensive error/warning pattern matching (case-insensitive)
+            # This pattern catches ALL problematic output including:
+            # - Standard errors/warnings
+            # - Debug messages and checkpoints
+            # - Diagnostic output and troubleshooting info
+            # - Wheel path messages and Python package issues
+            # - Build system errors (CMake, Ninja, Make)
+            # - Library-specific build errors (COLMAP, Open3D, OpenCV)
+            # - System/user generated errors
+            if echo "$line" | grep -qiE \
+                '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
+                # Write matching line to error log with timestamp
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line" >> "${error_log}" 2>/dev/null || true
+            fi
+        done
+    }
+    
+    # Use line-buffered tee with process substitution and error filtering
     # stdbuf -oL makes output line-buffered (immediate write on newline)
     # This ensures most output is written immediately, reducing data loss
     # IMPORTANT: exec redirects ALL subsequent output - each line written ONCE
+    # Error filtering is applied to stderr to capture errors/warnings
     # Gracefully degrade if stdbuf is not available (minimal containers)
-    if command -v stdbuf >/dev/null 2>&1 && command -v tee >/dev/null 2>&1; then
-        exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2>&1
+    if command -v stdbuf >/dev/null 2>&1 && command -v tee >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+        # Full featured: line buffered with error filtering
+        exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2> >(stdbuf -oL tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
+    elif command -v tee >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
+        # Fallback: tee with error filtering (no line buffering but still works)
+        exec > >(tee -a "${BUILD_LOG_FILE}") 2> >(tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
     elif command -v tee >/dev/null 2>&1; then
-        # Fallback: tee without stdbuf (no line buffering but still works)
+        # Fallback: tee without error filtering
         exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
     else
         echo "  ⚠ Warning: 'tee' command not available, logging disabled"
         echo "  Build will continue without log file"
     fi
     
-    # Start background sync job to periodically flush log file to disk
+    # Start background sync job to periodically flush log files to disk
     # This ensures data is saved even if build is interrupted
     # Only start if sleep command is available (may not be in minimal base images)
     if command -v sleep >/dev/null 2>&1; then
         (
             while true; do
                 sleep ${BUILD_LOG_SYNC_INTERVAL}
-                # Sync this specific log file to disk
+                # Sync both log files to disk
                 if [ -f "${BUILD_LOG_FILE}" ]; then
                     sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
+                fi
+                if [ -f "${BUILD_ERROR_LOG}" ]; then
+                    sync "${BUILD_ERROR_LOG}" 2>/dev/null || sync
                 fi
             done
         ) &
@@ -5063,8 +5140,38 @@ echo "✓ COLMAP build cleaned up"
 # Dependencies: python3-pip (Block 6)
 # Outputs: Installed Python packages
 # Note: Open3D Jupyter extension requires jupyter, jupyterlab, and ipywidgets
+# Issue: Debian may have installed traitlets 5.5.0 which cannot be uninstalled via pip
+# Solution: Install newer versions without attempting to uninstall system traitlets
 echo "Installing Jupyter, JupyterLab, and ipywidgets for Open3D Jupyter extension..."
-pip3 install --no-cache-dir jupyter jupyterlab ipywidgets || echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed (may affect Jupyter extension)"
+echo "  Note: Handling Debian-installed traitlets 5.5.0 (will not be uninstalled)"
+
+# First, try to install without upgrading traitlets if it's already installed
+if python3 -c "import traitlets" 2>/dev/null; then
+  TRAITLETS_VER=$(python3 -c "import traitlets; print(traitlets.__version__)" 2>/dev/null || echo "unknown")
+  echo "  Found existing traitlets: ${TRAITLETS_VER}"
+  if [ "${TRAITLETS_VER}" = "5.5.0" ]; then
+    echo "  Debian traitlets 5.5.0 detected - installing compatible versions..."
+    # Install compatible versions that work with traitlets 5.5.0
+    pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+      "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
+      echo "⚠ Jupyter installation with traitlets 5.5.0 failed"
+  else
+    # Upgrade traitlets if it's not the Debian version
+    pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+      "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
+      echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
+  fi
+else
+  # No traitlets installed, install normally
+  pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+    "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
+    echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
+fi
+
+# Also install jupyter_packaging which is needed for Open3D's pip package installation
+echo "Installing jupyter_packaging (required for Open3D pip package installation)..."
+pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || \
+  echo "⚠ jupyter_packaging installation failed (may affect Open3D pip package build)"
 
 # Verify Jupyter packages were installed
 echo "Verifying Jupyter packages installation..."
@@ -6557,29 +6664,49 @@ if [ "$PYTHON_INSTALLED" = false ]; then
             done
         fi
         
-        # 7. Extract wheel path from pip build log (if available)
+        # 7. Extract wheel path from pip build log and terminal output (if available)
         # Pip logs show "Created wheel for open3d: filename=... size=... sha256=..."
         # and "Stored in directory: /path/to/directory"
+        # Also check for "Wrote /path/to/wheel.whl" pattern
         # Sync to ensure log file is fully flushed to disk before reading
         sync
         if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ]; then
             # Look for "Stored in directory:" line which appears after wheel creation
-            # Extract path more robustly (handle spaces and special characters)
             STORED_DIR=$(grep -m1 "Stored in directory:" /tmp/open3d_python_install.log 2>/dev/null | \
                 sed 's/.*Stored in directory:[[:space:]]*//' | \
                 sed 's/[[:space:]]*$//' | \
                 sed "s/^['\"]//; s/['\"]\$//")
             if [ -n "${STORED_DIR}" ] && [ -d "${STORED_DIR}" ]; then
                 # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
+                # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
                 WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                 if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                     echo "  Found wheel from pip log stored directory: ${WHEEL_FILE}"
                 fi
             fi
+            
+            # Also check for "Wrote /path/to/wheel.whl" pattern in log
+            if [ -z "${WHEEL_FILE}" ]; then
+                WHEEL_FROM_LOG=$(grep -oE "Wrote[[:space:]]+[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | \
+                    sed 's/Wrote[[:space:]]*//' | head -1)
+                if [ -n "${WHEEL_FROM_LOG}" ] && [ -f "${WHEEL_FROM_LOG}" ]; then
+                    WHEEL_FILE="${WHEEL_FROM_LOG}"
+                    echo "  Found wheel from pip log 'Wrote' pattern: ${WHEEL_FILE}"
+                fi
+            fi
+            
+            # Check for "Successfully built" or similar patterns that might contain path
+            if [ -z "${WHEEL_FILE}" ]; then
+                BUILT_WHEEL=$(grep -oE "[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
+                if [ -n "${BUILT_WHEEL}" ] && [ -f "${BUILT_WHEEL}" ]; then
+                    WHEEL_FILE="${BUILT_WHEEL}"
+                    echo "  Found wheel path from pip log: ${WHEEL_FILE}"
+                fi
+            fi
         fi
         
         # 8. Check ephemeral pip cache directories (created during build process)
-        # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/...
+        # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
         # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
         if [ -z "${WHEEL_FILE}" ]; then
             # First check specific known locations with glob patterns
@@ -6590,7 +6717,13 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                 if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
                    [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
                    [ -d "${pattern}" ]; then
-                    WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                    # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
+                    # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+                    WHEEL_FILE=$(find "${pattern}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                    if [ -z "${WHEEL_FILE}" ]; then
+                        # Also try without the nested pattern (sometimes fewer levels)
+                        WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                    fi
                     if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                         echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
                         break
@@ -6602,7 +6735,12 @@ if [ "$PYTHON_INSTALLED" = false ]; then
             if [ -z "${WHEEL_FILE}" ]; then
                 while IFS= read -r cache_dir; do
                     if [ -n "${cache_dir}" ] && [ -d "${cache_dir}" ]; then
-                        WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                        # Try the specific nested pattern first
+                        WHEEL_FILE=$(find "${cache_dir}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                        if [ -z "${WHEEL_FILE}" ]; then
+                            # Fallback to general search
+                            WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                        fi
                         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                             echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
                             break
@@ -6613,8 +6751,22 @@ if [ "$PYTHON_INSTALLED" = false ]; then
         fi
         
         # 9. Comprehensive recursive search in /tmp for any pip cache directories and wheels
+        # This is the most thorough search - checks all nested wheel locations
         if [ -z "${WHEEL_FILE}" ]; then
-            WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+            # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+            WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -z "${WHEEL_FILE}" ]; then
+                # Try with fewer nesting levels
+                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+            fi
+            if [ -z "${WHEEL_FILE}" ]; then
+                # General search in any wheels directory
+                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+            fi
+            if [ -z "${WHEEL_FILE}" ]; then
+                # Final fallback - any open3d wheel in pip cache directories
+                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/*/open3d*.whl" 2>/dev/null | head -1)
+            fi
             if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                 echo "  Found wheel via recursive search: ${WHEEL_FILE}"
             fi
@@ -6655,9 +6807,7 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                 echo "  ⚠ Module not importable yet - will try Strategy 3"
             fi
         fi
-        else
-            echo "⚠ ninja python-package failed (exit code: ${PIPESTATUS[0]})"
-        fi  # Close the exit status check
+    fi  # Close: if ninja python-package exit status == 0
     else
         # Capture exit status when if condition fails
         NINJA_EXIT=${PIPESTATUS[0]:-$?}
@@ -10772,9 +10922,16 @@ echo "✓ Vulkan support installed"
 # Outputs: Installed packages
 echo "==> Installing Xpra for modern X11 forwarding..."
 
-apt-get install -y --no-install-recommends \
-  xpra \
-  xpra-html5
+# xpra-html5 may not be available in all repositories, install xpra first
+apt-get install -y --no-install-recommends xpra || echo "⚠ xpra installation failed"
+
+# Try to install xpra-html5 separately (may not be available)
+if apt-get install -y --no-install-recommends xpra-html5 2>/dev/null; then
+  echo "✓ xpra-html5 installed"
+else
+  echo "⚠ xpra-html5 package not found in repository (non-critical - xpra core installed)"
+  echo "  HTML5 client may still work via xpra's built-in HTML5 support"
+fi
 
 # Create Xpra launcher
 cat > /usr/local/bin/start_xpra.sh << 'XPRA'
@@ -11414,20 +11571,38 @@ FAILED_TOOLS=""
 # zellij - with binary fallback if compilation fails
 if ! install_rust_tool "zellij" "${ZELLIJ_VERSION}" "terminal multiplexer" "5-7"; then
   echo "[warn] zellij compilation failed, trying pre-built binary..."
-  install_prebuilt_binary "zellij" \
-    "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
-    "zellij"
-  # Extract from tarball if needed
-  if [ -f "/opt/rust/tools/bin/zellij" ] && file "/opt/rust/tools/bin/zellij" | grep -q "gzip"; then
-    tar -xzf "/opt/rust/tools/bin/zellij" -C /opt/rust/tools/bin/
-    rm -f "/opt/rust/tools/bin/zellij.tar.gz"
-  fi
-  # Verify binary installation
-  if [ -x "/opt/rust/tools/bin/zellij" ]; then
-    echo "✓ zellij installed from pre-built binary (v${ZELLIJ_VERSION})"
-    INSTALLED_TOOLS="${INSTALLED_TOOLS} zellij"
+  # Remove zellij from FAILED_TOOLS since we're attempting binary fallback
+  FAILED_TOOLS=$(echo "${FAILED_TOOLS}" | sed 's/ zellij//g' | sed 's/zellij //g')
+  
+  # Try downloading the tarball first, then extract
+  ZELLIJ_TARBALL="zellij-x86_64-unknown-linux-musl.tar.gz"
+  if curl -fsSL -o "/tmp/${ZELLIJ_TARBALL}" \
+      "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/${ZELLIJ_TARBALL}"; then
+    echo "✓ Downloaded zellij tarball, extracting..."
+    if tar -xzf "/tmp/${ZELLIJ_TARBALL}" -C /tmp 2>/dev/null; then
+      # Find the zellij binary in extracted directory
+      ZELLIJ_BIN=$(find /tmp -maxdepth 3 -type f -name "zellij" 2>/dev/null | head -1)
+      if [ -n "${ZELLIJ_BIN}" ] && [ -f "${ZELLIJ_BIN}" ]; then
+        chmod +x "${ZELLIJ_BIN}"
+        mv "${ZELLIJ_BIN}" "/opt/rust/tools/bin/zellij"
+        rm -rf /tmp/zellij-* /tmp/${ZELLIJ_TARBALL} 2>/dev/null
+        if [ -x "/opt/rust/tools/bin/zellij" ]; then
+          echo "✓ zellij installed from pre-built binary (v${ZELLIJ_VERSION})"
+          INSTALLED_TOOLS="${INSTALLED_TOOLS} zellij"
+        else
+          echo "✗ zellij binary not executable after installation"
+          FAILED_TOOLS="${FAILED_TOOLS} zellij"
+        fi
+      else
+        echo "✗ zellij binary not found in extracted tarball"
+        FAILED_TOOLS="${FAILED_TOOLS} zellij"
+      fi
+    else
+      echo "✗ Failed to extract zellij tarball"
+      FAILED_TOOLS="${FAILED_TOOLS} zellij"
+    fi
   else
-    echo "✗ zellij binary installation failed"
+    echo "✗ zellij binary download failed - skipping"
     FAILED_TOOLS="${FAILED_TOOLS} zellij"
   fi
 fi
@@ -11459,24 +11634,60 @@ echo ""
 echo "Installing ox (text editor)..."
 OX_INSTALLED=false
 
-# Try installing from crates.io
-if cargo install ox --root /opt/rust/tools 2>/dev/null; then
-  echo "✓ ox installed from crates.io"
-  INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
-  OX_INSTALLED=true
-else
-  echo "[warn] ox compilation from crates.io failed, trying pre-built binary..."
-  # Try downloading from GitHub releases
-  OX_VERSION="0.4.3"  # Latest stable version
-  OX_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox-${OX_VERSION}-x86_64-unknown-linux-gnu"
-  if curl -fsSL -o "/tmp/ox" "${OX_URL}" 2>/dev/null && [ -f "/tmp/ox" ] && [ -s "/tmp/ox" ]; then
-    chmod +x "/tmp/ox"
-    mv "/tmp/ox" "/opt/rust/tools/bin/ox"
-    echo "✓ ox installed from pre-built binary (v${OX_VERSION})"
+# Try installing from crates.io (capture output to check for real success)
+cargo install ox --root /opt/rust/tools 2>&1 | tee /tmp/ox_install.log
+# Check cargo exit status (not tee) using PIPESTATUS
+if [ ${PIPESTATUS[0]} -eq 0 ]; then
+  # Verify binary was actually installed
+  if [ -x "/opt/rust/tools/bin/ox" ]; then
+    echo "✓ ox installed from crates.io"
     INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
     OX_INSTALLED=true
   else
-    echo "✗ ox binary download failed - skipping"
+    echo "[warn] ox compilation appeared to succeed but binary not found, trying pre-built binary..."
+    OX_INSTALLED=false
+  fi
+else
+  echo "[warn] ox compilation from crates.io failed, trying pre-built binary..."
+  OX_INSTALLED=false
+fi
+
+# Try binary fallback if compilation failed or binary not found
+if [ "$OX_INSTALLED" = false ]; then
+  # Try downloading from GitHub releases
+  OX_VERSION="0.4.3"  # Latest stable version
+  OX_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox-${OX_VERSION}-x86_64-unknown-linux-gnu"
+  
+  echo "  Attempting to download ox binary from GitHub..."
+  if curl -fsSL -o "/tmp/ox" "${OX_URL}" 2>/dev/null; then
+    # Verify downloaded file exists and is not empty
+    if [ -f "/tmp/ox" ] && [ -s "/tmp/ox" ]; then
+      # Check if it's a valid binary
+      if file "/tmp/ox" | grep -qE "(ELF|executable|binary)"; then
+        chmod +x "/tmp/ox"
+        mkdir -p /opt/rust/tools/bin
+        mv "/tmp/ox" "/opt/rust/tools/bin/ox"
+        # Final verification
+        if [ -x "/opt/rust/tools/bin/ox" ]; then
+          echo "✓ ox installed from pre-built binary (v${OX_VERSION})"
+          INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
+          OX_INSTALLED=true
+        else
+          echo "✗ ox binary not executable after installation"
+          FAILED_TOOLS="${FAILED_TOOLS} ox"
+        fi
+      else
+        echo "✗ Downloaded file is not a valid binary"
+        rm -f "/tmp/ox"
+        FAILED_TOOLS="${FAILED_TOOLS} ox"
+      fi
+    else
+      echo "✗ ox binary download failed - file is empty or missing"
+      FAILED_TOOLS="${FAILED_TOOLS} ox"
+    fi
+  else
+    echo "✗ ox binary download failed - URL not accessible or network error"
+    echo "  URL: ${OX_URL}"
     FAILED_TOOLS="${FAILED_TOOLS} ox"
   fi
 fi
@@ -11547,7 +11758,7 @@ cat > /etc/profile.d/rust.sh << 'EOF'
 # Rust toolchain environment
 export RUSTUP_HOME=/opt/rust/rustup
 export CARGO_HOME=/opt/rust/cargo
-export PATH="/opt/rust/cargo/bin:${PATH}"
+export PATH="/opt/rust/cargo/bin:/opt/rust/tools/bin:${PATH}"
 EOF
 chmod +x /etc/profile.d/rust.sh
 
@@ -11881,26 +12092,148 @@ cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
 ZENOH_FILE="${ZENOH_FILE}"
 ZENOH_URL="${ZENOH_URL}"
 
-# Downloading Zenoh from GitHub...
-if wget -q --show-progress --timeout=60 "${ZENOH_URL}"; then
-  echo "✓ Download successful"
+# Downloading Zenoh from GitHub with retry logic...
+ZENOH_DOWNLOAD_SUCCESS=false
+for attempt in 1 2 3; do
+  echo "Attempt ${attempt}/3: Downloading Zenoh..."
+  if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_URL}"; then
+    echo "✓ Download successful"
+    ZENOH_DOWNLOAD_SUCCESS=true
+    break
+  else
+    echo "✗ Download attempt ${attempt} failed"
+    if [ $attempt -lt 3 ]; then
+      echo "  Retrying in 5 seconds..."
+      sleep 5
+    fi
+  fi
+done
+
+if [ "$ZENOH_DOWNLOAD_SUCCESS" = true ]; then
   if unzip -q "${ZENOH_FILE}" -d /opt/zenoh; then
     echo "✓ Extraction successful"
-    chmod +x /opt/zenoh/zenohd 2>/dev/null || true
-    if [ -f /opt/zenoh/zenohd ]; then
-      ln -sf /opt/zenoh/zenohd /usr/local/bin/zenohd
-      echo "✓ Zenoh installed: ${ZENOH_VERSION}"
-      ZENOH_INSTALLED=true
+    
+    # Find and install zenohd binary
+    ZENOH_BIN=$(find /opt/zenoh -type f -name "zenohd" 2>/dev/null | head -1)
+    if [ -n "${ZENOH_BIN}" ] && [ -f "${ZENOH_BIN}" ]; then
+      chmod +x "${ZENOH_BIN}"
+      ln -sf "${ZENOH_BIN}" /usr/local/bin/zenohd
+      echo "✓ Zenoh router installed: ${ZENOH_VERSION}"
+      
+      # Handle plugins (zenohd looks for plugins in same directory or via plugin-search-dir)
+      ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
+      mkdir -p "${ZENOH_PLUGINS_DIR}"
+      find /opt/zenoh -type f -name "libzenoh_plugin*.so" -exec cp {} "${ZENOH_PLUGINS_DIR}/" \; 2>/dev/null
+      if [ "$(ls -A ${ZENOH_PLUGINS_DIR} 2>/dev/null)" ]; then
+        echo "✓ Zenoh plugins installed: $(ls ${ZENOH_PLUGINS_DIR} | wc -l) plugin(s)"
+        # Make plugins executable and set library path
+        chmod +x ${ZENOH_PLUGINS_DIR}/*.so 2>/dev/null || true
+      fi
+      
+      # Verify installation
+      if zenohd --version > /dev/null 2>&1; then
+        echo "✓ Zenoh installation verified"
+        ZENOH_INSTALLED=true
+      else
+        echo "⚠ Zenoh binary found but version check failed (may require additional dependencies)"
+        ZENOH_INSTALLED=true  # Still mark as installed since binary exists
+      fi
     else
-      echo "✗ Zenoh binary not found after extraction"
+      echo "✗ Zenoh binary (zenohd) not found after extraction"
+      echo "  Searched in: /opt/zenoh"
+      find /opt/zenoh -type f 2>/dev/null | head -10 | sed 's/^/    /'
     fi
   else
     echo "✗ Extraction failed"
   fi
   rm -f "${ZENOH_FILE}"
 else
-  echo "✗ Download failed - Zenoh will not be available"
+  echo "✗ Download failed after 3 attempts - Zenoh will not be available"
+  echo "  URL: ${ZENOH_URL}"
+  echo "  File: ${ZENOH_FILE}"
   echo "  You can install manually later if needed"
+fi
+
+#--- Sub-block 25.1.1: Download and install Zenoh ROS 2 DDS Bridge ---
+# Purpose: Install ROS 2 DDS bridge plugin for Zenoh
+# Dependencies: Successful Zenoh installation (but can be installed independently)
+# Outputs: DDS bridge plugin and binaries
+if [ "$ZENOH_INSTALLED" = true ]; then
+  echo "==> Installing Zenoh ROS 2 DDS Bridge"
+  cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
+  
+  ZENOH_ROS2DDS_FILE="${ZENOH_ROS2DDS_FILE}"
+  ZENOH_ROS2DDS_URL="${ZENOH_ROS2DDS_URL}"
+  ZENOH_ROS2DDS_INSTALLED=false
+  
+  # Downloading Zenoh ROS2DDS bridge with retry logic...
+  ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=false
+  for attempt in 1 2 3; do
+    echo "Attempt ${attempt}/3: Downloading Zenoh ROS 2 DDS Bridge..."
+    if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_ROS2DDS_URL}"; then
+      echo "✓ Download successful"
+      ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=true
+      break
+    else
+      echo "✗ Download attempt ${attempt} failed"
+      if [ $attempt -lt 3 ]; then
+        echo "  Retrying in 5 seconds..."
+        sleep 5
+      fi
+    fi
+  done
+  
+  if [ "$ZENOH_ROS2DDS_DOWNLOAD_SUCCESS" = true ]; then
+    # Extract to temporary location first
+    TEMP_EXTRACT_DIR="/tmp/zenoh-ros2dds-extract"
+    mkdir -p "${TEMP_EXTRACT_DIR}"
+    
+    if unzip -q "${ZENOH_ROS2DDS_FILE}" -d "${TEMP_EXTRACT_DIR}"; then
+      echo "✓ Extraction successful"
+      
+      # Find and install zenoh-bridge-ros2dds binary
+      ROS2DDS_BRIDGE_BIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "zenoh-bridge-ros2dds" 2>/dev/null | head -1)
+      if [ -n "${ROS2DDS_BRIDGE_BIN}" ] && [ -f "${ROS2DDS_BRIDGE_BIN}" ]; then
+        chmod +x "${ROS2DDS_BRIDGE_BIN}"
+        ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-ros2dds
+        # Also create alias for zenoh-bridge-dds (common name)
+        ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-dds
+        echo "✓ Zenoh ROS 2 DDS bridge binary installed"
+        ZENOH_ROS2DDS_INSTALLED=true
+      fi
+      
+      # Find and install ROS2DDS plugin
+      ROS2DDS_PLUGIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "libzenoh_plugin_ros2dds*.so" 2>/dev/null | head -1)
+      if [ -n "${ROS2DDS_PLUGIN}" ] && [ -f "${ROS2DDS_PLUGIN}" ]; then
+        ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
+        mkdir -p "${ZENOH_PLUGINS_DIR}"
+        cp "${ROS2DDS_PLUGIN}" "${ZENOH_PLUGINS_DIR}/"
+        chmod +x "${ZENOH_PLUGINS_DIR}/$(basename ${ROS2DDS_PLUGIN})"
+        echo "✓ Zenoh ROS 2 DDS plugin installed"
+        ZENOH_ROS2DDS_INSTALLED=true
+      fi
+      
+      # Verify installation
+      if command -v zenoh-bridge-ros2dds >/dev/null 2>&1 || [ -n "${ROS2DDS_PLUGIN}" ]; then
+        echo "✓ Zenoh ROS 2 DDS Bridge installation verified"
+        echo "  Bridge binary: $(command -v zenoh-bridge-ros2dds 2>/dev/null || echo 'N/A (plugin only)')"
+        echo "  Plugin: ${ZENOH_PLUGINS_DIR}/$(basename ${ROS2DDS_PLUGIN} 2>/dev/null || echo 'N/A')"
+      fi
+      
+      # Cleanup
+      rm -rf "${TEMP_EXTRACT_DIR}"
+    else
+      echo "✗ Extraction failed"
+    fi
+    rm -f "${ZENOH_ROS2DDS_FILE}"
+  else
+    echo "✗ Download failed after 3 attempts - Zenoh ROS 2 DDS Bridge will not be available"
+    echo "  URL: ${ZENOH_ROS2DDS_URL}"
+    echo "  File: ${ZENOH_ROS2DDS_FILE}"
+    echo "  You can install manually later if needed"
+  fi
+else
+  echo "⚠ Skipping Zenoh ROS 2 DDS Bridge installation (Zenoh not installed)"
 fi
 cd /
 
@@ -12070,9 +12403,21 @@ cat > /usr/local/bin/zenoh_start << 'EOF'
 
 echo "Starting Zenoh infrastructure..."
 
+# Set plugin search directory if plugins are installed
+if [ -d "/opt/zenoh/plugins" ] && [ "$(ls -A /opt/zenoh/plugins 2>/dev/null)" ]; then
+  export ZENOH_PLUGIN_SEARCH_DIR="/opt/zenoh/plugins"
+  PLUGIN_OPT="--plugin-search-dir ${ZENOH_PLUGIN_SEARCH_DIR}"
+else
+  PLUGIN_OPT=""
+fi
+
 # Start Zenoh router in background
 echo "  Starting Zenoh router on port 7447..."
-zenohd --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
+if [ -n "${PLUGIN_OPT}" ]; then
+  zenohd ${PLUGIN_OPT} --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
+else
+  zenohd --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
+fi
 ROUTER_PID=$!
 sleep 2
 
@@ -12084,17 +12429,34 @@ if ! ps -p $ROUTER_PID > /dev/null; then
 fi
 echo "  ✓ Zenoh router started (PID: $ROUTER_PID)"
 
-# Start Humble bridge
+# Start Humble bridge (if zenoh-bridge-ros2dds is available)
 if [ -d "/conda/envs/ros2_humble" ]; then
-  echo "  Starting Zenoh-DDS bridge for Humble (Domain 1)..."
-  zenoh-bridge-dds --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
-  HUMBLE_PID=$!
-  sleep 1
-  if ps -p $HUMBLE_PID > /dev/null; then
-    echo "  ✓ Humble bridge started (PID: $HUMBLE_PID)"
+  # Try zenoh-bridge-ros2dds first, fallback to zenoh-bridge-dds for compatibility
+  BRIDGE_CMD=""
+  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
+    BRIDGE_CMD="zenoh-bridge-ros2dds"
+  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
+    BRIDGE_CMD="zenoh-bridge-dds"
+  fi
+  
+  if [ -n "${BRIDGE_CMD}" ]; then
+    echo "  Starting Zenoh ROS 2 DDS bridge for Humble (Domain 1)..."
+    if [ -n "${PLUGIN_OPT}" ]; then
+      ${BRIDGE_CMD} ${PLUGIN_OPT} --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
+    else
+      ${BRIDGE_CMD} --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
+    fi
+    HUMBLE_PID=$!
+    sleep 1
+    if ps -p $HUMBLE_PID > /dev/null; then
+      echo "  ✓ Humble bridge started (PID: $HUMBLE_PID)"
+    else
+      echo "  ✗ Failed to start Humble bridge"
+      cat /tmp/zenoh-humble.log
+    fi
   else
-    echo "  ✗ Failed to start Humble bridge"
-    cat /tmp/zenoh-humble.log
+    echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Humble bridge"
+    echo "    Note: Bridge functionality requires zenoh-plugin-ros2dds installation"
   fi
 fi
 
@@ -12108,17 +12470,34 @@ fi
 # Purpose: Continuing implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-# Start Jazzy bridge
+# Start Jazzy bridge (if zenoh-bridge-ros2dds is available)
 if [ -d "/conda/envs/ros2_jazzy" ] || [ -d "/opt/ros/${ROS_DISTRO}" ]; then
-  echo "  Starting Zenoh-DDS bridge for Jazzy (Domain 2)..."
-  zenoh-bridge-dds --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
-  JAZZY_PID=$!
-  sleep 1
-  if ps -p $JAZZY_PID > /dev/null; then
-    echo "  ✓ Jazzy bridge started (PID: $JAZZY_PID)"
+  # Try zenoh-bridge-ros2dds first, fallback to zenoh-bridge-dds for compatibility
+  BRIDGE_CMD=""
+  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
+    BRIDGE_CMD="zenoh-bridge-ros2dds"
+  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
+    BRIDGE_CMD="zenoh-bridge-dds"
+  fi
+  
+  if [ -n "${BRIDGE_CMD}" ]; then
+    echo "  Starting Zenoh ROS 2 DDS bridge for Jazzy (Domain 2)..."
+    if [ -n "${PLUGIN_OPT}" ]; then
+      ${BRIDGE_CMD} ${PLUGIN_OPT} --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
+    else
+      ${BRIDGE_CMD} --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
+    fi
+    JAZZY_PID=$!
+    sleep 1
+    if ps -p $JAZZY_PID > /dev/null; then
+      echo "  ✓ Jazzy bridge started (PID: $JAZZY_PID)"
+    else
+      echo "  ✗ Failed to start Jazzy bridge"
+      cat /tmp/zenoh-jazzy.log
+    fi
   else
-    echo "  ✗ Failed to start Jazzy bridge"
-    cat /tmp/zenoh-jazzy.log
+    echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Jazzy bridge"
+    echo "    Note: Bridge functionality requires zenoh-plugin-ros2dds installation"
   fi
 fi
 
@@ -12135,6 +12514,8 @@ cat > /usr/local/bin/zenoh_stop << 'EOF'
 
 echo "Stopping Zenoh infrastructure..."
 pkill -f zenohd
+pkill -f zenoh-bridge-ros2dds
+pkill -f zenoh-bridge-dds
 pkill -f zenoh-bridge
 echo "✓ Zenoh stopped"
 EOF
@@ -12166,14 +12547,14 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Check Humble bridge
-if pgrep -f "zenoh-bridge.*humble" > /dev/null; then
+if pgrep -f "zenoh-bridge.*humble\|zenoh-bridge-ros2dds.*humble" > /dev/null; then
   echo "✓ Humble Bridge: RUNNING (Domain 1 -> /humble namespace)"
 else
   echo "✗ Humble Bridge: STOPPED"
 fi
 
 # Check Jazzy bridge
-if pgrep -f "zenoh-bridge.*jazzy" > /dev/null; then
+if pgrep -f "zenoh-bridge.*jazzy\|zenoh-bridge-ros2dds.*jazzy" > /dev/null; then
   echo "✓ Jazzy Bridge: RUNNING (Domain 2 -> /jazzy namespace)"
 else
   echo "✗ Jazzy Bridge: STOPPED"

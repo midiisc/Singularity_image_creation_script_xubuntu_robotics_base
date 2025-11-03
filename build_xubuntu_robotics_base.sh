@@ -312,6 +312,38 @@ log_warning() {
     fi
 }
 
+#--- Sub-block 8.7: Error/Warning Filter Function ---
+# Purpose: Filter error and warning messages from output and write to error log
+# Dependencies: ERROR_LOG must be defined before this function is called
+# Outputs: Filters stdout/stderr and writes matches to ERROR_LOG
+# Note: This function is defined here but called later in BLOCK 14 after ERROR_LOG is set
+filter_errors_and_warnings() {
+    # Ensure ERROR_LOG is available (should be set before this function is called)
+    local error_log="${ERROR_LOG:-}"
+    if [ -z "$error_log" ]; then
+        # If ERROR_LOG not set, just pass through without filtering
+        while IFS= read -r line; do
+            echo "$line"
+        done
+        return
+    fi
+    
+    local line
+    while IFS= read -r line; do
+        # Write all output to terminal and main log (already handled by tee)
+        echo "$line"
+        
+        # Comprehensive error/warning pattern matching (case-insensitive)
+        # This pattern catches: errors, warnings, debug messages, diagnostic output, 
+        # wheel paths, build failures, compilation issues, and all problematic output
+        if echo "$line" | grep -qiE \
+            '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
+            # Write matching line to error log with timestamp
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line" >> "${error_log}" 2>/dev/null || true
+        fi
+    done
+}
+
 #--- Sub-block 8.4: Success logging function ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -957,11 +989,23 @@ log_with_timestamp "Starting build process..."
 log_with_timestamp "Log file: ${LOG_FILE}"
 log_with_timestamp "Error log: ${ERROR_LOG}"
 
-#--- Sub-block 14.2: Set up output redirection ---
+#--- Sub-block 14.2: Set up output redirection with error filtering ---
 # Critical: All stdout/stderr from this point forward goes to both console and log file
-# Dependencies: None (foundational)
+# Additionally, errors and warnings are filtered and written to ERROR_LOG
+# Dependencies: ERROR_LOG, filter_errors_and_warnings function
 # Outputs: Environment variables, configuration
-exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2)
+# Initialize error log with header
+if [ -z "${ERROR_LOG}" ] || [ ! -f "${ERROR_LOG}" ]; then
+    touch "${ERROR_LOG}" 2>/dev/null || true
+fi
+echo "========================================" >> "${ERROR_LOG}"
+echo "Error Log Started: $(date)" >> "${ERROR_LOG}"
+echo "Build Log: ${LOG_FILE}" >> "${ERROR_LOG}"
+echo "========================================" >> "${ERROR_LOG}"
+
+# Set up filtered output redirection
+# stdout goes to main log and terminal, stderr goes to both and is also filtered for errors
+exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings)
 
 # Log script start with detailed information
 echo "=============================================================================="

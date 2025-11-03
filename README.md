@@ -75,15 +75,15 @@ Production-ready Singularity/Apptainer container image for robotics research, 3D
 ## 🛠️ Development Tools
 
 ### Modern CLI Tools (Rust-based)
-All built from source with optimizations:
-- **bat** 0.24.0 - Syntax-highlighting cat replacement
-- **fd** 9.0.0 - Fast alternative to find
-- **ripgrep** 14.1.0 - Fast recursive grep
-- **eza** 0.17.3 - Modern ls replacement
-- **bottom** 0.9.6 - System monitor
-- **procs** 0.14.4 - Modern ps replacement
-- **zellij** 0.40.1 - Terminal multiplexer
-- **dust** 1.1.1 - Intuitive du replacement
+All built from source with optimizations (updated to latest versions):
+- **bat** 0.26.0 - Syntax-highlighting cat replacement
+- **fd** 10.3.0 - Fast alternative to find
+- **ripgrep** 15.1.0 - Fast recursive grep
+- **eza** 0.23.4 - Modern ls replacement
+- **bottom** 0.11.2 - System monitor
+- **procs** 0.14.10 - Modern ps replacement
+- **zellij** 0.43.1 - Terminal multiplexer
+- **dust** 1.2.3 - Intuitive du replacement
 - **ox** - Modern text editor
 
 ### Utilities
@@ -92,7 +92,8 @@ All built from source with optimizations:
 - Standard development tools (git, cmake, build-essential, etc.)
 
 ### Middleware
-- **Zenoh** 0.11.0 - High-performance pub/sub middleware
+- **Zenoh** 1.6.2 - High-performance pub/sub middleware
+- **Zenoh ROS 2 DDS Bridge** 1.6.2 - Plugin for ROS 2 DDS communication bridge
 
 ## 📂 Directory Structure
 

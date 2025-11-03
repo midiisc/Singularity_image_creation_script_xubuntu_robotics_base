@@ -92,18 +92,20 @@ export FREECAD_VERSION="1.0.2"
 export KASMVNC_VERSION="1.3.1"
 
 # Modern CLI Tools (Rust-based) - all compiled from source
-export BAT_VERSION="0.24.0"
-export FD_VERSION="9.0.0"
-export RIPGREP_VERSION="14.1.0"
-export EZA_VERSION="0.17.3"
-export BOTTOM_VERSION="0.9.6"
-export PROCS_VERSION="0.14.4"
-export ZELLIJ_VERSION="0.40.1"
-export DU_DUST_VERSION="1.1.1"
+# Updated to latest compatible versions as of 2025-11-03
+export BAT_VERSION="0.26.0"
+export FD_VERSION="10.3.0"
+export RIPGREP_VERSION="15.1.0"
+export EZA_VERSION="0.23.4"
+export BOTTOM_VERSION="0.11.2"
+export PROCS_VERSION="0.14.10"
+export ZELLIJ_VERSION="0.43.1"
+export DU_DUST_VERSION="1.2.3"
 export OX_VERSION="latest"  # no version pinning for ox
 
 # Middleware
-export ZENOH_VERSION="0.11.0"
+export ZENOH_VERSION="1.6.2"
+export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
 
 # GPU/CUDA
 export NVIDIA_KEYRING_VER="1.1-1"
@@ -152,8 +154,15 @@ export NVIDIA_KEYRING_DEB="cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb"
 export NVIDIA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${NVIDIA_KEYRING_DEB}"
 
 # Zenoh
-export ZENOH_FILE="zenoh-${ZENOH_VERSION}-x86_64-unknown-linux-gnu.zip"
+# Using standalone variant for container builds (self-contained, no system dependencies)
+# Alternative: debian variant contains .deb packages for APT installation
+export ZENOH_FILE="zenoh-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-standalone.zip"
 export ZENOH_URL="https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_VERSION}/${ZENOH_FILE}"
+
+# Zenoh ROS 2 DDS Bridge Plugin
+# Enables communication between Zenoh and ROS 2 DDS systems
+export ZENOH_ROS2DDS_FILE="zenoh-plugin-ros2dds-${ZENOH_ROS2DDS_VERSION}-x86_64-unknown-linux-gnu-standalone.zip"
+export ZENOH_ROS2DDS_URL="https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/${ZENOH_ROS2DDS_VERSION}/${ZENOH_ROS2DDS_FILE}"
 
 # Open3D WebRTC (prebuilt binaries for Open3D 0.19.0 with GLIBCXX_USE_CXX11_ABI=ON)
 export OPEN3D_WEBRTC_FILE="webrtc_${OPEN3D_WEBRTC_VER}_cxx-abi-1.tar.gz"
