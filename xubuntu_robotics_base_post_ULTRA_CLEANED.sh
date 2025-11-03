@@ -6960,7 +6960,7 @@ set -euo pipefail
 DISPLAY_NUM=${1:-:1}
 PORT=$((5900 + ${DISPLAY_NUM#:}))
 
-echo "Starting x11vnc on display $DISPLAY_NUM (port $PORT)..."
+echo "Starting x11vnc on display ${DISPLAY_NUM} (port ${PORT})..."
 
 # Create password file if doesn't exist
 if [ ! -f ~/.vnc/passwd ]; then
@@ -6969,8 +6969,8 @@ if [ ! -f ~/.vnc/passwd ]; then
 fi
 
 # Start x11vnc
-x11vnc -display $DISPLAY_NUM \
-  -rfbport $PORT \
+x11vnc -display "${DISPLAY_NUM}" \
+  -rfbport "${PORT}" \
   -rfbauth ~/.vnc/passwd \
   -forever \
   -shared \
@@ -7171,7 +7171,7 @@ echo "✓ GPG key imported successfully."
 # We verify package integrity via dpkg instead (safer for build environment)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-for deb_file in ${CONTAINER_DEB_CACHE}/turbovnc_*.deb ${CONTAINER_DEB_CACHE}/virtualgl_*.deb; do
+for deb_file in "${CONTAINER_DEB_CACHE}"/turbovnc_*.deb "${CONTAINER_DEB_CACHE}"/virtualgl_*.deb; do
     if [ ! -f "$deb_file" ]; then
     echo "[warn] Package not found in cache, skipping: $(basename "$deb_file")"
         continue
@@ -7326,23 +7326,23 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
   
   # Method 2: Check for vncserver processes
-  if [ -z "$vnc_display" ]; then
+  if [ -z "${vnc_display}" ]; then
     vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
   fi
   
   # Method 3: Check for display :1, :2, etc.
-  if [ -z "$vnc_display" ]; then
+  if [ -z "${vnc_display}" ]; then
     for i in 1 2 3 4 5; do
-      if [ -S "/tmp/.X11-unix/X$i" ]; then
-        vnc_display=":$i"
+      if [ -S "/tmp/.X11-unix/X${i}" ]; then
+        vnc_display=":${i}"
         break
       fi
     done
   fi
   
   # Set VGL_DISPLAY
-  if [ -n "$vnc_display" ]; then
-    export VGL_DISPLAY="$vnc_display"
+  if [ -n "${vnc_display}" ]; then
+    export VGL_DISPLAY="${vnc_display}"
   else
     export VGL_DISPLAY=":0"  # Fallback
   fi
@@ -7387,10 +7387,10 @@ echo ""
 
 echo "1. Checking VirtualGL binaries:"
 for binary in vglrun glxinfo glxspheres64; do
-  if command -v $binary >/dev/null 2>&1; then
-    echo "  ✓ $binary: $(which $binary)"
+  if command -v "${binary}" >/dev/null 2>&1; then
+    echo "  ✓ ${binary}: $(which "${binary}")"
   else
-    echo "  ✗ $binary: NOT FOUND"
+    echo "  ✗ ${binary}: NOT FOUND"
   fi
 done
 
@@ -7622,10 +7622,10 @@ echo ""
 # Available tools
 echo "Available Utilities:"
 for tool in vglrun glxinfo glxspheres64 eglinfo cpustat nettest tcbench; do
-  if command -v $tool >/dev/null 2>&1; then
-    echo "  ✓ $tool"
+  if command -v "${tool}" >/dev/null 2>&1; then
+    echo "  ✓ ${tool}"
   else
-    echo "  ✗ $tool (not found)"
+    echo "  ✗ ${tool} (not found)"
   fi
 done
 
@@ -7674,7 +7674,7 @@ fi
 
 # Launch with VirtualGL
 echo "Launching with VirtualGL GPU acceleration..."
-echo "Command: vglrun $@"
+echo "Command: vglrun $*"
 echo ""
 exec vglrun "$@"
 VGLLAUNCH
@@ -7734,10 +7734,10 @@ vgl() {
 compare_render() {
   local app="${1:-glxspheres64}"
   echo "=== Software Rendering ==="
-  timeout 5s $app 2>&1 | grep -i fps | tail -1
+  timeout 5s "${app}" 2>&1 | grep -i fps | tail -1
   echo ""
   echo "=== GPU Rendering (VirtualGL) ==="
-  timeout 5s vglrun $app 2>&1 | grep -i fps | tail -1
+  timeout 5s vglrun "${app}" 2>&1 | grep -i fps | tail -1
 }
 
 #--- Sub-block: Section continuation (3345) ---
@@ -8112,7 +8112,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     echo "Miniforge installation attempt $((retry_count + 1))/${max_retries}..."
 
     # Clear any existing conda package cache to force fresh downloads
-    rm -rf ${MINIFORGE_HOME}/pkgs/* 2>/dev/null || true
+    rm -rf "${MINIFORGE_HOME}/pkgs"/* 2>/dev/null || true
     rm -rf /root/.cache/conda/* 2>/dev/null || true
 
     #--- Sub-block 16.5: Advanced conda cache cleanup ---
@@ -8153,7 +8153,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       corrupted_packages=()
 
       # Check all conda packages for integrity
-      find ${CONTAINER_CONDA_CACHE} -name "*.conda" -o -name "*.tar.bz2" | while read -r pkg_file; do
+      find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -o -name "*.tar.bz2" | while read -r pkg_file; do
         if ! verify_package_integrity "$pkg_file"; then
           pkg_name=$(basename "$pkg_file")
           echo "  Δ Found corrupted package: $pkg_name"
@@ -8174,8 +8174,8 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
       # Clear conda package cache metadata that might be stale
       echo "  Clearing conda package cache metadata..."
-      rm -rf ${CONTAINER_CONDA_CACHE}/cache/* 2>/dev/null || true
-      rm -rf ${CONTAINER_CONDA_CACHE}/*/info 2>/dev/null || true
+      rm -rf "${CONTAINER_CONDA_CACHE}/cache"/* 2>/dev/null || true
+      rm -rf "${CONTAINER_CONDA_CACHE}"/*/info 2>/dev/null || true
 
       # Force filesystem sync to ensure all writes are flushed
       sync
@@ -8193,11 +8193,11 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
     # Run installer with enhanced CRC error handling and non-interactive mode
     echo "Running Miniforge installer with enhanced CRC error handling..."
-    if yes "" | bash "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" -b -p ${MINIFORGE_HOME} -f > /tmp/miniforge_install.log 2>&1; then
+    if yes "" | bash "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" -b -p "${MINIFORGE_HOME}" -f > /tmp/miniforge_install.log 2>&1; then
       # Reset terminal state in case installer left control codes
       printf '\033[0m\n' # Reset all terminal attributes and print newline
       echo "✓ Miniforge installer completed"
-      mv /opt/.condarc.pre > ${MINIFORGE_HOME}/.condarc 2>/dev/null || true
+      mv /opt/.condarc.pre "${MINIFORGE_HOME}/.condarc" 2>/dev/null || true
 
 
 #--- Sub-block: Code section 3625 ---
@@ -8205,7 +8205,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
       # Verify Conda Installation
-      if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
+      if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
         echo "✓ Miniforge installed successfully"
         break
       else
@@ -8213,7 +8213,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         ((retry_count++))
         if [ $retry_count -lt $max_retries ]; then
           echo "Retrying Miniforge installation..."
-          rm -rf ${MINIFORGE_HOME}
+          rm -rf "${MINIFORGE_HOME}"
         fi
       fi
     else
@@ -8226,20 +8226,20 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         # Extract all corrupted package names from the log
         corrupted_pkgs=$(grep -o 'Extracting \(.*\)\.conda\|Extracting \(.*\)\.tar\.bz2' /tmp/miniforge_install.log | sed 's/Extracting //' | sort -u)
 
-        if [ -n "$corrupted_pkgs" ]; then
+        if [ -n "${corrupted_pkgs}" ]; then
           echo "→ Removing corrupted packages:"
-          for pkg in $corrupted_pkgs; do
-            echo "  - $pkg"
-            rm -f "${CONTAINER_CONDA_CACHE}/$pkg" 2>/dev/null || true
-            rm -f "${MINIFORGE_HOME}/pkgs/$pkg" 2>/dev/null || true
-            rm -f "/root/.cache/conda/pkgs/$pkg" 2>/dev/null || true
+          for pkg in ${corrupted_pkgs}; do
+            echo "  - ${pkg}"
+            rm -f "${CONTAINER_CONDA_CACHE}/${pkg}" 2>/dev/null || true
+            rm -f "${MINIFORGE_HOME}/pkgs/${pkg}" 2>/dev/null || true
+            rm -f "/root/.cache/conda/pkgs/${pkg}" 2>/dev/null || true
           done
         fi
 
           # Clear any remaining corrupted packages using integrity check
         echo "→ Performing integrity check on remaining packages..."
           if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
-            find ${CONTAINER_CONDA_CACHE} -name "*.conda" -type f -exec sh -c '
+            find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -type f -exec sh -c '
               for pkg; do
                 if ! unzip -t "$pkg" >/dev/null 2>&1; then
                 echo "Removing corrupted: $(basename "$pkg")"
@@ -9085,30 +9085,30 @@ detect_vgl_display() {
     vnc_display=$(ps aux | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
     
     # Method 2: Check for vncserver processes
-    if [ -z "$vnc_display" ]; then
+    if [ -z "${vnc_display}" ]; then
       vnc_display=$(ps aux | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
     fi
     
     # Method 3: Check for display :1, :2, etc.
-    if [ -z "$vnc_display" ]; then
+    if [ -z "${vnc_display}" ]; then
       for i in 1 2 3 4 5; do
-        if [ -S "/tmp/.X11-unix/X$i" ]; then
-          vnc_display=":$i"
+        if [ -S "/tmp/.X11-unix/X${i}" ]; then
+          vnc_display=":${i}"
           break
         fi
       done
     fi
     
-    if [ -n "$vnc_display" ]; then
-      export VGL_DISPLAY="$vnc_display"
-      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: $vnc_display"
+    if [ -n "${vnc_display}" ]; then
+      export VGL_DISPLAY="${vnc_display}"
+      [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: ${vnc_display}"
     else
-      export VGL_DISPLAY="$VGL_DISPLAY_FALLBACK"
-      [ "$VERBOSE_MODE" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: $VGL_DISPLAY_FALLBACK"
+      export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
+      [ "${VERBOSE_MODE}" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
     fi
   else
-    export VGL_DISPLAY="$VGL_DISPLAY_FALLBACK"
-    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: $VGL_DISPLAY_FALLBACK"
+    export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
+    [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
   fi
 }
 
@@ -9788,7 +9788,9 @@ LOGIN_NODE="${1:-107.122.148.226}"
 LOGIN_PORT="${LOGIN_PORT:-22}"
 VNC_PORT="${3:-5901}"
 WEB_PORT="${4:-6081}"
-TURBOVNC_WEB_PORT=$((5800 + ${VNC_PORT#59}))
+# Calculate TurboVNC web port more robustly (remove assumption that port starts with 59)
+VNC_DISPLAY_NUM_FROM_PORT=$((VNC_PORT - 5900))
+TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM_FROM_PORT))
 
 # Try to detect compute node from SLURM environment
 if [ -n "${SLURM_JOB_NODELIST:-}" ]; then
@@ -9863,9 +9865,13 @@ create_tunnel_scripts() {
     local compute_node="$2"
     local vnc_port="$3"
     local web_port="$4"
-    local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    # Calculate TurboVNC web port more robustly
+    local vnc_display_num=$((vnc_port - 5900))
+    local turbovnc_web_port=$((5800 + vnc_display_num))
     local user_name="$5"
     local node_ip="$6"
+    # Get login_port from outer scope (defined in main script)
+    local login_port="${LOGIN_PORT:-22}"
     
     # Create Stage 1 script (local machine to login node)
     cat > /tmp/vnc_tunnel_stage1.sh << EOF
@@ -9878,11 +9884,11 @@ echo "After connecting, run Stage 2 script on the login node."
 echo "Press Ctrl+C to stop this tunnel."
 echo ""
 
-ssh -L ${vnc_port}:localhost:${vnc_port} \\
-    -L ${web_port}:localhost:${web_port} \\
-    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    -p ${login_port} \\
-    ${user_name}@${login_node}
+ssh -L "${vnc_port}:localhost:${vnc_port}" \\
+    -L "${web_port}:localhost:${web_port}" \\
+    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
+    -p "${login_port}" \\
+    "${user_name}@${login_node}"
 EOF
 
     # Create Stage 2 script (login node to compute node)
@@ -9899,14 +9905,14 @@ echo "Press Ctrl+C to stop this tunnel."
 echo ""
 
 # Try hostname first, fallback to IP if needed
-ssh -L ${vnc_port}:localhost:${vnc_port} \\
-    -L ${web_port}:localhost:${web_port} \\
-    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    ${user_name}@${compute_node} || \\
-ssh -L ${vnc_port}:localhost:${vnc_port} \\
-    -L ${web_port}:localhost:${web_port} \\
-    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    ${user_name}@${node_ip}
+ssh -L "${vnc_port}:localhost:${vnc_port}" \\
+    -L "${web_port}:localhost:${web_port}" \\
+    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
+    "${user_name}@${compute_node}" || \\
+ssh -L "${vnc_port}:localhost:${vnc_port}" \\
+    -L "${web_port}:localhost:${web_port}" \\
+    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
+    "${user_name}@${node_ip}"
 EOF
 
     # Create combined script (direct two-stage tunnel)
@@ -9924,16 +9930,16 @@ echo "Press Ctrl+C to stop this tunnel."
 echo ""
 
 # Try hostname first, fallback to IP if needed
-ssh -J ${user_name}@${login_node}:${login_port} \\
-    -L ${vnc_port}:localhost:${vnc_port} \\
-    -L ${web_port}:localhost:${web_port} \\
-    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    ${user_name}@${compute_node} || \\
-ssh -J ${user_name}@${login_node}:${login_port} \\
-    -L ${vnc_port}:localhost:${vnc_port} \\
-    -L ${web_port}:localhost:${web_port} \\
-    -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} \\
-    ${user_name}@${node_ip}
+ssh -J "${user_name}@${login_node}:${login_port}" \\
+    -L "${vnc_port}:localhost:${vnc_port}" \\
+    -L "${web_port}:localhost:${web_port}" \\
+    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
+    "${user_name}@${compute_node}" || \\
+ssh -J "${user_name}@${login_node}:${login_port}" \\
+    -L "${vnc_port}:localhost:${vnc_port}" \\
+    -L "${web_port}:localhost:${web_port}" \\
+    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
+    "${user_name}@${node_ip}"
 EOF
 
     chmod +x /tmp/vnc_tunnel_*.sh
@@ -9942,11 +9948,15 @@ EOF
 show_connection_info() {
     local vnc_port="$1"
     local web_port="$2"
-    local turbovnc_web_port=$((5800 + ${vnc_port#59}))
+    # Calculate TurboVNC web port more robustly
+    local vnc_display_num=$((vnc_port - 5900))
+    local turbovnc_web_port=$((5800 + vnc_display_num))
     local user_name="$3"
     local compute_node="$4"
     local node_ip="$5"
     local login_node="$6"
+    # Get login_port from outer scope
+    local login_port="${LOGIN_PORT:-22}"
     
     echo -e "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
     echo ""
@@ -10414,10 +10424,15 @@ echo "Connect: http://localhost:$WEB_PORT/?token=$TOKEN"
 echo "=========================================="
 
 # Start websockify with token authentication
+# Create temporary token file (more robust than process substitution)
+TOKEN_FILE=$(mktemp)
+echo "$TOKEN: localhost:$VNC_PORT" > "$TOKEN_FILE"
+trap "rm -f '$TOKEN_FILE'" EXIT INT TERM
+
 /usr/bin/websockify \
   --web /usr/local/share/novnc \
   --token-plugin TokenFile \
-  --token-source <(echo "$TOKEN: localhost:$VNC_PORT") \
+  --token-source "$TOKEN_FILE" \
   $WEB_PORT
 NOVNCADV
 chmod +x /usr/local/bin/start_novnc_advanced.sh
