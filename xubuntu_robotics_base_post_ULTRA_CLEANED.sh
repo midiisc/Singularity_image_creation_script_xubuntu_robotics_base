@@ -10205,9 +10205,9 @@ vncserver ":${VNC_DISPLAY_NUM}" \
   -depth "${DEPTH}" \
   -localhost \
   -xstartup "$HOME/.vnc/xstartup" \
-  -quality ${TVNC_QUALITY} \
-  -compresslevel ${TVNC_COMPRESSLEVEL} \
-  -subsample ${TVNC_SUBSAMPLE}
+  -quality "${TVNC_QUALITY}" \
+  -compresslevel "${TVNC_COMPRESSLEVEL}" \
+  -subsample "${TVNC_SUBSAMPLE}"
 
 sleep 3
 
@@ -10260,7 +10260,7 @@ else
   done
 
   if [ -n "$NOVNC_DIR" ]; then
-    $WEBSOCKIFY --web "$NOVNC_DIR" ${WEB_PORT} localhost:${VNC_PORT} 2>&1 | \
+    $WEBSOCKIFY --web "$NOVNC_DIR" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
       grep -v "WARNING" | grep -v "numpy" &
     WSPID=$!
     sleep 2
@@ -10433,7 +10433,7 @@ trap "rm -f '$TOKEN_FILE'" EXIT INT TERM
   --web /usr/local/share/novnc \
   --token-plugin TokenFile \
   --token-source "$TOKEN_FILE" \
-  $WEB_PORT
+  "${WEB_PORT}"
 NOVNCADV
 chmod +x /usr/local/bin/start_novnc_advanced.sh
 
@@ -10610,11 +10610,11 @@ XS
 chmod +x ~/.vnc/xstartup
 
 echo "Starting KasmVNC..."
-echo "  Display: :$DISPLAY_NUM"
-echo "  VNC Port: $VNC_PORT"
-echo "  Web Port: $WEB_PORT"
+echo "  Display: :${DISPLAY_NUM}"
+echo "  VNC Port: ${VNC_PORT}"
+echo "  Web Port: ${WEB_PORT}"
 echo ""
-echo "Connect: http://localhost:$WEB_PORT"
+echo "Connect: http://localhost:${WEB_PORT}"
 echo ""
 
 #--- Sub-block: Section continuation (5022) ---
@@ -10622,10 +10622,10 @@ echo ""
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
 
-kasmvncserver :$DISPLAY_NUM \
+kasmvncserver ":${DISPLAY_NUM}" \
   -geometry 1920x1080 \
   -depth 24 \
-  -websocketPort $WEB_PORT \
+  -websocketPort "${WEB_PORT}" \
   -interface 0.0.0.0
 
 
