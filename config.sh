@@ -48,6 +48,8 @@ export BASE_IMAGE="${BASE_IMAGE_REPO}:${ROS_DISTRO}-${BASE_IMAGE_VARIANT}-${BASE
 #===============================================================================
 
 # Python/Conda
+# NOTE: Check https://github.com/conda-forge/miniforge/releases for latest version
+# Current version: 25.3.1-0 (verify at https://github.com/conda-forge/miniforge/releases/latest)
 export MINIFORGE_VER="25.3.1-0"
 export MICROMAMBA_VER="2.3.2-0"
 
@@ -113,9 +115,12 @@ export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
 export NVIDIA_KEYRING_VER="1.1-1"
 export CUDA_VERSION="12.6"
 export CUDA_MAJOR="12"
-export CUDNN_VER="9.14.0.64-1"  # CUDA 12.x compatible version (verified from repo)
-# Note: Available cuDNN versions: 9.14.0.64-1 (CUDA 13/12), 9.10.2.21-1 (CUDA 11)
-# If specific version not found, fallback logic will install latest compatible version
+export CUDNN_VER="9.14.0.64-1"  # CUDA 12.x compatible version (preferred, but may not be available)
+# Note: Available cuDNN versions vary by repository. Common versions:
+#   - 9.14.0.64-1 (CUDA 13/12) - may not be available in all repositories
+#   - 9.10.2.21-1 (CUDA 11)
+# If specific version not found, fallback logic will automatically install latest compatible version
+# The script checks version availability before attempting installation to avoid errors
 export CUDA_ARCH="8.6"  # NVIDIA A6000 architecture
 
 #===============================================================================
@@ -123,6 +128,8 @@ export CUDA_ARCH="8.6"  # NVIDIA A6000 architecture
 #===============================================================================
 
 # Miniforge
+# Official GitHub releases URL: https://github.com/conda-forge/miniforge/releases
+# Download URL pattern: https://github.com/conda-forge/miniforge/releases/download/{VERSION}/Miniforge3-{VERSION}-Linux-x86_64.sh
 export MINIFORGE_SH="Miniforge3-${MINIFORGE_VER}-Linux-x86_64.sh"
 export MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VER}/${MINIFORGE_SH}"
 

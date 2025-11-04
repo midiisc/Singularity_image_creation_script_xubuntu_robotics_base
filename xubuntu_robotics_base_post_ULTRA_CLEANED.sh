@@ -555,17 +555,53 @@ if [ -f /etc/apt/sources.list ]; then
   sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
   echo "[info] Updated /etc/apt/sources.list with fastest mirror"
   
-  # Verify the update was successful
-  if grep -q "${FASTEST_MIRROR}" /etc/apt/sources.list 2>/dev/null; then
+  # Verify the update was successful (more robust check)
+  # Extract base URL without protocol for flexible matching
+  MIRROR_BASE=$(echo "${FASTEST_MIRROR}" | sed 's|https\?://||')
+  MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
+  
+  # Escape special regex characters for safe use in grep patterns
+  MIRROR_BASE_ESCAPED=$(printf '%s\n' "${MIRROR_BASE}" | sed 's/[[\.*^$()+?{|]/\\&/g')
+  MIRROR_NO_PROTOCOL_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\.*^$()+?{|]/\\&/g')
+  FASTEST_MIRROR_ESCAPED=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g')
+  
+  # Check if mirror appears in active (non-commented) deb lines
+  VERIFICATION_PASSED=false
+  if grep -v "^#" /etc/apt/sources.list | grep -qE "(deb|deb-src).*${MIRROR_BASE_ESCAPED}" 2>/dev/null; then
+    VERIFICATION_PASSED=true
     echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
+  elif grep -v "^#" /etc/apt/sources.list | grep -qE "(deb|deb-src).*${MIRROR_NO_PROTOCOL_ESCAPED}" 2>/dev/null; then
+    VERIFICATION_PASSED=true
+    echo "[info] ✓ Verified: sources.list uses mirror (format may vary)"
+  elif grep -v "^#" /etc/apt/sources.list | grep -qF "${FASTEST_MIRROR}" 2>/dev/null; then
+    VERIFICATION_PASSED=true
+    echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
   else
-    echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+    # Check if file is actually empty or only has comments
+    ACTIVE_LINES=$(grep -v "^#" /etc/apt/sources.list | grep -v "^$" | wc -l || echo "0")
+    if [ "${ACTIVE_LINES:-0}" -eq 0 ]; then
+      echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
+      VERIFICATION_PASSED=true
+    else
+      echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+      echo "[info]   Checking for alternative mirror formats..."
+      # Show what we actually found
+      grep -v "^#" /etc/apt/sources.list | grep -E "(deb|deb-src)" | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
+    fi
   fi
   
-  # Also verify no archive.ubuntu.com remains
+  # Also verify no archive.ubuntu.com remains in active lines
   if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
     echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
-    sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" /etc/apt/sources.list
+    # Escape special sed characters in MIRROR_NO_PROTOCOL for safe replacement
+    MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
+    sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" /etc/apt/sources.list
+    # Verify again after additional replacement
+    if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+      echo "[warn] ⚠ archive.ubuntu.com still present after replacement attempt"
+    else
+      echo "[info] ✓ Additional replacement successful"
+    fi
   fi
 else
   echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
@@ -602,7 +638,12 @@ if [ -d /etc/apt/sources.list.d ]; then
         
         # Final check - remove any remaining archive.ubuntu.com references
         if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" "$sources_file"
+            # Use MIRROR_NO_PROTOCOL if already computed, otherwise compute it (escape for sed)
+            if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
+                MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
+            fi
+            MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" "$sources_file"
             echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
         fi
     done
@@ -725,7 +766,12 @@ reapply_fastest_mirror() {
         # Also verify no archive.ubuntu.com remains
         if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
             echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" /etc/apt/sources.list
+            # Compute MIRROR_NO_PROTOCOL if not already set, then escape for sed
+            if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
+                MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
+            fi
+            MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" /etc/apt/sources.list
         fi
         echo "[info] ✓ Updated /etc/apt/sources.list"
     else
@@ -762,7 +808,12 @@ reapply_fastest_mirror() {
             
             # Final check - remove any remaining archive.ubuntu.com references
             if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
-                sed -i "s|archive\\.ubuntu\\.com/ubuntu|$(echo ${FASTEST_MIRROR} | sed 's|http://||; s|https://||')|g" "$sources_file"
+                # Compute MIRROR_NO_PROTOCOL if not already set, then escape for sed
+                if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
+                    MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
+                fi
+                MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
+                sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" "$sources_file"
                 echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
             fi
         done
@@ -1723,15 +1774,29 @@ if is_install_command "$@"; then
   echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
 
     # Use a more robust approach to collect URIs
-  # Filter out package metadata and only extract actual download URIs
-  if /usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>/dev/null | \
-    grep -E "'(https?://[^']*)'" | \
-    sed -E "s/^'([^']+)'.*$/\1/" | \
-    sed "s/ //g" | \
-    grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null; then
-        echo "[apt-aria] URI collection successful"
+    # First, check if there are actually packages to download
+    APT_OUTPUT=$(/usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>&1)
+    APT_EXIT_CODE=$?
+    
+    # Check if packages are already installed or nothing to download (benign case)
+    if echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install|already installed)"; then
+        echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
+        touch "$URI_FILE"
+    # Check if there's an actual error (not just "no URIs")
+    elif [ $APT_EXIT_CODE -ne 0 ] && ! echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
+        echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: $APT_EXIT_CODE)"
+        echo "[apt-aria] Error output: $(echo "$APT_OUTPUT" | head -3)"
+        echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
+        touch "$URI_FILE"
+    # Try to extract URIs from the output
+    elif echo "$APT_OUTPUT" | grep -E "'(https?://[^']*)'" | \
+        sed -E "s/^'([^']+)'.*$/\1/" | \
+        sed "s/ //g" | \
+        grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null && [ -s "$URI_FILE" ]; then
+        echo "[apt-aria] URI collection successful ($(< "$URI_FILE" wc -l) packages)"
     else
-        echo "[apt-aria] URI collection failed, creating empty file"
+        # No URIs found, but not an error - likely already cached or installed
+        echo "[apt-aria] No URIs to download (packages may be cached or already installed)"
         touch "$URI_FILE"
     fi
 
@@ -1857,16 +1922,62 @@ fi
 
 # 2. Update package list and install cuDNN
 # The container already has curl, gnupg, and ca-certificates from essential tools.
-# We install a specific version of libcudnn8 compatible with the Cuda 12 range.
+# We install a specific version of libcudnn9 compatible with the Cuda 12 range.
 # This ensures reproducibility. You can update the version number as needed.
 apt-get update
 # The following command installs the runtime library and the dev library needed for compiling software.
 CUDA_MAJOR="${CUDA_VERSION%%.*}"  # Extract major version (e.g., "12" from "12.6")
-if ! apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} cuda-toolkit-${CUDA_MAJOR}; then
-  echo "WARNING: Failed to install specific pinned cuDNN version. Attempting to install latest version."
-  apt-get install -y --no-install-recommends libcudnn9-cuda-${CUDA_MAJOR} libcudnn9-dev-cuda-${CUDA_MAJOR} cuda-toolkit-${CUDA_MAJOR}
+
+# Check if the specific cuDNN version is available before attempting installation
+echo "Checking availability of cuDNN version ${CUDNN_VER}..."
+CUDNN_VERSION_AVAILABLE=false
+# Use -F for fixed-string matching (safer for version strings with special characters)
+if apt-cache policy libcudnn9 2>/dev/null | grep -qF "${CUDNN_VER}"; then
+    CUDNN_VERSION_AVAILABLE=true
+    echo "  ✓ Version ${CUDNN_VER} is available in repository"
+else
+    echo "  ⚠ Version ${CUDNN_VER} not found in repository"
+    echo "  Checking available cuDNN versions..."
+    apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)"
 fi
-echo "✓ NVIDIA cuDNN installed successfully."
+
+# Try to install specific version if available, otherwise fall back to latest
+CUDNN_INSTALLED=false
+if [ "$CUDNN_VERSION_AVAILABLE" = "true" ]; then
+    echo "Installing cuDNN version ${CUDNN_VER}..."
+    if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee /tmp/cudnn_install.log; then
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            CUDNN_INSTALLED=true
+            echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
+        fi
+    fi
+fi
+
+# Fallback to latest compatible version if specific version failed or wasn't available
+if [ "$CUDNN_INSTALLED" = "false" ]; then
+    echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
+    echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
+    if apt-get install -y --no-install-recommends libcudnn9-cuda-${CUDA_MAJOR} libcudnn9-dev-cuda-${CUDA_MAJOR} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee -a /tmp/cudnn_install.log; then
+        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            CUDNN_INSTALLED=true
+            # Detect installed version
+            INSTALLED_CUDNN_VER=$(dpkg -l | grep -E "^ii\s+libcudnn9" | awk '{print $3}' | head -1)
+            if [ -n "${INSTALLED_CUDNN_VER}" ]; then
+                echo "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
+            else
+                echo "  ✓ Successfully installed latest cuDNN version"
+            fi
+        fi
+    fi
+fi
+
+if [ "$CUDNN_INSTALLED" = "true" ]; then
+    echo "✓ NVIDIA cuDNN installed successfully."
+else
+    echo "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details."
+    export PHASE2_STATUS="FAIL"
+    exit 1
+fi
 # --- Configuration Step (Fixing the PATH) ---
 echo -e "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment variables for CUDA...${NC}"
 # After CUDA installation, detect actual installed version (or use config.sh default)
@@ -5183,8 +5294,18 @@ fi
 
 # Also install jupyter_packaging which is needed for Open3D's pip package installation
 echo "Installing jupyter_packaging (required for Open3D pip package installation)..."
-pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || \
-  echo "⚠ jupyter_packaging installation failed (may affect Open3D pip package build)"
+if pip3 install --no-cache-dir "jupyter_packaging>=0.12.0"; then
+    # Verify it's actually importable
+    if python3 -c "import jupyter_packaging" 2>/dev/null; then
+        JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+        echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
+    else
+        echo "  ⚠ jupyter_packaging installed but not importable (may need to retry later)"
+    fi
+else
+    echo "  ⚠ jupyter_packaging installation failed (may affect Open3D pip package build)"
+    echo "  Will retry installation before Open3D Python package build"
+fi
 
 # Verify Jupyter packages were installed
 echo "Verifying Jupyter packages installation..."
@@ -6564,6 +6685,32 @@ fi
 # Install Python module with multiple fallback strategies
 # Based on official Open3D documentation: https://www.open3d.org/docs/latest/compilation.html
 echo "Installing Open3D Python module..."
+
+# CRITICAL: Ensure Python build tools are up-to-date before Open3D installation
+# This fixes AttributeError issues and ensures jupyter_packaging is available
+echo "Upgrading pip, setuptools, and wheel (required for Open3D Python package)..."
+pip3 install --no-cache-dir --upgrade pip setuptools wheel || {
+    echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
+}
+
+# Verify and install jupyter_packaging (CRITICAL for Open3D pip package installation)
+echo "Verifying jupyter_packaging installation..."
+if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
+    echo "  jupyter_packaging not found, installing..."
+    pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || {
+        echo "⚠ jupyter_packaging installation failed - will try alternative installation methods"
+    }
+else
+    echo "  ✓ jupyter_packaging is available"
+fi
+
+# Verify jupyter_packaging is actually importable
+if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
+    echo "⚠ WARNING: jupyter_packaging still not importable after installation attempt"
+    echo "  This may cause ninja install-pip-package to fail"
+    echo "  Will fall back to alternative installation methods if needed"
+fi
+
 PYTHON_INSTALLED=false
 OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path (should be /tmp/Open3D/build)
 # Source directory (/tmp/Open3D) - safely get parent directory
@@ -6613,6 +6760,8 @@ verify_open3d_installation() {
 #       in the main Open3D Python package/wheel, not as a separate package.
 #       Both ninja install-pip-package and ninja python-package handle this automatically.
 echo "Strategy 1: ninja install-pip-package (official recommended method)..."
+# Clear any previous log
+> /tmp/open3d_python_install.log
 if ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
     # Check exit status - tee doesn't preserve it
     if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -6625,12 +6774,36 @@ if ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
             echo "⚠ install-pip-package succeeded but module not yet importable"
         fi
     else
-        echo "⚠ ninja install-pip-package failed (exit code: ${PIPESTATUS[0]})"
+        NINJA_EXIT=${PIPESTATUS[0]}
+        echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
+        # Check for specific error patterns in the log
+        if grep -q "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
+            echo "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
+            echo "  This is a known issue with Open3D build scripts on Python 3.10+"
+            echo "  Falling back to Strategy 2 (python-package)..."
+        elif grep -q "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
+            echo "  Detected missing jupyter_packaging module"
+            echo "  Attempting to install jupyter_packaging and retry..."
+            pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || true
+            echo "  Falling back to Strategy 2 (python-package)..."
+        fi
     fi
 else
     # Capture exit status when if condition fails
     NINJA_EXIT=${PIPESTATUS[0]:-$?}
     echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
+    # Check log for specific errors
+    if [ -f /tmp/open3d_python_install.log ]; then
+        if grep -q "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
+            echo "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
+            echo "  This is a known issue with Open3D build scripts on Python 3.10+"
+            echo "  Falling back to Strategy 2 (python-package)..."
+        elif grep -q "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
+            echo "  Detected missing jupyter_packaging module"
+            echo "  Attempting to install jupyter_packaging and will try Strategy 2..."
+            pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || true
+        fi
+    fi
 fi
 
 # Strategy 2: Build Python wheel and install it WITHOUT dependencies
@@ -6641,6 +6814,13 @@ fi
 if [ "$PYTHON_INSTALLED" = false ]; then
     echo ""
     echo "Strategy 2: Building Python wheel with ninja python-package..."
+    # Ensure jupyter_packaging is available for wheel build (required for Jupyter extension)
+    if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
+        echo "  Installing jupyter_packaging for wheel build..."
+        pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || {
+            echo "  ⚠ jupyter_packaging installation failed (may affect wheel build)"
+        }
+    fi
     if ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
         # Check exit status - tee doesn't preserve it
         if [ ${PIPESTATUS[0]} -eq 0 ]; then
@@ -6694,23 +6874,39 @@ if [ "$PYTHON_INSTALLED" = false ]; then
             if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ]; then
                 echo "  Searching pip build log for wheel location (parsing terminal output)..."
                 
-                # Priority 1: Look for "Stored in directory:" - pip's standard output format
+                # Priority 1: Look for "Stored in directory:" or "Store in directory:" - pip's standard output format
                 # This handles random pip-ephem-wheel-cache-* directory names by extracting exact path
-                STORED_DIR=$(grep -m1 "Stored in directory:" /tmp/open3d_python_install.log 2>/dev/null | \
-                    sed 's/.*Stored in directory:[[:space:]]*//' | \
+                # Also handles cases where pip might output the full wheel path after the directory
+                STORED_DIR=$(grep -m1 -i "Store[d]* in directory:" /tmp/open3d_python_install.log 2>/dev/null | \
+                    sed 's/.*[Ss]tore[d]* in directory:[[:space:]]*//' | \
                     sed 's/[[:space:]]*$//' | \
                     sed "s/^['\"]//; s/['\"]\$//" | \
+                    sed 's/[[:space:]].*$//' | \
                     head -1)
-                # Validate that we got a non-empty directory path and that it exists
-                if [ -n "${STORED_DIR}" ] && [ "${#STORED_DIR}" -gt 1 ] && [ -d "${STORED_DIR}" ]; then
-                    echo "  Found 'Stored in directory' in log: ${STORED_DIR}"
-                    # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
-                    # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
-                    WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-                    if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                        echo "  ✓ Found wheel from stored directory: ${WHEEL_FILE}"
-                    else
-                        echo "  ⚠ Wheel not found in stored directory (will try other methods)"
+                
+                # Check if STORED_DIR is actually a file (full wheel path) or directory
+                if [ -n "${STORED_DIR}" ] && [ "${#STORED_DIR}" -gt 1 ]; then
+                    if [ -f "${STORED_DIR}" ] && [[ "${STORED_DIR}" == *.whl ]]; then
+                        # It's actually a full wheel path, not just a directory
+                        WHEEL_FILE="${STORED_DIR}"
+                        echo "  ✓ Found full wheel path from 'Stored in directory': ${WHEEL_FILE}"
+                    elif [ -d "${STORED_DIR}" ]; then
+                        # It's a directory, search for wheel inside it
+                        echo "  Found 'Stored in directory' in log: ${STORED_DIR}"
+                        # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
+                        # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
+                        # Use maxdepth 10 to handle deeply nested hash directories
+                        WHEEL_FILE=$(find "${STORED_DIR}" -maxdepth 10 -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                        if [ -z "${WHEEL_FILE}" ]; then
+                            # Try deeper search if maxdepth didn't find it
+                            WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                        fi
+                        if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+                            echo "  ✓ Found wheel from stored directory: ${WHEEL_FILE}"
+                        else
+                            echo "  ⚠ Wheel not found in stored directory (will try other methods)"
+                            echo "    Searched in: ${STORED_DIR}"
+                        fi
                     fi
                 fi
                 
@@ -6746,25 +6942,38 @@ if [ "$PYTHON_INSTALLED" = false ]; then
             
             # 8. Check ephemeral pip cache directories (created during build process)
             # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
+            # Also handles: /tmp/cuda_build/pip-ephem-wheel-cache-* (user-reported location)
             # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
+            # Note: pip may also create pip-ephem-whee-cache-* (truncated), so we search for both patterns
             if [ -z "${WHEEL_FILE}" ]; then
+                echo "  Searching ephemeral pip cache directories..."
                 # First check specific known locations with glob patterns
                 # Use nullglob and failglob safety - check if glob expands before using
                 for pattern in "/tmp/cuda_build/pip-ephem-wheel-cache-"* \
-                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"*; do
+                              "/tmp/cuda_build/pip-ephem-whee-cache-"* \
+                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"* \
+                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-"*; do
                     # Check if pattern expanded to actual directories (not literal pattern)
                     if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
+                       [ "${pattern}" != "/tmp/cuda_build/pip-ephem-whee-cache-*" ] && \
                        [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
+                       [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-*" ] && \
                        [ -d "${pattern}" ]; then
+                        echo "    Checking ephemeral cache: ${pattern}"
                         # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
                         # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-                        WHEEL_FILE=$(find "${pattern}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                        # Try with maxdepth first for efficiency, then full recursive
+                        WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                        if [ -z "${WHEEL_FILE}" ]; then
+                            # Try fewer nesting levels
+                            WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                        fi
                         if [ -z "${WHEEL_FILE}" ]; then
                             # Also try without the nested pattern (sometimes fewer levels)
                             WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                         fi
                         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                            echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                            echo "  ✓ Found wheel in ephemeral cache: ${WHEEL_FILE}"
                             break
                         fi
                     fi
@@ -6785,29 +6994,40 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                                 break
                             fi
                         fi
-                    done < <(find /tmp -maxdepth 2 -type d -name "pip-ephem-wheel-cache-*" 2>/dev/null | head -5)
+                    done < <(find /tmp -maxdepth 3 -type d \( -name "pip-ephem-wheel-cache-*" -o -name "pip-ephem-whee-cache-*" \) 2>/dev/null | head -10)
                 fi
             fi
             
             # 9. Comprehensive recursive search in /tmp for any pip cache directories and wheels
             # This is the most thorough search - checks all nested wheel locations
+            # Handles both pip-ephem-wheel-cache-* and pip-ephem-whee-cache-* patterns
             if [ -z "${WHEEL_FILE}" ]; then
+                echo "  Performing comprehensive recursive search in /tmp..."
                 # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-                WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                if [ -z "${WHEEL_FILE}" ]; then
+                # Also try pip-ephem-whee-cache-* (truncated variant)
+                for cache_pattern in "pip-ephem-wheel-cache-*" "pip-ephem-whee-cache-*"; do
+                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                    if [ -n "${WHEEL_FILE}" ]; then
+                        break
+                    fi
                     # Try with fewer nesting levels
-                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
-                fi
-                if [ -z "${WHEEL_FILE}" ]; then
+                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+                    if [ -n "${WHEEL_FILE}" ]; then
+                        break
+                    fi
                     # General search in any wheels directory
-                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/wheels/*/open3d*.whl" 2>/dev/null | head -1)
-                fi
-                if [ -z "${WHEEL_FILE}" ]; then
+                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+                    if [ -n "${WHEEL_FILE}" ]; then
+                        break
+                    fi
                     # Final fallback - any open3d wheel in pip cache directories
-                    WHEEL_FILE=$(find /tmp -type f -path "*/pip-ephem-wheel-cache-*/*/open3d*.whl" 2>/dev/null | head -1)
-                fi
+                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/*/open3d*.whl" 2>/dev/null | head -1)
+                    if [ -n "${WHEEL_FILE}" ]; then
+                        break
+                    fi
+                done
                 if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                    echo "  Found wheel via recursive search: ${WHEEL_FILE}"
+                    echo "  ✓ Found wheel via comprehensive recursive search: ${WHEEL_FILE}"
                 fi
             fi
             
@@ -8424,6 +8644,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
   # Purpose: Allow multiple installation attempts with cleanup
   max_retries=3
   retry_count=0
+  MINIFORGE_INSTALLED=false
 
   #--- Sub-block 16.4: Miniforge installation retry loop ---
   # Critical: Retry installation with cache cleanup between attempts
@@ -8526,6 +8747,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       # Verify Conda Installation
       if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
         echo "✓ Miniforge installed successfully"
+        MINIFORGE_INSTALLED=true
         break
       else
         echo "[warn] Miniforge installation may have failed - conda binary not found"
@@ -8668,16 +8890,26 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       
       # Update conda itself and core components (conda, conda-build, conda-env, conda-libmamba-solver, etc.)
       # Note: conda-libmamba-solver enables faster conda solving even when mamba is not available
-      # Redirect both stdout and stderr to suppress output but preserve error detection
+      # Use explicit channel priority and ensure clean update
       if ${MINIFORGE_HOME}/bin/conda update -y -n base -c conda-forge \
-          conda conda-build conda-env conda-libmamba-solver >/dev/null 2>&1; then
+          --override-channels \
+          conda conda-build conda-env conda-libmamba-solver 2>&1 | tee /tmp/conda_update.log; then
         printf '\033[0m\n' # Reset terminal state after conda update
         CONDA_VERSION_AFTER=$(${MINIFORGE_HOME}/bin/conda --version 2>/dev/null | head -1 || echo "unknown")
         echo "✓ Conda and core components updated successfully"
         echo "  Conda version after update: ${CONDA_VERSION_AFTER}"
       else
-        echo "[warn] Conda update failed (non-critical, continuing with existing version)"
+        echo "[warn] Conda update failed - checking error log..."
+        tail -20 /tmp/conda_update.log 2>/dev/null || true
+        echo "[warn] Continuing with existing conda version (non-critical)"
+        # Try a simpler update without override-channels
+        if ${MINIFORGE_HOME}/bin/conda update -y -n base conda >/tmp/conda_update_simple.log 2>&1; then
+          echo "✓ Conda updated successfully (simplified update)"
+        else
+          echo "[warn] Simplified conda update also failed - using existing version"
+        fi
       fi
+      rm -f /tmp/conda_update.log /tmp/conda_update_simple.log 2>/dev/null || true
 
       # Install mamba as the PREFERRED solver (with conda fallback)
       echo "Installing mamba solver (PREFERRED - will fallback to conda if needed)..."
@@ -8754,7 +8986,11 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
   fi
   # End installation verification (if-else self-contained)
   # End retry loop (while loop self-contained)
-  echo "[warn] Miniforge Installation failed after $max_retries attempts"
+  
+  # Only show failure message if installation actually failed
+  if [ "$MINIFORGE_INSTALLED" = false ]; then
+    echo "[warn] Miniforge Installation failed after $max_retries attempts"
+  fi
 
   # Clean up temporary files
   rm -f /tmp/miniforge_install.log 2>/dev/null || true
@@ -9091,9 +9327,41 @@ else
   mkdir -p /usr/share/ocio/aces && cd /tmp || { echo "Failed to change to /tmp"; exit 1; }
   curl -fsSL --retry 3 --retry-delay 2 -o aces.tar.gz https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/archive/refs/heads/master.tar.gz || true
   if [ -f aces.tar.gz ]; then
-    tar -xzf aces.tar.gz --strip-components=2 -C /usr/share/ocio/aces OpenColorIO-Config-ACES-master/aces_1.2 || true
-    if [ -f /usr/share/ocio/aces/config.ocio ]; then
-      printf 'export OCIO="/usr/share/ocio/aces/config.ocio"\n' > /etc/profile.d/99-ocio.sh
+    # Extract the archive to inspect its structure
+    tar -xzf aces.tar.gz || true
+    # Find config.ocio in the extracted archive (try multiple possible locations)
+    OCIO_CONFIG_FOUND=""
+    if [ -d "OpenColorIO-Config-ACES-master" ]; then
+      # Try aces_1.2 first (most common)
+      if [ -f "OpenColorIO-Config-ACES-master/aces_1.2/config.ocio" ]; then
+        cp -r "OpenColorIO-Config-ACES-master/aces_1.2"/* /usr/share/ocio/aces/ 2>/dev/null || true
+        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
+      # Try aces_1.3 if available
+      elif [ -f "OpenColorIO-Config-ACES-master/aces_1.3/config.ocio" ]; then
+        cp -r "OpenColorIO-Config-ACES-master/aces_1.3"/* /usr/share/ocio/aces/ 2>/dev/null || true
+        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
+      # Try root level config.ocio
+      elif [ -f "OpenColorIO-Config-ACES-master/config.ocio" ]; then
+        cp "OpenColorIO-Config-ACES-master/config.ocio" /usr/share/ocio/aces/ 2>/dev/null || true
+        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
+      # Search for any config.ocio in the archive
+      else
+        OCIO_CONFIG_FOUND=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f | head -1)
+        if [ -n "$OCIO_CONFIG_FOUND" ]; then
+          OCIO_DIR=$(dirname "$OCIO_CONFIG_FOUND")
+          cp -r "$OCIO_DIR"/* /usr/share/ocio/aces/ 2>/dev/null || true
+          OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
+        fi
+      fi
+    fi
+    # Clean up extracted archive
+    rm -rf OpenColorIO-Config-ACES-master aces.tar.gz 2>/dev/null || true
+    # Set OCIO environment variable if config was found
+    if [ -n "$OCIO_CONFIG_FOUND" ] && [ -f "$OCIO_CONFIG_FOUND" ]; then
+      printf 'export OCIO="%s"\n' "$OCIO_CONFIG_FOUND" > /etc/profile.d/99-ocio.sh
+      echo "✓ OCIO config installed from ACES repository: $OCIO_CONFIG_FOUND"
+    else
+      echo "⚠ OCIO config.ocio not found in ACES archive - OCIO may not be fully configured"
     fi
   fi
 fi
@@ -11044,6 +11312,9 @@ XPRA_INSTALLED=false
 # CRITICAL: Install Xpra dependencies BEFORE installing Xpra to avoid libavcodec60 removal
 # libavcodec60 is required by Xpra for video encoding/decoding
 # We install all multimedia libraries first to satisfy dependencies
+# Note: libavresample4 is deprecated in Ubuntu 24.04, replaced by libswresample
+# CRITICAL: x264 and vpx dev packages needed for wheel build with codec support
+# CRITICAL: libxxhash-dev needed for pkg-config during wheel build
 apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
@@ -11058,11 +11329,31 @@ apt-get install -y --no-install-recommends \
     libavutil58 \
     libavformat60 \
     libswscale7 \
-    libavresample4 \
+    libswresample4 \
+    libx264-dev \
+    libvpx-dev \
+    libxxhash-dev \
+    pkg-config \
     || echo "⚠ Some Xpra dependencies may not be available"
+
+# Try to install libavresample4 as fallback (for older Xpra compatibility)
+# This is optional - newer Xpra versions use libswresample instead
+apt-get install -y --no-install-recommends libavresample4 2>/dev/null || \
+    echo "⚠ libavresample4 not available (using libswresample4 instead - this is normal in Ubuntu 24.04)"
 
 # Fix any broken dependencies that may have occurred
 apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non-critical)"
+
+# Ensure PKG_CONFIG_PATH includes libxxhash.pc location
+# libxxhash-dev installs .pc file to standard locations, but ensure PKG_CONFIG_PATH is set
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+echo "==> PKG_CONFIG_PATH configured for codec libraries: ${PKG_CONFIG_PATH}"
+
+# Verify codec libraries are available for wheel build
+echo "==> Verifying codec library availability..."
+pkg-config --exists libx264 && echo "✓ x264 found" || echo "⚠ x264 not found in pkg-config"
+pkg-config --exists vpx && echo "✓ vpx found" || echo "⚠ vpx not found in pkg-config"
+pkg-config --exists libxxhash && echo "✓ libxxhash found" || echo "⚠ libxxhash not found in pkg-config"
 
 # Install Xpra from PyPI (uses version from config.sh)
 # Using PyPI ensures we get the latest from GitHub releases
@@ -11465,6 +11756,9 @@ echo "==> Rust tools (bat, fd, ripgrep, eza, bottom, procs) compiled from source
 
 # zoxide (better cd)
 curl -sS https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | bash
+# Add /root/.local/bin to PATH so zoxide is available
+export PATH="/root/.local/bin:${PATH}"
+echo "==> Added /root/.local/bin to PATH for zoxide"
 
 
 #--- Sub-block: Code section 5192 (ALIASES MOVED TO BLOCK 24) ---
@@ -12163,12 +12457,29 @@ alias grep='rg'
 alias top='btm'
 alias ps='procs'
 
+# Add /root/.local/bin to PATH for zoxide (if not already present)
+export PATH="/root/.local/bin:${PATH}"
 # Initialize zoxide (better cd) - installed earlier via curl script
 eval "$(zoxide init bash)"
 alias cd='z'
 RUSTALIASES
 
 echo "✓ Rust tool aliases configured"
+
+#--- Sub-block: Add /root/.local/bin to system-wide PATH ---
+# Purpose: Ensure zoxide is available in all shell sessions
+# Dependencies: zoxide installation (Block 23)
+# Outputs: System-wide PATH configuration
+echo "==> Creating system-wide PATH configuration for zoxide..."
+cat > /etc/profile.d/zoxide-path.sh << 'EOF'
+#!/bin/sh
+# Add /root/.local/bin to PATH for zoxide
+if [ -d "/root/.local/bin" ]; then
+    export PATH="/root/.local/bin:${PATH}"
+fi
+EOF
+chmod +x /etc/profile.d/zoxide-path.sh
+echo "✓ System-wide PATH configuration for zoxide created"
 
 # ZELLIJ CONFIGURATION
 mkdir -p /etc/zellij
