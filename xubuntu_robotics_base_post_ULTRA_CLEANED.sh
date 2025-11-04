@@ -11315,6 +11315,12 @@ XPRA_INSTALLED=false
 # Note: libavresample4 is deprecated in Ubuntu 24.04, replaced by libswresample
 # CRITICAL: x264 and vpx dev packages needed for wheel build with codec support
 # CRITICAL: libxxhash-dev needed for pkg-config during wheel build
+# CRITICAL: Cairo and GTK3 dependencies for py3cairo (required by virtual:world extra)
+#   - python3-cairo: Python Cairo bindings runtime
+#   - python3-cairo-dev: Python Cairo bindings development headers (provides py3cairo)
+#   - libcairo2-dev: Cairo graphics library development files
+#   - libgtk-3-dev: GTK+ 3.0 development files
+#   - python3-gi-dev: GObject introspection development files
 apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
@@ -11325,6 +11331,11 @@ apt-get install -y --no-install-recommends \
     python3-lz4 \
     python3-netifaces \
     python3-websockify \
+    python3-cairo \
+    python3-cairo-dev \
+    libcairo2-dev \
+    libgtk-3-dev \
+    python3-gi-dev \
     libavcodec60 \
     libavutil58 \
     libavformat60 \
@@ -11344,6 +11355,20 @@ apt-get install -y --no-install-recommends libavresample4 2>/dev/null || \
 # Fix any broken dependencies that may have occurred
 apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non-critical)"
 
+# Verify Cairo/Py3Cairo installation (required for virtual:world extra)
+echo "==> Verifying Cairo and py3cairo availability..."
+if pkg-config --exists py3cairo 2>/dev/null; then
+    echo "✓ py3cairo found in pkg-config"
+elif python3 -c "import cairo" 2>/dev/null; then
+    echo "✓ python3-cairo module importable"
+else
+    echo "⚠ py3cairo not found - may cause build issues"
+    echo "  Attempting to verify python3-cairo installation..."
+    dpkg -l | grep -E "python3-cairo|libcairo" | head -5 || echo "    (Could not verify Cairo packages)"
+fi
+pkg-config --exists cairo && echo "✓ cairo library found" || echo "⚠ cairo library not found in pkg-config"
+pkg-config --exists gtk+-3.0 && echo "✓ gtk+-3.0 found" || echo "⚠ gtk+-3.0 not found in pkg-config"
+
 # Ensure PKG_CONFIG_PATH includes libxxhash.pc location
 # libxxhash-dev installs .pc file to standard locations, but ensure PKG_CONFIG_PATH is set
 export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
@@ -11351,7 +11376,7 @@ echo "==> PKG_CONFIG_PATH configured for codec libraries: ${PKG_CONFIG_PATH}"
 
 # Verify codec libraries are available for wheel build
 echo "==> Verifying codec library availability..."
-pkg-config --exists libx264 && echo "✓ x264 found" || echo "⚠ x264 not found in pkg-config"
+pkg-config --exists x264 && echo "✓ x264 found" || echo "⚠ x264 not found in pkg-config"
 pkg-config --exists vpx && echo "✓ vpx found" || echo "⚠ vpx not found in pkg-config"
 pkg-config --exists libxxhash && echo "✓ libxxhash found" || echo "⚠ libxxhash not found in pkg-config"
 
@@ -11373,7 +11398,8 @@ else
         echo "  Installing from Xpra official repository as fallback..."
         # Add Xpra official repository as fallback
         echo "deb https://xpra.org/ stable main" > /etc/apt/sources.list.d/xpra.list
-        wget -qO- https://xpra.org/gpg.asc | apt-key add - 2>/dev/null || true
+        # Modern GPG key handling (replaces deprecated apt-key)
+        wget -qO- https://xpra.org/gpg.asc | gpg --dearmor > /etc/apt/trusted.gpg.d/xpra.gpg 2>/dev/null || true
         apt-get update -qq
         if apt-get install -y --no-install-recommends xpra 2>/dev/null; then
             echo "✓ Xpra installed from official repository"
@@ -11405,7 +11431,9 @@ else
         if tar -xzf /tmp/xpra-html5.tar.gz 2>/dev/null; then
             XPRA_HTML5_EXTRACTED=$(ls -d xpra-html5-* 2>/dev/null | head -1)
             if [ -n "${XPRA_HTML5_EXTRACTED}" ] && [ -d "${XPRA_HTML5_EXTRACTED}/html5" ]; then
-                if cp -r "${XPRA_HTML5_EXTRACTED}/html5"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                # Construct full source path for robust glob expansion
+                XPRA_HTML5_SOURCE="${XPRA_HTML5_EXTRACTED}/html5"
+                if cp -r "${XPRA_HTML5_SOURCE}"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
                     echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR}"
                     XPRA_HTML5_INSTALLED=true
                 else
@@ -11429,7 +11457,9 @@ else
             if tar -xzf /tmp/xpra-html5-master.tar.gz 2>/dev/null; then
                 XPRA_HTML5_MASTER=$(ls -d xpra-html5-master 2>/dev/null | head -1)
                 if [ -n "${XPRA_HTML5_MASTER}" ] && [ -d "${XPRA_HTML5_MASTER}/html5" ]; then
-                    if cp -r "${XPRA_HTML5_MASTER}/html5"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                    # Construct full source path for robust glob expansion
+                    XPRA_HTML5_SOURCE_MASTER="${XPRA_HTML5_MASTER}/html5"
+                    if cp -r "${XPRA_HTML5_SOURCE_MASTER}"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
                         echo "✓ Xpra HTML5 client installed from master branch"
                         XPRA_HTML5_INSTALLED=true
                     else
@@ -11483,8 +11513,8 @@ else
 fi
 
 echo "Starting Xpra server..."
-xpra start :${DISPLAY_NUM} \
-  --bind-tcp=0.0.0.0:${PORT} \
+xpra start ":${DISPLAY_NUM}" \
+  --bind-tcp="0.0.0.0:${PORT}" \
   --html=on \
   --start=startxfce4 \
   --daemon=no \
@@ -11512,7 +11542,7 @@ echo "Connect: http://localhost:${PORT}/"
 echo ""
 
 xpra start --start="${APP}" \
-  --bind-tcp=0.0.0.0:${PORT} \
+  --bind-tcp="0.0.0.0:${PORT}" \
   --html=on \
   --daemon=no \
   --webdir="/usr/local/share/xpra/www" \
@@ -11552,10 +11582,10 @@ PORT=$((5900 + DISPLAY_NUM))
 
 echo "Starting x11vnc on display :${DISPLAY_NUM} (port ${PORT})"
 
-x11vnc -display :${DISPLAY_NUM} \
+x11vnc -display ":${DISPLAY_NUM}" \
   -forever \
   -shared \
-  -rfbport ${PORT} \
+  -rfbport "${PORT}" \
   -nopw
 X11VNC
 chmod +x /usr/local/bin/start_x11vnc.sh
