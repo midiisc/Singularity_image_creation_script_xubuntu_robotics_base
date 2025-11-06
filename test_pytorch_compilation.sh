@@ -2372,6 +2372,13 @@ export USE_TENSORPIPE=0
 export USE_GLOO=0
 export USE_MPI=0
 
+# NCCL configuration (for multi-GPU communication)
+# NOTE: When USE_DISTRIBUTED=0, NCCL is typically not needed, but PyTorch may auto-enable it
+# Explicitly disable NCCL to avoid building it from source (which can fail)
+# If you need distributed training, set USE_DISTRIBUTED=1 and USE_NCCL=1
+export USE_NCCL=0  # Disable NCCL (not needed for single-GPU or non-distributed builds)
+export USE_SYSTEM_NCCL=0  # Don't use system NCCL (since we're disabling NCCL)
+
 # Performance Libraries (CPU parallelism and multithreading)
 # OFFICIALLY SUPPORTED FLAGS (from PYTORCH_BUILD_FLAGS.md):
 # - USE_OPENMP: Enable OpenMP for parallel CPU operations (Auto-detect, set to 1 to enable)
@@ -2379,13 +2386,25 @@ export USE_MPI=0
 # - BLAS: Set to "OpenBLAS" to use OpenBLAS instead of MKL
 # - LAPACK: Set to "OpenBLAS" to use OpenBLAS LAPACK (OpenBLAS includes LAPACK)
 # Reference: https://github.com/pytorch/pytorch#from-source
+#
+# CRITICAL: USE_TBB and USE_OPENMP are MUTUALLY EXCLUSIVE
+# PyTorch will ignore USE_TBB if USE_OPENMP is enabled (or vice versa)
+# For OpenBLAS builds, OpenMP is recommended and required
+# TBB is typically used with MKL builds, not OpenBLAS builds
+# See: https://docs.pytorch.org/docs/2.8/notes/cpu_threading_torchscript_inference.html
 
-export USE_OPENMP=1  # OpenMP for CPU parallelism (officially supported flag)
+export USE_OPENMP=1  # OpenMP for CPU parallelism (officially supported flag, required for OpenBLAS)
 
-# Set TBB enable/disable based on availability
+# TBB configuration: DISABLED when OpenMP is enabled (they conflict)
+# PyTorch will ignore USE_TBB=1 if USE_OPENMP=1 is set
+# If you want to use TBB instead, set USE_OPENMP=0 and USE_TBB=1
+# However, OpenBLAS builds typically require OpenMP, so TBB is not recommended here
 if [ "${TBB_FOUND:-false}" = "true" ]; then
-    export USE_TBB=1
-    echo "  USE_TBB=1 (TBB enabled - officially supported flag)"
+    # TBB is available, but we're using OpenMP instead (they conflict)
+    export USE_TBB=0  # Explicitly disable TBB to avoid conflicts
+    echo -e "  ${YELLOW}⚠ TBB found but DISABLED (conflicts with USE_OPENMP=1)${NC}"
+    echo "    USE_TBB is officially supported but ignored when USE_OPENMP is enabled"
+    echo "    Using OpenMP instead (recommended for OpenBLAS builds)"
 else
     echo -e "  ${YELLOW}⚠ TBB not found - PyTorch will build without TBB support${NC}"
     export USE_TBB=0
@@ -2580,11 +2599,12 @@ if [ -n "${CMAKE_CUDA_COMPILER:-}" ]; then
 fi
 echo "    CMAKE_BUILD_TYPE=Release"
 echo "    BUILD_TEST=0 (tests skipped)"
-echo "    USE_OPENMP=1 (OpenMP enabled)"
+echo "    USE_OPENMP=1 (OpenMP enabled - required for OpenBLAS)"
+echo "    USE_TBB=0 (TBB disabled - conflicts with OpenMP, will be ignored if set)"
+echo "    USE_NCCL=0 (NCCL disabled - not needed for non-distributed builds)"
+echo "    USE_DISTRIBUTED=0 (Distributed training disabled)"
 if [ "${TBB_FOUND:-false}" = "true" ]; then
-    echo "    USE_TBB=1 (TBB enabled)"
-else
-    echo "    USE_TBB=0 (TBB not available)"
+    echo "      Note: TBB is available but disabled due to OpenMP conflict"
 fi
 if [ "${LAPACK_FOUND:-false}" = "true" ]; then
     echo "    LAPACK enabled (system LAPACK available)"
