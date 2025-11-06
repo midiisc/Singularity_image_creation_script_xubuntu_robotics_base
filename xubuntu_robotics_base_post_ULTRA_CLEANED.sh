@@ -5439,7 +5439,31 @@ detect_cuda_version_for_jax() {
 detect_cuda_version_for_jax
 echo "  JAX CUDA variant: ${CUDA_FOR_JAX} (CUDA ${CUDA_VERSION}.x)"
 
-#--- Sub-block 13B.1.1: Verify prerequisites ---
+#--- Sub-block 13B.1.1: Install system prerequisites ---
+# Purpose: Install system packages required for JAX CUDA (pre-built wheels)
+# Dependencies: APT repositories configured
+# Outputs: System packages installed
+# Note: Using pre-built wheels, so we don't need Bazel/Java, but still need runtime deps
+echo "Installing system prerequisites for JAX CUDA..."
+
+# Update package lists
+apt-get update -o Acquire::Retries=3 -qq
+
+# Install required system packages
+# zlib1g-dev: Compression library (required by JAX dependencies)
+# libjpeg-dev: JPEG support (used by some ML libraries)
+# libpng-dev: PNG support (used by some ML libraries)
+# unzip: Archive extraction (may be needed for some dependencies)
+apt-get install -y --no-install-recommends \
+    zlib1g-dev \
+    libjpeg-dev \
+    libpng-dev \
+    unzip \
+    2>&1 | grep -v "^\(Reading database\|Building dependency tree\|Reading state information\)" || true
+
+echo "  ✓ System prerequisites installed"
+
+#--- Sub-block 13B.1.2: Verify prerequisites ---
 # Purpose: Ensure all required packages and libraries are available
 # Dependencies: CUDA, cuDNN, Python, NumPy (installed earlier)
 # Outputs: Prerequisite verification status
@@ -5467,6 +5491,13 @@ if ! command -v nvcc &> /dev/null; then
     echo "  ⚠ WARNING: nvcc not found - JAX will install but may not have GPU support"
 else
     echo "  ✓ CUDA compiler (nvcc) found"
+fi
+
+# Check zlib development library
+if ldconfig -p 2>/dev/null | grep -q libz; then
+    echo "  ✓ zlib library found"
+else
+    echo "  ⚠ WARNING: zlib library not found - may affect JAX dependencies"
 fi
 
 # Check NumPy (required dependency for JAX)
