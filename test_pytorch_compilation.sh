@@ -721,10 +721,12 @@ check_package() {
 }
 
 # Check each package and add to install list if missing
+# CRITICAL: Include LAPACKE for full LAPACK support
 for pkg in build-essential cmake ninja-build git curl wget \
-           libopenblas-dev liblapack-dev libblas-dev \
+           libopenblas-dev liblapack-dev liblapacke-dev libblas-dev \
            libomp-dev libtbb-dev python3-dev python3-pip \
-           python3-setuptools python3-wheel util-linux shellcheck sysstat jq; do
+           python3-setuptools python3-wheel util-linux shellcheck sysstat jq \
+           pkg-config; do
     if ! check_package "${pkg}"; then
         PACKAGES_TO_INSTALL+=("${pkg}")
     else
@@ -1608,25 +1610,297 @@ else
     echo -e "${YELLOW}⚠ OpenBLAS headers not found${NC}"
 fi
 
-# Verify OpenMP
+# Verify and install OpenMP if missing
+OPENMP_FOUND=false
 if ldconfig -p 2>/dev/null | grep -q libomp; then
     echo -e "${GREEN}✓ OpenMP found${NC}"
+    OPENMP_FOUND=true
 else
-    echo -e "${YELLOW}⚠ OpenMP not found${NC}"
+    echo -e "${YELLOW}⚠ OpenMP not found - installing...${NC}"
+    if [ -z "${APT_CMD:-}" ]; then
+        echo -e "${RED}✗ ERROR: APT_CMD not set${NC}"
+        OPENMP_FOUND=false
+    elif ! check_package "libomp-dev"; then
+        if ${APT_CMD} install -y -qq libomp-dev libomp5 2>/dev/null; then
+            # Verify installation succeeded
+            if ldconfig -p 2>/dev/null | grep -q libomp; then
+                echo -e "${GREEN}✓ OpenMP installed and verified${NC}"
+                OPENMP_FOUND=true
+            else
+                echo -e "${YELLOW}⚠ OpenMP installation completed but library not found in ldconfig${NC}"
+                OPENMP_FOUND=false
+            fi
+        else
+            echo -e "${YELLOW}⚠ OpenMP installation failed, continuing...${NC}"
+            OPENMP_FOUND=false
+        fi
+    else
+        # Package already installed, verify library is available
+        if ldconfig -p 2>/dev/null | grep -q libomp; then
+            echo -e "${GREEN}✓ OpenMP package installed and library verified${NC}"
+            OPENMP_FOUND=true
+        else
+            echo -e "${YELLOW}⚠ OpenMP package installed but library not found in ldconfig${NC}"
+            OPENMP_FOUND=false
+        fi
+    fi
 fi
 
-# Verify TBB (Threading Building Blocks)
+# Verify and install TBB (Threading Building Blocks) if missing
+TBB_FOUND=false
 if ldconfig -p 2>/dev/null | grep -q libtbb; then
     echo -e "${GREEN}✓ TBB (Threading Building Blocks) found${NC}"
+    TBB_FOUND=true
 else
-    echo -e "${YELLOW}⚠ TBB not found (optional, but recommended)${NC}"
+    echo -e "${YELLOW}⚠ TBB not found - installing...${NC}"
+    if [ -z "${APT_CMD:-}" ]; then
+        echo -e "${RED}✗ ERROR: APT_CMD not set${NC}"
+        TBB_FOUND=false
+    elif ! check_package "libtbb-dev"; then
+        if ${APT_CMD} install -y -qq libtbb-dev 2>/dev/null; then
+            # Verify installation succeeded
+            if ldconfig -p 2>/dev/null | grep -q libtbb; then
+                echo -e "${GREEN}✓ TBB installed and verified${NC}"
+                TBB_FOUND=true
+            else
+                echo -e "${YELLOW}⚠ TBB installation completed but library not found in ldconfig${NC}"
+                TBB_FOUND=false
+            fi
+        else
+            echo -e "${YELLOW}⚠ TBB installation failed, continuing...${NC}"
+            TBB_FOUND=false
+        fi
+    else
+        # Package already installed, verify library is available
+        if ldconfig -p 2>/dev/null | grep -q libtbb; then
+            echo -e "${GREEN}✓ TBB package installed and library verified${NC}"
+            TBB_FOUND=true
+        else
+            echo -e "${YELLOW}⚠ TBB package installed but library not found in ldconfig${NC}"
+            TBB_FOUND=false
+        fi
+    fi
 fi
 
-# Verify LAPACK
+# Verify and install LAPACK if missing
+LAPACK_FOUND=false
 if ldconfig -p 2>/dev/null | grep -q liblapack; then
     echo -e "${GREEN}✓ LAPACK found${NC}"
+    LAPACK_FOUND=true
 else
-    echo -e "${YELLOW}⚠ LAPACK not found${NC}"
+    echo -e "${YELLOW}⚠ LAPACK not found - installing...${NC}"
+    if [ -z "${APT_CMD:-}" ]; then
+        echo -e "${RED}✗ ERROR: APT_CMD not set${NC}"
+        LAPACK_FOUND=false
+    elif ! check_package "liblapack-dev"; then
+        if ${APT_CMD} install -y -qq liblapack-dev liblapacke-dev 2>/dev/null; then
+            # Verify installation succeeded
+            if ldconfig -p 2>/dev/null | grep -q liblapack; then
+                echo -e "${GREEN}✓ LAPACK installed and verified${NC}"
+                LAPACK_FOUND=true
+            else
+                echo -e "${YELLOW}⚠ LAPACK installation completed but library not found in ldconfig${NC}"
+                LAPACK_FOUND=false
+            fi
+        else
+            echo -e "${YELLOW}⚠ LAPACK installation failed, continuing...${NC}"
+            LAPACK_FOUND=false
+        fi
+    else
+        # Package already installed, verify library is available
+        if ldconfig -p 2>/dev/null | grep -q liblapack; then
+            echo -e "${GREEN}✓ LAPACK package installed and library verified${NC}"
+            LAPACK_FOUND=true
+        else
+            echo -e "${YELLOW}⚠ LAPACK package installed but library not found in ldconfig${NC}"
+            LAPACK_FOUND=false
+        fi
+    fi
+fi
+
+# Verify LAPACKE (LAPACK C interface) - required for some PyTorch operations
+LAPACKE_FOUND=false
+if ldconfig -p 2>/dev/null | grep -q liblapacke; then
+    echo -e "${GREEN}✓ LAPACKE found${NC}"
+    LAPACKE_FOUND=true
+else
+    echo -e "${YELLOW}⚠ LAPACKE not found - installing...${NC}"
+    if [ -z "${APT_CMD:-}" ]; then
+        echo -e "${YELLOW}⚠ APT_CMD not set, skipping LAPACKE installation (optional)${NC}"
+        LAPACKE_FOUND=false
+    elif ! check_package "liblapacke-dev"; then
+        if ${APT_CMD} install -y -qq liblapacke-dev 2>/dev/null; then
+            # Verify installation succeeded
+            if ldconfig -p 2>/dev/null | grep -q liblapacke; then
+                echo -e "${GREEN}✓ LAPACKE installed and verified${NC}"
+                LAPACKE_FOUND=true
+            else
+                echo -e "${YELLOW}⚠ LAPACKE installation completed but library not found in ldconfig (optional)${NC}"
+                LAPACKE_FOUND=false
+            fi
+        else
+            echo -e "${YELLOW}⚠ LAPACKE installation failed, continuing (optional)...${NC}"
+            LAPACKE_FOUND=false
+        fi
+    else
+        # Package already installed, verify library is available
+        if ldconfig -p 2>/dev/null | grep -q liblapacke; then
+            echo -e "${GREEN}✓ LAPACKE package installed and library verified${NC}"
+            LAPACKE_FOUND=true
+        else
+            echo -e "${YELLOW}⚠ LAPACKE package installed but library not found in ldconfig (optional)${NC}"
+            LAPACKE_FOUND=false
+        fi
+    fi
+fi
+
+#===============================================================================
+# Step 1.5: Detect and configure optional libraries (OpenCV, Ceres, g2o, GTSAM)
+#===============================================================================
+echo -e "${BLUE}[Step 1.5] Detecting optional libraries for PyTorch linking...${NC}"
+
+# Detect OpenCV
+OPENCV_FOUND=false
+OPENCV_DIR=""
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists opencv4 2>/dev/null; then
+    OPENCV_FOUND=true
+    OPENCV_DIR=$(pkg-config --variable=prefix opencv4 2>/dev/null || echo "")
+    if [ -z "${OPENCV_DIR:-}" ] || [ ! -d "${OPENCV_DIR}" ]; then
+        OPENCV_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ OpenCV 4 found via pkg-config${NC}"
+    echo "  OpenCV prefix: ${OPENCV_DIR}"
+elif command -v pkg-config >/dev/null 2>&1 && pkg-config --exists opencv 2>/dev/null; then
+    OPENCV_FOUND=true
+    OPENCV_DIR=$(pkg-config --variable=prefix opencv 2>/dev/null || echo "")
+    if [ -z "${OPENCV_DIR:-}" ] || [ ! -d "${OPENCV_DIR}" ]; then
+        OPENCV_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ OpenCV found via pkg-config${NC}"
+    echo "  OpenCV prefix: ${OPENCV_DIR}"
+elif [ -f "/usr/local/lib/pkgconfig/opencv4.pc" ] || [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/opencv4.pc" ]; then
+    OPENCV_FOUND=true
+    if [ -f "/usr/local/lib/pkgconfig/opencv4.pc" ] && [ -d "/usr/local" ]; then
+        OPENCV_DIR="/usr/local"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/pkgconfig/opencv4.pc" ] && [ -d "/usr" ]; then
+        OPENCV_DIR="/usr"
+    else
+        OPENCV_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ OpenCV found in system${NC}"
+    echo "  OpenCV prefix: ${OPENCV_DIR}"
+elif [ -d "/usr/local/include/opencv4" ] || [ -d "/usr/include/opencv4" ]; then
+    OPENCV_FOUND=true
+    if [ -d "/usr/local/include/opencv4" ] && [ -d "/usr/local" ]; then
+        OPENCV_DIR="/usr/local"
+    elif [ -d "/usr/include/opencv4" ] && [ -d "/usr" ]; then
+        OPENCV_DIR="/usr"
+    else
+        OPENCV_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ OpenCV headers found${NC}"
+    echo "  OpenCV prefix: ${OPENCV_DIR}"
+else
+    echo -e "${YELLOW}⚠ OpenCV not found (optional)${NC}"
+    echo "  PyTorch will be built without OpenCV support"
+fi
+
+# Detect Ceres Solver
+CERES_FOUND=false
+CERES_DIR=""
+if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists ceres 2>/dev/null; then
+    CERES_FOUND=true
+    CERES_DIR=$(pkg-config --variable=prefix ceres 2>/dev/null || echo "")
+    if [ -z "${CERES_DIR:-}" ] || [ ! -d "${CERES_DIR}" ]; then
+        CERES_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ Ceres Solver found via pkg-config${NC}"
+    echo "  Ceres prefix: ${CERES_DIR}"
+elif [ -f "/usr/local/lib/cmake/Ceres/CeresConfig.cmake" ] || [ -f "/usr/lib/x86_64-linux-gnu/cmake/Ceres/CeresConfig.cmake" ]; then
+    CERES_FOUND=true
+    if [ -f "/usr/local/lib/cmake/Ceres/CeresConfig.cmake" ] && [ -d "/usr/local" ]; then
+        CERES_DIR="/usr/local"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/cmake/Ceres/CeresConfig.cmake" ] && [ -d "/usr" ]; then
+        CERES_DIR="/usr"
+    else
+        CERES_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ Ceres Solver found in system${NC}"
+    echo "  Ceres prefix: ${CERES_DIR}"
+elif [ -f "/usr/local/include/ceres/ceres.h" ] || [ -f "/usr/include/ceres/ceres.h" ]; then
+    CERES_FOUND=true
+    if [ -f "/usr/local/include/ceres/ceres.h" ] && [ -d "/usr/local" ]; then
+        CERES_DIR="/usr/local"
+    elif [ -f "/usr/include/ceres/ceres.h" ] && [ -d "/usr" ]; then
+        CERES_DIR="/usr"
+    else
+        CERES_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ Ceres Solver headers found${NC}"
+    echo "  Ceres prefix: ${CERES_DIR}"
+else
+    echo -e "${YELLOW}⚠ Ceres Solver not found (optional)${NC}"
+    echo "  PyTorch will be built without Ceres support"
+fi
+
+# Detect g2o
+G2O_FOUND=false
+G2O_DIR=""
+if [ -f "/usr/local/lib/cmake/g2o/g2oConfig.cmake" ] || [ -f "/usr/lib/x86_64-linux-gnu/cmake/g2o/g2oConfig.cmake" ]; then
+    G2O_FOUND=true
+    if [ -f "/usr/local/lib/cmake/g2o/g2oConfig.cmake" ] && [ -d "/usr/local" ]; then
+        G2O_DIR="/usr/local"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/cmake/g2o/g2oConfig.cmake" ] && [ -d "/usr" ]; then
+        G2O_DIR="/usr"
+    else
+        G2O_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ g2o found in system${NC}"
+    echo "  g2o prefix: ${G2O_DIR}"
+elif [ -f "/usr/local/include/g2o/core/base_vertex.h" ] || [ -f "/usr/include/g2o/core/base_vertex.h" ]; then
+    G2O_FOUND=true
+    if [ -f "/usr/local/include/g2o/core/base_vertex.h" ] && [ -d "/usr/local" ]; then
+        G2O_DIR="/usr/local"
+    elif [ -f "/usr/include/g2o/core/base_vertex.h" ] && [ -d "/usr" ]; then
+        G2O_DIR="/usr"
+    else
+        G2O_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ g2o headers found${NC}"
+    echo "  g2o prefix: ${G2O_DIR}"
+else
+    echo -e "${YELLOW}⚠ g2o not found (optional)${NC}"
+    echo "  PyTorch will be built without g2o support"
+fi
+
+# Detect GTSAM
+GTSAM_FOUND=false
+GTSAM_DIR=""
+if [ -f "/usr/local/lib/cmake/GTSAM/GTSAMConfig.cmake" ] || [ -f "/usr/lib/x86_64-linux-gnu/cmake/GTSAM/GTSAMConfig.cmake" ]; then
+    GTSAM_FOUND=true
+    if [ -f "/usr/local/lib/cmake/GTSAM/GTSAMConfig.cmake" ] && [ -d "/usr/local" ]; then
+        GTSAM_DIR="/usr/local"
+    elif [ -f "/usr/lib/x86_64-linux-gnu/cmake/GTSAM/GTSAMConfig.cmake" ] && [ -d "/usr" ]; then
+        GTSAM_DIR="/usr"
+    else
+        GTSAM_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ GTSAM found in system${NC}"
+    echo "  GTSAM prefix: ${GTSAM_DIR}"
+elif [ -f "/usr/local/include/gtsam/base/Matrix.h" ] || [ -f "/usr/include/gtsam/base/Matrix.h" ]; then
+    GTSAM_FOUND=true
+    if [ -f "/usr/local/include/gtsam/base/Matrix.h" ] && [ -d "/usr/local" ]; then
+        GTSAM_DIR="/usr/local"
+    elif [ -f "/usr/include/gtsam/base/Matrix.h" ] && [ -d "/usr" ]; then
+        GTSAM_DIR="/usr"
+    else
+        GTSAM_DIR="/usr/local"
+    fi
+    echo -e "${GREEN}✓ GTSAM headers found${NC}"
+    echo "  GTSAM prefix: ${GTSAM_DIR}"
+else
+    echo -e "${YELLOW}⚠ GTSAM not found (optional)${NC}"
+    echo "  PyTorch will be built without GTSAM support"
 fi
 
 echo ""
@@ -1834,16 +2108,207 @@ fi
 # Display CUDA version
 echo "  CUDA version: ${CUDA_VERSION}"
 if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "12" ]; then
-    echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} toolkit detected and verified${NC}\n"
+    echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} toolkit detected and verified${NC}"
 else
-    echo -e "${YELLOW}⚠ CUDA ${CUDA_VERSION} detected (expected 12.x)${NC}\n"
+    echo -e "${YELLOW}⚠ CUDA ${CUDA_VERSION} detected (expected 12.x)${NC}"
 fi
 
-# CUDA compute capabilities
-CUDA_ARCH_LIST="8.6;8.9;9.0"
-CMAKE_CUDA_ARCHITECTURES="86;89;90"
-echo "  CUDA compute capabilities: ${CUDA_ARCH_LIST}"
-echo "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
+# Function to check if nvcc supports a specific compute capability
+check_nvcc_arch_support() {
+    local arch="${1:-}"
+    if [ -z "${arch}" ]; then
+        return 1
+    fi
+    
+    # Validate arch format (should be X.Y where X and Y are digits)
+    if ! echo "${arch}" | grep -qE '^[0-9]+\.[0-9]+$'; then
+        return 1
+    fi
+    
+    local arch_no_dot
+    arch_no_dot=$(echo "${arch}" | tr -d '.' 2>/dev/null || echo "")
+    if [ -z "${arch_no_dot}" ]; then
+        return 1
+    fi
+    
+    # First, try to test nvcc directly (most reliable method)
+    if command -v nvcc >/dev/null 2>&1; then
+        local test_file
+        test_file=$(mktemp /tmp/nvcc_test_XXXXXX.cu 2>/dev/null || echo "")
+        if [ -z "${test_file}" ]; then
+            # Fallback if mktemp fails
+            test_file="/tmp/nvcc_test_${arch_no_dot}_$$.cu"
+        fi
+        
+        # Create test file
+        if ! echo '__global__ void test(){}' > "${test_file}" 2>/dev/null; then
+            # Can't create test file, skip nvcc test
+            test_file=""
+        else
+            # Try to compile for this architecture
+            # Use proper quoting and error handling
+            if nvcc -arch="compute_${arch_no_dot}" -c "${test_file}" -o /dev/null 2>/dev/null; then
+                rm -f "${test_file}" 2>/dev/null || true
+                return 0
+            fi
+            # Clean up test file
+            rm -f "${test_file}" 2>/dev/null || true
+        fi
+    fi
+    
+    # Fallback: Check based on CUDA version and known support matrix
+    # CUDA 12.0+ supports: 8.6, 8.9
+    # CUDA 12.4+ supports: 8.6, 8.9, 9.0
+    if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "12" ]; then
+        local cuda_minor=0
+        if [ -n "${CUDA_VERSION:-}" ]; then
+            local version_part
+            version_part=$(echo "${CUDA_VERSION}" | cut -d. -f2 2>/dev/null || echo "")
+            if [ -n "${version_part}" ] && echo "${version_part}" | grep -qE '^[0-9]+$'; then
+                cuda_minor="${version_part}"
+            fi
+        fi
+        
+        case "${arch}" in
+            "8.6")
+                return 0  # Always supported in CUDA 12.x
+                ;;
+            "8.9")
+                # 8.9 requires CUDA 12.0+ (all CUDA 12.x versions support it)
+                # Since we're already in CUDA 12.x branch, it's supported
+                return 0
+                ;;
+            "9.0")
+                # 9.0 requires CUDA 12.4+
+                if [ -n "${cuda_minor}" ] && [ "${cuda_minor}" -ge 4 ] 2>/dev/null; then
+                    return 0
+                fi
+                return 1
+                ;;
+            "8.0"|"7.5"|"7.0")
+                # Older architectures - generally supported in CUDA 12.x
+                return 0
+                ;;
+            *)
+                # Unknown architecture - be conservative
+                return 1
+                ;;
+        esac
+    fi
+    
+    # For CUDA 11.x or other versions, be conservative
+    if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "11" ]; then
+        # CUDA 11.x supports up to 8.6
+        case "${arch}" in
+            "8.6"|"8.0"|"7.5"|"7.0"|"6.1"|"6.0"|"5.2"|"5.0"|"3.7"|"3.5"|"3.0"|"2.1"|"2.0"|"1.3"|"1.0")
+                return 0
+                ;;
+            "8.9"|"9.0")
+                return 1  # Not supported in CUDA 11.x
+                ;;
+            *)
+                # Unknown architecture - be conservative
+                return 1
+                ;;
+        esac
+    fi
+    
+    # For other CUDA versions or unknown versions, be very conservative
+    # Only support well-known older architectures
+    case "${arch}" in
+        "7.5"|"7.0"|"6.1"|"6.0"|"5.2"|"5.0"|"3.7"|"3.5"|"3.0"|"2.1"|"2.0"|"1.3"|"1.0")
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Build CUDA architecture list based on CUDA version and nvcc support
+# Allow override via environment variable
+CUDA_ARCH_LIST=""
+CMAKE_CUDA_ARCHITECTURES=""
+
+if [ -n "${TORCH_CUDA_ARCH_LIST_OVERRIDE:-}" ]; then
+    echo "  Using user-specified CUDA architectures: ${TORCH_CUDA_ARCH_LIST_OVERRIDE}"
+    CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST_OVERRIDE}"
+    # Convert to CMake format (remove dots from each architecture, keep semicolons)
+    # Example: "8.6;8.9" -> "86;89"
+    # Use proper error handling for command substitution
+    CMAKE_CUDA_ARCHITECTURES=$(echo "${CUDA_ARCH_LIST}" | sed 's/\.//g' 2>/dev/null || echo "")
+    if [ -z "${CMAKE_CUDA_ARCHITECTURES}" ]; then
+        echo -e "${RED}✗ ERROR: Failed to convert CUDA architecture list to CMake format${NC}"
+        exit 1
+    fi
+    echo "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
+    echo "  Note: User override - architectures will not be validated"
+    echo ""
+else
+    # Common architectures to try (in order of preference)
+    # Start with most common/recent architectures
+    ARCH_CANDIDATES="8.6 8.9 9.0 8.0 7.5 7.0"
+    
+    echo "  Detecting supported CUDA compute capabilities..."
+    echo "  Testing architectures with nvcc..."
+    for arch in ${ARCH_CANDIDATES}; do
+        if [ -z "${arch:-}" ]; then
+            continue
+        fi
+        
+        if check_nvcc_arch_support "${arch}"; then
+            arch_no_dot=$(echo "${arch}" | tr -d '.' 2>/dev/null || echo "")
+            if [ -z "${arch_no_dot}" ]; then
+                echo "    ⚠ ${arch} - failed to process architecture format"
+                continue
+            fi
+            
+            if [ -z "${CUDA_ARCH_LIST:-}" ]; then
+                CUDA_ARCH_LIST="${arch}"
+                CMAKE_CUDA_ARCHITECTURES="${arch_no_dot}"
+            else
+                CUDA_ARCH_LIST="${CUDA_ARCH_LIST};${arch}"
+                CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES};${arch_no_dot}"
+            fi
+            echo "    ✓ compute_${arch_no_dot} (sm_${arch_no_dot}) - supported"
+        else
+            arch_no_dot=$(echo "${arch}" | tr -d '.' 2>/dev/null || echo "")
+            if [ -n "${arch_no_dot}" ]; then
+                echo "    ✗ compute_${arch_no_dot} (sm_${arch_no_dot}) - not supported by CUDA ${CUDA_VERSION:-unknown} or nvcc"
+            else
+                echo "    ✗ ${arch} - invalid architecture format"
+            fi
+        fi
+    done
+    
+    # Validate that we have at least one architecture
+    if [ -z "${CUDA_ARCH_LIST:-}" ] || [ -z "${CMAKE_CUDA_ARCHITECTURES:-}" ]; then
+        echo -e "${RED}✗ ERROR: No supported CUDA architectures found${NC}"
+        echo "  Please check your CUDA installation and version"
+        echo "  CUDA version detected: ${CUDA_VERSION:-unknown}"
+        echo "  CUDA major version: ${CUDA_MAJOR:-unknown}"
+        if command -v nvcc >/dev/null 2>&1; then
+            echo "  nvcc found: $(command -v nvcc)"
+        else
+            echo "  nvcc not found in PATH"
+        fi
+        echo "  You can override by setting: export TORCH_CUDA_ARCH_LIST_OVERRIDE=\"8.6\""
+        exit 1
+    fi
+    
+    echo "  Selected CUDA compute capabilities: ${CUDA_ARCH_LIST}"
+    echo "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
+    echo "  Note: To override, set TORCH_CUDA_ARCH_LIST_OVERRIDE environment variable"
+    echo ""
+fi
+
+# Final validation - ensure both variables are set
+if [ -z "${CUDA_ARCH_LIST:-}" ] || [ -z "${CMAKE_CUDA_ARCHITECTURES:-}" ]; then
+    echo -e "${RED}✗ ERROR: CUDA architecture configuration failed${NC}"
+    echo "  CUDA_ARCH_LIST: ${CUDA_ARCH_LIST:-not set}"
+    echo "  CMAKE_CUDA_ARCHITECTURES: ${CMAKE_CUDA_ARCHITECTURES:-not set}"
+    exit 1
+fi
 
 #===============================================================================
 # Step 4: Set up build environment for OpenBLAS
@@ -1908,34 +2373,165 @@ export USE_GLOO=0
 export USE_MPI=0
 
 # Performance Libraries (CPU parallelism and multithreading)
-export USE_OPENMP=1  # OpenMP for CPU parallelism (required)
-export USE_TBB=1     # Intel Threading Building Blocks (if available)
-export TBB_SOURCE_DIR=/usr/include/tbb  # TBB include path
+# OFFICIALLY SUPPORTED FLAGS (from PYTORCH_BUILD_FLAGS.md):
+# - USE_OPENMP: Enable OpenMP for parallel CPU operations (Auto-detect, set to 1 to enable)
+# - USE_TBB: Enable Intel Threading Building Blocks (Auto-detect, set to 1 to enable)
+# - BLAS: Set to "OpenBLAS" to use OpenBLAS instead of MKL
+# - LAPACK: Set to "OpenBLAS" to use OpenBLAS LAPACK (OpenBLAS includes LAPACK)
+# Reference: https://github.com/pytorch/pytorch#from-source
+
+export USE_OPENMP=1  # OpenMP for CPU parallelism (officially supported flag)
+
+# Set TBB enable/disable based on availability
+if [ "${TBB_FOUND:-false}" = "true" ]; then
+    export USE_TBB=1
+    echo "  USE_TBB=1 (TBB enabled - officially supported flag)"
+else
+    echo -e "  ${YELLOW}⚠ TBB not found - PyTorch will build without TBB support${NC}"
+    export USE_TBB=0
+fi
+
+# BLAS and LAPACK configuration (officially supported via BLAS and LAPACK env vars)
+# PyTorch uses OpenBLAS which includes LAPACK functionality
+# According to official docs: export BLAS=OpenBLAS and export LAPACK=OpenBLAS
+export BLAS=OpenBLAS
+export LAPACK=OpenBLAS
+echo "  BLAS=OpenBLAS (officially supported flag)"
+echo "  LAPACK=OpenBLAS (officially supported flag - OpenBLAS includes LAPACK)"
+
+# Note: There is NO USE_LAPACK flag in PyTorch - LAPACK is handled through OpenBLAS
+# System LAPACK libraries are available for compatibility but PyTorch uses OpenBLAS LAPACK
+if [ "${LAPACK_FOUND:-false}" = "true" ]; then
+    echo "  System LAPACK available (for compatibility, PyTorch uses OpenBLAS LAPACK)"
+    if [ "${LAPACKE_FOUND:-false}" = "true" ]; then
+        echo "  System LAPACKE available (LAPACK C interface)"
+    fi
+else
+    echo -e "  ${YELLOW}⚠ System LAPACK not found - PyTorch will use OpenBLAS LAPACK only${NC}"
+fi
+
+# Optional libraries (OpenCV, Ceres, g2o, GTSAM) - NOT PyTorch build flags
+# IMPORTANT: These are NOT official PyTorch build flags (USE_OPENCV, USE_CERES, etc. do NOT exist)
+# These libraries are configured via CMAKE_PREFIX_PATH for PyTorch extensions/C++ bindings
+# PyTorch core does not directly link to these - they're used by extensions or C++ code
+# Reference: PyTorch build flags documentation shows no USE_OPENCV, USE_CERES, etc.
+
+if [ "${OPENCV_FOUND:-false}" = "true" ] && [ -n "${OPENCV_DIR:-}" ] && [ -d "${OPENCV_DIR}" ]; then
+    export OpenCV_DIR="${OPENCV_DIR}"
+    if [ -d "${OPENCV_DIR}/lib/pkgconfig" ]; then
+        if [ -n "${PKG_CONFIG_PATH:-}" ]; then
+            export PKG_CONFIG_PATH="${OPENCV_DIR}/lib/pkgconfig:${PKG_CONFIG_PATH}"
+        else
+            export PKG_CONFIG_PATH="${OPENCV_DIR}/lib/pkgconfig"
+        fi
+    fi
+    if [ -d "${OPENCV_DIR}/lib" ]; then
+        if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${OPENCV_DIR}/lib:${LD_LIBRARY_PATH}"
+        else
+            export LD_LIBRARY_PATH="${OPENCV_DIR}/lib"
+        fi
+    fi
+    if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        export CMAKE_PREFIX_PATH="${OPENCV_DIR}:${CMAKE_PREFIX_PATH}"
+    else
+        export CMAKE_PREFIX_PATH="${OPENCV_DIR}"
+    fi
+    echo "  OpenCV: Found and configured via CMAKE_PREFIX_PATH (${OPENCV_DIR})"
+    echo "    Note: OpenCV is NOT a PyTorch build flag - configured for extensions"
+fi
+
+if [ "${CERES_FOUND:-false}" = "true" ] && [ -n "${CERES_DIR:-}" ] && [ -d "${CERES_DIR}" ]; then
+    CERES_PREFIX="${CERES_DIR}"
+    if [ -f "${CERES_DIR}/lib/cmake/Ceres/CeresConfig.cmake" ] || [ -d "${CERES_DIR}/lib/cmake/Ceres" ]; then
+        export Ceres_DIR="${CERES_DIR}/lib/cmake/Ceres"
+    fi
+    if [ -d "${CERES_PREFIX}/lib" ]; then
+        if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${CERES_PREFIX}/lib:${LD_LIBRARY_PATH}"
+        else
+            export LD_LIBRARY_PATH="${CERES_PREFIX}/lib"
+        fi
+    fi
+    if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        export CMAKE_PREFIX_PATH="${CERES_PREFIX}:${CMAKE_PREFIX_PATH}"
+    else
+        export CMAKE_PREFIX_PATH="${CERES_PREFIX}"
+    fi
+    echo "  Ceres: Found and configured via CMAKE_PREFIX_PATH (${CERES_PREFIX})"
+    echo "    Note: Ceres is NOT a PyTorch build flag - configured for extensions"
+fi
+
+if [ "${G2O_FOUND:-false}" = "true" ] && [ -n "${G2O_DIR:-}" ] && [ -d "${G2O_DIR}" ]; then
+    G2O_PREFIX="${G2O_DIR}"
+    if [ -f "${G2O_DIR}/lib/cmake/g2o/g2oConfig.cmake" ] || [ -d "${G2O_DIR}/lib/cmake/g2o" ]; then
+        export g2o_DIR="${G2O_DIR}/lib/cmake/g2o"
+    fi
+    if [ -d "${G2O_PREFIX}/lib" ]; then
+        if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${G2O_PREFIX}/lib:${LD_LIBRARY_PATH}"
+        else
+            export LD_LIBRARY_PATH="${G2O_PREFIX}/lib"
+        fi
+    fi
+    if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        export CMAKE_PREFIX_PATH="${G2O_PREFIX}:${CMAKE_PREFIX_PATH}"
+    else
+        export CMAKE_PREFIX_PATH="${G2O_PREFIX}"
+    fi
+    echo "  g2o: Found and configured via CMAKE_PREFIX_PATH (${G2O_PREFIX})"
+    echo "    Note: g2o is NOT a PyTorch build flag - configured for extensions"
+fi
+
+if [ "${GTSAM_FOUND:-false}" = "true" ] && [ -n "${GTSAM_DIR:-}" ] && [ -d "${GTSAM_DIR}" ]; then
+    GTSAM_PREFIX="${GTSAM_DIR}"
+    if [ -f "${GTSAM_DIR}/lib/cmake/GTSAM/GTSAMConfig.cmake" ] || [ -d "${GTSAM_DIR}/lib/cmake/GTSAM" ]; then
+        export GTSAM_DIR="${GTSAM_DIR}/lib/cmake/GTSAM"
+    fi
+    if [ -d "${GTSAM_PREFIX}/lib" ]; then
+        if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+            export LD_LIBRARY_PATH="${GTSAM_PREFIX}/lib:${LD_LIBRARY_PATH}"
+        else
+            export LD_LIBRARY_PATH="${GTSAM_PREFIX}/lib"
+        fi
+    fi
+    if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        export CMAKE_PREFIX_PATH="${GTSAM_PREFIX}:${CMAKE_PREFIX_PATH}"
+    else
+        export CMAKE_PREFIX_PATH="${GTSAM_PREFIX}"
+    fi
+    echo "  GTSAM: Found and configured via CMAKE_PREFIX_PATH (${GTSAM_PREFIX})"
+    echo "    Note: GTSAM is NOT a PyTorch build flag - configured for extensions"
+fi
 
 # Use pre-calculated build jobs from system detection
-BUILD_JOBS="${CALCULATED_JOBS}"
+BUILD_JOBS="${CALCULATED_JOBS:-1}"
 
 echo "  Build Configuration (Based on Detected Hardware):"
-echo "    Total CPU cores: ${SYS_CPU_CORES}"
-echo "    Total RAM: ${SYS_MEM_TOTAL_GB}GB (${SYS_MEM_AVAILABLE_GB}GB available)"
-echo "    Disk type: ${SYS_DISK_TYPE}"
+echo "    Total CPU cores: ${SYS_CPU_CORES:-unknown}"
+echo "    Total RAM: ${SYS_MEM_TOTAL_GB:-unknown}GB (${SYS_MEM_AVAILABLE_GB:-unknown}GB available)"
+echo "    Disk type: ${SYS_DISK_TYPE:-unknown}"
 echo "    Build jobs: ${BUILD_JOBS} (calculated from CPU, memory, and I/O capabilities)"
-echo "    Memory per job: ${SYS_MEM_PER_JOB_GB}GB"
-echo "    Total memory budget: $((BUILD_JOBS * SYS_MEM_PER_JOB_GB))GB"
+if [ -n "${SYS_MEM_PER_JOB_GB:-}" ] && [ "${SYS_MEM_PER_JOB_GB}" -gt 0 ] 2>/dev/null; then
+    echo "    Memory per job: ${SYS_MEM_PER_JOB_GB}GB"
+    echo "    Total memory budget: $((BUILD_JOBS * SYS_MEM_PER_JOB_GB))GB"
+else
+    echo "    Memory per job: unknown"
+    echo "    Total memory budget: unknown"
+fi
 
 # Threading configuration (runtime threading, not build parallelism)
 # Use 50% of available cores for runtime threading to avoid oversubscription
 # But ensure we don't exceed available cores
-if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+runtime_threads=1  # Default to 1
+if [ -n "${SYS_CPU_CORES:-}" ] && [ "${SYS_CPU_CORES}" -gt 0 ] 2>/dev/null; then
     runtime_threads=$((SYS_CPU_CORES / 2))
-    if [ $runtime_threads -lt 1 ]; then
+    if [ "${runtime_threads}" -lt 1 ]; then
         runtime_threads=1
     fi
-else
-    runtime_threads=1  # Default to 1 if CPU cores unknown
 fi
 # Cap at build jobs to avoid oversubscription
-if [ "${runtime_threads}" -gt "${BUILD_JOBS}" ]; then
+if [ -n "${BUILD_JOBS:-}" ] && [ "${BUILD_JOBS}" -gt 0 ] 2>/dev/null && [ "${runtime_threads}" -gt "${BUILD_JOBS}" ]; then
     runtime_threads="${BUILD_JOBS}"
 fi
 
@@ -1944,7 +2540,7 @@ export MKL_NUM_THREADS="${runtime_threads}"  # MKL threads (for compatibility)
 export OPENBLAS_NUM_THREADS="${runtime_threads}"  # OpenBLAS threads
 export NUMEXPR_NUM_THREADS="${runtime_threads}"  # NumExpr threads
 
-if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+if [ -n "${SYS_CPU_CORES:-}" ] && [ "${SYS_CPU_CORES}" -gt 0 ] 2>/dev/null; then
     echo "    Runtime threading: ${runtime_threads} threads (50% of ${SYS_CPU_CORES} cores, capped at ${BUILD_JOBS} jobs)"
 else
     echo "    Runtime threading: ${runtime_threads} threads (capped at ${BUILD_JOBS} jobs)"
@@ -1985,7 +2581,37 @@ fi
 echo "    CMAKE_BUILD_TYPE=Release"
 echo "    BUILD_TEST=0 (tests skipped)"
 echo "    USE_OPENMP=1 (OpenMP enabled)"
-echo -e "${GREEN}✓ Build environment configured for OpenBLAS + CUDA${NC}\n"
+if [ "${TBB_FOUND:-false}" = "true" ]; then
+    echo "    USE_TBB=1 (TBB enabled)"
+else
+    echo "    USE_TBB=0 (TBB not available)"
+fi
+if [ "${LAPACK_FOUND:-false}" = "true" ]; then
+    echo "    LAPACK enabled (system LAPACK available)"
+    if [ "${LAPACKE_FOUND:-false}" = "true" ]; then
+        echo "    LAPACKE enabled (LAPACK C interface available)"
+    fi
+else
+    echo "    LAPACK: Using OpenBLAS LAPACK only"
+fi
+if [ "${OPENCV_FOUND:-false}" = "true" ]; then
+    echo "    OpenCV: Found and configured (${OPENCV_DIR})"
+fi
+if [ "${CERES_FOUND:-false}" = "true" ]; then
+    echo "    Ceres: Found and configured (${CERES_DIR})"
+fi
+if [ "${G2O_FOUND:-false}" = "true" ]; then
+    echo "    g2o: Found and configured (${G2O_DIR})"
+fi
+if [ "${GTSAM_FOUND:-false}" = "true" ]; then
+    echo "    GTSAM: Found and configured (${GTSAM_DIR})"
+fi
+echo -e "${GREEN}✓ Build environment configured for OpenBLAS + CUDA${NC}"
+echo -e "${GREEN}✓ Performance libraries: OpenMP, TBB, LAPACK enabled${NC}"
+if [ "${OPENCV_FOUND:-false}" = "true" ] || [ "${CERES_FOUND:-false}" = "true" ] || [ "${G2O_FOUND:-false}" = "true" ] || [ "${GTSAM_FOUND:-false}" = "true" ]; then
+    echo -e "${GREEN}✓ Optional libraries detected and configured for PyTorch extensions${NC}"
+fi
+echo ""
 
 #===============================================================================
 # Step 5: Create build directory
