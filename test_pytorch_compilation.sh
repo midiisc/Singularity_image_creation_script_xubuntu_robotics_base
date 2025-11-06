@@ -904,15 +904,22 @@ check_cmake_build_dependencies() {
         "libncursesw5-dev"
         "wget"
         "curl"
-        "tar"
-        "gzip"
     )
     
+    # Check dpkg-installed packages
     for dep in "${required_deps[@]}"; do
-        if ! dpkg -l | grep -qE "^ii\s+${dep}\s"; then
+        if ! dpkg -l 2>/dev/null | grep -qE "^ii[[:space:]]+${dep}[[:space:]]"; then
             missing_deps+=("${dep}")
         fi
     done
+    
+    # Check for tar and gzip (usually in base system, but verify with command)
+    if ! command -v tar >/dev/null 2>&1; then
+        missing_deps+=("tar")
+    fi
+    if ! command -v gzip >/dev/null 2>&1; then
+        missing_deps+=("gzip")
+    fi
     
     if [ ${#missing_deps[@]} -gt 0 ]; then
         echo "  Missing dependencies: ${missing_deps[*]}" >&2
@@ -968,7 +975,10 @@ UBUNTU_CMAKE_VERSION=$(check_ubuntu_cmake_version)
 # Initialize NEED_UPGRADE flag
 NEED_UPGRADE=false
 
-# Use installed version if available, otherwise use empty
+# Check if CMake is already installed
+INSTALLED_CMAKE_VERSION=$(check_installed_cmake_version)
+
+# Use installed version if available, otherwise try to install from repos first
 if [ -n "${INSTALLED_CMAKE_VERSION:-}" ]; then
     CMAKE_VERSION="${INSTALLED_CMAKE_VERSION}"
     CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1 || echo "")
@@ -1001,131 +1011,194 @@ if [ -n "${INSTALLED_CMAKE_VERSION:-}" ]; then
             fi
     fi
 else
-    echo "  CMake not found in PATH"
-    NEED_UPGRADE=true
-fi
-
-if [ "${NEED_UPGRADE}" = true ]; then
+    # CMake not installed - try installing from Ubuntu repos first if available
     if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
-        echo "    Ubuntu repo has ${UBUNTU_CMAKE_VERSION}, will try alternative installation methods"
-    fi
-    
-    # Check build dependencies before attempting compilation
-    MISSING_DEPS=$(check_cmake_build_dependencies)
-    if [ -n "${MISSING_DEPS:-}" ]; then
-        echo "  Installing missing CMake build dependencies..."
-        ${APT_CMD} install -y -qq ${MISSING_DEPS} || {
-            echo -e "${YELLOW}⚠ Some dependencies failed to install, compilation may fail${NC}"
-        }
-    fi
-    
-    echo "  Upgrading CMake to meet PyTorch requirements..."
-            
-            # Method 1: Try installing cmake from pip (usually has latest version)
-            echo "  Attempting to install CMake via pip..."
-            if [ -n "${pip_flags:-}" ]; then
-                python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
-            else
-                python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
-            fi
-            
-            # Verify pip-installed cmake works
-            if python3 -m pip show cmake &>/dev/null; then
-                # pip-installed cmake is usually in ~/.local/bin or similar
-                # Check if it's now in PATH
-                if command -v cmake &>/dev/null; then
-                    NEW_CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
-                    if [ -n "${NEW_CMAKE_VERSION:-}" ]; then
-                        NEW_CMAKE_MAJOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f1)
-                        NEW_CMAKE_MINOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f2)
-                        # Validate version components
-                        if [ -n "${NEW_CMAKE_MAJOR:-}" ] && [ -n "${NEW_CMAKE_MINOR:-}" ] && \
-                           echo "${NEW_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
-                           echo "${NEW_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
-                            # Compare against required version (dynamic)
-                            REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
-                            REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
-                            if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
-                               echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
-                               echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
-                                if [ "${NEW_CMAKE_MAJOR}" -gt "${REQUIRED_CMAKE_MAJOR}" ] || \
-                                   ([ "${NEW_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${NEW_CMAKE_MINOR}" -ge "${REQUIRED_CMAKE_MINOR}" ]); then
-                                    echo -e "  ${GREEN}✓ CMake upgraded to ${NEW_CMAKE_VERSION} via pip${NC}"
-                                    NEED_UPGRADE=false
-                                else
-                                    echo "  ⚠ Pip CMake version ${NEW_CMAKE_VERSION} still < ${CMAKE_REQUIRED_VERSION}"
-                                    echo "  Will try Kitware APT repository..."
-                                    NEED_UPGRADE=true
-                                fi
-                            else
-                                echo "  ⚠ Could not parse required CMake version"
-                                NEED_UPGRADE=true
-                            fi
-                        else
-                            echo "  ⚠ Could not parse pip-installed CMake version"
-                            NEED_UPGRADE=true
-                        fi
-                    else
-                        echo "  ⚠ Could not determine pip-installed CMake version"
+        UBUNTU_CMAKE_MAJOR=$(echo "${UBUNTU_CMAKE_VERSION}" | cut -d. -f1)
+        UBUNTU_CMAKE_MINOR=$(echo "${UBUNTU_CMAKE_VERSION}" | cut -d. -f2)
+        REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+        REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+        
+        # Check if Ubuntu version meets requirements
+        if [ -n "${UBUNTU_CMAKE_MAJOR:-}" ] && [ -n "${UBUNTU_CMAKE_MINOR:-}" ] && \
+           [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+           echo "${UBUNTU_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+           echo "${UBUNTU_CMAKE_MINOR}" | grep -qE '^[0-9]+$' && \
+           echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+           echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+            if [ "${UBUNTU_CMAKE_MAJOR}" -gt "${REQUIRED_CMAKE_MAJOR}" ] || \
+               ([ "${UBUNTU_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${UBUNTU_CMAKE_MINOR}" -ge "${REQUIRED_CMAKE_MINOR}" ]); then
+                echo "  CMake not found in PATH, installing ${UBUNTU_CMAKE_VERSION} from Ubuntu repositories..."
+                if [ -z "${APT_CMD:-}" ]; then
+                    echo "  ⚠ ERROR: APT_CMD not set, cannot install CMake"
+                    NEED_UPGRADE=true
+                else
+                    ${APT_CMD} install -y -qq cmake || {
+                        echo -e "${YELLOW}⚠ Failed to install CMake from Ubuntu repos, will try alternative methods${NC}"
                         NEED_UPGRADE=true
+                    }
+                fi
+                
+                # Verify installation
+                INSTALLED_CMAKE_VERSION=$(check_installed_cmake_version)
+                if [ -n "${INSTALLED_CMAKE_VERSION:-}" ]; then
+                    echo -e "  ${GREEN}✓ CMake ${INSTALLED_CMAKE_VERSION} installed successfully${NC}"
+                    # Re-check version to ensure it meets requirements
+                    CMAKE_VERSION="${INSTALLED_CMAKE_VERSION}"
+                    CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1 || echo "")
+                    CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2 || echo "")
+                    if [ -n "${CMAKE_MAJOR:-}" ] && [ -n "${CMAKE_MINOR:-}" ] && \
+                       echo "${CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                       echo "${CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                        if [ "${CMAKE_MAJOR}" -lt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                           ([ "${CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${CMAKE_MINOR}" -lt "${REQUIRED_CMAKE_MINOR}" ]); then
+                            NEED_UPGRADE=true
+                        else
+                            NEED_UPGRADE=false
+                        fi
                     fi
                 else
-                    echo "  ⚠ pip-installed cmake not found in PATH"
+                    echo "  ⚠ CMake installation from repos failed, will try alternative methods"
                     NEED_UPGRADE=true
                 fi
             else
-                echo "  ⚠ CMake pip package not found after installation"
+                echo "  CMake not found in PATH"
+                echo "    Ubuntu repo has ${UBUNTU_CMAKE_VERSION} < ${CMAKE_REQUIRED_VERSION}, will try alternative installation methods"
                 NEED_UPGRADE=true
             fi
-            
-            # Method 2: Try Kitware APT repository (official CMake builds)
-            if [ "${NEED_UPGRADE}" = true ]; then
-                echo "  Attempting to install CMake from Kitware APT repository..."
-                # Install prerequisites
-                ${APT_CMD} install -y -qq software-properties-common lsb-release wget gpg || true
-                
-                # Add Kitware APT repository
-                wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
-                    gpg --dearmor - | \
-                    tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null 2>&1 || true
-                
-                # Add repository (try to detect Ubuntu version)
-                if [ -f /etc/os-release ]; then
-                    . /etc/os-release
-                    kitware_codename=""
-                    if [ -n "${UBUNTU_CODENAME:-}" ]; then
-                        kitware_codename="${UBUNTU_CODENAME}"
-                    elif [ -n "${VERSION_CODENAME:-}" ]; then
-                        kitware_codename="${VERSION_CODENAME}"
-                    fi
-                    
-                    if [ -n "${kitware_codename:-}" ]; then
-                        # Validate codename before using in URL
-                        if echo "${kitware_codename}" | grep -qE '^[a-z0-9-]+$'; then
-                            echo "deb https://apt.kitware.com/ubuntu/ ${kitware_codename} main" | \
-                                tee /etc/apt/sources.list.d/kitware.list >/dev/null 2>&1 || true
-                            ${APT_CMD} update -qq || true
-                            ${APT_CMD} install -y -qq --allow-change-held-packages cmake || {
-                                echo "  ⚠ Kitware repository installation failed"
-                                NEED_UPGRADE=true
-                            }
+        else
+            echo "  CMake not found in PATH"
+            echo "    Will try alternative installation methods"
+            NEED_UPGRADE=true
+        fi
+    else
+        echo "  CMake not found in PATH"
+        echo "    CMake not available in Ubuntu repositories, will try alternative installation methods"
+        NEED_UPGRADE=true
+    fi
+fi
+
+if [ "${NEED_UPGRADE}" = "true" ]; then
+    echo "  Upgrading CMake to meet PyTorch requirements..."
+    echo "  Will try alternative installation methods (pip, Kitware repo, or source compilation)..."
+    
+    # Method 1: Try installing cmake from pip (usually has latest version)
+    echo "  Attempting to install CMake via pip..."
+    if [ -n "${pip_flags:-}" ]; then
+        # Note: pip_flags is intentionally unquoted to allow multiple flags if needed
+        # It's typically a single flag like "--break-system-packages"
+        python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
+    else
+        python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
+    fi
+    
+    # Verify pip-installed cmake works
+    if python3 -m pip show cmake &>/dev/null; then
+        # pip-installed cmake is usually in ~/.local/bin or similar
+        # Check if it's now in PATH
+        if command -v cmake &>/dev/null; then
+            NEW_CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+            if [ -n "${NEW_CMAKE_VERSION:-}" ]; then
+                NEW_CMAKE_MAJOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f1)
+                NEW_CMAKE_MINOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f2)
+                # Validate version components
+                if [ -n "${NEW_CMAKE_MAJOR:-}" ] && [ -n "${NEW_CMAKE_MINOR:-}" ] && \
+                   echo "${NEW_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                   echo "${NEW_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                    # Compare against required version (dynamic)
+                    REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+                    REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+                    if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+                       echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                       echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                        if [ "${NEW_CMAKE_MAJOR}" -gt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                           ([ "${NEW_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${NEW_CMAKE_MINOR}" -ge "${REQUIRED_CMAKE_MINOR}" ]); then
+                            echo -e "  ${GREEN}✓ CMake upgraded to ${NEW_CMAKE_VERSION} via pip${NC}"
+                            NEED_UPGRADE=false
                         else
-                            echo "  ⚠ Invalid Ubuntu codename for Kitware repo: ${kitware_codename}"
+                            echo "  ⚠ Pip CMake version ${NEW_CMAKE_VERSION} still < ${CMAKE_REQUIRED_VERSION}"
+                            echo "  Will try Kitware APT repository..."
                             NEED_UPGRADE=true
                         fi
                     else
-                        echo "  ⚠ Could not determine Ubuntu codename for Kitware repo"
+                        echo "  ⚠ Could not parse required CMake version"
                         NEED_UPGRADE=true
                     fi
                 else
-                    echo "  ⚠ /etc/os-release not found, cannot add Kitware repository"
+                    echo "  ⚠ Could not parse pip-installed CMake version"
                     NEED_UPGRADE=true
                 fi
+            else
+                echo "  ⚠ Could not determine pip-installed CMake version"
+                NEED_UPGRADE=true
             fi
+        else
+            echo "  ⚠ pip-installed cmake not found in PATH"
+            NEED_UPGRADE=true
+        fi
+    else
+        echo "  ⚠ CMake pip package not found after installation"
+        NEED_UPGRADE=true
+    fi
+    
+    # Method 2: Try Kitware APT repository (official CMake builds)
+    if [ "${NEED_UPGRADE}" = "true" ]; then
+        echo "  Attempting to install CMake from Kitware APT repository..."
+        # Validate APT_CMD is set
+        if [ -z "${APT_CMD:-}" ]; then
+            echo "  ⚠ ERROR: APT_CMD not set, cannot install packages"
+            NEED_UPGRADE=true
+        else
+            # Install prerequisites
+            ${APT_CMD} install -y -qq software-properties-common lsb-release wget gpg || true
             
-            # Method 3: Compile CMake from source (last resort)
-            if [ "${NEED_UPGRADE}" = true ]; then
-                echo "  Attempting to compile CMake from source (this may take 10-30 minutes)..."
+            # Add Kitware APT repository
+            wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+                gpg --dearmor - | \
+                tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null 2>&1 || true
+            
+            # Add repository (try to detect Ubuntu version)
+            if [ -f /etc/os-release ]; then
+                # Source os-release in a subshell to avoid polluting environment
+                kitware_codename=""
+                if [ -n "${UBUNTU_CODENAME:-}" ]; then
+                    kitware_codename="${UBUNTU_CODENAME}"
+                else
+                    # Try reading from /etc/os-release if UBUNTU_CODENAME not set
+                    if VERSION_CODENAME=$(grep -E '^VERSION_CODENAME=' /etc/os-release 2>/dev/null | cut -d'=' -f2 | tr -d '"' || echo ""); then
+                        if [ -n "${VERSION_CODENAME:-}" ]; then
+                            kitware_codename="${VERSION_CODENAME}"
+                        fi
+                    fi
+                fi
+                
+                if [ -n "${kitware_codename:-}" ]; then
+                    # Validate codename before using in URL (prevent injection)
+                    if echo "${kitware_codename}" | grep -qE '^[a-z0-9-]+$'; then
+                        echo "deb https://apt.kitware.com/ubuntu/ ${kitware_codename} main" | \
+                            tee /etc/apt/sources.list.d/kitware.list >/dev/null 2>&1 || true
+                        ${APT_CMD} update -qq || true
+                        ${APT_CMD} install -y -qq --allow-change-held-packages cmake || {
+                            echo "  ⚠ Kitware repository installation failed"
+                            NEED_UPGRADE=true
+                        }
+                    else
+                        echo "  ⚠ Invalid Ubuntu codename for Kitware repo: ${kitware_codename}"
+                        NEED_UPGRADE=true
+                    fi
+                else
+                    echo "  ⚠ Could not determine Ubuntu codename for Kitware repo"
+                    NEED_UPGRADE=true
+                fi
+            else
+                echo "  ⚠ /etc/os-release not found, cannot add Kitware repository"
+                NEED_UPGRADE=true
+            fi
+        fi
+    fi
+    
+    # Method 3: Compile CMake from source (last resort)
+    if [ "${NEED_UPGRADE}" = "true" ]; then
+        echo "  Attempting to compile CMake from source (this may take 10-30 minutes)..."
                 if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
                     echo "  Note: Ubuntu repository has CMake ${UBUNTU_CMAKE_VERSION}, but ${CMAKE_REQUIRED_VERSION} is required"
                 else
@@ -1136,18 +1209,24 @@ if [ "${NEED_UPGRADE}" = true ]; then
                 MISSING_BUILD_DEPS=$(check_cmake_build_dependencies)
                 if [ -n "${MISSING_BUILD_DEPS:-}" ]; then
                     echo "  Installing missing build dependencies: ${MISSING_BUILD_DEPS}"
-                    ${APT_CMD} install -y -qq ${MISSING_BUILD_DEPS} || {
-                        echo -e "${RED}✗ ERROR: Failed to install CMake build dependencies${NC}"
-                        echo "  Missing: ${MISSING_BUILD_DEPS}"
-                        echo "  Please install manually: ${APT_CMD} install -y ${MISSING_BUILD_DEPS}"
-                        exit 1
-                    }
-                    # Re-check after installation
-                    MISSING_BUILD_DEPS=$(check_cmake_build_dependencies)
-                    if [ -n "${MISSING_BUILD_DEPS:-}" ]; then
-                        echo -e "${RED}✗ ERROR: Some dependencies still missing after installation${NC}"
+                    if [ -z "${APT_CMD:-}" ]; then
+                        echo -e "${RED}✗ ERROR: APT_CMD not set, cannot install CMake build dependencies${NC}"
                         echo "  Missing: ${MISSING_BUILD_DEPS}"
                         exit 1
+                    else
+                        ${APT_CMD} install -y -qq ${MISSING_BUILD_DEPS} || {
+                            echo -e "${RED}✗ ERROR: Failed to install CMake build dependencies${NC}"
+                            echo "  Missing: ${MISSING_BUILD_DEPS}"
+                            echo "  Please install manually: ${APT_CMD} install -y ${MISSING_BUILD_DEPS}"
+                            exit 1
+                        }
+                        # Re-check after installation
+                        MISSING_BUILD_DEPS=$(check_cmake_build_dependencies)
+                        if [ -n "${MISSING_BUILD_DEPS:-}" ]; then
+                            echo -e "${RED}✗ ERROR: Some dependencies still missing after installation${NC}"
+                            echo "  Missing: ${MISSING_BUILD_DEPS}"
+                            exit 1
+                        fi
                     fi
                 fi
                 
@@ -1166,8 +1245,7 @@ if [ "${NEED_UPGRADE}" = true ]; then
                 
                 # Download CMake source from official GitHub releases
                 CMAKE_SOURCE_DIR="/tmp/cmake_build"
-                original_dir=""
-                original_dir=$(pwd)
+                original_dir=$(pwd || echo "")
                 
                 # Clean up any existing build directory
                 if [ -d "${CMAKE_SOURCE_DIR}" ]; then
@@ -1178,14 +1256,14 @@ if [ "${NEED_UPGRADE}" = true ]; then
                     NEED_UPGRADE=true
                 }
                 
-                if [ "${NEED_UPGRADE}" != true ]; then
+                if [ "${NEED_UPGRADE}" != "true" ]; then
                     cd "${CMAKE_SOURCE_DIR}" || {
                         echo "  ⚠ Failed to change to CMake build directory"
                         NEED_UPGRADE=true
                     }
                 fi
                 
-                if [ "${NEED_UPGRADE}" != true ]; then
+                if [ "${NEED_UPGRADE}" != "true" ]; then
                     # Fetch latest stable CMake release from official GitHub releases
                     # Source: https://github.com/Kitware/CMake/releases
                     echo "  Fetching latest stable CMake version from GitHub releases..."
@@ -1201,8 +1279,8 @@ if [ "${NEED_UPGRADE}" = true ]; then
                         if ! command -v jq &>/dev/null 2>&1; then
                             echo "  ⚠ ERROR: jq not found (should have been installed in Step 1)"
                             echo "  Installing jq now..."
-                            ${APT_CMD} install -y -qq jq || {
-                                echo "  ⚠ Failed to install jq, using fallback parsing"
+                            if [ -z "${APT_CMD:-}" ]; then
+                                echo "  ⚠ ERROR: APT_CMD not set, cannot install jq"
                                 # Fallback: Parse JSON with grep/sed (less reliable but works)
                                 cmake_version_to_build=$(echo "${api_response}" | \
                                     grep -E '"tag_name"|"prerelease"' | \
@@ -1211,7 +1289,19 @@ if [ "${NEED_UPGRADE}" = true ]; then
                                     head -1 | \
                                     sed -E 's/.*"tag_name":\s*"v?([^"]+)".*/\1/' | \
                                     sed 's/^v//' || echo "")
-                            }
+                            else
+                                ${APT_CMD} install -y -qq jq || {
+                                    echo "  ⚠ Failed to install jq, using fallback parsing"
+                                    # Fallback: Parse JSON with grep/sed (less reliable but works)
+                                    cmake_version_to_build=$(echo "${api_response}" | \
+                                        grep -E '"tag_name"|"prerelease"' | \
+                                        grep -B1 '"prerelease":\s*false' | \
+                                        grep '"tag_name"' | \
+                                        head -1 | \
+                                        sed -E 's/.*"tag_name":\s*"v?([^"]+)".*/\1/' | \
+                                        sed 's/^v//' || echo "")
+                                }
+                            fi
                         fi
                         
                         # Use jq if available (should be)
