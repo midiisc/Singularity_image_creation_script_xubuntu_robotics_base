@@ -47,12 +47,93 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 #===============================================================================
+# Detect Ubuntu Version for Compatibility
+#===============================================================================
+detect_ubuntu_version() {
+    local ubuntu_version=""
+    local ubuntu_codename=""
+    
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        if [ -n "${VERSION_ID:-}" ]; then
+            ubuntu_version="${VERSION_ID}"
+        fi
+        if [ -n "${UBUNTU_CODENAME:-}" ]; then
+            ubuntu_codename="${UBUNTU_CODENAME}"
+        elif [ -n "${VERSION_CODENAME:-}" ]; then
+            ubuntu_codename="${VERSION_CODENAME}"
+        fi
+    fi
+    
+    echo "${ubuntu_version}|${ubuntu_codename}"
+}
+
+# Detect system Ubuntu version
+UBUNTU_INFO=$(detect_ubuntu_version)
+UBUNTU_VERSION=$(echo "${UBUNTU_INFO}" | cut -d'|' -f1 || echo "")
+UBUNTU_CODENAME=$(echo "${UBUNTU_INFO}" | cut -d'|' -f2 || echo "")
+
+# Determine recommended PyTorch version based on Ubuntu version
+# Ubuntu 22.04: PyTorch 2.6.0 (works with CMake 3.22, available in repos)
+# Ubuntu 24.04: PyTorch 2.7+ (requires CMake 3.27+)
+if [ -n "${UBUNTU_VERSION:-}" ]; then
+    UBUNTU_MAJOR=$(echo "${UBUNTU_VERSION}" | cut -d. -f1 || echo "")
+    UBUNTU_MINOR=$(echo "${UBUNTU_VERSION}" | cut -d. -f2 || echo "")
+    
+    # Validate version components are numeric before arithmetic comparison
+    if [ -n "${UBUNTU_MAJOR:-}" ] && [ -n "${UBUNTU_MINOR:-}" ] && \
+       echo "${UBUNTU_MAJOR}" | grep -qE '^[0-9]+$' && \
+       echo "${UBUNTU_MINOR}" | grep -qE '^[0-9]+$'; then
+        if [ "${UBUNTU_MAJOR}" -eq 22 ]; then
+            RECOMMENDED_PYTORCH_VERSION="2.6.0"
+            RECOMMENDED_CMAKE_VERSION="3.22"
+            if [ -n "${UBUNTU_CODENAME:-}" ]; then
+                echo "  Detected Ubuntu ${UBUNTU_VERSION} (${UBUNTU_CODENAME})"
+            else
+                echo "  Detected Ubuntu ${UBUNTU_VERSION}"
+            fi
+            echo "  Recommended PyTorch version: ${RECOMMENDED_PYTORCH_VERSION} (compatible with CMake 3.22)"
+        elif [ "${UBUNTU_MAJOR}" -eq 24 ]; then
+            RECOMMENDED_PYTORCH_VERSION="2.7.0"
+            RECOMMENDED_CMAKE_VERSION="3.27"
+            if [ -n "${UBUNTU_CODENAME:-}" ]; then
+                echo "  Detected Ubuntu ${UBUNTU_VERSION} (${UBUNTU_CODENAME})"
+            else
+                echo "  Detected Ubuntu ${UBUNTU_VERSION}"
+            fi
+            echo "  Recommended PyTorch version: ${RECOMMENDED_PYTORCH_VERSION} (requires CMake 3.27+)"
+        else
+            # Default to latest for other versions
+            RECOMMENDED_PYTORCH_VERSION=""
+            RECOMMENDED_CMAKE_VERSION="3.27"
+            if [ -n "${UBUNTU_CODENAME:-}" ]; then
+                echo "  Detected Ubuntu ${UBUNTU_VERSION} (${UBUNTU_CODENAME})"
+            else
+                echo "  Detected Ubuntu ${UBUNTU_VERSION}"
+            fi
+            echo "  Will use latest PyTorch version (may require CMake 3.27+)"
+        fi
+    else
+        # Invalid version format
+        RECOMMENDED_PYTORCH_VERSION=""
+        RECOMMENDED_CMAKE_VERSION="3.27"
+        echo "  ⚠ Could not parse Ubuntu version format: ${UBUNTU_VERSION}"
+        echo "  Defaulting to latest PyTorch (CMake 3.27+)"
+    fi
+else
+    RECOMMENDED_PYTORCH_VERSION=""
+    RECOMMENDED_CMAKE_VERSION="3.27"
+    echo "  Could not detect Ubuntu version, defaulting to latest PyTorch (CMake 3.27+)"
+fi
+
+#===============================================================================
 # Parse Command-Line Arguments
 #===============================================================================
 OVERLAY_PATH=""
 IMAGE_PATH=""
 USE_GPU=false
 RUN_INSIDE_CONTAINER=false
+PYTORCH_VERSION_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -69,19 +150,28 @@ while [[ $# -gt 0 ]]; do
             USE_GPU=true
             shift
             ;;
+        --pytorch-version)
+            PYTORCH_VERSION_OVERRIDE="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
-            echo "  --overlay PATH    Path to writable overlay image (e.g., overlay.img)"
-            echo "  --image PATH      Path to Singularity/Apptainer image (e.g., image.sif)"
-            echo "  --gpu|--nv        Enable GPU support (NVIDIA)"
-            echo "  --help, -h        Show this help message"
+            echo "  --overlay PATH         Path to writable overlay image (e.g., overlay.img)"
+            echo "  --image PATH           Path to Singularity/Apptainer image (e.g., image.sif)"
+            echo "  --gpu|--nv             Enable GPU support (NVIDIA)"
+            echo "  --pytorch-version VER  Specify PyTorch version (e.g., 2.6.0, 2.7.0)"
+            echo "                         Default: Auto-detect based on Ubuntu version"
+            echo "                         Ubuntu 22.04: 2.6.0 (CMake 3.22 compatible)"
+            echo "                         Ubuntu 24.04: 2.7.0 (CMake 3.27+ required)"
+            echo "  --help, -h             Show this help message"
             echo ""
             echo "Examples:"
             echo "  $0                                    # Run on host or inside container"
             echo "  $0 --overlay overlay.img --image image.sif  # Run in Singularity with overlay"
             echo "  $0 --overlay overlay.img --image image.sif --gpu  # With GPU support"
+            echo "  $0 --pytorch-version 2.6.0            # Use specific PyTorch version"
             exit 0
             ;;
         *)
@@ -91,6 +181,52 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Set PyTorch version (use override if provided, otherwise use recommended)
+if [ -n "${PYTORCH_VERSION_OVERRIDE:-}" ]; then
+    # Validate version format (should be X.Y.Z)
+    if ! echo "${PYTORCH_VERSION_OVERRIDE}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+        echo -e "${RED}✗ ERROR: Invalid PyTorch version format: ${PYTORCH_VERSION_OVERRIDE}${NC}"
+        echo "  Expected format: X.Y or X.Y.Z (e.g., 2.6.0, 2.7.0)"
+        exit 1
+    fi
+    
+    SELECTED_PYTORCH_VERSION="${PYTORCH_VERSION_OVERRIDE}"
+    echo "  Using specified PyTorch version: ${SELECTED_PYTORCH_VERSION}"
+    
+    # Determine CMake requirement based on PyTorch version
+    PYTORCH_MAJOR=$(echo "${SELECTED_PYTORCH_VERSION}" | cut -d. -f1 || echo "")
+    PYTORCH_MINOR=$(echo "${SELECTED_PYTORCH_VERSION}" | cut -d. -f2 || echo "")
+    
+    # Validate version components are numeric before arithmetic comparison
+    if [ -n "${PYTORCH_MAJOR:-}" ] && [ -n "${PYTORCH_MINOR:-}" ] && \
+       echo "${PYTORCH_MAJOR}" | grep -qE '^[0-9]+$' && \
+       echo "${PYTORCH_MINOR}" | grep -qE '^[0-9]+$'; then
+        if [ "${PYTORCH_MAJOR}" -eq 2 ] && [ "${PYTORCH_MINOR}" -lt 7 ]; then
+            # PyTorch 2.6.x and earlier work with CMake 3.22
+            RECOMMENDED_CMAKE_VERSION="3.22"
+            echo "  PyTorch ${SELECTED_PYTORCH_VERSION} requires CMake >= 3.22"
+        else
+            # PyTorch 2.7+ requires CMake 3.27+
+            RECOMMENDED_CMAKE_VERSION="3.27"
+            echo "  PyTorch ${SELECTED_PYTORCH_VERSION} requires CMake >= 3.27"
+        fi
+    else
+        echo -e "${YELLOW}⚠ WARNING: Could not parse PyTorch version components${NC}"
+        echo "  Defaulting to CMake 3.27+ requirement"
+        RECOMMENDED_CMAKE_VERSION="3.27"
+    fi
+elif [ -n "${RECOMMENDED_PYTORCH_VERSION:-}" ]; then
+    SELECTED_PYTORCH_VERSION="${RECOMMENDED_PYTORCH_VERSION}"
+    if [ -n "${UBUNTU_VERSION:-}" ]; then
+        echo "  Using recommended PyTorch version for Ubuntu ${UBUNTU_VERSION}: ${SELECTED_PYTORCH_VERSION}"
+    else
+        echo "  Using recommended PyTorch version: ${SELECTED_PYTORCH_VERSION}"
+    fi
+else
+    SELECTED_PYTORCH_VERSION=""
+    echo "  Will fetch latest PyTorch version from GitHub (may require CMake 3.27+)"
+fi
 
 #===============================================================================
 # Check if we should run inside Singularity container
@@ -592,7 +728,7 @@ check_package() {
 for pkg in build-essential cmake ninja-build git curl wget \
            libopenblas-dev liblapack-dev libblas-dev \
            libomp-dev libtbb-dev python3-dev python3-pip \
-           python3-setuptools python3-wheel util-linux shellcheck sysstat; do
+           python3-setuptools python3-wheel util-linux shellcheck sysstat jq; do
     if ! check_package "${pkg}"; then
         PACKAGES_TO_INSTALL+=("${pkg}")
     else
@@ -648,6 +784,626 @@ if ! command -v bc >/dev/null 2>&1; then
     ${APT_CMD} install -y -qq bc || {
         echo -e "${YELLOW}⚠ bc installation failed, resource monitoring may be limited${NC}"
     }
+fi
+
+# CRITICAL: Verify jq is available (required for GitHub API JSON parsing)
+if ! command -v jq >/dev/null 2>&1; then
+    echo -e "${RED}✗ ERROR: jq not found after installation${NC}"
+    echo "  jq (from jq package) is REQUIRED for parsing GitHub API responses"
+    echo "  Please install manually: ${APT_CMD} install -y jq"
+    exit 1
+else
+    echo -e "${GREEN}✓ jq found (JSON parsing available)${NC}"
+fi
+
+# Function to filter pip output and suppress known non-fatal errors
+# This filters out apt package version parsing errors (e.g., devscripts with Ubuntu-style versions)
+# Defined early so it can be used in CMake installation
+filter_pip_output() {
+    grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|parsing dependencies|^ERROR.*tensorflow|^ERROR.*keras|Error parsing dependencies|Error parsing dependencies of" 2>/dev/null || true
+}
+
+# Function to check CMake version available in Ubuntu repositories
+# Queries packages.ubuntu.com for the specific Ubuntu version
+check_ubuntu_cmake_version() {
+    local ubuntu_codename=""
+    local cmake_version=""
+    local url=""
+    local curl_output=""
+    
+    # Detect Ubuntu version
+    if [ -f /etc/os-release ]; then
+        # Source os-release safely (may contain variables)
+        . /etc/os-release
+        if [ -n "${UBUNTU_CODENAME:-}" ]; then
+            ubuntu_codename="${UBUNTU_CODENAME}"
+        elif [ -n "${VERSION_CODENAME:-}" ]; then
+            ubuntu_codename="${VERSION_CODENAME}"
+        fi
+    fi
+    
+    if [ -z "${ubuntu_codename:-}" ]; then
+        echo ""
+        return 1
+    fi
+    
+    # Validate codename (should be lowercase alphanumeric with hyphens)
+    if ! echo "${ubuntu_codename}" | grep -qE '^[a-z0-9-]+$'; then
+        echo "  ⚠ Invalid Ubuntu codename: ${ubuntu_codename}" >&2
+        echo ""
+        return 1
+    fi
+    
+    # Query packages.ubuntu.com for cmake version
+    # URL format: https://packages.ubuntu.com/{codename}/cmake
+    url="https://packages.ubuntu.com/${ubuntu_codename}/cmake"
+    echo "  Checking CMake version in Ubuntu ${ubuntu_codename} repositories..." >&2
+    
+    # Use portable sed instead of grep -oP (Perl regex not available on all systems)
+    curl_output=$(curl -s "${url}" 2>/dev/null || echo "")
+    if [ -n "${curl_output:-}" ]; then
+        # Extract version using portable sed (look for "Version: X.Y.Z" pattern)
+        cmake_version=$(echo "${curl_output}" | \
+            grep -i "version:" | \
+            sed -n 's/.*Version:\s*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p' | \
+            head -1 || echo "")
+    fi
+    
+    if [ -n "${cmake_version:-}" ]; then
+        # Validate version format
+        if echo "${cmake_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "  Found CMake ${cmake_version} in Ubuntu ${ubuntu_codename} repositories" >&2
+            echo "${cmake_version}"
+            return 0
+        else
+            echo "  ⚠ Invalid version format from packages.ubuntu.com: ${cmake_version}" >&2
+            echo ""
+            return 1
+        fi
+    else
+        echo "  Could not determine CMake version from packages.ubuntu.com" >&2
+        echo ""
+        return 1
+    fi
+}
+
+# Check and upgrade CMake if needed
+# CMake requirement depends on PyTorch version (set above based on Ubuntu version or user override)
+echo "  Checking CMake version..."
+CMAKE_REQUIRED_VERSION="${RECOMMENDED_CMAKE_VERSION:-3.27}"
+echo "  Required CMake version: ${CMAKE_REQUIRED_VERSION} (based on PyTorch version selection)"
+CMAKE_VERSION=""
+CMAKE_MAJOR=""
+CMAKE_MINOR=""
+UBUNTU_CMAKE_VERSION=""
+
+# First, check what version is available in Ubuntu repositories
+UBUNTU_CMAKE_VERSION=$(check_ubuntu_cmake_version)
+        if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
+            UBUNTU_CMAKE_MAJOR=$(echo "${UBUNTU_CMAKE_VERSION}" | cut -d. -f1)
+            UBUNTU_CMAKE_MINOR=$(echo "${UBUNTU_CMAKE_VERSION}" | cut -d. -f2)
+            # Validate extracted version components
+            if [ -n "${UBUNTU_CMAKE_MAJOR:-}" ] && [ -n "${UBUNTU_CMAKE_MINOR:-}" ] && \
+               echo "${UBUNTU_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+               echo "${UBUNTU_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                # Compare against required version (dynamic based on PyTorch version)
+                REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+                REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+                if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+                   echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                   echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                    if [ "${UBUNTU_CMAKE_MAJOR}" -lt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                       ([ "${UBUNTU_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${UBUNTU_CMAKE_MINOR}" -lt "${REQUIRED_CMAKE_MINOR}" ]); then
+                        echo "  ⚠ Ubuntu repository has CMake ${UBUNTU_CMAKE_VERSION} < ${CMAKE_REQUIRED_VERSION}"
+                        echo "    Will need to install from pip, Kitware repo, or compile from source"
+                    else
+                        echo "  ✓ Ubuntu repository has CMake ${UBUNTU_CMAKE_VERSION} >= ${CMAKE_REQUIRED_VERSION}"
+                    fi
+                else
+                    echo "  ⚠ Could not parse required CMake version"
+                fi
+            else
+                echo "  ⚠ Could not parse Ubuntu CMake version components"
+            fi
+        fi
+
+# Initialize NEED_UPGRADE flag
+NEED_UPGRADE=false
+
+if command -v cmake &>/dev/null; then
+    CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+    if [ -n "${CMAKE_VERSION:-}" ]; then
+        CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1)
+        CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2)
+        echo "  Found CMake ${CMAKE_VERSION} installed"
+        
+        # Validate version components are numeric
+        if [ -z "${CMAKE_MAJOR:-}" ] || [ -z "${CMAKE_MINOR:-}" ] || \
+           ! echo "${CMAKE_MAJOR}" | grep -qE '^[0-9]+$' || \
+           ! echo "${CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+            NEED_UPGRADE=true
+            echo "  ⚠ Could not parse CMake version, will upgrade"
+        else
+            # Compare against required version (dynamic based on PyTorch version)
+            REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+            REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+            if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+               echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+               echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                if [ "${CMAKE_MAJOR}" -lt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                   ([ "${CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${CMAKE_MINOR}" -lt "${REQUIRED_CMAKE_MINOR}" ]); then
+                    NEED_UPGRADE=true
+                    echo "  ⚠ CMake ${CMAKE_VERSION} < ${CMAKE_REQUIRED_VERSION} (PyTorch requirement)"
+                else
+                    echo -e "  ${GREEN}✓ CMake ${CMAKE_VERSION} meets requirement (>= ${CMAKE_REQUIRED_VERSION})${NC}"
+                fi
+            else
+                NEED_UPGRADE=true
+                echo "  ⚠ Could not parse required CMake version"
+            fi
+        fi
+        
+        if [ "${NEED_UPGRADE}" = true ]; then
+            if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
+                echo "    Ubuntu repo has ${UBUNTU_CMAKE_VERSION}, will try alternative installation methods"
+            fi
+        fi
+        
+        if [ "${NEED_UPGRADE}" = true ]; then
+            echo "  Upgrading CMake to meet PyTorch requirements..."
+            
+            # Method 1: Try installing cmake from pip (usually has latest version)
+            echo "  Attempting to install CMake via pip..."
+            if [ -n "${pip_flags:-}" ]; then
+                python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
+            else
+                python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
+            fi
+            
+            # Verify pip-installed cmake works
+            if python3 -m pip show cmake &>/dev/null; then
+                # pip-installed cmake is usually in ~/.local/bin or similar
+                # Check if it's now in PATH
+                if command -v cmake &>/dev/null; then
+                    NEW_CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+                    if [ -n "${NEW_CMAKE_VERSION:-}" ]; then
+                        NEW_CMAKE_MAJOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f1)
+                        NEW_CMAKE_MINOR=$(echo "${NEW_CMAKE_VERSION}" | cut -d. -f2)
+                        # Validate version components
+                        if [ -n "${NEW_CMAKE_MAJOR:-}" ] && [ -n "${NEW_CMAKE_MINOR:-}" ] && \
+                           echo "${NEW_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                           echo "${NEW_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                            # Compare against required version (dynamic)
+                            REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+                            REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+                            if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+                               echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                               echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                                if [ "${NEW_CMAKE_MAJOR}" -gt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                                   ([ "${NEW_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${NEW_CMAKE_MINOR}" -ge "${REQUIRED_CMAKE_MINOR}" ]); then
+                                    echo -e "  ${GREEN}✓ CMake upgraded to ${NEW_CMAKE_VERSION} via pip${NC}"
+                                    NEED_UPGRADE=false
+                                else
+                                    echo "  ⚠ Pip CMake version ${NEW_CMAKE_VERSION} still < ${CMAKE_REQUIRED_VERSION}"
+                                    echo "  Will try Kitware APT repository..."
+                                    NEED_UPGRADE=true
+                                fi
+                            else
+                                echo "  ⚠ Could not parse required CMake version"
+                                NEED_UPGRADE=true
+                            fi
+                        else
+                            echo "  ⚠ Could not parse pip-installed CMake version"
+                            NEED_UPGRADE=true
+                        fi
+                    else
+                        echo "  ⚠ Could not determine pip-installed CMake version"
+                        NEED_UPGRADE=true
+                    fi
+                else
+                    echo "  ⚠ pip-installed cmake not found in PATH"
+                    NEED_UPGRADE=true
+                fi
+            else
+                echo "  ⚠ CMake pip package not found after installation"
+                NEED_UPGRADE=true
+            fi
+            
+            # Method 2: Try Kitware APT repository (official CMake builds)
+            if [ "${NEED_UPGRADE}" = true ]; then
+                echo "  Attempting to install CMake from Kitware APT repository..."
+                # Install prerequisites
+                ${APT_CMD} install -y -qq software-properties-common lsb-release wget gpg || true
+                
+                # Add Kitware APT repository
+                wget -O - https://apt.kitware.com/keys/kitware-archive-latest.asc 2>/dev/null | \
+                    gpg --dearmor - | \
+                    tee /etc/apt/trusted.gpg.d/kitware.gpg >/dev/null 2>&1 || true
+                
+                # Add repository (try to detect Ubuntu version)
+                if [ -f /etc/os-release ]; then
+                    . /etc/os-release
+                    kitware_codename=""
+                    if [ -n "${UBUNTU_CODENAME:-}" ]; then
+                        kitware_codename="${UBUNTU_CODENAME}"
+                    elif [ -n "${VERSION_CODENAME:-}" ]; then
+                        kitware_codename="${VERSION_CODENAME}"
+                    fi
+                    
+                    if [ -n "${kitware_codename:-}" ]; then
+                        # Validate codename before using in URL
+                        if echo "${kitware_codename}" | grep -qE '^[a-z0-9-]+$'; then
+                            echo "deb https://apt.kitware.com/ubuntu/ ${kitware_codename} main" | \
+                                tee /etc/apt/sources.list.d/kitware.list >/dev/null 2>&1 || true
+                            ${APT_CMD} update -qq || true
+                            ${APT_CMD} install -y -qq --allow-change-held-packages cmake || {
+                                echo "  ⚠ Kitware repository installation failed"
+                                NEED_UPGRADE=true
+                            }
+                        else
+                            echo "  ⚠ Invalid Ubuntu codename for Kitware repo: ${kitware_codename}"
+                            NEED_UPGRADE=true
+                        fi
+                    else
+                        echo "  ⚠ Could not determine Ubuntu codename for Kitware repo"
+                        NEED_UPGRADE=true
+                    fi
+                else
+                    echo "  ⚠ /etc/os-release not found, cannot add Kitware repository"
+                    NEED_UPGRADE=true
+                fi
+            fi
+            
+            # Method 3: Compile CMake from source (last resort for Ubuntu 22.04)
+            if [ "${NEED_UPGRADE}" = true ]; then
+                echo "  Attempting to compile CMake from source (this may take 10-30 minutes)..."
+                echo "  Note: Ubuntu 22.04 only has CMake 3.22.1 in default repos, compiling 3.27+ from source"
+                
+                # Check if we have a bootstrap cmake (needed to build cmake)
+                BOOTSTRAP_CMAKE=""
+                if command -v cmake &>/dev/null; then
+                    BOOTSTRAP_CMAKE=$(command -v cmake)
+                fi
+                
+                # Install build dependencies
+                ${APT_CMD} install -y -qq build-essential libssl-dev libncurses5-dev libncursesw5-dev || true
+                
+                # Download CMake source from official GitHub releases
+                CMAKE_SOURCE_DIR="/tmp/cmake_build"
+                original_dir=""
+                original_dir=$(pwd)
+                
+                # Clean up any existing build directory
+                if [ -d "${CMAKE_SOURCE_DIR}" ]; then
+                    rm -rf "${CMAKE_SOURCE_DIR}"
+                fi
+                mkdir -p "${CMAKE_SOURCE_DIR}" || {
+                    echo "  ⚠ Failed to create CMake build directory: ${CMAKE_SOURCE_DIR}"
+                    NEED_UPGRADE=true
+                }
+                
+                if [ "${NEED_UPGRADE}" != true ]; then
+                    cd "${CMAKE_SOURCE_DIR}" || {
+                        echo "  ⚠ Failed to change to CMake build directory"
+                        NEED_UPGRADE=true
+                    }
+                fi
+                
+                if [ "${NEED_UPGRADE}" != true ]; then
+                    # Fetch latest stable CMake release from official GitHub releases
+                    # Source: https://github.com/Kitware/CMake/releases
+                    echo "  Fetching latest stable CMake version from GitHub releases..."
+                    cmake_version_to_build=""
+                    api_response=""
+                    
+                    # Use GitHub API to get latest non-prerelease version
+                    # jq is required and should be installed by now
+                    api_response=$(curl -s https://api.github.com/repos/Kitware/CMake/releases 2>/dev/null || echo "")
+                    
+                    if [ -n "${api_response:-}" ]; then
+                        # jq is required - it should be installed in Step 1
+                        if ! command -v jq &>/dev/null 2>&1; then
+                            echo "  ⚠ ERROR: jq not found (should have been installed in Step 1)"
+                            echo "  Installing jq now..."
+                            ${APT_CMD} install -y -qq jq || {
+                                echo "  ⚠ Failed to install jq, using fallback parsing"
+                                # Fallback: Parse JSON with grep/sed (less reliable but works)
+                                cmake_version_to_build=$(echo "${api_response}" | \
+                                    grep -E '"tag_name"|"prerelease"' | \
+                                    grep -B1 '"prerelease":\s*false' | \
+                                    grep '"tag_name"' | \
+                                    head -1 | \
+                                    sed -E 's/.*"tag_name":\s*"v?([^"]+)".*/\1/' | \
+                                    sed 's/^v//' || echo "")
+                            }
+                        fi
+                        
+                        # Use jq if available (should be)
+                        if command -v jq &>/dev/null 2>&1; then
+                            cmake_version_to_build=$(echo "${api_response}" | \
+                                jq -r '.[] | select(.prerelease == false) | .tag_name' 2>/dev/null | \
+                                head -1 | \
+                                sed 's/^v//' || echo "")
+                        fi
+                    fi
+                    
+                    # Fallback: Use a known good version if API fails
+                    if [ -z "${cmake_version_to_build:-}" ]; then
+                        echo "  ⚠ Could not fetch latest version from GitHub, using fallback version 3.28.1"
+                        cmake_version_to_build="3.28.1"
+                    else
+                        # Validate version format (should be X.Y.Z)
+                        if ! echo "${cmake_version_to_build}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+                            echo "  ⚠ Invalid version format from API: ${cmake_version_to_build}, using fallback version 3.28.1"
+                            cmake_version_to_build="3.28.1"
+                        else
+                            echo "  Found latest stable CMake version: ${cmake_version_to_build}"
+                        fi
+                    fi
+                    
+                    CMAKE_VERSION_TO_BUILD="${cmake_version_to_build}"
+                    CMAKE_TARBALL="cmake-${CMAKE_VERSION_TO_BUILD}.tar.gz"
+                    CMAKE_URL="https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION_TO_BUILD}/${CMAKE_TARBALL}"
+                fi
+                
+                if [ "${NEED_UPGRADE}" != true ] && [ -n "${CMAKE_VERSION_TO_BUILD:-}" ] && [ -n "${CMAKE_URL:-}" ]; then
+                    echo "  Downloading CMake ${CMAKE_VERSION_TO_BUILD} source..."
+                    if wget -q "${CMAKE_URL}" -O "${CMAKE_TARBALL}"; then
+                        if [ -f "${CMAKE_TARBALL}" ]; then
+                            echo "  Extracting CMake source..."
+                            tar -xzf "${CMAKE_TARBALL}" || {
+                                echo "  ⚠ Failed to extract CMake source"
+                                cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                NEED_UPGRADE=true
+                            }
+                            
+                            if [ "${NEED_UPGRADE}" != true ] && [ -d "cmake-${CMAKE_VERSION_TO_BUILD}" ]; then
+                                cd "cmake-${CMAKE_VERSION_TO_BUILD}" || {
+                                    echo "  ⚠ Failed to change to CMake source directory"
+                                    cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                    NEED_UPGRADE=true
+                                }
+                                
+                                if [ "${NEED_UPGRADE}" != true ]; then
+                                    echo "  Configuring CMake build..."
+                                    # Bootstrap CMake (uses existing cmake if available, or builds minimal version first)
+                                    build_jobs_cmake=""
+                                    build_jobs_cmake="${BUILD_JOBS:-${CALCULATED_JOBS:-4}}"
+                                    # Ensure build_jobs_cmake is at least 1 and numeric
+                                    if [ -z "${build_jobs_cmake:-}" ] || ! echo "${build_jobs_cmake}" | grep -qE '^[0-9]+$'; then
+                                        build_jobs_cmake=4
+                                    fi
+                                    
+                                    if [ -n "${BOOTSTRAP_CMAKE:-}" ] && [ -x "${BOOTSTRAP_CMAKE}" ]; then
+                                        ${BOOTSTRAP_CMAKE} -B build -S . \
+                                            -DCMAKE_BUILD_TYPE=Release \
+                                            -DCMAKE_INSTALL_PREFIX=/usr/local \
+                                            -DCMAKE_USE_OPENSSL=ON || {
+                                            echo "  ⚠ CMake configuration failed, trying bootstrap method..."
+                                            ./bootstrap --prefix=/usr/local --parallel="${build_jobs_cmake}" || {
+                                                echo "  ⚠ CMake bootstrap failed"
+                                                cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                NEED_UPGRADE=true
+                                            }
+                                        }
+                                        
+                                        if [ "${NEED_UPGRADE}" != true ]; then
+                                            echo "  Building CMake (this will take 10-30 minutes)..."
+                                            ${BOOTSTRAP_CMAKE} --build build --parallel "${build_jobs_cmake}" || {
+                                                echo "  ⚠ CMake build failed, trying make..."
+                                                if [ -d "build" ]; then
+                                                    cd build || {
+                                                        echo "  ⚠ Failed to change to build directory"
+                                                        cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                        NEED_UPGRADE=true
+                                                    }
+                                                    if [ "${NEED_UPGRADE}" != true ]; then
+                                                        make -j"${build_jobs_cmake}" || {
+                                                            echo "  ⚠ CMake compilation failed"
+                                                            cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                            NEED_UPGRADE=true
+                                                        }
+                                                    fi
+                                                else
+                                                    echo "  ⚠ Build directory not found"
+                                                    NEED_UPGRADE=true
+                                                fi
+                                            }
+                                            
+                                            if [ "${NEED_UPGRADE}" != true ]; then
+                                                # Return to source directory for install
+                                                if [ "$(basename "$(pwd)")" = "build" ]; then
+                                                    cd .. || {
+                                                        echo "  ⚠ Failed to return to source directory"
+                                                        cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                        NEED_UPGRADE=true
+                                                    }
+                                                fi
+                                                
+                                                if [ "${NEED_UPGRADE}" != true ]; then
+                                                    echo "  Installing CMake..."
+                                                    ${BOOTSTRAP_CMAKE} --install build || {
+                                                        if [ -d "build" ]; then
+                                                            cd build || {
+                                                                echo "  ⚠ Failed to change to build directory for install"
+                                                                cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                                NEED_UPGRADE=true
+                                                            }
+                                                            if [ "${NEED_UPGRADE}" != true ]; then
+                                                                make install || {
+                                                                    echo "  ⚠ CMake installation failed"
+                                                                    cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                                    NEED_UPGRADE=true
+                                                                }
+                                                            fi
+                                                        else
+                                                            echo "  ⚠ Build directory not found for install"
+                                                            NEED_UPGRADE=true
+                                                        fi
+                                                    }
+                                                    
+                                                    if [ "${NEED_UPGRADE}" != true ]; then
+                                                        # Update PATH to include /usr/local/bin (where cmake is installed)
+                                                        if [ -n "${PATH:-}" ]; then
+                                                            export PATH="/usr/local/bin:${PATH}"
+                                                        else
+                                                            export PATH="/usr/local/bin"
+                                                        fi
+                                                        ldconfig || true
+                                                    fi
+                                                fi
+                                            fi
+                                        fi
+                                    else
+                                        # No bootstrap cmake available, use bootstrap script
+                                        echo "  Bootstrapping CMake (no existing cmake found)..."
+                                        ./bootstrap --prefix=/usr/local --parallel="${build_jobs_cmake}" || {
+                                            echo "  ⚠ CMake bootstrap failed"
+                                            cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                            NEED_UPGRADE=true
+                                        }
+                                        
+                                        if [ "${NEED_UPGRADE}" != true ]; then
+                                            echo "  Building CMake (this will take 10-30 minutes)..."
+                                            make -j"${build_jobs_cmake}" || {
+                                                echo "  ⚠ CMake build failed"
+                                                cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                NEED_UPGRADE=true
+                                            }
+                                            
+                                            if [ "${NEED_UPGRADE}" != true ]; then
+                                                echo "  Installing CMake..."
+                                                make install || {
+                                                    echo "  ⚠ CMake installation failed"
+                                                    cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                                    NEED_UPGRADE=true
+                                                }
+                                                
+                                                if [ "${NEED_UPGRADE}" != true ]; then
+                                                    # Update PATH to include /usr/local/bin
+                                                    if [ -n "${PATH:-}" ]; then
+                                                        export PATH="/usr/local/bin:${PATH}"
+                                                    else
+                                                        export PATH="/usr/local/bin"
+                                                    fi
+                                                    ldconfig || true
+                                                fi
+                                            fi
+                                        fi
+                                    fi
+                                    
+                                    # Return to original directory
+                                    cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                                fi
+                            fi
+                        else
+                            echo "  ⚠ CMake tarball not found after download"
+                            cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                            NEED_UPGRADE=true
+                        fi
+                    else
+                        echo "  ⚠ Failed to download CMake from ${CMAKE_URL}"
+                        cd "${original_dir:-/tmp}" >/dev/null 2>&1 || true
+                        NEED_UPGRADE=true
+                    fi
+                    
+                    # Clean up build directory
+                    if [ -d "${CMAKE_SOURCE_DIR}" ]; then
+                        rm -rf "${CMAKE_SOURCE_DIR}" || true
+                    fi
+                else
+                    echo "  ⚠ Cannot proceed with CMake compilation (missing version or URL)"
+                    if [ -n "${original_dir:-}" ]; then
+                        cd "${original_dir}" >/dev/null 2>&1 || true
+                    fi
+                    NEED_UPGRADE=true
+                fi
+            fi
+            
+            # Final verification
+            if command -v cmake &>/dev/null; then
+                FINAL_CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+                if [ -n "${FINAL_CMAKE_VERSION:-}" ]; then
+                    FINAL_CMAKE_MAJOR=$(echo "${FINAL_CMAKE_VERSION}" | cut -d. -f1)
+                    FINAL_CMAKE_MINOR=$(echo "${FINAL_CMAKE_VERSION}" | cut -d. -f2)
+                    # Validate version components
+                    if [ -n "${FINAL_CMAKE_MAJOR:-}" ] && [ -n "${FINAL_CMAKE_MINOR:-}" ] && \
+                       echo "${FINAL_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                       echo "${FINAL_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                        # Compare against required version (dynamic)
+                        REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
+                        REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
+                        if [ -n "${REQUIRED_CMAKE_MAJOR:-}" ] && [ -n "${REQUIRED_CMAKE_MINOR:-}" ] && \
+                           echo "${REQUIRED_CMAKE_MAJOR}" | grep -qE '^[0-9]+$' && \
+                           echo "${REQUIRED_CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+                            if [ "${FINAL_CMAKE_MAJOR}" -gt "${REQUIRED_CMAKE_MAJOR}" ] || \
+                               ([ "${FINAL_CMAKE_MAJOR}" -eq "${REQUIRED_CMAKE_MAJOR}" ] && [ "${FINAL_CMAKE_MINOR}" -ge "${REQUIRED_CMAKE_MINOR}" ]); then
+                                echo -e "  ${GREEN}✓ CMake ${FINAL_CMAKE_VERSION} now meets requirement${NC}"
+                                NEED_UPGRADE=false
+                            else
+                                echo -e "  ${YELLOW}⚠ WARNING: CMake ${FINAL_CMAKE_VERSION} < ${CMAKE_REQUIRED_VERSION}${NC}"
+                                echo "    PyTorch build may fail. Consider manual CMake upgrade."
+                                NEED_UPGRADE=true
+                            fi
+                        else
+                            echo "  ⚠ Could not parse required CMake version"
+                            NEED_UPGRADE=true
+                        fi
+                    else
+                        echo "  ⚠ Could not parse final CMake version components"
+                        NEED_UPGRADE=true
+                    fi
+                else
+                    echo "  ⚠ Could not determine final CMake version"
+                    NEED_UPGRADE=true
+                fi
+            else
+                echo "  ⚠ CMake not found in PATH after upgrade attempts"
+                NEED_UPGRADE=true
+            fi
+        fi
+    else
+        echo "  ⚠ Could not determine CMake version"
+        echo "  Installing CMake via pip as fallback..."
+        if [ -n "${pip_flags:-}" ]; then
+            python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
+        else
+            python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
+        fi
+    fi
+else
+    echo "  ⚠ CMake not found, installing..."
+    # Try pip first (usually has latest version)
+    if [ -n "${pip_flags:-}" ]; then
+        python3 -m pip install --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || {
+            echo "  Installing CMake via apt-get..."
+            ${APT_CMD} install -y -qq cmake || {
+                echo -e "${YELLOW}⚠ CMake installation failed${NC}"
+            }
+        }
+    else
+        python3 -m pip install --no-cache-dir cmake 2>&1 | filter_pip_output || {
+            echo "  Installing CMake via apt-get..."
+            ${APT_CMD} install -y -qq cmake || {
+                echo -e "${YELLOW}⚠ CMake installation failed${NC}"
+            }
+        }
+    fi
+fi
+
+# Final CMake verification
+if ! command -v cmake &>/dev/null; then
+    echo -e "${RED}✗ ERROR: CMake not found after installation attempt${NC}"
+    echo "  Please install CMake manually:"
+    echo "    pip install cmake"
+    echo "    OR"
+    echo "    apt-get install cmake"
+    exit 1
+else
+    FINAL_VER=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+    if [ -n "${FINAL_VER:-}" ]; then
+        echo -e "  ${GREEN}✓ CMake ${FINAL_VER} ready${NC}"
+    fi
 fi
 
 # Verify OpenBLAS installation
@@ -1195,18 +1951,46 @@ else
     echo "  Official repository: https://github.com/pytorch/pytorch"
     echo "  Build instructions: https://github.com/pytorch/pytorch#from-source"
     
-    # Always use latest stable release (fetch from GitHub releases)
-    echo "  Fetching latest stable PyTorch version from GitHub releases..."
-    LATEST_TAG=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -1)
-    
-    if [ -z "${LATEST_TAG:-}" ]; then
-        echo -e "${YELLOW}⚠ Could not fetch latest tag, using PyTorch 2.9.0 as fallback${NC}"
-        LATEST_TAG="v2.9.0"
+    # Use selected PyTorch version or fetch latest
+    if [ -n "${SELECTED_PYTORCH_VERSION:-}" ]; then
+        # Use specified/recommended version
+        # Validate version format before using
+        if echo "${SELECTED_PYTORCH_VERSION}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            LATEST_TAG="v${SELECTED_PYTORCH_VERSION}"
+            PYTORCH_VERSION="${SELECTED_PYTORCH_VERSION}"
+            echo "  Using PyTorch version: ${PYTORCH_VERSION} (${LATEST_TAG})"
+        else
+            echo -e "${RED}✗ ERROR: Invalid PyTorch version format: ${SELECTED_PYTORCH_VERSION}${NC}"
+            echo "  Expected format: X.Y or X.Y.Z"
+            exit 1
+        fi
+    else
+        # Fetch latest stable release from GitHub
+        echo "  Fetching latest stable PyTorch version from GitHub releases..."
+        LATEST_TAG=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
+            jq -r '.tag_name' 2>/dev/null | head -1 || echo "")
+        
+        if [ -z "${LATEST_TAG:-}" ]; then
+            # Fallback: try grep if jq fails
+            LATEST_TAG=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
+                grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -1 || echo "")
+        fi
+        
+        if [ -z "${LATEST_TAG:-}" ]; then
+            echo -e "${YELLOW}⚠ Could not fetch latest tag, using PyTorch 2.9.0 as fallback${NC}"
+            LATEST_TAG="v2.9.0"
+        fi
+        
+        # Remove 'v' prefix if present for version comparison
+        PYTORCH_VERSION="${LATEST_TAG#v}"
+        # Validate fetched version format
+        if ! echo "${PYTORCH_VERSION}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+            echo -e "${YELLOW}⚠ Invalid version format from API: ${PYTORCH_VERSION}, using fallback${NC}"
+            PYTORCH_VERSION="2.9.0"
+            LATEST_TAG="v2.9.0"
+        fi
+        echo "  Latest stable version: ${PYTORCH_VERSION}"
     fi
-    
-    # Remove 'v' prefix if present for version comparison
-    PYTORCH_VERSION="${LATEST_TAG#v}"
-    echo "  Latest stable version: ${PYTORCH_VERSION}"
     
     # Clone specific stable version tag (skip if already exists)
     if [ ! -d "pytorch-${PYTORCH_VERSION}" ]; then
@@ -1262,6 +2046,7 @@ else
     cd "${PYTORCH_SOURCE_DIR}" || exit 1
 
 # Detect if we need --break-system-packages flag
+# Note: filter_pip_output function is defined earlier in Step 1
 # Check for externally-managed-environment error
 export pip_flags=""
 
@@ -1306,14 +2091,16 @@ if [ -z "${pip_flags}" ]; then
 fi
 
 echo "  Installing Python build dependencies..."
+# Suppress pip warnings about system packages
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_WARN_SCRIPT_LOCATION=1
+
 if [ -n "${pip_flags}" ]; then
-    python3 -m pip install --upgrade pip setuptools wheel ${pip_flags} --quiet 2>&1 || \
-    python3 -m pip install --upgrade pip setuptools wheel ${pip_flags} 2>&1 | \
-        grep -v "^Requirement\|^Collecting\|^Using\|^Already\|^WARNING" || true
+    python3 -m pip install --upgrade pip setuptools wheel ${pip_flags} --quiet 2>&1 | filter_pip_output || \
+    python3 -m pip install --upgrade pip setuptools wheel ${pip_flags} 2>&1 | filter_pip_output || true
 else
-    python3 -m pip install --upgrade pip setuptools wheel --quiet 2>&1 || \
-    python3 -m pip install --upgrade pip setuptools wheel 2>&1 | \
-        grep -v "^Requirement\|^Collecting\|^Using\|^Already\|^WARNING" || true
+    python3 -m pip install --upgrade pip setuptools wheel --quiet 2>&1 | filter_pip_output || \
+    python3 -m pip install --upgrade pip setuptools wheel 2>&1 | filter_pip_output || true
 fi
 
 # Install PyTorch build dependencies
@@ -1323,6 +2110,12 @@ fi
 echo "  Installing minimal PyTorch build dependencies..."
 echo "  Note: PyTorch is independent of TensorFlow/Keras - these are NOT required for building"
 echo "  Note: Installing only core build dependencies to avoid conflicts"
+echo "  Note: Ignoring apt package version parsing errors (e.g., devscripts) - these are non-fatal"
+
+# Suppress pip's dependency resolver warnings about system packages
+# This prevents errors when pip encounters apt packages with Ubuntu-style versions
+export PIP_DISABLE_PIP_VERSION_CHECK=1
+export PIP_NO_WARN_SCRIPT_LOCATION=1
 
 # Core build dependencies for PyTorch (minimal set required for compilation)
 # These are the actual dependencies needed by PyTorch's setup.py
@@ -1330,20 +2123,27 @@ CORE_BUILD_DEPS="numpy ninja pyyaml setuptools wheel cmake typing-extensions fil
 
 if [ -n "${pip_flags}" ]; then
     # Install core dependencies with --ignore-installed to handle version conflicts gracefully
-    # This allows pip to install needed versions even if system packages exist
+    # Use --no-deps to avoid dependency resolution that triggers apt package version errors
+    # Redirect both stdout and stderr, filter known errors
+    python3 -m pip install --no-cache-dir --ignore-installed --no-deps ${pip_flags} \
+        ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || {
+        echo "  ⚠ Some packages may have installation issues (non-fatal)"
+        echo "  Continuing with build - PyTorch setup.py will handle missing optional dependencies"
+    }
+    
+    # Now install with dependencies for packages that need them (but suppress errors)
     python3 -m pip install --no-cache-dir --ignore-installed ${pip_flags} \
-        ${CORE_BUILD_DEPS} 2>&1 | \
-        grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|^ERROR.*tensorflow|^ERROR.*keras" || {
-        echo "  ⚠ Some packages may have installation issues (non-fatal)"
-        echo "  Continuing with build - PyTorch setup.py will handle missing optional dependencies"
-    }
+        ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || true
 else
-    python3 -m pip install --no-cache-dir --ignore-installed \
-        ${CORE_BUILD_DEPS} 2>&1 | \
-        grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|^ERROR.*tensorflow|^ERROR.*keras" || {
+    python3 -m pip install --no-cache-dir --ignore-installed --no-deps \
+        ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || {
         echo "  ⚠ Some packages may have installation issues (non-fatal)"
         echo "  Continuing with build - PyTorch setup.py will handle missing optional dependencies"
     }
+    
+    # Now install with dependencies for packages that need them (but suppress errors)
+    python3 -m pip install --no-cache-dir --ignore-installed \
+        ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || true
 fi
 
 # Optional: Try to install from requirements.txt if it exists, but filter out problematic packages
@@ -1356,14 +2156,13 @@ if [ -f "requirements.txt" ]; then
     
     if [ -f "${FILTERED_REQUIREMENTS}" ] && [ -s "${FILTERED_REQUIREMENTS}" ]; then
         # Try installing filtered requirements, but don't fail if it doesn't work
+        # Use --no-deps to avoid dependency resolution errors
         if [ -n "${pip_flags}" ]; then
-            python3 -m pip install --no-cache-dir --ignore-installed ${pip_flags} \
-                -r "${FILTERED_REQUIREMENTS}" 2>&1 | \
-                grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version" || true
+            python3 -m pip install --no-cache-dir --ignore-installed --no-deps ${pip_flags} \
+                -r "${FILTERED_REQUIREMENTS}" 2>&1 | filter_pip_output || true
         else
-            python3 -m pip install --no-cache-dir --ignore-installed \
-                -r "${FILTERED_REQUIREMENTS}" 2>&1 | \
-                grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version" || true
+            python3 -m pip install --no-cache-dir --ignore-installed --no-deps \
+                -r "${FILTERED_REQUIREMENTS}" 2>&1 | filter_pip_output || true
         fi
     fi
     
