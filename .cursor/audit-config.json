@@ -21,8 +21,6 @@
     "description": "Enable Cursor AI agent semantic analysis. Generates prompt file for manual review with Cmd/Ctrl+K, or uses Cursor Rules for automatic analysis."
   },
   "excluded_files": [
-    "^xubuntu_robotics_base_post_ULTRA_CLEANED\\.sh$",
-    "^build_xubuntu_robotics_base\\.sh$",
     "\\.git/"
   ],
   "description": "Pre-commit audit configuration. Exclude large generated files if needed."
