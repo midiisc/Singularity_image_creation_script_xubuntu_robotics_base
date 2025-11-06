@@ -1167,8 +1167,19 @@ log_with_timestamp "Comprehensive cache directory structure created successfully
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 OUT_DIR="${PWD}"  # Output in current working directory
-SIF_NAME="xubuntu_base_image_complete.sif"
-DEF_NAME="xubuntu_base_image_complete.def"
+# Use SIF_NAME from config.sh if set, otherwise generate from version numbers
+if [ -z "${SIF_NAME:-}" ]; then
+    if [ -n "${ROS_DISTRO:-}" ]; then
+        ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+    else
+        ROS_DISTRO_CAPITALIZED="Unknown"
+        log_warning "ROS_DISTRO not set, using 'Unknown' in image name"
+    fi
+    SIF_NAME="Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.sif"
+    DEF_NAME="Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.def"
+fi
+# Ensure DEF_NAME is set if not already
+DEF_NAME="${DEF_NAME:-${SIF_NAME%.sif}.def}"
 
 #--- Sub-block 17.2: Remove existing definition file ---
 # Critical: Ensures we always generate a fresh definition file
@@ -2531,6 +2542,890 @@ fi
 log "================ Image building completed successfully ================"
 
 #===============================================================================
+# BLOCK 22.5: ORGANIZE BUILD OUTPUT INTO TIMESTAMPED FOLDER
+#===============================================================================
+# Purpose: Create organized folder structure with image, logs, and documentation
+# Self-contained: Yes
+# Dependencies: ${OUT_DIR}, ${SIF_NAME}, ${LOG_FILE}, ${ERROR_LOG}
+# Outputs: Organized build output directory with documentation
+#-------------------------------------------------------------------------------
+
+#--- Sub-block 22.5.1: Create timestamped output directory ---
+# Dependencies: None (foundational)
+# Outputs: Environment variables, configuration
+# Generate timestamp in format: DD-MM-YYYY-DAY-HHMMSSAM/PM
+# Example: 03-01-2025-Friday-143022PM
+# Format: %d-%m-%Y-%A-%I%M%S%p where %A is full weekday name, %p is AM/PM
+BUILD_TIMESTAMP=$(date +%d-%m-%Y-%A-%I%M%S%p)
+IMAGE_NAME_BASE="${SIF_NAME%.sif}"  # Remove .sif extension
+BUILD_OUTPUT_DIR="${OUT_DIR}/${IMAGE_NAME_BASE}_${BUILD_TIMESTAMP}"
+
+log_with_timestamp "Creating build output directory: ${BUILD_OUTPUT_DIR}"
+mkdir -p "${BUILD_OUTPUT_DIR}"
+
+if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
+    log_error "Failed to create build output directory: ${BUILD_OUTPUT_DIR}"
+    exit 1
+fi
+
+log_success "Build output directory created: ${BUILD_OUTPUT_DIR}"
+
+#--- Sub-block 22.5.2: Move image file to output directory ---
+# Dependencies: Image file exists
+# Outputs: Moved image file
+ORIGINAL_IMAGE_PATH="${OUT_DIR}/${SIF_NAME}"
+FINAL_IMAGE_PATH="${BUILD_OUTPUT_DIR}/${SIF_NAME}"
+
+if [ -f "${ORIGINAL_IMAGE_PATH}" ]; then
+    log_with_timestamp "Moving image file to output directory..."
+    mv "${ORIGINAL_IMAGE_PATH}" "${FINAL_IMAGE_PATH}"
+    if [ -f "${FINAL_IMAGE_PATH}" ]; then
+        log_success "Image moved to: ${FINAL_IMAGE_PATH}"
+        # Update SIF_PATH for later use
+        SIF_PATH="${FINAL_IMAGE_PATH}"
+    else
+        log_warning "Failed to move image file, keeping original location"
+        SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+    fi
+else
+    log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
+    SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+fi
+
+#--- Sub-block 22.5.3: Move build logs to output directory ---
+# Dependencies: LOG_FILE and ERROR_LOG exist, BUILD_OUTPUT_DIR exists
+# Outputs: Moved log files
+if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
+    log_error "Build output directory does not exist: ${BUILD_OUTPUT_DIR}"
+    log_warning "Skipping log file moves"
+else
+    if [ -f "${LOG_FILE:-}" ] && [ -n "${LOG_FILE:-}" ]; then
+        log_with_timestamp "Moving build log to output directory..."
+        if mv "${LOG_FILE}" "${BUILD_OUTPUT_DIR}/" 2>/dev/null; then
+            BUILD_LOG_BASENAME=$(basename "${LOG_FILE}")
+            log_success "Build log moved to: ${BUILD_OUTPUT_DIR}/${BUILD_LOG_BASENAME}"
+        else
+            log_warning "Failed to move build log: ${LOG_FILE}"
+        fi
+    else
+        log_warning "Build log file not found or not set: ${LOG_FILE:-<not set>}"
+        BUILD_LOG_BASENAME=""
+    fi
+
+    if [ -f "${ERROR_LOG:-}" ] && [ -n "${ERROR_LOG:-}" ]; then
+        log_with_timestamp "Moving error log to output directory..."
+        if mv "${ERROR_LOG}" "${BUILD_OUTPUT_DIR}/" 2>/dev/null; then
+            ERROR_LOG_BASENAME=$(basename "${ERROR_LOG}")
+            log_success "Error log moved to: ${BUILD_OUTPUT_DIR}/${ERROR_LOG_BASENAME}"
+        else
+            log_warning "Failed to move error log: ${ERROR_LOG}"
+        fi
+    else
+        log_warning "Error log file not found or not set: ${ERROR_LOG:-<not set>}"
+        ERROR_LOG_BASENAME=""
+    fi
+fi
+
+# Ensure basename variables are set even if files weren't moved
+BUILD_LOG_BASENAME="${BUILD_LOG_BASENAME:-$(basename "${LOG_FILE:-unknown.log}" 2>/dev/null || echo "unknown.log")}"
+ERROR_LOG_BASENAME="${ERROR_LOG_BASENAME:-$(basename "${ERROR_LOG:-unknown.log}" 2>/dev/null || echo "unknown.log")}"
+
+#--- Sub-block 22.5.4: Generate BUILD_ARCHITECTURE.md ---
+# Dependencies: config.sh variables, BUILD_OUTPUT_DIR exists
+# Outputs: BUILD_ARCHITECTURE.md file
+if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
+    log_error "Cannot generate BUILD_ARCHITECTURE.md: build output directory does not exist"
+else
+ARCHITECTURE_FILE="${BUILD_OUTPUT_DIR}/BUILD_ARCHITECTURE.md"
+log_with_timestamp "Generating BUILD_ARCHITECTURE.md..."
+
+cat > "${ARCHITECTURE_FILE}" << 'ARCH_EOF'
+# Build Architecture and Software Inventory
+
+## Build Information
+
+ARCH_EOF
+
+BUILD_DATE_STR=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
+BUILD_END_TIME_NOW=$(date +%s 2>/dev/null || echo "0")
+if [ -n "${BUILD_START_TIME:-}" ] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
+    BUILD_DURATION_NOW=$((BUILD_END_TIME_NOW - BUILD_START_TIME))
+else
+    BUILD_DURATION_NOW=0
+    log_warning "BUILD_START_TIME not set, duration calculation skipped"
+fi
+BUILD_HOURS_NOW=$((BUILD_DURATION_NOW / 3600))
+BUILD_MINUTES_NOW=$(( (BUILD_DURATION_NOW % 3600) / 60))
+BUILD_SECONDS_NOW=$((BUILD_DURATION_NOW % 60))
+
+# Calculate image size safely - use SIF_PATH which is set correctly
+IMAGE_SIZE_STR="unknown"
+if [ -f "${SIF_PATH:-}" ]; then
+    IMAGE_SIZE_STR=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+elif [ -f "${FINAL_IMAGE_PATH:-}" ]; then
+    IMAGE_SIZE_STR=$(du -sh "${FINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+elif [ -f "${ORIGINAL_IMAGE_PATH:-}" ]; then
+    IMAGE_SIZE_STR=$(du -sh "${ORIGINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+fi
+
+# Ensure basename variables are set (already set above if logs were moved)
+if [ -z "${BUILD_LOG_BASENAME:-}" ]; then
+    BUILD_LOG_BASENAME=$(basename "${LOG_FILE:-unknown.log}" 2>/dev/null || echo "unknown.log")
+fi
+if [ -z "${ERROR_LOG_BASENAME:-}" ]; then
+    ERROR_LOG_BASENAME=$(basename "${ERROR_LOG:-unknown.log}" 2>/dev/null || echo "unknown.log")
+fi
+
+# Calculate cache statistics early for use in BUILD_ARCHITECTURE.md
+# These may be recalculated later, but we need them now for documentation
+CACHE_TOTAL_SIZE="${CACHE_TOTAL_SIZE:-$(du -sh "${CACHE_DIR:-}" 2>/dev/null | cut -f1 || echo "0B")}"
+APT_CACHE_SIZE="${APT_CACHE_SIZE:-$(du -sh "${APT_ARCHIVE_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
+CONDA_CACHE_SIZE="${CONDA_CACHE_SIZE:-$(du -sh "${CONDA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
+WHEELS_CACHE_SIZE="${WHEELS_CACHE_SIZE:-$(du -sh "${WHEELS_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
+JULIA_CACHE_SIZE="${JULIA_CACHE_SIZE:-$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
+APT_CACHE_COUNT="${APT_CACHE_COUNT:-$(find "${APT_ARCHIVE_CACHE:-}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
+CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT:-$(find "${CONDA_CACHE:-}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
+WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT:-$(find "${WHEELS_CACHE:-}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
+
+cat >> "${ARCHITECTURE_FILE}" << ARCH_INFO_EOF
+- **Build Date**: ${BUILD_DATE_STR}
+- **Build Timestamp**: ${BUILD_TIMESTAMP}
+- **Image Name**: ${SIF_NAME}
+- **Image Size**: ${IMAGE_SIZE_STR}
+- **Build Duration**: ${BUILD_HOURS_NOW}h ${BUILD_MINUTES_NOW}m ${BUILD_SECONDS_NOW}s
+
+## Base System Architecture
+
+- **Operating System**: ${BASE_OS} ${BASE_OS_VERSION} (${BASE_OS_CODENAME})
+- **Desktop Environment**: Xubuntu (XFCE4)
+- **System Python**: ${SYSTEM_PYTHON_VER}
+- **ROS Distribution**: ${ROS_DISTRO} Desktop Full
+- **Base Image**: ${BASE_IMAGE}
+
+## Software Architecture Overview
+
+### Package Management Systems
+- **APT**: Ubuntu package manager with apt-aria wrapper for parallel downloads
+- **Conda/Mamba**: Miniforge3 ${MINIFORGE_VER} with Micromamba ${MICROMAMBA_VER}
+- **Julia**: ${JULIA_LTS_VER} LTS
+- **Pip**: Python package manager
+- **Cargo**: Rust package manager
+
+### Installation Directories
+ARCH_INFO_EOF
+
+cat >> "${ARCHITECTURE_FILE}" << ARCH_DIRS_EOF
+- **System Packages**: /usr/lib, /usr/local/lib
+- **Conda/Mamba**: ${MINIFORGE_HOME}
+- **Conda Environments**: ${MAMBA_ENVS}
+- **Julia**: ${JULIA_HOME}
+- **Julia Environments**: ${JULIA_ENVS}
+- **Rust Tools**: ${RUST_HOME}
+- **Drake**: ${DRAKE_HOME}
+- **Zenoh**: ${ZENOH_HOME}
+- **TurboVNC**: ${TURBOVNC_HOME}
+- **VirtualGL**: ${VIRTUALGL_HOME}
+- **CUDA**: /usr/local/cuda-${CUDA_VERSION}
+
+## Installed Libraries and Software
+
+### GPU & CUDA Support
+- **CUDA Toolkit**: ${CUDA_VERSION} (Architecture: ${CUDA_ARCH})
+- **cuDNN**: ${CUDNN_VER}
+- **NVIDIA Video Codec SDK**: ${NVIDIA_VIDEO_SDK_VERSION}
+- **NVIDIA Keyring**: ${NVIDIA_KEYRING_VER}
+
+### Remote Desktop Stack
+- **TurboVNC**: ${TURBOVNC_VER}
+- **VirtualGL**: ${VIRTUALGL_VER}
+- **noVNC**: ${NOVNC_VER}
+- **KasmVNC**: ${KASMVNC_VERSION}
+- **Xpra**: ${XPRA_VERSION}
+- **Xpra HTML5**: ${XPRA_HTML5_VERSION}
+
+### Robotics & SLAM Libraries
+- **Ceres Solver**: ${CERES_VERSION}
+- **PyCeres**: ${PYCERES_VERSION}
+- **g2o**: ${G2O_VERSION}
+- **GTSAM**: ${GTSAM_VERSION}
+- **OpenCV**: ${OPENCV_VERSION} (custom compiled with CUDA support)
+
+### 3D Reconstruction & SfM
+- **COLMAP**: ${COLMAP_VERSION} (with CUDA, CGAL, OpenMP)
+- **Open3D**: ${OPEN3D_VERSION} (with CUDA ${CUDA_VERSION} support)
+- **Open3D WebRTC**: ${OPEN3D_WEBRTC_VER}
+- **PyCOLMAP**: ${COLMAP_VERSION} (Python bindings)
+
+### Desktop Applications
+- **FreeCAD**: ${FREECAD_VERSION}
+
+### Modern CLI Tools (Rust-based, compiled from source)
+- **bat**: ${BAT_VERSION} - Syntax highlighting for cat
+- **fd**: ${FD_VERSION} - Fast find alternative
+- **ripgrep**: ${RIPGREP_VERSION} - Fast recursive grep
+- **eza**: ${EZA_VERSION} - Modern ls replacement
+- **bottom**: ${BOTTOM_VERSION} - System monitor (btm)
+- **procs**: ${PROCS_VERSION} - Modern ps replacement
+- **zellij**: ${ZELLIJ_VERSION} - Terminal multiplexer
+- **dust**: ${DU_DUST_VERSION} - Intuitive du replacement
+- **ox**: ${OX_VERSION} - Modern text editor
+
+### Development Tools
+- **yq**: ${YQ_VER} - YAML/JSON processor
+- **Julia**: ${JULIA_LTS_VER} LTS
+
+### Middleware
+- **Zenoh**: ${ZENOH_VERSION}
+- **Zenoh ROS 2 DDS Bridge**: ${ZENOH_ROS2DDS_VERSION}
+
+### Python Packages (Data Formats)
+- **h5py**: ${H5PY_VERSION}
+- **zarr**: ${ZARR_VERSION}
+
+### Python Packages (Messaging/IPC)
+- **pyzmq**: ${PYZMQ_VERSION}
+- **msgpack**: ${MSGPACK_VERSION}
+
+### Python Packages (Julia Bridge)
+- **Juliapkg**: ${JULIAPKG_VERSION}
+- **JulianCall**: ${JULIACALL_VERSION}
+
+## Compilation Flags & Optimizations
+
+### CPU Optimizations
+- Architecture: x86-64-v3 (AVX2, FMA, BMI2)
+- Compiler flags: -O3 -march=native -mtune=native
+- Link-Time Optimization (LTO): Enabled where supported
+
+### CUDA Optimizations
+- Compute Capability: ${CUDA_ARCH} (optimized for NVIDIA A6000)
+- CUDA Architecture: sm_${CUDA_ARCH}
+
+### Build System Features
+- Parallel compilation (uses all available CPU cores)
+- Comprehensive caching system:
+  - APT package cache
+  - Conda package cache
+  - Python wheels cache
+  - Julia package cache
+  - Binary artifact cache
+
+## Build Cache Statistics
+
+ARCH_DIRS_EOF
+
+cat >> "${ARCHITECTURE_FILE}" << ARCH_CACHE_EOF
+- **Total Cache Size**: ${CACHE_TOTAL_SIZE}
+- **APT Cache**: ${APT_CACHE_SIZE} (${APT_CACHE_COUNT} .deb files)
+- **Conda Cache**: ${CONDA_CACHE_SIZE} (${CONDA_CACHE_COUNT} packages)
+- **Pip Wheels**: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)
+- **Julia Cache**: ${JULIA_CACHE_SIZE}
+
+## System Configuration
+
+### APT Package Protection
+- Custom compiled libraries protected from APT overwrites
+- APT pinning configured for critical packages
+- Package holding for compiled libraries
+
+### Environment Variables
+- ROS 2 environment sourced from /opt/ros/${ROS_DISTRO}/setup.bash
+- Conda base environment pre-activated
+- CUDA paths configured in /usr/local/cuda-${CUDA_VERSION}
+- VirtualGL paths configured
+- TurboVNC paths configured
+
+### Security
+- GPG signature verification for:
+  - Julia releases
+  - TurboVNC packages
+  - VirtualGL packages
+- SHA256 checksums verified for all downloads
+
+## Build Logs
+
+- **Build Log**: ${BUILD_LOG_BASENAME}
+- **Error Log**: ${ERROR_LOG_BASENAME}
+
+Both logs are included in this directory for troubleshooting and review.
+
+ARCH_CACHE_EOF
+
+if [ -f "${ARCHITECTURE_FILE}" ]; then
+    log_success "BUILD_ARCHITECTURE.md generated: ${ARCHITECTURE_FILE}"
+else
+    log_error "Failed to generate BUILD_ARCHITECTURE.md"
+fi
+fi  # End of BUILD_OUTPUT_DIR check
+
+#--- Sub-block 22.5.5: Generate README.md with instructions ---
+# Dependencies: TOOLS_AND_UTILITIES.md content, BUILD_OUTPUT_DIR exists
+# Outputs: README.md file
+if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
+    log_error "Cannot generate README.md: build output directory does not exist"
+else
+README_FILE="${BUILD_OUTPUT_DIR}/README.md"
+log_with_timestamp "Generating README.md..."
+
+cat > "${README_FILE}" << 'README_EOF'
+# Xubuntu Robotics Base Image - Usage Guide
+
+## Quick Start
+
+### Running the Image
+
+```bash
+# Basic shell access
+singularity shell image.sif
+# or
+apptainer shell image.sif
+
+# With GPU support
+singularity shell --nv image.sif
+# or
+apptainer shell --nv image.sif
+
+# Execute a command
+singularity exec --nv image.sif command
+```
+
+### Starting Remote Desktop
+
+```bash
+# Start VNC session with GPU acceleration
+singularity exec --nv image.sif start_vnc_xfce.sh
+
+# Or use the ultimate VNC with all features
+singularity exec --nv image.sif start_vnc_ultimate.sh
+
+# Interactive menu for VNC options
+singularity exec --nv image.sif remote_desktop.sh
+```
+
+**Note**: Set VNC password first:
+```bash
+singularity exec image.sif vncpasswd
+```
+
+### SSH Tunneling for Remote Access
+
+For HPC/cluster environments, create SSH tunnel:
+
+```bash
+# From local machine to login node
+ssh -L 5901:localhost:5901 -L 6081:localhost:6081 user@login-node
+
+# From login node to compute node
+ssh -L 5901:localhost:5901 -L 6081:localhost:6081 user@compute-node
+
+# Or direct two-stage tunnel
+ssh -J user@login-node:22 -L 5901:localhost:5901 -L 6081:localhost:6081 user@compute-node
+```
+
+Then connect VNC viewer to `localhost:5901` or open browser to `http://localhost:6081`
+
+## Remote Desktop Options
+
+### Available VNC Servers
+
+1. **TurboVNC** (Recommended for GPU-accelerated applications)
+   ```bash
+   singularity exec --nv image.sif start_vnc_xfce.sh
+   ```
+   - Optimized JPEG compression
+   - Built for VirtualGL integration
+   - Multiple performance profiles
+   - Built-in webserver on port 5800+N
+
+2. **TurboVNC Ultimate** (Maximum performance)
+   ```bash
+   singularity exec --nv image.sif start_vnc_ultimate.sh
+   ```
+   - All TurboVNC features
+   - Automatic optimization
+   - Performance monitoring
+   - Audio support
+
+3. **KasmVNC** (Modern web-native VNC)
+   ```bash
+   singularity exec --nv image.sif start_kasmvnc.sh
+   ```
+   - Built-in web interface
+   - Container-optimized
+
+4. **x11vnc** (Screen sharing)
+   ```bash
+   singularity exec --nv image.sif start_x11vnc.sh :1
+   ```
+   - Attach to existing X session
+   - Useful for debugging
+
+### Interactive VNC Selection
+
+```bash
+singularity exec --nv image.sif vnc_select.sh
+```
+
+### VNC Configuration Options
+
+```bash
+# Custom display and geometry
+singularity exec --nv image.sif start_vnc_xfce.sh --vnc-display 2 --geometry 2560x1440
+
+# With VirtualGL debugging
+singularity exec --nv image.sif start_vnc_xfce.sh --vgl-debug --vgl-verbose
+
+# Disable VirtualGL integration
+singularity exec --nv image.sif start_vnc_xfce.sh --no-vgl
+```
+
+### VNC Management Commands
+
+```bash
+# List running VNC servers
+singularity exec image.sif vncserver -list
+
+# Kill specific VNC server
+singularity exec image.sif vncserver -kill :1
+
+# View VNC logs
+singularity exec image.sif tail -f ~/.vnc/*.log
+
+# Monitor VNC server status
+singularity exec image.sif vnc_monitor.sh
+```
+
+## GPU Acceleration & VirtualGL
+
+### Running GPU-Accelerated Applications
+
+```bash
+# Basic usage
+singularity exec --nv image.sif vglrun application
+
+# Performance profiles
+singularity exec --nv image.sif vglrun-fast application    # High performance
+singularity exec --nv image.sif vglrun-balanced application # Balanced
+singularity exec --nv image.sif vglrun-lowbw application   # Low bandwidth
+```
+
+### VirtualGL Testing
+
+```bash
+# Test VirtualGL installation
+singularity exec --nv image.sif test_virtualgl.sh
+
+# Display OpenGL/VirtualGL information
+singularity exec --nv image.sif vgl_info.sh
+
+# Performance benchmarking
+singularity exec --nv image.sif vgl_benchmark.sh
+```
+
+### VirtualGL Environment Variables
+
+```bash
+# Set display for GPU rendering
+export VGL_DISPLAY=:1
+
+# Compression method
+export VGL_COMPRESS=proxy  # or jpeg, rgb, yuv
+
+# Enable FPS display
+export VGL_FPS=1
+
+# Verbose output
+export VGL_VERBOSE=1
+```
+
+## Rust Tools Usage
+
+All Rust tools are installed in `/opt/rust/tools/bin` and available in PATH:
+
+### bat (Syntax-highlighting cat)
+```bash
+singularity exec image.sif bat file.txt
+singularity exec image.sif bat --style=grid file.txt
+```
+
+### fd (Fast find)
+```bash
+singularity exec image.sif fd pattern
+singularity exec image.sif fd -e py  # Find Python files
+```
+
+### ripgrep (Fast grep)
+```bash
+singularity exec image.sif rg "pattern" /path
+singularity exec image.sif rg -t py "import"  # Search in Python files
+```
+
+### eza (Modern ls)
+```bash
+singularity exec image.sif eza -l --tree
+singularity exec image.sif eza --long --git
+```
+
+### bottom (System monitor)
+```bash
+singularity exec image.sif btm
+singularity exec image.sif btm --basic
+```
+
+### procs (Modern ps)
+```bash
+singularity exec image.sif procs
+singularity exec image.sif procs python  # Filter by name
+```
+
+### zellij (Terminal multiplexer)
+```bash
+singularity exec image.sif zellij
+singularity exec image.sif zellij attach session
+```
+
+### dust (Disk usage)
+```bash
+singularity exec image.sif dust
+singularity exec image.sif dust /path/to/analyze
+```
+
+## Python & Conda Environments
+
+### Activating Conda
+
+```bash
+# Inside container
+source /opt/conda/etc/profile.d/conda.sh
+conda activate base
+
+# Or use mamba (faster solver)
+mamba activate base
+```
+
+### Creating Environments
+
+```bash
+# Create new environment
+conda create -n myenv python=3.12
+mamba create -n myenv python=3.12
+
+# Install packages
+conda install numpy pandas
+mamba install numpy pandas  # Faster
+```
+
+### Python Packages
+
+The image includes pre-installed packages:
+- NumPy, SciPy, Pandas
+- Matplotlib, Seaborn
+- Jupyter, IPython
+- Open3D Python bindings
+- PyCOLMAP
+- OpenCV Python bindings
+
+### Installing Additional Packages
+
+```bash
+# Via conda
+conda install -c conda-forge package-name
+
+# Via pip
+pip install package-name
+
+# For PyTorch/TensorFlow (optional, install as needed)
+conda install pytorch torchvision -c pytorch
+```
+
+## Julia Environment
+
+### Basic Usage
+
+```bash
+# Start Julia REPL
+singularity exec image.sif julia
+
+# Run Julia script
+singularity exec image.sif julia script.jl
+
+# Install packages
+singularity exec image.sif julia -e 'using Pkg; Pkg.add("PackageName")'
+```
+
+### CUDA Precompilation
+
+For GPU systems, precompile Julia CUDA packages:
+
+```bash
+singularity exec --nv image.sif precompile_julia_cuda.sh
+```
+
+## ROS 2 Setup
+
+### Sourcing ROS 2
+
+```bash
+# Inside container
+source /opt/ros/jazzy/setup.bash
+
+# For fish shell
+source /opt/ros/jazzy/setup.fish
+```
+
+### ROS 2 Tools
+
+```bash
+# Verify installation
+ros2 --help
+
+# List packages
+ros2 pkg list
+
+# Run nodes
+ros2 run package_name node_name
+```
+
+### ROS 2 Multiterminal Launchers
+
+```bash
+# Default terminal launcher
+singularity exec image.sif ros_multiterm command1 command2
+
+# TMUX-based
+singularity exec image.sif ros_multiterm_tmux command1 command2
+
+# Zellij-based
+singularity exec image.sif ros_multiterm_zellij command1 command2
+```
+
+## 3D Reconstruction Tools
+
+### COLMAP
+
+```bash
+# Launch GUI
+singularity exec --nv image.sif colmap gui
+
+# Automatic reconstruction
+singularity exec --nv image.sif colmap automatic_reconstructor \
+    --workspace_path /path/to/images \
+    --image_path /path/to/images \
+    --output_path /path/to/output
+
+# Manual pipeline
+singularity exec --nv image.sif colmap feature_extractor \
+    --database_path database.db \
+    --image_path /path/to/images
+```
+
+### Open3D
+
+```bash
+# Python API
+singularity exec --nv image.sif python -c "import open3d as o3d; print(o3d.__version__)"
+
+# CUDA-accelerated processing
+singularity exec --nv image.sif python -c "import open3d as o3d; # ... your code"
+```
+
+### PyCOLMAP
+
+```bash
+singularity exec --nv image.sif python -c "import pycolmap; print(pycolmap.__version__)"
+```
+
+## Monitoring & System Tools
+
+### GPU Monitoring
+
+```bash
+singularity exec --nv image.sif gpu_monitor.sh
+```
+
+### VNC Monitoring
+
+```bash
+singularity exec image.sif vnc_monitor.sh
+```
+
+### System Information
+
+```bash
+# 3D reconstruction tools info
+singularity exec image.sif 3d_recon_info
+
+# VirtualGL information
+singularity exec --nv image.sif vgl_info.sh
+```
+
+## What to Install Additionally
+
+### Optional Software
+
+1. **AppImages** (FreeCAD, Ultimaker Cura, Mendeley)
+   ```bash
+   # Download from official pages, then:
+   chmod +x *.AppImage
+   mkdir -p ~/Applications
+   mv *.AppImage ~/Applications/
+   ```
+
+2. **Simulators** (Isaac Sim, Mujoco)
+   - Install via conda/mamba environments
+   - Download from official sources
+
+3. **PyTorch/TensorFlow**
+   ```bash
+   conda install pytorch torchvision -c pytorch
+   conda install tensorflow
+   ```
+
+4. **Additional Python Packages**
+   ```bash
+   pip install package-name
+   conda install -c conda-forge package-name
+   ```
+
+### Writable Overlay (Persistent Storage)
+
+Create a writable overlay for persistent changes:
+
+```bash
+# On host system
+./create_writable_overlay.sh
+
+# Use with image
+singularity shell --overlay overlay.img:rw image.sif
+```
+
+## Configuration
+
+### Environment Variables
+
+Key environment variables are set in the container:
+- `ROS_DISTRO=jazzy`
+- `CUDA_ROOT=/usr/local/cuda-12.6`
+- `VGL_DISPLAY` (auto-detected for VNC)
+- Conda paths configured
+
+### Custom Configuration
+
+Modify container behavior by:
+1. Using writable overlays for persistent changes
+2. Creating custom conda environments
+3. Installing additional packages in overlays
+4. Modifying `~/.bashrc` or `~/.profile` in overlays
+
+## Troubleshooting
+
+### VNC Connection Issues
+
+```bash
+# Check VNC password is set
+singularity exec image.sif ls -la ~/.vnc/passwd
+
+# View VNC logs
+singularity exec image.sif tail -f ~/.vnc/*.log
+
+# Test VirtualGL
+singularity exec --nv image.sif test_virtualgl.sh
+```
+
+### GPU Issues
+
+```bash
+# Check GPU access
+singularity exec --nv image.sif nvidia-smi
+
+# Verify CUDA
+singularity exec --nv image.sif nvcc --version
+
+# Test VirtualGL
+singularity exec --nv image.sif vglrun glxspheres64
+```
+
+### Conda/Mamba Issues
+
+```bash
+# Reinitialize conda
+singularity exec image.sif source /opt/conda/etc/profile.d/conda.sh
+
+# Update conda
+singularity exec image.sif conda update conda
+
+# Clean cache
+singularity exec image.sif conda clean --all
+```
+
+### Connection Issues (HPC)
+
+```bash
+# Verify SSH tunnel
+ss -tuln | grep 5901
+
+# Test local connection
+vncviewer localhost:5901
+```
+
+## Getting Help
+
+- Check script help: `singularity exec image.sif script_name.sh --help`
+- View logs: Build logs and error logs are in this directory
+- Test components individually using test scripts
+- Check system information: `3d_recon_info`, `vgl_info.sh`
+
+## Additional Resources
+
+- **TurboVNC**: https://turbovnc.org/
+- **VirtualGL**: https://virtualgl.org/
+- **noVNC**: https://novnc.com/
+- **COLMAP**: https://colmap.github.io/
+- **Open3D**: http://www.open3d.org/
+- **ROS 2**: https://docs.ros.org/en/jazzy/
+- **Julia**: https://julialang.org/
+- **Zenoh**: https://zenoh.io/
+
+## Build Information
+
+This image was built on: ${BUILD_DATE_STR}
+Build timestamp: ${BUILD_TIMESTAMP}
+Image size: ${IMAGE_SIZE_STR}
+
+For detailed software architecture and library versions, see `BUILD_ARCHITECTURE.md`.
+
+README_EOF
+
+if [ -f "${README_FILE}" ]; then
+    log_success "README.md generated: ${README_FILE}"
+else
+    log_error "Failed to generate README.md"
+fi
+fi  # End of BUILD_OUTPUT_DIR check
+
+#--- Sub-block 22.5.6: Update OUT_DIR reference for display ---
+# Dependencies: Build output directory created
+# Outputs: Updated display messages
+if [ -n "${BUILD_OUTPUT_DIR:-}" ] && [ -d "${BUILD_OUTPUT_DIR}" ]; then
+    log_with_timestamp "Build output organized in: ${BUILD_OUTPUT_DIR}"
+    log_with_timestamp "  Image: ${SIF_PATH:-${ORIGINAL_IMAGE_PATH:-unknown}}"
+    if [ -n "${BUILD_LOG_BASENAME:-}" ]; then
+        log_with_timestamp "  Build Log: ${BUILD_OUTPUT_DIR}/${BUILD_LOG_BASENAME}"
+    fi
+    if [ -n "${ERROR_LOG_BASENAME:-}" ]; then
+        log_with_timestamp "  Error Log: ${BUILD_OUTPUT_DIR}/${ERROR_LOG_BASENAME}"
+    fi
+    if [ -f "${BUILD_OUTPUT_DIR}/BUILD_ARCHITECTURE.md" ]; then
+        log_with_timestamp "  Documentation: ${BUILD_OUTPUT_DIR}/BUILD_ARCHITECTURE.md"
+    fi
+    if [ -f "${BUILD_OUTPUT_DIR}/README.md" ]; then
+        log_with_timestamp "  Documentation: ${BUILD_OUTPUT_DIR}/README.md"
+    fi
+else
+    log_warning "Build output directory not available for summary"
+fi
+
+#===============================================================================
 # BLOCK 23: BUILD INFORMATION DISPLAY
 #===============================================================================
 # Purpose: Display build completion information
@@ -2545,7 +3440,8 @@ log "================ Image building completed successfully ================"
 log "Detailed build information"
 echo "Build Phase: Cache Harvesting"
 echo "Build completed at: $(date)"
-echo "Image size: $(du -sh "${OUT_DIR}/${SIF_NAME}" 2>/dev/null | cut -f1 || echo "unknown")"
+echo "Image size: $(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")"
+echo "Image location: ${SIF_PATH}"
 echo "======================================================================"
 
 #===============================================================================
@@ -2561,7 +3457,10 @@ echo "======================================================================"
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
 log_with_timestamp "============= Initiating Harvest from SIF to Host Cache ============="
-SIF_PATH="${OUT_DIR}/${SIF_NAME}"
+# SIF_PATH already set in BLOCK 22.5 if image was moved, otherwise use original location
+if [ -z "${SIF_PATH:-}" ]; then
+    SIF_PATH="${OUT_DIR}/${SIF_NAME}"
+fi
 HOST_CACHE="${PWD}/container_cache"
 mkdir -p "$HOST_CACHE"
 
@@ -2759,10 +3658,13 @@ echo -e "${YELLOW}==============================================================
 # Purpose: Continuing implementation
 # Dependencies: Block 17 (Conda/Miniforge), Block 15 (VirtualGL)
 # Outputs: Python packages, conda environments
-echo "Built image: ${OUT_DIR}/${SIF_NAME}"
+echo "Built image: ${SIF_PATH}"
+if [ -n "${BUILD_OUTPUT_DIR:-}" ]; then
+    echo "Build output directory: ${BUILD_OUTPUT_DIR}"
+fi
 echo ""
 echo "# Build Summary"
-echo "- Base system: Ubuntu 22.04 with XFCE4"
+echo "- Base system: Ubuntu ${BASE_OS_VERSION} with XFCE4"
 echo "- Package manager: apt-aria wrapper + mamba solver"
 echo "- Development: Python, Julia, C++ toolchains"
 echo "- Jupyter: Full environment with kernels"
@@ -2786,11 +3688,11 @@ du -sh "${BIN_CACHE}" "${DEB_CACHE}" "${APT_CACHE}" "${CONDA_CACHE}" "${JULIA_CA
 # Dependencies: Block 17 (Conda/Miniforge), Block 6.13 (NVIDIA CUDA), System (Container runtime)
 # Outputs: GPU libraries, CUDA toolkit
 echo "[note] To start a tuned VNC session inside the container:"
-echo "apptainer exec --nv \"\${OUT_DIR}/\${SIF_NAME}\" start_vnc_xfce.sh"
+echo "apptainer exec --nv \"${SIF_PATH}\" start_vnc_xfce.sh"
 echo "(Tunnel: ssh -L 5901:localhost:5901 <user>@<host>) -> VNC viewer to localhost:5901"
 
 echo "[note] Julia CUDA lazy precompile (run on GPU node):"
-echo "apptainer exec --nv \"\${OUT_DIR}/\${SIF_NAME}\" precompile_julia_cuda.sh"
+echo "apptainer exec --nv \"${SIF_PATH}\" precompile_julia_cuda.sh"
 
 echo "[note] AppImages (FreeCAD, Ultimaker Cura, Mendeley) recommended:"
 echo "Download from official pages, then:"

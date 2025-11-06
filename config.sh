@@ -227,8 +227,16 @@ export WHEELS_CACHE="${CACHE_DIR}/wheels"
 #===============================================================================
 # OUTPUT FILE NAMES
 #===============================================================================
-export SIF_NAME="${SIF_NAME:-xubuntu_base_image_complete.sif}"
-export DEF_NAME="${DEF_NAME:-xubuntu_base_image_complete.def}"
+# Generate descriptive image name with version numbers
+# Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base
+# Capitalize ROS distribution name (first letter uppercase, rest lowercase)
+if [ -n "${ROS_DISTRO:-}" ]; then
+    ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+else
+    ROS_DISTRO_CAPITALIZED="Unknown"
+fi
+export SIF_NAME="${SIF_NAME:-Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.sif}"
+export DEF_NAME="${DEF_NAME:-Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.def}"
 
 #===============================================================================
 # CONTAINER-INTERNAL PATHS
