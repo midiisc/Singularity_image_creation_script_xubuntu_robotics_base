@@ -176,6 +176,11 @@ echo -e "${BLUE}========================================${NC}\n"
 # Resource Management Functions - Dynamic Hardware Detection
 #===============================================================================
 
+# Initialize resource monitoring variables with defaults (will be updated when BUILD_DIR is set)
+RESOURCE_MONITOR_LOG="/tmp/resource_monitor.log"
+BUILD_STOP_FLAG_FILE="/tmp/.build_stop_flag"
+BUILD_STATE_FILE="/tmp/.build_state"
+
 # Comprehensive system resource detection at startup
 detect_system_resources() {
     # CPU detection
@@ -390,11 +395,19 @@ calculate_resource_thresholds() {
     
     # Critical load average: 1.5x CPU cores (more conservative - system approaching overload)
     local critical_load_avg
-    critical_load_avg=$(echo "scale=1; ${cpu_cores} * 1.5" | bc 2>/dev/null || echo "6.0")
+    if [ "${cpu_cores:-0}" -gt 0 ]; then
+        critical_load_avg=$(echo "scale=1; ${cpu_cores} * 1.5" | bc 2>/dev/null || echo "6.0")
+    else
+        critical_load_avg="6.0"  # Default if CPU cores unknown
+    fi
     
     # Warning load average: 1.2x CPU cores (more conservative)
     local warn_load_avg
-    warn_load_avg=$(echo "scale=1; ${cpu_cores} * 1.2" | bc 2>/dev/null || echo "4.8")
+    if [ "${cpu_cores:-0}" -gt 0 ]; then
+        warn_load_avg=$(echo "scale=1; ${cpu_cores} * 1.2" | bc 2>/dev/null || echo "4.8")
+    else
+        warn_load_avg="4.8"  # Default if CPU cores unknown
+    fi
     
     # Disk I/O wait thresholds (more conservative to prevent freezes)
     local critical_iowait
@@ -525,8 +538,13 @@ if [ "${SYS_SWAP_TOTAL_GB}" -gt 0 ]; then
 else
     echo "  Swap: Not available (no swap space detected)"
 fi
-echo "  Critical Load: > ${CRITICAL_LOAD_AVG} (1.5x ${SYS_CPU_CORES} cores - conservative)"
-echo "  Warning Load: > ${WARN_LOAD_AVG} (1.2x ${SYS_CPU_CORES} cores - conservative)"
+if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+    echo "  Critical Load: > ${CRITICAL_LOAD_AVG} (1.5x ${SYS_CPU_CORES} cores - conservative)"
+    echo "  Warning Load: > ${WARN_LOAD_AVG} (1.2x ${SYS_CPU_CORES} cores - conservative)"
+else
+    echo "  Critical Load: > ${CRITICAL_LOAD_AVG} (conservative threshold)"
+    echo "  Warning Load: > ${WARN_LOAD_AVG} (conservative threshold)"
+fi
 echo "  Critical I/O Wait: > ${CRITICAL_DISK_IO_WAIT}% (${SYS_DISK_TYPE} optimized)"
 echo "  Warning I/O Wait: > ${WARN_DISK_IO_WAIT}% (${SYS_DISK_TYPE} optimized)"
 echo ""
@@ -694,12 +712,10 @@ echo ""
 #===============================================================================
 echo -e "${BLUE}[Step 2] Checking for MKL conflicts...${NC}"
 
-MKL_FOUND=false
 if ldconfig -p 2>/dev/null | grep -q mkl; then
     echo -e "${YELLOW}⚠ WARNING: MKL found in system${NC}"
     echo "  PyTorch build will be configured to use OpenBLAS instead"
     echo "  MKL will be disabled via environment variables"
-    MKL_FOUND=true
 else
     echo -e "${GREEN}✓ No MKL found (good - OpenBLAS will be used)${NC}\n"
 fi
@@ -738,7 +754,7 @@ detect_cuda() {
 
 CUDA_VERSION=$(detect_cuda)
 CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
-CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)
+# CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)  # Not used elsewhere, removed to avoid unused variable warning
 
 if [ "${CUDA_MAJOR}" = "12" ]; then
     echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}\n"
@@ -817,13 +833,17 @@ echo "    Total memory budget: $((BUILD_JOBS * SYS_MEM_PER_JOB_GB))GB"
 # Threading configuration (runtime threading, not build parallelism)
 # Use 50% of available cores for runtime threading to avoid oversubscription
 # But ensure we don't exceed available cores
-runtime_threads=$((SYS_CPU_CORES / 2))
-if [ $runtime_threads -lt 1 ]; then
-    runtime_threads=1
+if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+    runtime_threads=$((SYS_CPU_CORES / 2))
+    if [ $runtime_threads -lt 1 ]; then
+        runtime_threads=1
+    fi
+else
+    runtime_threads=1  # Default to 1 if CPU cores unknown
 fi
 # Cap at build jobs to avoid oversubscription
-if [ $runtime_threads -gt $BUILD_JOBS ]; then
-    runtime_threads=$BUILD_JOBS
+if [ "${runtime_threads}" -gt "${BUILD_JOBS}" ]; then
+    runtime_threads="${BUILD_JOBS}"
 fi
 
 export OMP_NUM_THREADS="${runtime_threads}"  # OpenMP threads
@@ -831,7 +851,11 @@ export MKL_NUM_THREADS="${runtime_threads}"  # MKL threads (for compatibility)
 export OPENBLAS_NUM_THREADS="${runtime_threads}"  # OpenBLAS threads
 export NUMEXPR_NUM_THREADS="${runtime_threads}"  # NumExpr threads
 
-echo "    Runtime threading: ${runtime_threads} threads (50% of ${SYS_CPU_CORES} cores, capped at ${BUILD_JOBS} jobs)"
+if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+    echo "    Runtime threading: ${runtime_threads} threads (50% of ${SYS_CPU_CORES} cores, capped at ${BUILD_JOBS} jobs)"
+else
+    echo "    Runtime threading: ${runtime_threads} threads (capped at ${BUILD_JOBS} jobs)"
+fi
 echo "    OMP_NUM_THREADS=${runtime_threads}"
 echo "    OPENBLAS_NUM_THREADS=${runtime_threads}"
 
@@ -924,7 +948,7 @@ check_build_state() {
     if [ -n "${pytorch_source}" ] && [ -d "${pytorch_source}" ]; then
         # Check for CMake cache (indicates build started)
         if [ -f "${pytorch_source}/build/CMakeCache.txt" ] || \
-           ([ -d "${pytorch_source}/build" ] && [ -n "$(find "${pytorch_source}/build" -name "CMakeCache.txt" 2>/dev/null | head -1)" ]); then
+           { [ -d "${pytorch_source}/build" ] && [ -n "$(find "${pytorch_source}/build" -name "CMakeCache.txt" 2>/dev/null | head -1)" ]; }; then
             echo "in_progress"
             return 0
         fi
@@ -945,7 +969,7 @@ check_build_state() {
 save_build_state() {
     local state="$1"
     echo "${state}" > "${BUILD_STATE_FILE}"
-    echo "$(date +%s)" >> "${BUILD_STATE_FILE}"  # Timestamp
+    date +%s >> "${BUILD_STATE_FILE}"  # Timestamp
 }
 
 # Check current build state
@@ -1196,7 +1220,7 @@ else
     PYTHON_MAJOR=$(echo "${PYTHON_VER}" | cut -d. -f1)
     PYTHON_MINOR=$(echo "${PYTHON_VER}" | cut -d. -f2)
 
-    if [ "${PYTHON_MAJOR}" -lt 3 ] || ([ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_MINOR}" -lt 10 ]); then
+    if [ "${PYTHON_MAJOR}" -lt 3 ] || { [ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_MINOR}" -lt 10 ]; }; then
         echo -e "${RED}✗ ERROR: PyTorch 2.9 requires Python 3.10 or later${NC}"
         echo "  Current Python version: ${PYTHON_VER}"
         echo "  Please upgrade Python or use an older PyTorch version"
@@ -1211,7 +1235,11 @@ else
     echo "  Build configuration (based on detected hardware):"
     echo "    MAX_JOBS=${MAX_JOBS} (parallel compilation jobs)"
     echo "    Memory limit: ${SYS_MEM_PER_JOB_GB}GB per job (adaptive)"
-    echo "    CPU limit: ${BUILD_JOBS} jobs (${BUILD_JOBS}/${SYS_CPU_CORES} cores = $((BUILD_JOBS * 100 / SYS_CPU_CORES))%)"
+    if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+        echo "    CPU limit: ${BUILD_JOBS} jobs (${BUILD_JOBS}/${SYS_CPU_CORES} cores = $((BUILD_JOBS * 100 / SYS_CPU_CORES))%)"
+    else
+        echo "    CPU limit: ${BUILD_JOBS} jobs (CPU cores unknown)"
+    fi
     echo "    Disk type: ${SYS_DISK_TYPE} (I/O optimized)"
     if [ "${BUILD_STATE}" = "in_progress" ]; then
         echo "    Build mode: Incremental (resuming from previous build)"
@@ -1254,7 +1282,11 @@ else
         # Memory check
         mem_avail=$(free -g 2>/dev/null | awk '/^Mem:/ {print $7}' || echo "0")
         mem_total=$(free -g 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "0")
-        mem_used_pct=$(( (mem_total - mem_avail) * 100 / mem_total ))
+        if [ "${mem_total:-0}" -gt 0 ]; then
+            mem_used_pct=$(( (mem_total - mem_avail) * 100 / mem_total ))
+        else
+            mem_used_pct=0
+        fi
         
         # Swap check
         swap_used=$(free -g 2>/dev/null | awk '/^Swap:/ {print $3}' || echo "0")
@@ -1263,7 +1295,11 @@ else
         # Load average check
         load_avg=$(uptime | awk -F'load average:' '{print $2}' | awk '{print $1}' | sed 's/,//' || echo "0")
         cpu_cores=$(nproc 2>/dev/null || echo "1")
-        load_per_core=$(echo "scale=2; ${load_avg} / ${cpu_cores}" | bc 2>/dev/null || echo "0")
+        if [ "${cpu_cores:-0}" -gt 0 ]; then
+            load_per_core=$(echo "scale=2; ${load_avg} / ${cpu_cores}" | bc 2>/dev/null || echo "0")
+        else
+            load_per_core="0"
+        fi
         
         # Disk I/O wait check (iostat is now required, but fallback to /proc/stat if needed)
         iowait_pct=0
@@ -1459,7 +1495,11 @@ fi
         
         echo -e "${GREEN}✓ PyTorch wheel built successfully${NC}"
         echo "  Build time: ${BUILD_MINUTES} minutes"
-        echo "  Build jobs used: ${BUILD_JOBS} (of ${SYS_CPU_CORES} cores)"
+        if [ "${SYS_CPU_CORES:-0}" -gt 0 ]; then
+            echo "  Build jobs used: ${BUILD_JOBS} (of ${SYS_CPU_CORES} cores)"
+        else
+            echo "  Build jobs used: ${BUILD_JOBS}"
+        fi
         echo "  Build state saved - can resume if interrupted in future runs"
     else
         # Stop resource monitor

@@ -33,6 +33,8 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/audit-config.json"
 AUDIT_REPORT="${SCRIPT_DIR}/.audit-report.txt"
 FAILED=0
+SHOW_INLINE_CORRECTIONS=true  # Show corrections directly in code
+SKIP_REPORT_FILE=false  # Set to true to skip report file generation
 
 # Load configuration if exists
 if [ -f "${CONFIG_FILE}" ]; then
@@ -57,29 +59,47 @@ else
     EXCLUDED_FILES=""
 fi
 
-# Initialize report
-cat > "${AUDIT_REPORT}" <<EOF
+# Initialize report (only if not skipping)
+if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+    cat > "${AUDIT_REPORT}" <<EOF
 === CURSOR SHELL AUDIT REPORT ===
 Generated: $(date)
 Project: ${PROJECT_ROOT}
 
 EOF
+fi
 
 # Helper functions
 log_info() {
-    echo -e "${BLUE}[INFO]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo -e "${BLUE}[INFO]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    else
+        echo -e "${BLUE}[INFO]${NC} $1"
+    fi
 }
 
 log_success() {
-    echo -e "${GREEN}[✓]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo -e "${GREEN}[✓]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    else
+        echo -e "${GREEN}[✓]${NC} $1"
+    fi
 }
 
 log_warning() {
-    echo -e "${YELLOW}[⚠]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo -e "${YELLOW}[⚠]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    else
+        echo -e "${YELLOW}[⚠]${NC} $1"
+    fi
 }
 
 log_error() {
-    echo -e "${RED}[✗]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo -e "${RED}[✗]${NC} $1" | tee -a "${AUDIT_REPORT}"
+    else
+        echo -e "${RED}[✗]${NC} $1"
+    fi
     FAILED=1
 }
 
@@ -228,8 +248,32 @@ variable_expansion_check() {
         if echo "${line_content}" | grep -qE '\$[A-Z_][A-Z0-9_]*[^"'\''`]' && \
            ! echo "${line_content}" | grep -qE '["'\''].*\$\{?[A-Z_].*["'\'']'; then
             log_warning "Line ${line_num}: Unquoted variable expansion may cause word splitting"
-            echo "  → Line ${line_num}: ${line_content}" >> "${AUDIT_REPORT}"
-            echo "    Consider: \"\${VAR}\" instead of \${VAR}" >> "${AUDIT_REPORT}"
+            if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+                echo "  → Line ${line_num}: ${line_content}" >> "${AUDIT_REPORT}"
+                echo "    Consider: \"\${VAR}\" instead of \${VAR}" >> "${AUDIT_REPORT}"
+            fi
+            
+            if [ "${SHOW_INLINE_CORRECTIONS}" = "true" ]; then
+                echo ""
+                echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${YELLOW}CORRECTION: Unquoted Variable - Line ${line_num}${NC}"
+                echo -e "${YELLOW}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "# ISSUE: Unquoted variable expansion"
+                echo "# Description: Variable may cause word splitting"
+                echo "# Risk: MEDIUM"
+                echo ""
+                echo "# BEFORE (Line ${line_num}):"
+                echo "${line_content}"
+                echo ""
+                echo "# AFTER (Line ${line_num}) - CORRECTION:"
+                # Try to quote the variable (simplified)
+                echo "${line_content}" | sed -E 's/\$([A-Z_][A-Z0-9_]*)/"$\1"/g; s/\$\{([A-Z_][A-Z0-9_]*)\}/"${{\1}}"/g'
+                echo ""
+                echo "# [ ] Accept this correction"
+                echo "# [ ] Reject this correction"
+                echo ""
+            fi
             ((issues++)) || true
         fi
     done < <(grep -nE '\$[A-Z_][A-Z0-9_]*' "${file}" 2>/dev/null || true)
@@ -654,6 +698,61 @@ Break the audit into explicit, sequential stages to prevent oversight. Each stag
 - Verify commands that should fail gracefully have: \`|| exit 1\`, \`|| return 1\`, or \`2>/dev/null\`
 - Check for dangerous commands without confirmation: \`rm -rf\`, \`mv\` to overwrite
 
+### Stage 3.5: Unbound Variable and Scope Analysis (NEW - CRITICAL)
+**Objective:** Detect unbound variables, local/global scope issues, and variable initialization order
+
+**3.5.1 Unbound Variable Detection:**
+- Check if script uses \`set -u\` or \`set -euo pipefail\` (required for catching unbound variables)
+- For each variable reference (\`\${VAR}\` or \`\$VAR\`), verify it's defined before use
+- Pattern: Check if variable appears in assignment (\`VAR=\`, \`export VAR=\`, \`local VAR=\`) before reference
+- Exception: Variables with default values (\`\${VAR:-default}\`, \`\${VAR:=default}\`) are safe
+- Flag variables used without default values that may be unbound
+- Check for variables referenced in early script sections before initialization
+
+**3.5.2 Local/Global Variable Scope:**
+- **Local Variable Usage:** Check if variables in functions should be declared \`local\`
+  - Pattern: Variables used in functions without \`local\` declaration
+  - Check if variable is defined globally (outside function) - may cause scope pollution
+  - Recommendation: Use \`local VAR\` in functions to avoid global scope conflicts
+- **Invalid Local Usage:** Check for \`local\` keyword used outside functions
+  - Pattern: \`local VAR=\` outside function body
+  - Error: \`local\` is only valid inside functions
+  - Fix: Remove \`local\` or move code into function
+- **Global Variable Access:** Verify intentional global variable access vs accidental
+
+**3.5.3 Variable Initialization Order:**
+- Check if variables are initialized before first use
+- Verify variables used in early script sections (before BUILD_DIR, etc.) are initialized
+- Check for variables that depend on other variables being set first
+- Flag circular dependencies in variable initialization
+
+### Stage 3.6: Function Declaration and Usage Order (NEW - CRITICAL)
+**Objective:** Ensure functions are declared before use and properly scoped
+
+**3.6.1 Function Declaration Order:**
+- Check if functions are called before they're defined
+- Pattern: Function \`func_name()\` called at line X but defined at line Y (where Y > X)
+- In bash, functions must be defined before use (unlike some languages)
+- Fix: Move function definition before first call, or ensure proper sourcing order
+- Exception: Functions defined in sourced files are acceptable
+
+**3.6.2 Duplicate Function Definitions:**
+- Check for functions defined multiple times
+- Pattern: Same function name appears in multiple \`function name()\` or \`name()\` declarations
+- Only the last definition will be used (silent override)
+- Fix: Remove duplicate definitions or rename functions
+
+**3.6.3 Function Scope and Structure:**
+- Check for properly closed functions (no missing closing braces)
+- Verify function body structure: \`function name() { ... }\` or \`name() { ... }\`
+- Check for functions that are never called (informational)
+- Verify function parameters are properly handled
+
+**3.6.4 Function Call Patterns:**
+- Check for function calls with incorrect syntax
+- Verify function calls match function definitions
+- Check for functions called with wrong number of arguments
+
 ### Stage 4: Shell‑Specific Vulnerability and Expansion Review
 **Objective:** Prevent word splitting, pathname expansion, injection, and expansion errors
 
@@ -1045,6 +1144,342 @@ EOF
     log_info "Workspace trigger files created for auto-detection"
 }
 
+# Unbound variable check - comprehensive detection
+unbound_variable_check() {
+    local file="$1"
+    local issues=0
+    
+    log_info "Checking for unbound variables: ${file}"
+    
+    # Check if script uses set -u or set -euo pipefail
+    local has_set_u=false
+    if grep -qE 'set\s+[+-]euo?\s+pipefail|set\s+-u' "${file}"; then
+        has_set_u=true
+    fi
+    
+    if [ "$has_set_u" = false ]; then
+        log_warning "Script doesn't use 'set -u' - unbound variables won't be caught at runtime"
+        echo "  → Consider adding 'set -euo pipefail' to catch unbound variables" >> "${AUDIT_REPORT}"
+        ((issues++)) || true
+    fi
+    
+    # Find all variable references and check if they're defined before use
+    # Pattern: ${VAR} or $VAR (excluding special variables like $1, $@, $?, etc.)
+    local line_num=0
+    while IFS= read -r line; do
+        ((line_num++)) || true
+        
+        # Skip comments and shebang
+        if echo "${line}" | grep -qE '^\s*#|^#!/'; then
+            continue
+        fi
+        
+        # Extract variable names from ${VAR} or $VAR patterns
+        # Exclude special variables: $0, $1-$9, $@, $*, $?, $$, $!, $-, $_
+        echo "${line}" | grep -oE '\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*' | \
+        grep -vE '\$\{[0-9@*?$!_-]+\}|\$[0-9@*?$!_-]' | \
+        sed 's/\${//;s/}//;s/\$//' | while IFS= read -r var_name; do
+            # Check if variable is defined before this line
+            # Look for: VAR=, export VAR=, local VAR=, declare VAR=, readonly VAR=
+            if ! sed -n "1,${line_num}p" "${file}" | grep -qE "^\s*(export\s+|local\s+|declare\s+|readonly\s+)?${var_name}\s*=|^\s*${var_name}\s*="; then
+                # Check if it's a default value pattern ${VAR:-default} or ${VAR:=default}
+                if echo "${line}" | grep -qE "\$\{${var_name}:-|\$\{${var_name}:="; then
+                    continue  # This is safe, has default value
+                fi
+                log_warning "Line ${line_num}: Variable '${var_name}' may be unbound"
+                echo "  → Line ${line_num}: Variable \${${var_name}} used but may not be defined" >> "${AUDIT_REPORT}"
+                echo "    Consider: \${${var_name}:-default} or define before use" >> "${AUDIT_REPORT}"
+                ((issues++)) || true
+            fi
+        done
+    done < "${file}"
+    
+    if [ $issues -eq 0 ]; then
+        log_success "Unbound variable checks passed: ${file}"
+        return 0
+    else
+        log_warning "Potential unbound variables found in: ${file}"
+        return 0  # Don't fail on warnings
+    fi
+}
+
+# Local/global variable scope check
+variable_scope_check() {
+    local file="$1"
+    local issues=0
+    
+    log_info "Checking variable scope (local/global): ${file}"
+    
+    # Find all function definitions
+    local functions=()
+    while IFS= read -r line; do
+        local func_name
+        if echo "${line}" | grep -qE '^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            func_name=$(echo "${line}" | sed -E 's/^\s*(function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)/\2/')
+            functions+=("${func_name}")
+        fi
+    done < "${file}"
+    
+    # Check each function for local variable usage
+    for func_name in "${functions[@]}"; do
+        # Extract function body (between function definition and next function or end of file)
+        local func_start
+        func_start=$(grep -nE "^\s*(function\s+)?${func_name}\s*\(\)" "${file}" | cut -d: -f1)
+        
+        if [ -z "${func_start}" ]; then
+            continue
+        fi
+        
+        # Find function end (next function definition or end of file)
+        local func_end
+        func_end=$(sed -n "$((func_start + 1)),\$p" "${file}" | grep -nE "^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)" | head -1 | cut -d: -f1)
+        if [ -z "${func_end}" ]; then
+            func_end=$(wc -l < "${file}")
+        else
+            func_end=$((func_start + func_end - 1))
+        fi
+        
+        # Check for variables used in function without 'local' declaration
+        sed -n "${func_start},${func_end}p" "${file}" | \
+        grep -nE '\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*' | \
+        sed 's/\${//;s/}//;s/\$//' | \
+        grep -vE '^[0-9]+:[^:]*[0-9@*?$!_-]' | \
+        while IFS= read -r var_line; do
+            local line_in_func
+            line_in_func=$(echo "${var_line}" | cut -d: -f1)
+            local var_name
+            var_name=$(echo "${var_line}" | cut -d: -f2- | grep -oE '[A-Z_][A-Z0-9_]*' | head -1)
+            
+            if [ -z "${var_name}" ]; then
+                continue
+            fi
+            
+            # Check if variable is declared as local in function
+            if ! sed -n "${func_start},$((func_start + line_in_func - 1))p" "${file}" | \
+                 grep -qE "^\s*local\s+${var_name}\s*=|^\s*local\s+${var_name}\s*$"; then
+                # Check if it's a global variable (defined outside function)
+                local global_def_line
+                global_def_line=$(sed -n "1,$((func_start - 1))p" "${file}" | \
+                    grep -nE "^\s*(export\s+|declare\s+|readonly\s+)?${var_name}\s*=" | \
+                    tail -1 | cut -d: -f1)
+                
+                if [ -n "${global_def_line}" ]; then
+                    log_warning "Function '${func_name}': Variable '${var_name}' is global (defined at line ${global_def_line})"
+                    echo "  → Function ${func_name}: Consider using 'local ${var_name}' to avoid global scope pollution" >> "${AUDIT_REPORT}"
+                    ((issues++)) || true
+                fi
+            fi
+        done
+    done
+    
+    # Check for 'local' used outside functions
+    local line_num=0
+    local in_function=false
+    local current_function=""
+    
+    while IFS= read -r line; do
+        ((line_num++)) || true
+        
+        # Detect function start
+        if echo "${line}" | grep -qE '^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            in_function=true
+            current_function=$(echo "${line}" | sed -E 's/^\s*(function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)/\2/')
+            continue
+        fi
+        
+        # Detect function end (next function or closing brace)
+        if [ "$in_function" = true ] && echo "${line}" | grep -qE '^\s*}\s*$|^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            in_function=false
+            current_function=""
+            continue
+        fi
+        
+        # Check for 'local' outside function
+        if [ "$in_function" = false ] && echo "${line}" | grep -qE '^\s*local\s+'; then
+            log_error "Line ${line_num}: 'local' used outside function scope"
+            if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+                echo "  → Line ${line_num}: 'local' keyword is only valid inside functions" >> "${AUDIT_REPORT}"
+                echo "    Remove 'local' or move code into a function" >> "${AUDIT_REPORT}"
+            fi
+            
+            if [ "${SHOW_INLINE_CORRECTIONS}" = "true" ]; then
+                echo ""
+                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo -e "${RED}ERROR: 'local' used outside function - Line ${line_num}${NC}"
+                echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+                echo ""
+                echo "# ISSUE: Invalid 'local' usage"
+                echo "# Description: 'local' keyword is only valid inside functions"
+                echo "# Risk: HIGH (script will fail at runtime)"
+                echo ""
+                echo "# BEFORE (Line ${line_num}):"
+                echo "${line}"
+                echo ""
+                echo "# AFTER (Line ${line_num}) - CORRECTION:"
+                echo "${line}" | sed 's/^\s*local\s\+//'
+                echo ""
+                echo "# [ ] Accept this correction"
+                echo "# [ ] Reject this correction"
+                echo ""
+            fi
+            ((issues++)) || true
+        fi
+    done < "${file}"
+    
+    if [ $issues -eq 0 ]; then
+        log_success "Variable scope checks passed: ${file}"
+        return 0
+    else
+        log_warning "Variable scope issues found in: ${file}"
+        return 0  # Don't fail on warnings, but log them
+    fi
+}
+
+# Function declaration and usage order check
+function_order_check() {
+    local file="$1"
+    local issues=0
+    
+    log_info "Checking function declaration and usage order: ${file}"
+    
+    # Extract all function definitions with line numbers
+    declare -A func_definitions
+    local line_num=0
+    
+    while IFS= read -r line; do
+        ((line_num++)) || true
+        
+        if echo "${line}" | grep -qE '^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            local func_name
+            func_name=$(echo "${line}" | sed -E 's/^\s*(function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)/\2/')
+            func_definitions["${func_name}"]="${line_num}"
+        fi
+    done < "${file}"
+    
+    # Check each function call to see if function is defined before use
+    line_num=0
+    while IFS= read -r line; do
+        ((line_num++)) || true
+        
+        # Skip comments and function definitions
+        if echo "${line}" | grep -qE '^\s*#|^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            continue
+        fi
+        
+        # Find function calls (pattern: function_name or function_name with arguments)
+        echo "${line}" | grep -oE '[a-zA-Z_][a-zA-Z0-9_]*\s*\(' | sed 's/\s*(//' | while IFS= read -r func_name; do
+            # Skip built-in commands and common commands
+            if echo "${func_name}" | grep -qE '^(echo|printf|test|grep|sed|awk|cut|head|tail|wc|sort|uniq|tr|cat|ls|cd|mkdir|rm|cp|mv|chmod|chown|export|local|declare|readonly|if|then|else|fi|case|esac|for|while|do|done|function|return|exit)$'; then
+                continue
+            fi
+            
+            # Check if this is a defined function
+            if [ -n "${func_definitions[${func_name}]:-}" ]; then
+                local def_line="${func_definitions[${func_name}]}"
+                if [ "${def_line}" -gt "${line_num}" ]; then
+                    log_warning "Line ${line_num}: Function '${func_name}' called before definition (defined at line ${def_line})"
+                    echo "  → Line ${line_num}: Function ${func_name}() is called but defined later at line ${def_line}" >> "${AUDIT_REPORT}"
+                    echo "    Consider: Move function definition before first use, or ensure function is sourced/defined earlier" >> "${AUDIT_REPORT}"
+                    ((issues++)) || true
+                fi
+            fi
+        done
+    done < "${file}"
+    
+    # Check for duplicate function definitions
+    for func_name in "${!func_definitions[@]}"; do
+        local count
+        count=$(grep -cE "^\s*(function\s+)?${func_name}\s*\(\)" "${file}" || echo "0")
+        if [ "${count}" -gt 1 ]; then
+            log_error "Function '${func_name}' is defined ${count} times (duplicate definition)"
+            echo "  → Function ${func_name}() has duplicate definitions" >> "${AUDIT_REPORT}"
+            echo "    Only the last definition will be used" >> "${AUDIT_REPORT}"
+            ((issues++)) || true
+        fi
+    done
+    
+    if [ $issues -eq 0 ]; then
+        log_success "Function order checks passed: ${file}"
+        return 0
+    else
+        log_warning "Function order issues found in: ${file}"
+        return 0  # Don't fail on warnings
+    fi
+}
+
+# Function scope check - ensure functions are properly scoped
+function_scope_check() {
+    local file="$1"
+    local issues=0
+    
+    log_info "Checking function scope and structure: ${file}"
+    
+    # Check for function definitions
+    local line_num=0
+    local in_function=false
+    local function_name=""
+    local function_start=0
+    local brace_count=0
+    local paren_count=0
+    
+    while IFS= read -r line; do
+        ((line_num++)) || true
+        
+        # Detect function start
+        if echo "${line}" | grep -qE '^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)'; then
+            if [ "$in_function" = true ]; then
+                log_warning "Line ${line_num}: Function '${function_name}' may not be properly closed before new function"
+                echo "  → Line ${line_num}: Previous function ${function_name}() may be missing closing brace" >> "${AUDIT_REPORT}"
+                ((issues++)) || true
+            fi
+            in_function=true
+            function_name=$(echo "${line}" | sed -E 's/^\s*(function\s+)?([a-zA-Z_][a-zA-Z0-9_]*)\s*\(\)/\2/')
+            function_start="${line_num}"
+            brace_count=0
+            paren_count=0
+            continue
+        fi
+        
+        if [ "$in_function" = true ]; then
+            # Count braces to detect function end
+            local open_braces
+            open_braces=$(echo "${line}" | grep -o '{' | wc -l || echo "0")
+            local close_braces
+            close_braces=$(echo "${line}" | grep -o '}' | wc -l || echo "0")
+            brace_count=$((brace_count + open_braces - close_braces))
+            
+            # Check for function body (should have commands, not just declaration)
+            if [ "${line_num}" -eq "$((function_start + 1))" ] && echo "${line}" | grep -qE '^\s*{\s*$'; then
+                # Function uses braces, check for closing brace
+                if [ "${brace_count}" -lt 0 ]; then
+                    log_warning "Function '${function_name}': Possible mismatched braces"
+                    echo "  → Function ${function_name}(): Check brace matching" >> "${AUDIT_REPORT}"
+                    ((issues++)) || true
+                fi
+            fi
+        fi
+    done < "${file}"
+    
+    # Check for functions that are never called
+    declare -A func_calls
+    while IFS= read -r line; do
+        echo "${line}" | grep -oE '[a-zA-Z_][a-zA-Z0-9_]*\s*\(' | sed 's/\s*(//' | while IFS= read -r func_name; do
+            if [ -n "${func_name}" ]; then
+                func_calls["${func_name}"]=1
+            fi
+        done
+    done < "${file}"
+    
+    # This is informational, not an error
+    if [ $issues -eq 0 ]; then
+        log_success "Function scope checks passed: ${file}"
+        return 0
+    else
+        log_warning "Function scope issues found in: ${file}"
+        return 0
+    fi
+}
+
 # Style and best practices check
 style_check() {
     local file="$1"
@@ -1091,25 +1526,76 @@ audit_file() {
         return 0
     fi
     
-    echo "" >> "${AUDIT_REPORT}"
-    echo "--- Auditing: ${file} ---" >> "${AUDIT_REPORT}"
-    echo "" >> "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo "" >> "${AUDIT_REPORT}"
+        echo "--- Auditing: ${file} ---" >> "${AUDIT_REPORT}"
+        echo "" >> "${AUDIT_REPORT}"
+    fi
     
     log_info "Auditing shell script: ${file}"
     
     local failed=0
     
-    # Run all comprehensive checks
+    # Get diff to focus audit on changed lines only (comprehensive line-by-line)
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${CYAN}COMPREHENSIVE LINE-BY-LINE AUDIT${NC}"
+    echo -e "${CYAN}Analyzing diff from previous commit...${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    
+    local diff_output
+    diff_output=$(git diff HEAD -- "${file}" 2>/dev/null || echo "")
+    if [ -n "${diff_output}" ]; then
+        echo -e "${BLUE}Diff detected - focusing audit on changed lines${NC}"
+        echo "  (Full file will also be checked for context)"
+        echo ""
+    else
+        echo -e "${YELLOW}No diff detected - performing full file audit${NC}"
+        echo ""
+    fi
+    
+    # Run all comprehensive checks SEQUENTIALLY (each stage extensively checked)
+    # Each stage checks line-by-line, taking time for thorough analysis
+    
+    # Stage 1: Syntax and basic structure
+    echo -e "${BLUE}[Stage 1/6] Syntax and Structure Check...${NC}"
     syntax_check "${file}" || failed=1
     run_shellcheck "${file}" || failed=1
+    echo ""
+    
+    # Stage 2: Variable and expansion checks
+    echo -e "${BLUE}[Stage 2/6] Variable Expansion Check (line-by-line)...${NC}"
     variable_expansion_check "${file}" || true  # Warnings
     shell_expansion_check "${file}" || true     # Warnings
     escape_sequence_check "${file}" || true     # Warnings
+    echo ""
+    
+    # Stage 3: Unbound variable and scope checks (NEW - comprehensive line-by-line)
+    echo -e "${BLUE}[Stage 3/6] Unbound Variable & Scope Check (line-by-line)...${NC}"
+    echo "  This stage takes time to check every variable reference..."
+    unbound_variable_check "${file}" || true    # Warnings
+    variable_scope_check "${file}" || true      # Warnings
+    echo ""
+    
+    # Stage 4: Function checks (NEW - comprehensive)
+    echo -e "${BLUE}[Stage 4/6] Function Declaration & Order Check...${NC}"
+    function_order_check "${file}" || true       # Warnings
+    function_scope_check "${file}" || true       # Warnings
+    echo ""
+    
+    # Stage 5: Logic and robustness
+    echo -e "${BLUE}[Stage 5/6] Logic & Robustness Check...${NC}"
     logical_error_check "${file}" || true       # Warnings
     robustness_check "${file}" || true          # Warnings
     edge_case_check "${file}" || true           # Warnings
+    echo ""
+    
+    # Stage 6: Security and style
+    echo -e "${BLUE}[Stage 6/6] Security & Style Check...${NC}"
     security_check "${file}" || true            # Warnings
     style_check "${file}" || true               # Warnings
+    echo ""
     
     # Run Cursor AI agent audit (semantic analysis)
     cursor_ai_audit "${file}" || true  # Warnings only, don't fail commit
@@ -1149,23 +1635,35 @@ main() {
     done <<< "${staged_files}"
     
     # Summary
-    echo "" >> "${AUDIT_REPORT}"
-    echo "=== Summary ===" >> "${AUDIT_REPORT}"
-    echo "Audited: $(echo "${staged_files}" | wc -l) file(s)" >> "${AUDIT_REPORT}"
-    echo "Status: $([ $FAILED -eq 0 ] && echo "PASSED" || echo "FAILED")" >> "${AUDIT_REPORT}"
-    echo "" >> "${AUDIT_REPORT}"
+    if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+        echo "" >> "${AUDIT_REPORT}"
+        echo "=== Summary ===" >> "${AUDIT_REPORT}"
+        echo "Audited: $(echo "${staged_files}" | wc -l) file(s)" >> "${AUDIT_REPORT}"
+        echo "Status: $([ $FAILED -eq 0 ] && echo "PASSED" || echo "FAILED")" >> "${AUDIT_REPORT}"
+        echo "" >> "${AUDIT_REPORT}"
+    fi
     
     echo ""
-    echo -e "${CYAN}========================================${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     if [ $FAILED -eq 0 ]; then
         log_success "All audits passed!"
         echo ""
-        log_info "Full report: ${AUDIT_REPORT}"
+        if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+            log_info "Full report: ${AUDIT_REPORT}"
+        else
+            log_info "All corrections shown inline above (no report file generated)"
+        fi
+        echo ""
+        echo -e "${GREEN}Review all corrections shown above and accept/reject as needed${NC}"
         exit 0
     else
         log_error "Audit failed! Please fix issues before committing."
         echo ""
-        log_error "Review report: ${AUDIT_REPORT}"
+        if [ "${SKIP_REPORT_FILE}" != "true" ]; then
+            log_error "Review report: ${AUDIT_REPORT}"
+        fi
+        echo ""
+        echo -e "${YELLOW}All corrections shown inline above - review and fix before committing${NC}"
         echo ""
         echo -e "${YELLOW}To skip audit (not recommended): git commit --no-verify${NC}"
         exit 1

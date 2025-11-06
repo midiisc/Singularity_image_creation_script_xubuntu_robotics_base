@@ -2587,9 +2587,23 @@ if [ -f "${ORIGINAL_IMAGE_PATH}" ]; then
         log_warning "Failed to move image file, keeping original location"
         SIF_PATH="${ORIGINAL_IMAGE_PATH}"
     fi
+    else
+        log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
+        SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+    fi
+
+#--- Sub-block 22.5.2.1: Move definition file to output directory ---
+# Dependencies: DEF_NAME exists, BUILD_OUTPUT_DIR exists
+# Outputs: Moved definition file
+if [ -f "${DEF_NAME}" ]; then
+    log_with_timestamp "Moving definition file to output directory..."
+    if mv "${DEF_NAME}" "${BUILD_OUTPUT_DIR}/" 2>/dev/null; then
+        log_success "Definition file moved to: ${BUILD_OUTPUT_DIR}/${DEF_NAME}"
+    else
+        log_warning "Failed to move definition file: ${DEF_NAME}"
+    fi
 else
-    log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
-    SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+    log_warning "Definition file not found: ${DEF_NAME}"
 fi
 
 #--- Sub-block 22.5.3: Move build logs to output directory ---

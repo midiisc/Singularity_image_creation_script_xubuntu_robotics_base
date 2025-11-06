@@ -8040,7 +8040,13 @@ cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
 set -euo pipefail
 
 DISPLAY_NUM=${1:-:1}
-PORT=$((5900 + ${DISPLAY_NUM#:}))
+# Extract numeric part from display number (handle both :1 and 1 formats)
+DISPLAY_NUM_NUMERIC="${DISPLAY_NUM#:}"
+# Validate and default to 1 if empty or non-numeric
+if [ -z "${DISPLAY_NUM_NUMERIC}" ] || ! [ "${DISPLAY_NUM_NUMERIC}" -eq "${DISPLAY_NUM_NUMERIC}" ] 2>/dev/null; then
+    DISPLAY_NUM_NUMERIC=1
+fi
+PORT=$((5900 + DISPLAY_NUM_NUMERIC))
 
 echo "Starting x11vnc on display ${DISPLAY_NUM} (port ${PORT})..."
 echo "Official documentation: https://github.com/LibVNC/x11vnc"
@@ -12402,7 +12408,9 @@ apt-get install -y --no-install-recommends \
   atop \
   glances \
   btop \
-  nmon
+  nmon \
+  util-linux \
+  shellcheck
 
 # Create GPU monitoring script
 #--- Sub-block 22.4: Create GPU monitoring script ---
