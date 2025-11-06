@@ -58,34 +58,36 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         echo "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
         
         # Clean up regular build logs
-        if [ "$EXISTING_LOGS" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+        if [ "${EXISTING_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
             # List all log files sorted by modification time (newest first)
             # Keep only N most recent files, remove the rest
             # Use ls -t for sorting by modification time (works on all systems)
+            local keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
             ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | grep -v "_errors.log$" | \
-                tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | \
+                tail -n +$((keep_count + 1)) | \
                 while read -r old_log; do
-                    if [ -f "$old_log" ]; then
-                        echo "  Removing old log: $(basename "$old_log")"
-                        rm -f "$old_log"
+                    if [ -f "${old_log}" ]; then
+                        echo "  Removing old log: $(basename "${old_log}")"
+                        rm -f "${old_log}"
                     fi
                 done
         fi
         
         # Clean up error logs
-        if [ "$EXISTING_ERROR_LOGS" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+        if [ "${EXISTING_ERROR_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+            local keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
             ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*_errors.log 2>/dev/null | \
-                tail -n +$((BUILD_LOG_KEEP_COUNT + 1)) | \
+                tail -n +$((keep_count + 1)) | \
                 while read -r old_error_log; do
-                    if [ -f "$old_error_log" ]; then
-                        echo "  Removing old error log: $(basename "$old_error_log")"
-                        rm -f "$old_error_log"
+                    if [ -f "${old_error_log}" ]; then
+                        echo "  Removing old error log: $(basename "${old_error_log}")"
+                        rm -f "${old_error_log}"
                     fi
                 done
         fi
         
-        if [ "$EXISTING_LOGS" -le "${BUILD_LOG_KEEP_COUNT:-2}" ] && [ "$EXISTING_ERROR_LOGS" -le "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
-            echo "✓ No old logs to clean up (found ${EXISTING_LOGS} build logs, ${EXISTING_ERROR_LOGS} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
+        if [ "${EXISTING_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ] && [ "${EXISTING_ERROR_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
+            echo "✓ No old logs to clean up (found ${EXISTING_LOGS:-0} build logs, ${EXISTING_ERROR_LOGS:-0} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
         else
             echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
         fi
@@ -95,7 +97,12 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Format: YYYYMMDD_Day_HHMM_AMPM (e.g., 20241027_Sun_1430_PM)
     DAY_NAMES=("Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat")
     CURRENT_DAY=$(date +%w)  # 0=Sunday, 1=Monday, etc.
-    DAY_NAME=${DAY_NAMES[$CURRENT_DAY]}
+    # Bounds check for array access
+    if [ "${CURRENT_DAY:-}" -ge 0 ] && [ "${CURRENT_DAY:-}" -le 6 ]; then
+        DAY_NAME="${DAY_NAMES[$CURRENT_DAY]}"
+    else
+        DAY_NAME="Unknown"
+    fi
     
     # Get 12-hour format with AM/PM
     HOUR_12=$(date +"%I")
@@ -116,8 +123,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     echo "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
     echo "  Log directory: ${BUILD_LOG_DIR}"
     echo "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
-    echo "  Keeping ${BUILD_LOG_KEEP_COUNT} most recent logs"
-    echo "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL} seconds"
+    echo "  Keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent logs"
+    echo "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL:-60} seconds"
     echo ""
     
     # Initialize error log with header
@@ -191,8 +198,10 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Only start if sleep command is available (may not be in minimal base images)
     if command -v sleep >/dev/null 2>&1; then
         (
+            # Note: Cannot use 'local' in subshell, use regular variable
+            sync_interval="${BUILD_LOG_SYNC_INTERVAL:-60}"
             while true; do
-                sleep ${BUILD_LOG_SYNC_INTERVAL}
+                sleep "${sync_interval}"
                 # Sync both log files to disk
                 if [ -f "${BUILD_LOG_FILE}" ]; then
                     sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
@@ -205,7 +214,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         SYNC_PID=$!
         
         # Store sync PID so we can clean it up if needed
-        export BUILD_LOG_SYNC_PID=${SYNC_PID}
+        export BUILD_LOG_SYNC_PID="${SYNC_PID}"
     else
         echo "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
         echo "  Log will still be captured, but manual sync only on exit"
@@ -223,7 +232,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         
         # Kill the background sync job
         if [ -n "${BUILD_LOG_SYNC_PID:-}" ]; then
-            kill ${BUILD_LOG_SYNC_PID} 2>/dev/null || true
+            kill "${BUILD_LOG_SYNC_PID}" 2>/dev/null || true
         fi
         # CRITICAL: Perform final sync to ensure all data is written to disk
         # This captures any output generated between last sync and exit
@@ -366,23 +375,23 @@ calculate_build_jobs() {
     
     # Use the minimum of the two (most conservative)
     local jobs=$jobs_by_cpu
-    if [ $jobs_by_mem -lt $jobs ]; then
+    if [ "${jobs_by_mem}" -lt "${jobs}" ]; then
         jobs=$jobs_by_mem
-        echo "  ℹ Memory-limited: Using $jobs jobs (RAM: ${mem_gb}GB allows ~$jobs parallel C++ jobs)" >&2
+        echo "  ℹ Memory-limited: Using ${jobs} jobs (RAM: ${mem_gb}GB allows ~${jobs} parallel C++ jobs)" >&2
     fi
     
     # Ensure at least 1 job
-    if [ $jobs -lt 1 ]; then
+    if [ "${jobs}" -lt 1 ]; then
         jobs=1
     fi
     
     # Allow override via environment variable (for testing/debugging)
     if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        jobs=$BUILD_JOBS_OVERRIDE
-        echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=$jobs" >&2
+        jobs="${BUILD_JOBS_OVERRIDE}"
+        echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
     fi
     
-    echo $jobs
+    echo "${jobs}"
 }
 # End function (self-contained)
 
@@ -443,24 +452,50 @@ export -f test_mirror
 # Dependencies: test_mirror function, curl
 # Outputs: FASTEST_MIRROR (exported), updated /etc/apt/sources.list and sources.list.d/
 probe_and_set_mirrors() {
-export LC_NUMERIC=C # Prevents printf errors with decimals
-echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
+  # Set locale for numeric operations (exported for subshells)
+  export LC_NUMERIC=C # Prevents printf errors with decimals
+  echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
 
-# Detect Ubuntu codename correctly (noble for 24.04, jammy for 22.04, etc.)
-CODENAME="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || echo "${BASE_OS_CODENAME}")"
-echo "[info] Detected Ubuntu codename: ${CODENAME}"
-PROBE_RESULTS="$(mktemp)"
-export CODENAME PROBE_RESULTS  # Export for subshell access
+  # Detect Ubuntu codename correctly (noble for 24.04, jammy for 22.04, etc.)
+  local detected_codename
+  detected_codename="$(grep VERSION_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || echo "")"
+  if [ -z "${detected_codename:-}" ]; then
+    # Fallback: try UBUNTU_CODENAME
+    detected_codename="$(grep UBUNTU_CODENAME /etc/os-release 2>/dev/null | cut -d= -f2 || echo "")"
+  fi
+  if [ -z "${detected_codename:-}" ]; then
+    # Final fallback: try to detect from VERSION_ID
+    local version_id
+    version_id="$(grep VERSION_ID /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"' || echo "")"
+    case "${version_id:-}" in
+      "24.04") detected_codename="noble" ;;
+      "22.04") detected_codename="jammy" ;;
+      "20.04") detected_codename="focal" ;;
+      *) detected_codename="noble" ;; # Default fallback
+    esac
+  fi
+  CODENAME="${detected_codename}"
+  echo "[info] Detected Ubuntu codename: ${CODENAME}"
+  
+  # Create temporary file for probe results with error checking
+  local probe_results_file
+  probe_results_file="$(mktemp 2>/dev/null || echo "/tmp/mirror_probe_$$.tmp")"
+  if [ ! -f "${probe_results_file}" ]; then
+    echo "[error] Failed to create temporary file for probe results"
+    return 1
+  fi
+  PROBE_RESULTS="${probe_results_file}"
+  export CODENAME PROBE_RESULTS  # Export for subshell access
 
   # Attempt to dynamically fetch 100Gbps+ mirrors from official Launchpad page
   echo "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
   MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
   
-  if [ -n "$MIRRORS_HTML" ]; then
-    echo "[info] Successfully fetched mirror list ($(echo "$MIRRORS_HTML" | wc -c) bytes). Parsing..."
+  if [ -n "${MIRRORS_HTML:-}" ]; then
+    echo "[info] Successfully fetched mirror list ($(echo "${MIRRORS_HTML}" | wc -c) bytes). Parsing..."
     
     # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
-    DYNAMIC_MIRRORS=$(echo "$MIRRORS_HTML" | \
+    DYNAMIC_MIRRORS=$(echo "${MIRRORS_HTML}" | \
       tr '\n' ' ' | \
       sed 's|<tr>|\n<tr>|g' | \
       grep -E '([1-9][0-9]{2,}|[1-9][0-9]0) Gbps' | \
@@ -470,19 +505,22 @@ export CODENAME PROBE_RESULTS  # Export for subshell access
       sort -u | \
       head -20)  # Limit to top 20 mirrors for performance
     
-    MIRROR_COUNT=$(echo "$DYNAMIC_MIRRORS" | grep -c . || echo 0)
+    MIRROR_COUNT=$(echo "${DYNAMIC_MIRRORS:-}" | grep -c . || echo 0)
     
     # Explicit check for non-empty and sufficient mirrors
-    if [ -n "$DYNAMIC_MIRRORS" ] && [ "$MIRROR_COUNT" -ge 10 ]; then
+    if [ -n "${DYNAMIC_MIRRORS:-}" ] && [ "${MIRROR_COUNT:-0}" -ge 10 ]; then
       CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
-      for mirror in $DYNAMIC_MIRRORS; do
+      # Convert to array to handle spaces in URLs safely
+      while IFS= read -r mirror; do
         # Skip empty lines
-        [ -z "$mirror" ] && continue
+        [ -z "${mirror:-}" ] && continue
         CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} ${mirror}"
-      done
+      done <<EOF
+${DYNAMIC_MIRRORS}
+EOF
       echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors"
     else
-      echo "[warn] Only ${MIRROR_COUNT} dynamic mirrors found. Using curated static list."
+      echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
       CANDIDATE_MIRRORS=""  # Will trigger fallback below
     fi
   else
@@ -491,7 +529,7 @@ export CODENAME PROBE_RESULTS  # Export for subshell access
   fi
   
   # Fallback to curated static list if dynamic fetch failed
-  if [ -z "$CANDIDATE_MIRRORS" ]; then
+  if [ -z "${CANDIDATE_MIRRORS:-}" ]; then
     echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
     CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
     # Australia (100 Gbps)
@@ -518,140 +556,187 @@ export CODENAME PROBE_RESULTS  # Export for subshell access
     CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.jaist.ac.jp/pub/Linux/ubuntu"
   fi
 
-# Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
-MIRROR_TOTAL=$(echo "$CANDIDATE_MIRRORS" | wc -w)
-echo "Testing ${MIRROR_TOTAL} mirrors in parallel (max 6 concurrent)..."
-echo "${CANDIDATE_MIRRORS}" | tr ' ' '\n' | xargs -P 6 -I {} bash -c 'test_mirror "{}" "$CODENAME" "$PROBE_RESULTS"'
+  # Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
+  local mirror_total
+  mirror_total=$(echo "${CANDIDATE_MIRRORS:-}" | tr ' ' '\n' | grep -c . || echo "0")
+  echo "Testing ${mirror_total} mirrors in parallel (max 6 concurrent)..."
+  # Use printf to safely handle empty strings and ensure proper line separation
+  if [ -n "${CANDIDATE_MIRRORS:-}" ]; then
+    echo "${CANDIDATE_MIRRORS}" | tr ' ' '\n' | grep -v '^$' | xargs -P 6 -I {} bash -c 'test_mirror "{}" "${CODENAME}" "${PROBE_RESULTS}"' || true
+  fi
 
-# Display mirror probe results
-echo "--- Mirror Probe Results (speed score, url): ---"
-if [ -s "$PROBE_RESULTS" ]; then
-    LC_NUMERIC=C sort -n "$PROBE_RESULTS" | sed 's/^/ /' || echo "[warn] Failed to sort results"
-else
+  # Display mirror probe results
+  echo "--- Mirror Probe Results (speed score, url): ---"
+  if [ -s "${PROBE_RESULTS:-}" ]; then
+    LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || echo "[warn] Failed to sort results"
+  else
     echo "[warn] No probe results written - all mirrors may have failed"
-fi
+  fi
 
-# Extract the fastest mirror that responded in under 15 seconds
-FASTEST_MIRROR="$(LC_NUMERIC=C sort -n "$PROBE_RESULTS" 2>/dev/null | awk 'NF==2 && $1 < 15.0 {print $2; exit}')"
-rm -f "$PROBE_RESULTS"
+  # Extract the fastest mirror that responded in under 15 seconds
+  local fastest_mirror_raw
+  fastest_mirror_raw="$(LC_NUMERIC=C sort -n "${PROBE_RESULTS:-}" 2>/dev/null | awk 'NF==2 && $1 < 15.0 {print $2; exit}' || echo "")"
+  
+  # Clean up temporary file
+  rm -f "${PROBE_RESULTS:-}" 2>/dev/null || true
 
-if [[ -z "$FASTEST_MIRROR" ]]; then
+  if [ -z "${fastest_mirror_raw:-}" ]; then
     echo "[warn] All mirror probes failed or took >15 seconds. Using default ubuntu archive."
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
-fi
-echo "==> Selected fastest mirror: $FASTEST_MIRROR"
-
-# Export the variable so it persists after function ends and is available globally
-export FASTEST_MIRROR
-
-# Apply the fastest mirror to the main APT sources
-if [ -f /etc/apt/sources.list ]; then
-  # Multiple replacement patterns to catch all variations:
-  # 1. Specifically target archive.ubuntu.com (most common issue)
-  sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-  sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-  # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-  sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-  sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-  echo "[info] Updated /etc/apt/sources.list with fastest mirror"
-  
-  # Verify the update was successful (more robust check)
-  # Extract base URL without protocol for flexible matching
-  MIRROR_BASE=$(echo "${FASTEST_MIRROR}" | sed 's|https\?://||')
-  MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
-  
-  # Escape special regex characters for safe use in grep patterns
-  MIRROR_BASE_ESCAPED=$(printf '%s\n' "${MIRROR_BASE}" | sed 's/[[\.*^$()+?{|]/\\&/g')
-  MIRROR_NO_PROTOCOL_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\.*^$()+?{|]/\\&/g')
-  FASTEST_MIRROR_ESCAPED=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g')
-  
-  # Check if mirror appears in active (non-commented) deb lines
-  VERIFICATION_PASSED=false
-  if grep -v "^#" /etc/apt/sources.list | grep -qE "(deb|deb-src).*${MIRROR_BASE_ESCAPED}" 2>/dev/null; then
-    VERIFICATION_PASSED=true
-    echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
-  elif grep -v "^#" /etc/apt/sources.list | grep -qE "(deb|deb-src).*${MIRROR_NO_PROTOCOL_ESCAPED}" 2>/dev/null; then
-    VERIFICATION_PASSED=true
-    echo "[info] ✓ Verified: sources.list uses mirror (format may vary)"
-  elif grep -v "^#" /etc/apt/sources.list | grep -qF "${FASTEST_MIRROR}" 2>/dev/null; then
-    VERIFICATION_PASSED=true
-    echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
   else
-    # Check if file is actually empty or only has comments
-    ACTIVE_LINES=$(grep -v "^#" /etc/apt/sources.list | grep -v "^$" | wc -l || echo "0")
-    if [ "${ACTIVE_LINES:-0}" -eq 0 ]; then
-      echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
-      VERIFICATION_PASSED=true
-    else
-      echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
-      echo "[info]   Checking for alternative mirror formats..."
-      # Show what we actually found
-      grep -v "^#" /etc/apt/sources.list | grep -E "(deb|deb-src)" | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
-    fi
+    FASTEST_MIRROR="${fastest_mirror_raw}"
   fi
-  
-  # Also verify no archive.ubuntu.com remains in active lines
-  if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
-    echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
-    # Escape special sed characters in MIRROR_NO_PROTOCOL for safe replacement
-    MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
-    sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" /etc/apt/sources.list
-    # Verify again after additional replacement
-    if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
-      echo "[warn] ⚠ archive.ubuntu.com still present after replacement attempt"
-    else
-      echo "[info] ✓ Additional replacement successful"
-    fi
-  fi
-else
-  echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
-fi
+  echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
-# Also update sources.list.d/ files (excluding PPAs which should stay on ppa.launchpad.net)
-echo "[info] Updating sources.list.d/ files with fastest mirror (excluding PPAs)..."
-if [ -d /etc/apt/sources.list.d ]; then
+  # Export the variable so it persists after function ends and is available globally
+  export FASTEST_MIRROR
+
+  # Apply the fastest mirror to the main APT sources
+  if [ -f /etc/apt/sources.list ]; then
+    # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
+    local fastest_mirror_sed_escaped
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g')"
+    
+    # Multiple replacement patterns to catch all variations:
+    # 1. Specifically target archive.ubuntu.com (most common issue)
+    sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+    sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+    # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+    sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+    sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+    echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+    
+    # Verify the update was successful (more robust check)
+    # Extract base URL without protocol for flexible matching
+    local mirror_base mirror_no_protocol
+    mirror_base=$(echo "${FASTEST_MIRROR}" | sed 's|https\?://||' || echo "")
+    mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+    
+    # Escape special regex characters for safe use in grep patterns
+    local mirror_base_escaped mirror_no_protocol_escaped fastest_mirror_escaped
+    if [ -n "${mirror_base:-}" ]; then
+      mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+    else
+      mirror_base_escaped=""
+    fi
+    if [ -n "${mirror_no_protocol:-}" ]; then
+      mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+    else
+      mirror_no_protocol_escaped=""
+    fi
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+  
+    # Check if mirror appears in active (non-commented) deb lines
+    local verification_passed=false
+    if [ -n "${mirror_base_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_base_escaped}" 2>/dev/null; then
+      verification_passed=true
+      echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
+    elif [ -n "${mirror_no_protocol_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_no_protocol_escaped}" 2>/dev/null; then
+      verification_passed=true
+      echo "[info] ✓ Verified: sources.list uses mirror (format may vary)"
+    elif [ -n "${fastest_mirror_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qF "${FASTEST_MIRROR}" 2>/dev/null; then
+      verification_passed=true
+      echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
+    else
+      # Check if file is actually empty or only has comments
+      local active_lines
+      active_lines=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -v "^$" | wc -l || echo "0")
+      if [ "${active_lines:-0}" -eq 0 ]; then
+        echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
+        verification_passed=true
+      else
+        echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
+        echo "[info]   Checking for alternative mirror formats..."
+        # Show what we actually found
+        grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -E "(deb|deb-src)" | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
+      fi
+    fi
+    
+    # Also verify no archive.ubuntu.com remains in active lines
+    if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+      echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
+      # Recompute mirror_no_protocol if not already set
+      if [ -z "${mirror_no_protocol:-}" ]; then
+        mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+      fi
+      # Escape special sed characters in mirror_no_protocol for safe replacement
+      local mirror_sed_escaped
+      if [ -n "${mirror_no_protocol:-}" ]; then
+        mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+        if [ -n "${mirror_sed_escaped:-}" ]; then
+          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list
+          # Verify again after additional replacement
+          if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+            echo "[warn] ⚠ archive.ubuntu.com still present after replacement attempt"
+          else
+            echo "[info] ✓ Additional replacement successful"
+          fi
+        fi
+      fi
+    fi
+  else
+    echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
+  fi
+
+  # Also update sources.list.d/ files (excluding PPAs which should stay on ppa.launchpad.net)
+  echo "[info] Updating sources.list.d/ files with fastest mirror (excluding PPAs)..."
+  if [ -d /etc/apt/sources.list.d ]; then
+    # Escape FASTEST_MIRROR for safe use in sed
+    local fastest_mirror_sed_escaped
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g' || echo "")"
+    
+    # Compute mirror_no_protocol once for reuse
+    local mirror_no_protocol
+    mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+    
     # Enable nullglob to handle case where no .list files exist
     shopt -s nullglob
     for sources_file in /etc/apt/sources.list.d/*.list; do
-        # Double-check file exists (redundant with nullglob, but defensive)
-        [ -f "$sources_file" ] || continue
-        
-        # Skip PPA files (they should always use ppa.launchpad.net)
-        if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
-            echo "[info] Skipping PPA file: $(basename "$sources_file")"
-            continue
+      # Double-check file exists (redundant with nullglob, but defensive)
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files (they should always use ppa.launchpad.net)
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        echo "[info] Skipping PPA file: $(basename "${sources_file}")"
+        continue
+      fi
+      
+      # Multiple replacement patterns for sources.list.d files too
+      # 1. Specifically target archive.ubuntu.com
+      if grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] Updated archive.ubuntu.com in: $(basename "${sources_file}")"
         fi
-        
-        # Multiple replacement patterns for sources.list.d files too
-        # 1. Specifically target archive.ubuntu.com
-        if grep -q "archive\\.ubuntu\\.com" "$sources_file" 2>/dev/null; then
-            sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-            sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-            echo "[info] Updated archive.ubuntu.com in: $(basename "$sources_file")"
+      fi
+      # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+      if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "${sources_file}" 2>/dev/null; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] Updated: $(basename "${sources_file}")"
         fi
-        # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-        if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
-            sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-            sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-            echo "[info] Updated: $(basename "$sources_file")"
+      fi
+      
+      # Final check - remove any remaining archive.ubuntu.com references
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+        # Escape special sed characters in mirror_no_protocol for safe replacement
+        local mirror_sed_escaped
+        if [ -n "${mirror_no_protocol:-}" ]; then
+          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+          if [ -n "${mirror_sed_escaped:-}" ]; then
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
+            echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
+          fi
         fi
-        
-        # Final check - remove any remaining archive.ubuntu.com references
-        if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
-            # Use MIRROR_NO_PROTOCOL if already computed, otherwise compute it (escape for sed)
-            if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
-                MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
-            fi
-            MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" "$sources_file"
-            echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
-        fi
+      fi
     done
     shopt -u nullglob  # Restore default behavior
     echo "[info] ✓ sources.list.d/ update complete"
-else
+  else
     echo "[info] /etc/apt/sources.list.d/ not found or empty"
-fi
+  fi
 }
 # End probe_and_set_mirrors function (self-contained)
 
@@ -660,79 +745,89 @@ fi
 # Dependencies: FASTEST_MIRROR variable
 # Outputs: Diagnostic messages, returns 0 if OK, 1 if issues found
 verify_fastest_mirror() {
-    if [ -z "${FASTEST_MIRROR:-}" ]; then
-        echo "[warn] FASTEST_MIRROR not set - cannot verify"
-        return 1
-    fi
+  if [ -z "${FASTEST_MIRROR:-}" ]; then
+    echo "[warn] FASTEST_MIRROR not set - cannot verify"
+    return 1
+  fi
+  
+  if [ "${FASTEST_MIRROR}" = "http://archive.ubuntu.com/ubuntu" ]; then
+    echo "[info] Using default Ubuntu mirror (no verification needed)"
+    return 0
+  fi
+  
+  echo "[info] Verifying fastest mirror usage..."
+  
+  local issues_found=0
+  
+  # Check main sources.list
+  if [ -f /etc/apt/sources.list ]; then
+    # Escape FASTEST_MIRROR for safe use in grep pattern
+    local fastest_mirror_escaped
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
     
-    if [ "$FASTEST_MIRROR" = "http://archive.ubuntu.com/ubuntu" ]; then
-        echo "[info] Using default Ubuntu mirror (no verification needed)"
-        return 0
-    fi
-    
-    echo "[info] Verifying fastest mirror usage..."
-    
-    local issues_found=0
-    
-    # Check main sources.list
-    if [ -f /etc/apt/sources.list ]; then
-        # Count lines using fastest mirror
-        local fast_count=$(grep -v "^#" /etc/apt/sources.list | grep -c "deb.*${FASTEST_MIRROR}" 2>/dev/null || echo 0)
-        # Count lines using archive.ubuntu.com
-        local slow_count=$(grep -v "^#" /etc/apt/sources.list | grep -c "deb.*archive\.ubuntu\.com" 2>/dev/null || echo 0)
-        
-        if [ $slow_count -gt 0 ]; then
-            echo "[ERROR] Found $slow_count lines still using archive.ubuntu.com in sources.list:"
-            grep -v "^#" /etc/apt/sources.list | grep "archive\.ubuntu\.com" | sed 's/^/  /'
-            issues_found=$((issues_found + slow_count))
-        else
-            echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
-        fi
-        
-        if [ $fast_count -gt 0 ]; then
-            echo "[info] ✓ sources.list: ${fast_count} lines using ${FASTEST_MIRROR}"
-        fi
+    # Count lines using fastest mirror (use -F for fixed string if escaping fails)
+    local fast_count
+    if [ -n "${fastest_mirror_escaped:-}" ]; then
+      fast_count=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -cF "${FASTEST_MIRROR}" 2>/dev/null || echo "0")
     else
-        echo "[warn] /etc/apt/sources.list not found"
-        return 1
+      fast_count="0"
     fi
+    # Count lines using archive.ubuntu.com
+    local slow_count
+    slow_count=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -c "deb.*archive\.ubuntu\.com" 2>/dev/null || echo "0")
     
-    # Check sources.list.d/ files (excluding PPAs)
-    if [ -d /etc/apt/sources.list.d ]; then
-        local found_issues=0
-        shopt -s nullglob  # Handle case where no .list files exist
-        for sources_file in /etc/apt/sources.list.d/*.list; do
-            [ -f "$sources_file" ] || continue
-            
-            # Skip PPA files
-            if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
-                continue
-            fi
-            
-            # Check for archive.ubuntu.com in non-PPA files
-            if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
-                echo "[ERROR] Found archive.ubuntu.com in $(basename "$sources_file"):"
-                grep -v "^#" "$sources_file" | grep "archive\.ubuntu\.com" | sed 's/^/  /'
-                found_issues=1
-            fi
-        done
-        shopt -u nullglob  # Restore default behavior
-        
-        if [ $found_issues -eq 0 ]; then
-            echo "[info] ✓ sources.list.d/: No archive.ubuntu.com found (good)"
-        else
-            issues_found=$((issues_found + 1))
-        fi
-    fi
-    
-    # Summary
-    if [ $issues_found -eq 0 ]; then
-        echo "[info] ✅ VERIFICATION PASSED: All Ubuntu sources use ${FASTEST_MIRROR}"
-        return 0
+    if [ "${slow_count:-0}" -gt 0 ]; then
+      echo "[ERROR] Found ${slow_count} lines still using archive.ubuntu.com in sources.list:"
+      grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+      issues_found=$((issues_found + slow_count))
     else
-        echo "[ERROR] ❌ VERIFICATION FAILED: Found $issues_found issue(s) - some sources still use archive.ubuntu.com"
-        return 1
+      echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
     fi
+    
+    if [ "${fast_count:-0}" -gt 0 ]; then
+      echo "[info] ✓ sources.list: ${fast_count} lines using ${FASTEST_MIRROR}"
+    fi
+  else
+    echo "[warn] /etc/apt/sources.list not found"
+    return 1
+  fi
+  
+  # Check sources.list.d/ files (excluding PPAs)
+  if [ -d /etc/apt/sources.list.d ]; then
+    local found_issues=0
+    shopt -s nullglob  # Handle case where no .list files exist
+    for sources_file in /etc/apt/sources.list.d/*.list; do
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        continue
+      fi
+      
+      # Check for archive.ubuntu.com in non-PPA files
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
+        echo "[ERROR] Found archive.ubuntu.com in $(basename "${sources_file}"):"
+        grep -v "^#" "${sources_file}" 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+        found_issues=1
+      fi
+    done
+    shopt -u nullglob  # Restore default behavior
+    
+    if [ "${found_issues:-0}" -eq 0 ]; then
+      echo "[info] ✓ sources.list.d/: No archive.ubuntu.com found (good)"
+    else
+      issues_found=$((issues_found + 1))
+    fi
+  fi
+  
+  # Summary
+  if [ "${issues_found:-0}" -eq 0 ]; then
+    echo "[info] ✅ VERIFICATION PASSED: All Ubuntu sources use ${FASTEST_MIRROR}"
+    return 0
+  else
+    echo "[ERROR] ❌ VERIFICATION FAILED: Found ${issues_found} issue(s) - some sources still use archive.ubuntu.com"
+    return 1
+  fi
 }
 export -f verify_fastest_mirror
 
@@ -741,101 +836,119 @@ export -f verify_fastest_mirror
 # Dependencies: FASTEST_MIRROR variable
 # Outputs: Updated sources.list and sources.list.d/ files
 reapply_fastest_mirror() {
-    if [ -z "${FASTEST_MIRROR:-}" ]; then
-        echo "[warn] FASTEST_MIRROR not set - skipping re-application"
-        return 1
+  if [ -z "${FASTEST_MIRROR:-}" ]; then
+    echo "[warn] FASTEST_MIRROR not set - skipping re-application"
+    return 1
+  fi
+  
+  if [ "${FASTEST_MIRROR}" = "http://archive.ubuntu.com/ubuntu" ]; then
+    echo "[info] Using default Ubuntu mirror (no re-application needed)"
+    return 0
+  fi
+  
+  echo "[info] Re-applying fastest mirror to all Ubuntu repositories..."
+  
+  # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
+  local fastest_mirror_sed_escaped
+  fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g' || echo "")"
+  
+  # Compute mirror_no_protocol once for reuse
+  local mirror_no_protocol
+  mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+  
+  # Update main sources.list with multiple aggressive replacement patterns
+  if [ -f /etc/apt/sources.list ]; then
+    # Multiple replacement patterns to catch all variations:
+    # 1. Specifically target archive.ubuntu.com (what add-apt-repository adds)
+    if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+      sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
     fi
     
-    if [ "$FASTEST_MIRROR" = "http://archive.ubuntu.com/ubuntu" ]; then
-        echo "[info] Using default Ubuntu mirror (no re-application needed)"
-        return 0
-    fi
-    
-    echo "[info] Re-applying fastest mirror to all Ubuntu repositories..."
-    
-    # Update main sources.list with multiple aggressive replacement patterns
-    if [ -f /etc/apt/sources.list ]; then
-        # Multiple replacement patterns to catch all variations:
-        # 1. Specifically target archive.ubuntu.com (what add-apt-repository adds)
-        sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-        sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-        # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" /etc/apt/sources.list
-        
-        # Also verify no archive.ubuntu.com remains
-        if grep -v "^#" /etc/apt/sources.list | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
-            echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
-            # Compute MIRROR_NO_PROTOCOL if not already set, then escape for sed
-            if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
-                MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
-            fi
-            MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" /etc/apt/sources.list
+    # Also verify no archive.ubuntu.com remains
+    if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+      echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
+      # Escape special sed characters in mirror_no_protocol for safe replacement
+      local mirror_sed_escaped
+      if [ -n "${mirror_no_protocol:-}" ]; then
+        mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+        if [ -n "${mirror_sed_escaped:-}" ]; then
+          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list
         fi
-        echo "[info] ✓ Updated /etc/apt/sources.list"
-    else
-        echo "[warn] /etc/apt/sources.list not found"
+      fi
     fi
-    
-    # Update sources.list.d/ files (excluding PPAs) with aggressive replacement
-    if [ -d /etc/apt/sources.list.d ]; then
-        local updated_count=0
-        shopt -s nullglob  # Handle case where no .list files exist
-        for sources_file in /etc/apt/sources.list.d/*.list; do
-            [ -f "$sources_file" ] || continue
-            
-            # Skip PPA files (they must use ppa.launchpad.net)
-            if grep -q "ppa.launchpad.net" "$sources_file" 2>/dev/null; then
-                continue
-            fi
-            
-            # Multiple replacement patterns for sources.list.d files too
-            # 1. Specifically target archive.ubuntu.com
-            if grep -q "archive\\.ubuntu\\.com" "$sources_file" 2>/dev/null; then
-                sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-                sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-                echo "[info] ✓ Updated archive.ubuntu.com in: $(basename "$sources_file")"
-                updated_count=$((updated_count + 1))
-            fi
-            # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-            if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "$sources_file" 2>/dev/null; then
-                sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-                sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${FASTEST_MIRROR}|g" "$sources_file"
-                echo "[info] ✓ Updated: $(basename "$sources_file")"
-                updated_count=$((updated_count + 1))
-            fi
-            
-            # Final check - remove any remaining archive.ubuntu.com references
-            if grep -v "^#" "$sources_file" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
-                # Compute MIRROR_NO_PROTOCOL if not already set, then escape for sed
-                if [ -z "${MIRROR_NO_PROTOCOL:-}" ]; then
-                    MIRROR_NO_PROTOCOL=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||')
-                fi
-                MIRROR_SED_ESCAPED=$(printf '%s\n' "${MIRROR_NO_PROTOCOL}" | sed 's/[[\/&]/\\&/g')
-                sed -i "s|archive\\.ubuntu\\.com/ubuntu|${MIRROR_SED_ESCAPED}|g" "$sources_file"
-                echo "[info] Additional cleanup applied to: $(basename "$sources_file")"
-            fi
-        done
-        shopt -u nullglob  # Restore default behavior
-        
-        if [ $updated_count -eq 0 ]; then
-            echo "[info] sources.list.d/: No Ubuntu repositories to update"
+    echo "[info] ✓ Updated /etc/apt/sources.list"
+  else
+    echo "[warn] /etc/apt/sources.list not found"
+  fi
+  
+  # Update sources.list.d/ files (excluding PPAs) with aggressive replacement
+  if [ -d /etc/apt/sources.list.d ]; then
+    local updated_count=0
+    shopt -s nullglob  # Handle case where no .list files exist
+    for sources_file in /etc/apt/sources.list.d/*.list; do
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files (they must use ppa.launchpad.net)
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        continue
+      fi
+      
+      # Multiple replacement patterns for sources.list.d files too
+      # 1. Specifically target archive.ubuntu.com
+      if grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] ✓ Updated archive.ubuntu.com in: $(basename "${sources_file}")"
+          updated_count=$((updated_count + 1))
         fi
+      fi
+      # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+      if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "${sources_file}" 2>/dev/null; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] ✓ Updated: $(basename "${sources_file}")"
+          updated_count=$((updated_count + 1))
+        fi
+      fi
+      
+      # Final check - remove any remaining archive.ubuntu.com references
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+        # Escape special sed characters in mirror_no_protocol for safe replacement
+        local mirror_sed_escaped
+        if [ -n "${mirror_no_protocol:-}" ]; then
+          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+          if [ -n "${mirror_sed_escaped:-}" ]; then
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
+            echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
+          fi
+        fi
+      fi
+    done
+    shopt -u nullglob  # Restore default behavior
+    
+    if [ "${updated_count:-0}" -eq 0 ]; then
+      echo "[info] sources.list.d/: No Ubuntu repositories to update"
     fi
-    
-    echo "[info] ✓ Fastest mirror re-application complete"
-    
-    # Force apt-get update to clear any cached mirror configuration
-    # CRITICAL: Clear package list cache first so Release files are re-downloaded from new mirror
-    # Otherwise apt-get --print-uris will still return archive.ubuntu.com URLs
-    echo "[info] Clearing package list cache to force fresh download from fastest mirror..."
-    rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-    echo "[info] Running apt-get update to refresh package lists with new mirror..."
-    apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
-    
-    # Verify the changes
-    verify_fastest_mirror
+  fi
+  
+  echo "[info] ✓ Fastest mirror re-application complete"
+  
+  # Force apt-get update to clear any cached mirror configuration
+  # CRITICAL: Clear package list cache first so Release files are re-downloaded from new mirror
+  # Otherwise apt-get --print-uris will still return archive.ubuntu.com URLs
+  echo "[info] Clearing package list cache to force fresh download from fastest mirror..."
+  rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+  echo "[info] Running apt-get update to refresh package lists with new mirror..."
+  apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
+  
+  # Verify the changes
+  verify_fastest_mirror
 }
 export -f reapply_fastest_mirror
 
@@ -861,23 +974,52 @@ echo "Stage|Container APT|Var APT|Conda|Wheels|Julia" > "$CACHE_MONITOR_DATA"
 # Outputs: Installed packages
 # Parameters: $1 = stage name
 monitor_cache() {
-    local stage="$1"
-    local container_apt=$(ls ${CONTAINER_APT_CACHE}/*.deb 2>/dev/null | wc -l)
-    local var_apt=$(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l)
-    local conda_pkgs=$(ls ${CONTAINER_CONDA_CACHE}/* 2>/dev/null | wc -l)
-    local wheels=$(ls ${CONTAINER_WHEELS_CACHE}/* 2>/dev/null | wc -l)
-    local julia_pkgs=$(ls ${CONTAINER_JULIA_CACHE}/* 2>/dev/null | wc -l)
+  local stage="${1:-unknown}"
+  local container_apt var_apt conda_pkgs wheels julia_pkgs
+  
+  # Safely count files with error handling
+  if [ -d "${CONTAINER_APT_CACHE:-}" ]; then
+    container_apt=$(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l || echo "0")
+  else
+    container_apt="0"
+  fi
+  
+  if [ -d /var/cache/apt/archives ]; then
+    var_apt=$(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l || echo "0")
+  else
+    var_apt="0"
+  fi
+  
+  if [ -d "${CONTAINER_CONDA_CACHE:-}" ]; then
+    conda_pkgs=$(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+  else
+    conda_pkgs="0"
+  fi
+  
+  if [ -d "${CONTAINER_WHEELS_CACHE:-}" ]; then
+    wheels=$(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+  else
+    wheels="0"
+  fi
+  
+  if [ -d "${CONTAINER_JULIA_CACHE:-}" ]; then
+    julia_pkgs=$(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+  else
+    julia_pkgs="0"
+  fi
 
-    echo "[CACHE MONITOR] Stage: $stage"
-  echo "${CONTAINER_APT_CACHE}: $container_apt .deb files"
-  echo "/var/cache/apt/archives: $var_apt .deb files"
-  echo "${CONTAINER_CONDA_CACHE}: $conda_pkgs files"
-  echo "${CONTAINER_WHEELS_CACHE}: $wheels files"
-  echo "${CONTAINER_JULIA_CACHE}: $julia_pkgs files"
-    echo ""
+  echo "[CACHE MONITOR] Stage: ${stage}"
+  echo "${CONTAINER_APT_CACHE:-/unknown}: ${container_apt} .deb files"
+  echo "/var/cache/apt/archives: ${var_apt} .deb files"
+  echo "${CONTAINER_CONDA_CACHE:-/unknown}: ${conda_pkgs} files"
+  echo "${CONTAINER_WHEELS_CACHE:-/unknown}: ${wheels} files"
+  echo "${CONTAINER_JULIA_CACHE:-/unknown}: ${julia_pkgs} files"
+  echo ""
 
   # Store data for summary (append to CSV)
-    echo "$stage|$container_apt|$var_apt|$conda_pkgs|$wheels|$julia_pkgs" >> "$CACHE_MONITOR_DATA"
+  if [ -f "${CACHE_MONITOR_DATA:-}" ]; then
+    echo "${stage}|${container_apt}|${var_apt}|${conda_pkgs}|${wheels}|${julia_pkgs}" >> "${CACHE_MONITOR_DATA}"
+  fi
 }
 # End function (self-contained)
 
@@ -891,18 +1033,20 @@ display_cache_monitoring_summary() {
   echo "=========================================================="
   echo "Stage                         | Container APT | Var APT | Conda | Wheels | Julia"
   echo "------------------------------|---------------|---------|-------|--------|-------"
-    # Read and display the monitoring data
-    while IFS='|' read -r stage container_apt var_apt conda_pkgs wheels julia_pkgs; do
-        # Skip header line
-        if [[ "$stage" == "# Stage" ]]; then
-            continue
-        fi
-    # End if-fi block
-        # Format the output with proper alignment
-        printf "%-30s | %-13s | %-7s | %-5s | %-6s | %-5s\n" \
-            "$stage" "$container_apt" "$var_apt" "$conda_pkgs" "$wheels" "$julia_pkgs"
-    done < "$CACHE_MONITOR_DATA"
-  # End while loop (self-contained)
+  # Read and display the monitoring data
+  if [ -f "${CACHE_MONITOR_DATA:-}" ]; then
+    while IFS='|' read -r stage container_apt var_apt conda_pkgs wheels julia_pkgs || [ -n "${stage:-}" ]; do
+      # Skip header line and empty lines
+      if [ "${stage:-}" = "Stage" ] || [ -z "${stage:-}" ]; then
+        continue
+      fi
+      # Format the output with proper alignment
+      printf "%-30s | %-13s | %-7s | %-5s | %-6s | %-5s\n" \
+        "${stage:-unknown}" "${container_apt:-0}" "${var_apt:-0}" "${conda_pkgs:-0}" "${wheels:-0}" "${julia_pkgs:-0}"
+    done < "${CACHE_MONITOR_DATA}"
+  else
+    echo "No cache monitoring data available"
+  fi
   echo "=========================================================="
   echo
 }
@@ -916,20 +1060,56 @@ cache_summary() {
   echo "=========================================================="
   echo "FINAL CACHE SUMMARY - BEFORE IMAGE CREATION"
   echo "=========================================================="
-    echo "APT Archives:"
-  echo " ${CONTAINER_APT_CACHE}: $(ls ${CONTAINER_APT_CACHE}/*.deb 2>/dev/null | wc -l) .deb files"
-  echo " /var/cache/apt/archives: $(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l) .deb files"
+  echo "APT Archives:"
+  if [ -d "${CONTAINER_APT_CACHE:-}" ]; then
+    echo " ${CONTAINER_APT_CACHE}: $(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l || echo "0") .deb files"
+  else
+    echo " ${CONTAINER_APT_CACHE:-/unknown}: 0 .deb files (directory not found)"
+  fi
+  if [ -d /var/cache/apt/archives ]; then
+    echo " /var/cache/apt/archives: $(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l || echo "0") .deb files"
+  else
+    echo " /var/cache/apt/archives: 0 .deb files (directory not found)"
+  fi
   echo "---"
-    echo "Other Caches:"
-  echo " ${CONTAINER_CONDA_CACHE}: $(ls ${CONTAINER_CONDA_CACHE}/* 2>/dev/null | wc -l) files"
-  echo " ${CONTAINER_WHEELS_CACHE}: $(ls ${CONTAINER_WHEELS_CACHE}/* 2>/dev/null | wc -l) files"
-  echo " ${CONTAINER_JULIA_CACHE}: $(ls ${CONTAINER_JULIA_CACHE}/* 2>/dev/null | wc -l) files"
+  echo "Other Caches:"
+  if [ -d "${CONTAINER_CONDA_CACHE:-}" ]; then
+    echo " ${CONTAINER_CONDA_CACHE}: $(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+  else
+    echo " ${CONTAINER_CONDA_CACHE:-/unknown}: 0 files (directory not found)"
+  fi
+  if [ -d "${CONTAINER_WHEELS_CACHE:-}" ]; then
+    echo " ${CONTAINER_WHEELS_CACHE}: $(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+  else
+    echo " ${CONTAINER_WHEELS_CACHE:-/unknown}: 0 files (directory not found)"
+  fi
+  if [ -d "${CONTAINER_JULIA_CACHE:-}" ]; then
+    echo " ${CONTAINER_JULIA_CACHE}: $(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+  else
+    echo " ${CONTAINER_JULIA_CACHE:-/unknown}: 0 files (directory not found)"
+  fi
   echo "---"
-    echo "Cache Directory Sizes:"
-  echo " ${CONTAINER_APT_CACHE}: $(du -sh ${CONTAINER_APT_CACHE} 2>/dev/null | cut -f1 || echo '0B')"
-  echo " ${CONTAINER_CONDA_CACHE}: $(du -sh ${CONTAINER_CONDA_CACHE} 2>/dev/null | cut -f1 || echo '0B')"
-  echo " ${CONTAINER_WHEELS_CACHE}: $(du -sh ${CONTAINER_WHEELS_CACHE} 2>/dev/null | cut -f1 || echo '0B')"
-  echo " ${CONTAINER_JULIA_CACHE}: $(du -sh ${CONTAINER_JULIA_CACHE} 2>/dev/null | cut -f1 || echo '0B')"
+  echo "Cache Directory Sizes:"
+  if [ -d "${CONTAINER_APT_CACHE:-}" ]; then
+    echo " ${CONTAINER_APT_CACHE}: $(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo '0B')"
+  else
+    echo " ${CONTAINER_APT_CACHE:-/unknown}: 0B (directory not found)"
+  fi
+  if [ -d "${CONTAINER_CONDA_CACHE:-}" ]; then
+    echo " ${CONTAINER_CONDA_CACHE}: $(du -sh "${CONTAINER_CONDA_CACHE}" 2>/dev/null | cut -f1 || echo '0B')"
+  else
+    echo " ${CONTAINER_CONDA_CACHE:-/unknown}: 0B (directory not found)"
+  fi
+  if [ -d "${CONTAINER_WHEELS_CACHE:-}" ]; then
+    echo " ${CONTAINER_WHEELS_CACHE}: $(du -sh "${CONTAINER_WHEELS_CACHE}" 2>/dev/null | cut -f1 || echo '0B')"
+  else
+    echo " ${CONTAINER_WHEELS_CACHE:-/unknown}: 0B (directory not found)"
+  fi
+  if [ -d "${CONTAINER_JULIA_CACHE:-}" ]; then
+    echo " ${CONTAINER_JULIA_CACHE}: $(du -sh "${CONTAINER_JULIA_CACHE}" 2>/dev/null | cut -f1 || echo '0B')"
+  else
+    echo " ${CONTAINER_JULIA_CACHE:-/unknown}: 0B (directory not found)"
+  fi
   echo "=========================================================="
   echo
 }
