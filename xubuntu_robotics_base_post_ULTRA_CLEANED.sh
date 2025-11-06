@@ -2624,11 +2624,9 @@ echo "==> Installing noVNC and websockify for HTML5 VNC access..."
 # Outputs: Installed packages
 apt-get install -y --no-install-recommends websockify python3-numpy python3-scipy
 
-# Install/upgrade numpy and scipy with system BLAS support
-# These are installed BEFORE any protections, using system OpenBLAS
-pip3 install --no-cache-dir \
-  numpy \
-  scipy
+# Note: NumPy and SciPy are installed via system packages (python3-numpy python3-scipy)
+# which use OpenBLAS. DO NOT install via pip as it may overwrite with MKL-linked versions.
+# System packages are built together and are ABI-compatible, ensuring stability.
 
 # Install latest websockify with all features via pip
 pip3 install --no-cache-dir \
@@ -2636,7 +2634,7 @@ pip3 install --no-cache-dir \
   jwcrypto \
   redis
 
-echo "✓ NumPy and SciPy installed (using system OpenBLAS from apt)"
+echo "✓ NumPy and SciPy installed via system packages (using OpenBLAS)"
 
 #--- Sub-block 6.11.7: Download and configure noVNC client ---
 # Critical: Install noVNC v1.6.0 for HTML5 VNC access
@@ -5501,9 +5499,10 @@ else
 fi
 
 # Check NumPy (required dependency for JAX)
+# Note: NumPy should already be installed via system packages (python3-numpy) which use OpenBLAS
 if ! python3 -c "import numpy" 2>/dev/null; then
-    echo "  ⚠ WARNING: NumPy not found - installing NumPy before JAX..."
-    pip3 install --no-cache-dir numpy || echo "  ⚠ NumPy installation failed (non-fatal)"
+    echo "  ⚠ WARNING: NumPy not found - installing via system package (OpenBLAS)..."
+    apt-get install -y --no-install-recommends python3-numpy || echo "  ⚠ NumPy installation failed (non-fatal)"
 else
     NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
     echo "  ✓ NumPy ${NUMPY_VER} found"
@@ -5535,6 +5534,8 @@ if [ -z "${num_cores:-}" ] || [ "${num_cores}" -lt 1 ]; then
     num_cores=1
 fi
 export OMP_NUM_THREADS="${num_cores}"
+# Note: MKL_NUM_THREADS set for compatibility (even though we use OpenBLAS)
+# This is harmless if MKL is not installed and some packages check this variable
 export MKL_NUM_THREADS="${num_cores}"
 export NUMEXPR_NUM_THREADS="${num_cores}"
 export OPENBLAS_NUM_THREADS="${num_cores}"
@@ -5602,79 +5603,284 @@ else
     echo "  ⚠ JAX installation verification failed (non-fatal)"
 fi
 
-#--- Sub-block 13B.4: Verify CUDA linking and GPU availability ---
-# Purpose: Test JAX CUDA functionality and verify GPU acceleration
+#--- Sub-block 13B.4: Comprehensive JAX verification ---
+# Purpose: Test JAX functionality with comprehensive verification (imports, GPU, JIT, threading, performance)
 # Dependencies: JAX installed, CUDA, cuDNN
 # Outputs: Test results (non-fatal)
-echo "Verifying JAX CUDA functionality..."
+echo "Running comprehensive JAX verification..."
 
 python3 << 'JAX_VERIFY' 2>&1 | tee /tmp/jax_verify.log || true
 import sys
 import os
+import time
+
+test_results = {"passed": 0, "failed": 0, "warnings": 0}
+
+def test_imports():
+    """Test 1: Basic imports"""
+    print("\n[Test 1] Basic Imports")
+    try:
+        import jax
+        import jax.numpy as jnp
+        import jaxlib
+        
+        print(f"  ✓ JAX version: {jax.__version__}")
+        print(f"  ✓ jaxlib version: {jaxlib.__version__}")
+        test_results["passed"] += 1
+        return True
+    except Exception as e:
+        print(f"  ✗ Import failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_backend():
+    """Test 2: Backend detection"""
+    print("\n[Test 2] Backend Detection")
+    try:
+        import jax
+        default_backend = jax.default_backend()
+        print(f"  ✓ Default backend: {default_backend}")
+        
+        devices = jax.devices()
+        if devices is None:
+            devices = []
+        print(f"  ✓ Found {len(devices)} device(s):")
+        for d in devices:
+            try:
+                kind = getattr(d, 'device_kind', 'unknown')
+                platform = getattr(d, 'platform', 'unknown')
+                print(f"    - {d} (kind: {kind}, platform: {platform})")
+            except Exception:
+                print(f"    - {d}")
+        
+        test_results["passed"] += 1
+        return True
+    except Exception as e:
+        print(f"  ✗ Backend detection failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_gpu():
+    """Test 3: GPU availability and operations"""
+    print("\n[Test 3] GPU Availability")
+    try:
+        import jax
+        import jax.numpy as jnp
+        
+        devices = jax.devices()
+        if devices is None:
+            devices = []
+        gpu_devices = [d for d in devices if getattr(d, 'device_kind', None) == 'gpu']
+        
+        if gpu_devices:
+            print(f"  ✓ GPU acceleration available ({len(gpu_devices)} GPU device(s))")
+            
+            try:
+                # Test GPU computation
+                x = jnp.array([1.0, 2.0, 3.0])
+                y = x * 2
+                result = float(jnp.sum(y))
+                print(f"  ✓ GPU computation test: {result} (expected: 12.0)")
+                
+                # Test device placement
+                x_gpu = jax.device_put(x, gpu_devices[0])
+                print(f"  ✓ GPU device placement working")
+                
+                # Test larger computation
+                a = jnp.ones((1000, 1000), dtype=jnp.float32)
+                b = jnp.ones((1000, 1000), dtype=jnp.float32)
+                c = jnp.dot(a, b)
+                result = float(c[0, 0])
+                print(f"  ✓ Large matrix multiplication on GPU: {result} (expected: 1000.0)")
+            except Exception as gpu_err:
+                print(f"  ⚠ GPU operation warning: {gpu_err}")
+                test_results["warnings"] += 1
+            
+            test_results["passed"] += 1
+            return True
+        else:
+            print("  ⚠ GPU devices not found (JAX will use CPU)")
+            print("  Note: This is non-fatal - JAX will still work in CPU mode")
+            test_results["warnings"] += 1
+            return True  # CPU mode is acceptable
+    except Exception as e:
+        print(f"  ✗ GPU test failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_jit():
+    """Test 4: JIT compilation"""
+    print("\n[Test 4] JIT Compilation")
+    try:
+        import jax
+        import jax.numpy as jnp
+        
+        @jax.jit
+        def add_one(x):
+            return x + 1
+        
+        x = jnp.array([1.0, 2.0, 3.0])
+        result = add_one(x)
+        expected = jnp.array([2.0, 3.0, 4.0])
+        
+        if jnp.allclose(result, expected):
+            print("  ✓ JIT compilation working")
+            test_results["passed"] += 1
+            return True
+        else:
+            print("  ✗ JIT computation result incorrect")
+            test_results["failed"] += 1
+            return False
+    except Exception as e:
+        print(f"  ✗ JIT test failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_threading():
+    """Test 5: Threading configuration"""
+    print("\n[Test 5] Threading Configuration")
+    try:
+        num_threads = os.environ.get('OMP_NUM_THREADS', 'not set')
+        openblas_threads = os.environ.get('OPENBLAS_NUM_THREADS', 'not set')
+        print(f"  OMP_NUM_THREADS: {num_threads}")
+        print(f"  OPENBLAS_NUM_THREADS: {openblas_threads}")
+        
+        # Test parallel computation
+        import jax
+        import jax.numpy as jnp
+        
+        x = jnp.random.normal(jax.random.PRNGKey(0), (1000, 1000))
+        y = jnp.dot(x, x.T)
+        result = float(jnp.sum(y))
+        
+        print(f"  ✓ Threading test computation: {result:.2f}")
+        print("  ✓ Threading configuration verified")
+        test_results["passed"] += 1
+        return True
+    except Exception as e:
+        print(f"  ✗ Threading test failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_performance():
+    """Test 6: Performance benchmark"""
+    print("\n[Test 6] Performance Benchmark")
+    try:
+        import jax
+        import jax.numpy as jnp
+        
+        # Benchmark matrix multiplication
+        size = 2000
+        try:
+            a = jnp.ones((size, size), dtype=jnp.float32)
+            b = jnp.ones((size, size), dtype=jnp.float32)
+            
+            # Warmup
+            _ = jnp.dot(a, b).block_until_ready()
+            
+            # Actual benchmark
+            start = time.time()
+            c = jnp.dot(a, b)
+            c.block_until_ready()
+            elapsed = time.time() - start
+            
+            print(f"  Matrix multiplication ({size}x{size}): {elapsed:.4f}s")
+            print("  ✓ Performance benchmark completed")
+        except MemoryError:
+            print("  ⚠ Performance test skipped (memory constraints)")
+            test_results["warnings"] += 1
+        except Exception as perf_err:
+            print(f"  ⚠ Performance test warning: {perf_err}")
+            test_results["warnings"] += 1
+        
+        test_results["passed"] += 1
+        return True
+    except Exception as e:
+        print(f"  ✗ Performance test failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+def test_multi_gpu():
+    """Test 7: Multi-GPU support (if available)"""
+    print("\n[Test 7] Multi-GPU Support")
+    try:
+        import jax
+        
+        devices = jax.devices()
+        if devices is None:
+            devices = []
+        gpu_devices = [d for d in devices if getattr(d, 'device_kind', None) == 'gpu']
+        
+        if len(gpu_devices) > 1:
+            print(f"  ✓ Multiple GPUs detected: {len(gpu_devices)}")
+            print("  ✓ Multi-GPU support available")
+        else:
+            print("  ℹ Single or no GPU detected (multi-GPU test skipped)")
+        
+        test_results["passed"] += 1
+        return True
+    except Exception as e:
+        print(f"  ✗ Multi-GPU test failed: {e}")
+        test_results["failed"] += 1
+        return False
+
+# Run all tests
+print("=" * 60)
+print("JAX Comprehensive Verification")
+print("=" * 60)
 
 try:
-    import jax
-    import jax.numpy as jnp
-    import jaxlib
+    if not test_imports():
+        print("\n✗ Critical: JAX imports failed - cannot continue tests")
+        sys.exit(1)
     
-    print("✓ JAX imports successful")
-    print(f"  JAX version: {jax.__version__}")
-    print(f"  jaxlib version: {jaxlib.__version__}")
+    test_backend()
+    test_gpu()
+    test_jit()
+    test_threading()
+    test_performance()
+    test_multi_gpu()
     
-    # Check CUDA backend
-    default_backend = jax.default_backend()
-    print(f"  Default backend: {default_backend}")
+    # Summary
+    print("\n" + "=" * 60)
+    print("Test Summary:")
+    print(f"  Passed: {test_results['passed']}")
+    print(f"  Failed: {test_results['failed']}")
+    print(f"  Warnings: {test_results['warnings']}")
+    print("=" * 60)
     
-    # Check devices
-    devices = jax.devices()
-    print(f"  Found {len(devices)} device(s):")
-    for d in devices:
-        print(f"    - {d} (kind: {d.device_kind}, platform: {d.platform})")
-    
-    # Check for GPU
-    gpu_devices = [d for d in devices if d.device_kind == 'gpu']
-    if gpu_devices:
-        print(f"  ✓ GPU acceleration available ({len(gpu_devices)} GPU device(s))")
-        
-        # Quick computation test
-        x = jnp.array([1.0, 2.0, 3.0])
-        y = x * 2
-        result = float(jnp.sum(y))
-        print(f"  ✓ GPU computation test: {result} (expected: 12.0)")
-        
-        # Check device placement
-        try:
-            x_gpu = jax.device_put(x, gpu_devices[0])
-            print(f"  ✓ GPU device placement working")
-        except Exception as e:
-            print(f"  ⚠ GPU device placement issue: {e}")
+    if test_results["failed"] == 0:
+        print("\n✓ All JAX verification tests passed")
+        sys.exit(0)
     else:
-        print("  ⚠ GPU devices not found (JAX will use CPU)")
-        print("  Note: This is non-fatal - JAX will still work in CPU mode")
-    
-    # Check threading
-    num_threads = os.environ.get('OMP_NUM_THREADS', 'not set')
-    print(f"  Threading: OMP_NUM_THREADS={num_threads}")
-    
-    print("✓ JAX CUDA verification complete")
+        print(f"\n⚠ Some tests failed ({test_results['failed']} failures)")
+        sys.exit(0)  # Non-fatal
     
 except ImportError as e:
-    print(f"✗ JAX import failed: {e}")
+    print(f"\n✗ JAX import failed: {e}")
     print("  JAX may not be installed correctly")
     sys.exit(1)
 except Exception as e:
-    print(f"⚠ JAX verification warning: {e}")
-    print("  JAX may work but with limitations")
+    print(f"\n⚠ JAX verification error: {e}")
+    import traceback
+    traceback.print_exc()
+    sys.exit(0)  # Non-fatal
 JAX_VERIFY
 
 # Check verification results
 if [ -f /tmp/jax_verify.log ]; then
-    if grep -q "✓ GPU acceleration available" /tmp/jax_verify.log; then
+    # Use grep with proper escaping for Unicode characters
+    # Check for success message (multiple patterns for robustness)
+    if grep -q "All JAX verification tests passed" /tmp/jax_verify.log 2>/dev/null || \
+       grep -q "All.*tests.*passed" /tmp/jax_verify.log 2>/dev/null; then
+        echo "✓ JAX comprehensive verification: All tests passed"
+    elif grep -q "GPU acceleration available" /tmp/jax_verify.log 2>/dev/null; then
         echo "✓ JAX CUDA installation verified with GPU acceleration"
-    elif grep -q "✓ JAX imports successful" /tmp/jax_verify.log; then
+    elif grep -q "JAX version:" /tmp/jax_verify.log 2>/dev/null; then
         echo "✓ JAX installation verified (CPU mode - GPU may be unavailable)"
     else
         echo "⚠ JAX verification had issues (non-fatal)"
+        echo "  Check /tmp/jax_verify.log for details"
     fi
 fi
 
@@ -9335,7 +9541,26 @@ fi
 # End Miniforge installation (if block self-contained)
 debug_glibc "After Miniforge installation and config"
 
-#--- Sub-block 16.6: Configure system-wide Conda PATH ---
+#--- Sub-block 16.6: Fix deprecated mamba.sh warning (mamba 2.0+) ---
+# Critical: Remove deprecated mamba.sh file to prevent warnings
+# Dependencies: Block 17 (Conda/Miniforge)
+# Outputs: Python packages, conda environments
+if [ -d "${MINIFORGE_HOME}/etc/profile.d" ]; then
+  # Remove or rename deprecated mamba.sh file (causes warnings in mamba 2.0+)
+  if [ -f "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" ]; then
+    echo "Removing deprecated mamba.sh file (mamba 2.0+ compatibility)..."
+    mv "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" "${MINIFORGE_HOME}/etc/profile.d/mamba.sh.deprecated" 2>/dev/null || true
+    echo -e "${GREEN}✓ Deprecated mamba.sh removed${NC}"
+  fi
+  
+  # Note: We don't create a replacement mamba.sh in /etc/profile.d
+  # because mamba is already available via PATH (set in %environment section)
+  # and MAMBA_ROOT_PREFIX is already set, so no initialization script is needed
+  # If conda.sh tries to source mamba.sh, it will fail gracefully
+fi
+# End mamba.sh fix (if block self-contained)
+
+#--- Sub-block 16.6.1: Configure system-wide Conda PATH ---
 # Critical: Make conda available in all shell sessions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments

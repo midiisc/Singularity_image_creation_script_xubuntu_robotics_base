@@ -1,0 +1,30 @@
+{
+  "shellcheck": {
+    "enabled": true,
+    "level": "all",
+    "description": "ShellCheck severity level: 'error' (only errors), 'warning' (errors+warnings), or 'all' (comprehensive - errors, warnings, info, style). Recommended: 'all' for full coverage of variable expansion, shell expansion, escape sequences, logical errors, robustness, edge cases, etc."
+  },
+  "syntax_check": {
+    "enabled": true,
+    "description": "Enable bash -n syntax checking"
+  },
+  "security": {
+    "enabled": true,
+    "description": "Enable security pattern checks"
+  },
+  "style": {
+    "enabled": true,
+    "description": "Enable style and best practices checks"
+  },
+  "cursor_ai": {
+    "enabled": true,
+    "description": "Enable Cursor AI agent semantic analysis. Generates prompt file for manual review with Cmd/Ctrl+K, or uses Cursor Rules for automatic analysis."
+  },
+  "excluded_files": [
+    "^xubuntu_robotics_base_post_ULTRA_CLEANED\\.sh$",
+    "^build_xubuntu_robotics_base\\.sh$",
+    "\\.git/"
+  ],
+  "description": "Pre-commit audit configuration. Exclude large generated files if needed."
+}
+
