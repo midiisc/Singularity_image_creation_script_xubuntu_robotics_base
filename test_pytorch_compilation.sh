@@ -2105,12 +2105,59 @@ if ! command -v nvcc &> /dev/null; then
     exit 1
 fi
 
-# Display CUDA version
-echo "  CUDA version: ${CUDA_VERSION}"
+# Display CUDA version and check for driver/toolkit mismatch
+echo "  CUDA toolkit version: ${CUDA_VERSION} (from nvcc)"
+echo "    This is the version used for PyTorch compilation"
+
+# Check nvidia-smi for driver CUDA version (if available)
+CUDA_DRIVER_VERSION=""
+if command -v nvidia-smi &> /dev/null; then
+    # Try multiple methods to extract CUDA version from nvidia-smi
+    # Method 1: Query specific field
+    CUDA_DRIVER_VERSION=$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader 2>/dev/null | head -1 | sed 's/[^0-9.]//g' || echo "")
+    
+    # Method 2: Parse from standard output if query fails
+    if [ -z "${CUDA_DRIVER_VERSION:-}" ] || [ "${CUDA_DRIVER_VERSION}" = "N/A" ]; then
+        CUDA_DRIVER_VERSION=$(nvidia-smi 2>/dev/null | grep -i "cuda version" | head -1 | sed -n 's/.*CUDA Version: \([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+    fi
+    
+    # Method 3: Try driver version query as fallback
+    if [ -z "${CUDA_DRIVER_VERSION:-}" ] || [ "${CUDA_DRIVER_VERSION}" = "N/A" ]; then
+        CUDA_DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version,cuda_version --format=csv,noheader 2>/dev/null | head -1 | awk -F', ' '{print $2}' | sed 's/[^0-9.]//g' || echo "")
+    fi
+    
+    if [ -n "${CUDA_DRIVER_VERSION:-}" ] && [ "${CUDA_DRIVER_VERSION}" != "N/A" ] && echo "${CUDA_DRIVER_VERSION}" | grep -qE '^[0-9]+\.[0-9]+'; then
+        echo "  CUDA driver version: ${CUDA_DRIVER_VERSION} (from nvidia-smi)"
+        echo "    This is the maximum CUDA version your GPU driver supports"
+        
+        # Compare driver and toolkit versions
+        DRIVER_MAJOR=$(echo "${CUDA_DRIVER_VERSION}" | cut -d. -f1 2>/dev/null || echo "")
+        if [ -n "${DRIVER_MAJOR:-}" ] && [ -n "${CUDA_MAJOR:-}" ]; then
+            if [ "${DRIVER_MAJOR}" != "${CUDA_MAJOR}" ]; then
+                echo -e "  ${YELLOW}⚠ NOTE: Driver supports CUDA ${CUDA_DRIVER_VERSION}, but toolkit ${CUDA_VERSION} is installed${NC}"
+                echo "    For PyTorch compilation, the toolkit version (${CUDA_VERSION}) is what matters"
+                echo "    Your GPU driver can run programs compiled with CUDA ${CUDA_VERSION} toolkit"
+                if [ "${DRIVER_MAJOR}" = "12" ] && [ "${CUDA_MAJOR}" = "11" ]; then
+                    echo -e "  ${YELLOW}  Tip: You could install CUDA 12.x toolkit to use newer PyTorch versions${NC}"
+                    echo "    However, PyTorch 2.4.0 (compatible with CUDA 11.5) will work fine with your current setup"
+                fi
+            elif [ "${CUDA_DRIVER_VERSION}" != "${CUDA_VERSION}" ]; then
+                echo -e "  ${YELLOW}⚠ NOTE: Minor version difference: Driver ${CUDA_DRIVER_VERSION} vs Toolkit ${CUDA_VERSION}${NC}"
+                echo "    This is normal - toolkit version is what matters for compilation"
+            fi
+        fi
+    fi
+fi
+
+# Display compatibility status
 if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "12" ]; then
     echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} toolkit detected and verified${NC}"
 else
-    echo -e "${YELLOW}⚠ CUDA ${CUDA_VERSION} detected (expected 12.x)${NC}"
+    echo -e "${YELLOW}⚠ CUDA ${CUDA_VERSION} toolkit detected${NC}"
+    echo "    PyTorch will be built with CUDA ${CUDA_VERSION} support"
+    if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "11" ]; then
+        echo "    Compatible PyTorch version: 2.4.0 (will be auto-selected)"
+    fi
 fi
 
 # Function to check if nvcc supports a specific compute capability
