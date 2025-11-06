@@ -442,6 +442,15 @@ After testing, verify:
 
 ## Additional Resources
 
+### Official Documentation
+
+- **TurboVNC User's Guide 3.2.1**: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
+- **VirtualGL User's Guide 3.1.4**: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
+- **x11vnc GitHub Repository**: https://github.com/LibVNC/x11vnc
+- **x11vnc ArchWiki**: https://wiki.archlinux.org/title/X11vnc
+
+### Additional Resources
+
 - **VirtualGL Documentation**: https://virtualgl.org/Documentation
 - **TurboVNC Documentation**: https://turbovnc.org/Documentation
 - **VirtualGL Troubleshooting**: https://virtualgl.org/Documentation/Troubleshooting

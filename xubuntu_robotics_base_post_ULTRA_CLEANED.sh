@@ -8034,6 +8034,8 @@ apt-get install -y --no-install-recommends x11vnc
 cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
 #!/usr/bin/env bash
 # x11vnc - Can attach to existing display or create new one
+# Official docs: https://github.com/LibVNC/x11vnc
+# ArchWiki: https://wiki.archlinux.org/title/X11vnc
 
 set -euo pipefail
 
@@ -8041,25 +8043,44 @@ DISPLAY_NUM=${1:-:1}
 PORT=$((5900 + ${DISPLAY_NUM#:}))
 
 echo "Starting x11vnc on display ${DISPLAY_NUM} (port ${PORT})..."
+echo "Official documentation: https://github.com/LibVNC/x11vnc"
 
 # Create password file if doesn't exist
+# Official recommendation: Always use password protection for security
 if [ ! -f ~/.vnc/passwd ]; then
     echo "VNC password not set. Setting now:"
     x11vnc -storepasswd ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
 fi
 
-# Start x11vnc
+# Start x11vnc with security and performance optimizations
+# Official best practices from x11vnc documentation:
+# - -forever: Keep server running after client disconnects
+# - -shared: Allow multiple clients to connect
+# - -rfbauth: Use password file for authentication (secure)
+# - -noxdamage: Disable X damage extension (better compatibility)
+# - -ncache: Enable pixel caching for better performance
+# - -ncache_cr: Enable client-side caching
+# - -speeds: Optimize for LAN connections
+# - -wait: Reduce CPU usage by waiting between updates
+# - -defer: Defer screen updates for better performance
+# - -noxrecord: Disable XRECORD extension (security)
+# - -noxfixes: Disable XFIXES extension (compatibility)
 x11vnc -display "${DISPLAY_NUM}" \
   -rfbport "${PORT}" \
   -rfbauth ~/.vnc/passwd \
   -forever \
   -shared \
   -noxdamage \
+  -noxrecord \
+  -noxfixes \
   -ncache 10 \
   -ncache_cr \
   -speeds lan \
   -wait 20 \
-  -defer 20
+  -defer 20 \
+  -bg \
+  -o ~/.vnc/x11vnc.log
 X11VNC
 
 #--- Sub-block 14.4: Make x11vnc script executable ---
@@ -8319,6 +8340,7 @@ cat > /etc/profile.d/turbovnc.sh << 'TVNC_PROFILE'
 # TurboVNC environment
 # Binaries are symlinked to /usr/local/bin and available in PATH
 # Main commands: vncserver, vncviewer, vncpasswd, Xvnc
+# Official documentation: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
 TVNC_PROFILE
 chmod +x /etc/profile.d/turbovnc.sh
 
@@ -8379,6 +8401,7 @@ done
 # Outputs: VNC server, GPU acceleration
 cat > /etc/profile.d/virtualgl.sh << 'VGL_PROFILE'
 # VirtualGL environment configuration
+# Official documentation: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 
 # VirtualGL runtime environment (with dynamic display detection)
 # VGL_DISPLAY will be set dynamically by VNC launcher scripts
@@ -8437,7 +8460,42 @@ chmod +x /etc/profile.d/virtualgl.sh
 
 echo "✓ VirtualGL symlinks and environment configuration complete"
 
-#--- Sub-block 15.16: Verify VirtualGL installation ---
+#--- Sub-block 15.16: Configure VirtualGL server (if needed) ---
+# Purpose: Run vglserver_config for system-wide VirtualGL configuration
+# Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
+# Dependencies: Block 15 (VirtualGL)
+# Outputs: VNC server, GPU acceleration
+echo ""
+echo "Configuring VirtualGL server..."
+# Note: vglserver_config typically requires interactive setup or specific permissions
+# In containerized environments, this may not be necessary as permissions are handled differently
+# We'll create a helper script for manual configuration if needed
+if [ -x /opt/VirtualGL/bin/vglserver_config ]; then
+  echo "  ✓ vglserver_config available (run manually if system-wide config needed)"
+  # Create a helper script for manual configuration
+  cat > /usr/local/bin/configure_vglserver.sh << 'VGLSCONF'
+#!/usr/bin/env bash
+# VirtualGL Server Configuration Helper
+# Official docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
+# This script helps configure VirtualGL for system-wide use
+# Note: In Singularity containers, this may not be necessary
+
+if [ -x /opt/VirtualGL/bin/vglserver_config ]; then
+  echo "Running VirtualGL server configuration..."
+  echo "This will set up permissions for VirtualGL to access the 3D X server"
+  /opt/VirtualGL/bin/vglserver_config
+else
+  echo "ERROR: vglserver_config not found"
+  exit 1
+fi
+VGLSCONF
+  chmod +x /usr/local/bin/configure_vglserver.sh
+  echo "  ✓ Helper script created: /usr/local/bin/configure_vglserver.sh"
+else
+  echo "  ⚠ vglserver_config not found (may not be needed in container environment)"
+fi
+
+#--- Sub-block 15.16.1: Verify VirtualGL installation ---
 # Purpose: Quick verification that vglrun is available
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -8930,6 +8988,8 @@ mkdir -p /etc/turbovncserver.conf.d
 
 cat > /etc/turbovncserver.conf.d/performance.conf << 'TVNCPERF'
 # TurboVNC Performance Configuration
+# Official documentation: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
+# Reference: TurboVNC User's Guide 3.2.1
 
 # Security
 $localhost = "yes";
@@ -8940,7 +9000,10 @@ $depth = "24";
 
 # Performance settings
 $desktopName = "TurboVNC";
-$useVGL = "1";  # Enable VirtualGL integration
+# VirtualGL integration: Use $useVGL = "1" in config OR -vgl flag when starting vncserver
+# Official recommendation: Use -vgl flag (see start_vnc_xfce.sh)
+# Both methods work, but -vgl flag is more explicit and recommended
+$useVGL = "1";  # Enable VirtualGL integration (backup method, -vgl flag is primary)
 $autokill = "1";  # Kill when last client disconnects
 
 # Compression (TurboVNC's optimized JPEG)
@@ -8982,6 +9045,8 @@ mkdir -p /usr/share/turbovnc/
 cat > /usr/share/turbovnc/xstartup.turbovnc.optimized << 'XSTARTOPT'
 #!/bin/sh
 # Optimized TurboVNC xstartup for XFCE + GPU
+# Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
+# Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 
 # Load X resources
 [ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
@@ -10261,16 +10326,26 @@ EOF
 
 # --- VirtualGL Display Detection ---
 detect_vgl_display() {
+  # Official VirtualGL docs: When using TurboVNC with -vgl flag, VGL_DISPLAY should be set to the VNC display
+  # Reference: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
   if [ "$VGL_DISPLAY_AUTO_DETECT" = "1" ]; then
-    # Try to detect VNC display from running processes
+    # Primary: Use the VNC display that's about to be started (most reliable)
+    # When TurboVNC starts with -vgl flag, VirtualGL should use the VNC display
+    if [ -n "${VNC_DISPLAY_NUM:-}" ]; then
+      export VGL_DISPLAY=":${VNC_DISPLAY_NUM}"
+      [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Set VGL_DISPLAY to VNC display: :${VNC_DISPLAY_NUM}"
+      return 0
+    fi
+    
+    # Fallback: Try to detect VNC display from running processes
     local vnc_display=""
     
     # Method 1: Check for Xvnc processes
-    vnc_display=$(ps aux | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
     
     # Method 2: Check for vncserver processes
     if [ -z "${vnc_display}" ]; then
-      vnc_display=$(ps aux | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+      vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
     fi
     
     # Method 3: Check for display :1, :2, etc.
@@ -10491,9 +10566,15 @@ setup_vnc_config() {
   mkdir -p "$HOME/.vnc"
 
   # Create xstartup script with VirtualGL integration
+  # Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
+  # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
   cat > "$HOME/.vnc/xstartup" << 'XSTART'
 #!/bin/sh
 # Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
+# Official documentation:
+# - TurboVNC: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
+# - VirtualGL: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
+# - x11vnc: https://github.com/LibVNC/x11vnc
 
 # Load X resources
 [ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
@@ -10593,7 +10674,13 @@ start_vnc_server() {
   )
 
   # Add VirtualGL-specific VNC arguments if integration is enabled
+  # Official TurboVNC docs: Use -vgl flag for VirtualGL integration
+  # Reference: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
   if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+    # CRITICAL: Add -vgl flag for VirtualGL integration (official recommendation)
+    # This enables VirtualGL to send rendered 3D images to TurboVNC via shared memory
+    vnc_args+=("-vgl")
+    
     # Add OpenGL extensions for VirtualGL
     if [ "$VNC_OPENGL_EXTENSIONS" = "1" ]; then
       vnc_args+=("-extension" "GLX")
@@ -10612,7 +10699,7 @@ start_vnc_server() {
       "-dontdisconnect"
     )
     
-    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added"
+    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added (with -vgl flag)"
   fi
 
   # Start VNC server with arguments
@@ -11915,6 +12002,20 @@ apt-get install -y --no-install-recommends libavresample4 2>/dev/null || \
 # Fix any broken dependencies that may have occurred
 apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non-critical)"
 
+# CRITICAL: Verify libxxhash-dev is actually installed and provides .pc file
+# Some Ubuntu versions may have libxxhash-dev without .pc file, or it may be in a different package
+if ! dpkg -l | grep -q "^ii.*libxxhash-dev"; then
+    echo "⚠ libxxhash-dev package not found in dpkg, attempting reinstall..."
+    apt-get install -y --reinstall libxxhash-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+fi
+
+# Verify libxxhash library files are present
+if [ ! -f "/usr/lib/x86_64-linux-gnu/libxxhash.so" ] && [ ! -f "/usr/lib/libxxhash.so" ]; then
+    echo "⚠ libxxhash.so not found in standard locations"
+    echo "  Attempting to locate libxxhash library..."
+    find /usr -name "*libxxhash*" -type f 2>/dev/null | head -3 || echo "    (No libxxhash files found)"
+fi
+
 # Verify Cairo/Py3Cairo installation (required for virtual:world extra)
 echo "==> Verifying Cairo and py3cairo availability..."
 if pkg-config --exists py3cairo 2>/dev/null; then
@@ -11931,25 +12032,52 @@ pkg-config --exists gtk+-3.0 && echo "✓ gtk+-3.0 found" || echo "⚠ gtk+-3.0 
 
 # Ensure PKG_CONFIG_PATH includes libxxhash.pc location
 # libxxhash-dev installs .pc file to standard locations, but ensure PKG_CONFIG_PATH is set
-export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+# CRITICAL: Find actual location of libxxhash.pc and add to PKG_CONFIG_PATH
+LIBXXHASH_PC_LOCATION=""
+for pc_dir in /usr/lib/x86_64-linux-gnu/pkgconfig /usr/lib/pkgconfig /usr/local/lib/pkgconfig /usr/share/pkgconfig; do
+    if [ -f "${pc_dir}/libxxhash.pc" ]; then
+        LIBXXHASH_PC_LOCATION="${pc_dir}"
+        echo "✓ Found libxxhash.pc at: ${pc_dir}"
+        break
+    fi
+done
+
+# Build comprehensive PKG_CONFIG_PATH with all standard locations
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH:-}"
+# Add libxxhash.pc location if found in non-standard location
+if [ -n "${LIBXXHASH_PC_LOCATION}" ] && [[ ":${PKG_CONFIG_PATH}:" != *":${LIBXXHASH_PC_LOCATION}:"* ]]; then
+    export PKG_CONFIG_PATH="${LIBXXHASH_PC_LOCATION}:${PKG_CONFIG_PATH}"
+fi
 echo "==> PKG_CONFIG_PATH configured for codec libraries: ${PKG_CONFIG_PATH}"
 
 # Verify codec libraries are available for wheel build
 echo "==> Verifying codec library availability..."
 pkg-config --exists x264 && echo "✓ x264 found" || echo "⚠ x264 not found in pkg-config"
 pkg-config --exists vpx && echo "✓ vpx found" || echo "⚠ vpx not found in pkg-config"
-pkg-config --exists libxxhash && echo "✓ libxxhash found" || echo "⚠ libxxhash not found in pkg-config"
+if pkg-config --exists libxxhash 2>/dev/null; then
+    echo "✓ libxxhash found in pkg-config"
+    LIBXXHASH_VERSION=$(pkg-config --modversion libxxhash 2>/dev/null || echo "unknown")
+    echo "  libxxhash version: ${LIBXXHASH_VERSION}"
+else
+    echo "⚠ libxxhash not found in pkg-config"
+    echo "  Searching for libxxhash.pc file..."
+    find /usr -name "libxxhash.pc" 2>/dev/null | head -3 || echo "    (libxxhash.pc not found)"
+    echo "  Attempting to locate libxxhash library..."
+    find /usr -name "*xxhash*" -type f 2>/dev/null | grep -E "\.(so|a|pc)$" | head -5 || echo "    (No xxhash files found)"
+fi
 
 # Install Xpra from PyPI (uses version from config.sh)
 # Using PyPI ensures we get the latest from GitHub releases
+# CRITICAL: Export PKG_CONFIG_PATH explicitly for pip subprocess
 cd /tmp
 echo "  Installing Xpra ${XPRA_VERSION} from PyPI..."
-if pip3 install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
+echo "  PKG_CONFIG_PATH for build: ${PKG_CONFIG_PATH}"
+if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" pip3 install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
     echo "✓ Xpra ${XPRA_VERSION} installed from PyPI"
     XPRA_INSTALLED=true
 else
     echo "⚠ Xpra ${XPRA_VERSION} pip installation failed, trying without version pin..."
-    if pip3 install --no-cache-dir "xpra[server]" 2>&1 | tee -a /tmp/xpra_install.log; then
+    if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" pip3 install --no-cache-dir "xpra[server]" 2>&1 | tee -a /tmp/xpra_install.log; then
         echo "✓ Xpra installed from PyPI (latest available)"
         XPRA_INSTALLED=true
     else
@@ -11972,10 +12100,12 @@ else
 fi
 
 # Install Xpra HTML5 client from GitHub (version from config.sh)
+# CRITICAL: Official installation path per https://github.com/Xpra-org/xpra-html5
+# On Linux, xpra server expects HTML5 client at /usr/share/xpra/www
 echo "==> Installing Xpra HTML5 client v${XPRA_HTML5_VERSION} from GitHub..."
 XPRA_HTML5_INSTALLED=false
 XPRA_HTML5_TAG="v${XPRA_HTML5_VERSION}"
-XPRA_HTML5_DIR="/usr/local/share/xpra/www"
+XPRA_HTML5_DIR="/usr/share/xpra/www"  # Official path per xpra-html5 README
 
 # Create directory and change to /tmp
 if ! mkdir -p "${XPRA_HTML5_DIR}" 2>/dev/null; then
@@ -12064,7 +12194,8 @@ echo "=========================================="
 echo ""
 
 # Set up Xpra HTML5 web directory
-XPRA_HTML5_DIR="/usr/local/share/xpra/www"
+# Official path per https://github.com/Xpra-org/xpra-html5
+XPRA_HTML5_DIR="/usr/share/xpra/www"
 if [ -d "$XPRA_HTML5_DIR" ]; then
     export XPRA_WEB_DIR="$XPRA_HTML5_DIR"
     echo "✓ HTML5 client available at ${XPRA_HTML5_DIR}"
@@ -12105,7 +12236,7 @@ xpra start --start="${APP}" \
   --bind-tcp="0.0.0.0:${PORT}" \
   --html=on \
   --daemon=no \
-  --webdir="/usr/local/share/xpra/www" \
+  --webdir="/usr/share/xpra/www" \
   --notifications=no \
   --clipboard=yes
 XPRA_SEAMLESS
@@ -12136,17 +12267,48 @@ apt-get install -y --no-install-recommends x11vnc
 cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
 #!/usr/bin/env bash
 # x11vnc - attach to existing X display
+# Official docs: https://github.com/LibVNC/x11vnc
+# ArchWiki: https://wiki.archlinux.org/title/X11vnc
+
+set -euo pipefail
 
 DISPLAY_NUM=${1:-1}
 PORT=$((5900 + DISPLAY_NUM))
 
 echo "Starting x11vnc on display :${DISPLAY_NUM} (port ${PORT})"
+echo "Official documentation: https://github.com/LibVNC/x11vnc"
 
+# Create password file if doesn't exist
+# SECURITY: Always use password protection (never use -nopw in production)
+if [ ! -f ~/.vnc/passwd ]; then
+    echo "VNC password not set. Setting now:"
+    x11vnc -storepasswd ~/.vnc/passwd
+    chmod 600 ~/.vnc/passwd
+fi
+
+# Start x11vnc with security and performance optimizations
+# Official best practices:
+# - -forever: Keep server running after client disconnects
+# - -shared: Allow multiple clients to connect
+# - -rfbauth: Use password file (secure, never use -nopw)
+# - -noxdamage: Better compatibility
+# - -ncache: Enable pixel caching
+# - -speeds: Optimize for LAN
 x11vnc -display ":${DISPLAY_NUM}" \
   -forever \
   -shared \
   -rfbport "${PORT}" \
-  -nopw
+  -rfbauth ~/.vnc/passwd \
+  -noxdamage \
+  -noxrecord \
+  -noxfixes \
+  -ncache 10 \
+  -ncache_cr \
+  -speeds lan \
+  -wait 20 \
+  -defer 20 \
+  -bg \
+  -o ~/.vnc/x11vnc.log
 X11VNC
 chmod +x /usr/local/bin/start_x11vnc.sh
 
