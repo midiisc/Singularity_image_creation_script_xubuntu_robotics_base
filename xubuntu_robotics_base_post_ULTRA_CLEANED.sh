@@ -11968,17 +11968,34 @@ XPRA_INSTALLED=false
 # Note: libavresample4 is deprecated in Ubuntu 24.04, replaced by libswresample
 # CRITICAL: x264 and vpx dev packages needed for wheel build with codec support
 # CRITICAL: libxxhash-dev needed for pkg-config during wheel build
-# CRITICAL: Cairo and GTK3 dependencies for py3cairo (required by virtual:world extra)
-#   - python3-cairo: Python Cairo bindings runtime
-#   - python3-cairo-dev: Python Cairo bindings development headers (provides py3cairo)
+# CRITICAL: Xpra dependencies based on official Xpra repository requirements
+# Source: https://github.com/Xpra-org/xpra/blob/master/docs/Build/Debian.md
+# Source: https://github.com/Xpra-org/xpra/blob/master/packaging/debian/xpra/control
+# 
+# GTK3 dependencies (required for server and GUI client):
+#   - libgtk-3-dev: GTK+ 3.0 development files (provides gtk+-3.0.pc)
+#   - python3-cairo-dev: Python Cairo bindings development headers (provides py3cairo.pc)
+#   - python-gi-dev: GObject introspection development files (provides pygobject-3.0.pc)
+#   - gobject-introspection: GObject introspection tools (provides gobject-introspection-1.0.pc)
 #   - libcairo2-dev: Cairo graphics library development files
-#   - libgtk-3-dev: GTK+ 3.0 development files
-#   - python3-gi-dev: GObject introspection development files
+#   - python3-cairo: Python Cairo bindings runtime
+#   - cython3: Cython compiler for Python extensions
+#
+# X11 dependencies (required for X11 forwarding):
+#   - libx11-dev, libxtst-dev, libxcomposite-dev, libxdamage-dev, libxres-dev, libxkbfile-dev
+#
+# Codec dependencies (for video encoding/decoding):
+#   - libx264-dev, libvpx-dev (for x264 and vpx codecs)
+#   - libxxhash-dev (for pkg-config during wheel build)
+#
+# Multimedia libraries:
+#   - libavcodec60, libavutil58, libavformat60, libswscale7, libswresample4
 apt-get install -y --no-install-recommends \
     python3-pip \
     python3-dev \
     python3-wheel \
     python3-setuptools \
+    cython3 \
     python3-cryptography \
     python3-pil \
     python3-lz4 \
@@ -11988,7 +12005,14 @@ apt-get install -y --no-install-recommends \
     python3-cairo-dev \
     libcairo2-dev \
     libgtk-3-dev \
-    python3-gi-dev \
+    python-gi-dev \
+    gobject-introspection \
+    libx11-dev \
+    libxtst-dev \
+    libxcomposite-dev \
+    libxdamage-dev \
+    libxres-dev \
+    libxkbfile-dev \
     libavcodec60 \
     libavutil58 \
     libavformat60 \
@@ -12036,12 +12060,121 @@ fi
 pkg-config --exists cairo && echo "✓ cairo library found" || echo "⚠ cairo library not found in pkg-config"
 pkg-config --exists gtk+-3.0 && echo "✓ gtk+-3.0 found" || echo "⚠ gtk+-3.0 not found in pkg-config"
 
+# CRITICAL: Find pkg-config .pc files required by Xpra build
+# Based on Xpra setup.py requirements: py3cairo, pygobject-3.0, gtk+-3.0, gobject-introspection-1.0
+# Source: https://github.com/Xpra-org/xpra/blob/master/setup.py
+PY3CAIRO_PC_LOCATION=""
+PYGOBJECT_PC_LOCATION=""
+GTK3_PC_LOCATION=""
+GOBJECT_INTROSPECTION_PC_LOCATION=""
+
+# Standard pkg-config directories to search
+PC_SEARCH_DIRS=(
+    "/usr/lib/x86_64-linux-gnu/pkgconfig"
+    "/usr/lib/pkgconfig"
+    "/usr/local/lib/pkgconfig"
+    "/usr/local/share/pkgconfig"
+    "/usr/share/pkgconfig"
+    "/usr/lib/python3/dist-packages/pkgconfig"
+)
+
+# Find py3cairo.pc (provided by python3-cairo-dev)
+for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
+    if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/py3cairo.pc" ]; then
+        PY3CAIRO_PC_LOCATION="${pc_dir}"
+        echo "✓ Found py3cairo.pc at: ${pc_dir}"
+        break
+    fi
+done
+
+# Find pygobject-3.0.pc (provided by python-gi-dev)
+for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
+    if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/pygobject-3.0.pc" ]; then
+        PYGOBJECT_PC_LOCATION="${pc_dir}"
+        echo "✓ Found pygobject-3.0.pc at: ${pc_dir}"
+        break
+    fi
+done
+
+# Find gtk+-3.0.pc (provided by libgtk-3-dev)
+for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
+    if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/gtk+-3.0.pc" ]; then
+        GTK3_PC_LOCATION="${pc_dir}"
+        echo "✓ Found gtk+-3.0.pc at: ${pc_dir}"
+        break
+    fi
+done
+
+# Find gobject-introspection-1.0.pc (provided by gobject-introspection)
+for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
+    if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/gobject-introspection-1.0.pc" ]; then
+        GOBJECT_INTROSPECTION_PC_LOCATION="${pc_dir}"
+        echo "✓ Found gobject-introspection-1.0.pc at: ${pc_dir}"
+        break
+    fi
+done
+
+# If any .pc files not found, search more broadly and reinstall if needed
+if [ -z "${PY3CAIRO_PC_LOCATION:-}" ]; then
+    echo "  Searching for py3cairo.pc in system..."
+    PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 || echo "")
+    if [ -n "${PY3CAIRO_PC_FOUND:-}" ] && [ -f "${PY3CAIRO_PC_FOUND}" ]; then
+        PY3CAIRO_PC_LOCATION=$(dirname "${PY3CAIRO_PC_FOUND}" 2>/dev/null || echo "")
+        if [ -n "${PY3CAIRO_PC_LOCATION:-}" ] && [ -d "${PY3CAIRO_PC_LOCATION}" ]; then
+            echo "✓ Found py3cairo.pc at: ${PY3CAIRO_PC_FOUND}"
+        else
+            echo "⚠ Invalid directory from py3cairo.pc path: ${PY3CAIRO_PC_FOUND}"
+            PY3CAIRO_PC_LOCATION=""
+        fi
+    else
+        echo "⚠ py3cairo.pc not found - attempting to reinstall python3-cairo-dev..."
+        apt-get install -y --reinstall python3-cairo-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+        # Search again after reinstall
+        PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 || echo "")
+        if [ -n "${PY3CAIRO_PC_FOUND:-}" ] && [ -f "${PY3CAIRO_PC_FOUND}" ]; then
+            PY3CAIRO_PC_LOCATION=$(dirname "${PY3CAIRO_PC_FOUND}" 2>/dev/null || echo "")
+            if [ -n "${PY3CAIRO_PC_LOCATION:-}" ] && [ -d "${PY3CAIRO_PC_LOCATION}" ]; then
+                echo "✓ Found py3cairo.pc after reinstall at: ${PY3CAIRO_PC_FOUND}"
+            else
+                PY3CAIRO_PC_LOCATION=""
+            fi
+        fi
+    fi
+fi
+
+# Similar check for pygobject-3.0.pc
+if [ -z "${PYGOBJECT_PC_LOCATION:-}" ]; then
+    echo "  Searching for pygobject-3.0.pc in system..."
+    PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 || echo "")
+    if [ -n "${PYGOBJECT_PC_FOUND:-}" ] && [ -f "${PYGOBJECT_PC_FOUND}" ]; then
+        PYGOBJECT_PC_LOCATION=$(dirname "${PYGOBJECT_PC_FOUND}" 2>/dev/null || echo "")
+        if [ -n "${PYGOBJECT_PC_LOCATION:-}" ] && [ -d "${PYGOBJECT_PC_LOCATION}" ]; then
+            echo "✓ Found pygobject-3.0.pc at: ${PYGOBJECT_PC_FOUND}"
+        else
+            echo "⚠ Invalid directory from pygobject-3.0.pc path: ${PYGOBJECT_PC_FOUND}"
+            PYGOBJECT_PC_LOCATION=""
+        fi
+    else
+        echo "⚠ pygobject-3.0.pc not found - attempting to reinstall python-gi-dev..."
+        apt-get install -y --reinstall python-gi-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+        PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 || echo "")
+        if [ -n "${PYGOBJECT_PC_FOUND:-}" ] && [ -f "${PYGOBJECT_PC_FOUND}" ]; then
+            PYGOBJECT_PC_LOCATION=$(dirname "${PYGOBJECT_PC_FOUND}" 2>/dev/null || echo "")
+            if [ -n "${PYGOBJECT_PC_LOCATION:-}" ] && [ -d "${PYGOBJECT_PC_LOCATION}" ]; then
+                echo "✓ Found pygobject-3.0.pc after reinstall at: ${PYGOBJECT_PC_FOUND}"
+            else
+                PYGOBJECT_PC_LOCATION=""
+            fi
+        fi
+    fi
+fi
+
 # Ensure PKG_CONFIG_PATH includes libxxhash.pc location
 # libxxhash-dev installs .pc file to standard locations, but ensure PKG_CONFIG_PATH is set
 # CRITICAL: Find actual location of libxxhash.pc and add to PKG_CONFIG_PATH
 LIBXXHASH_PC_LOCATION=""
-for pc_dir in /usr/lib/x86_64-linux-gnu/pkgconfig /usr/lib/pkgconfig /usr/local/lib/pkgconfig /usr/share/pkgconfig; do
-    if [ -f "${pc_dir}/libxxhash.pc" ]; then
+for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
+    if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/libxxhash.pc" ]; then
         LIBXXHASH_PC_LOCATION="${pc_dir}"
         echo "✓ Found libxxhash.pc at: ${pc_dir}"
         break
@@ -12050,11 +12183,78 @@ done
 
 # Build comprehensive PKG_CONFIG_PATH with all standard locations
 export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:/usr/share/pkgconfig:${PKG_CONFIG_PATH:-}"
-# Add libxxhash.pc location if found in non-standard location
-if [ -n "${LIBXXHASH_PC_LOCATION}" ] && [[ ":${PKG_CONFIG_PATH}:" != *":${LIBXXHASH_PC_LOCATION}:"* ]]; then
-    export PKG_CONFIG_PATH="${LIBXXHASH_PC_LOCATION}:${PKG_CONFIG_PATH}"
+
+# Add all found .pc file locations to PKG_CONFIG_PATH (avoid duplicates)
+# Note: This function modifies the global PKG_CONFIG_PATH variable (intentional)
+add_to_pkg_config_path() {
+    local pc_location="${1:-}"
+    local current_pkg_config_path="${PKG_CONFIG_PATH:-}"
+    if [ -n "${pc_location:-}" ] && [ -d "${pc_location}" ] && [[ ":${current_pkg_config_path}:" != *":${pc_location}:"* ]]; then
+        export PKG_CONFIG_PATH="${pc_location}:${current_pkg_config_path}"
+        echo "✓ Added to PKG_CONFIG_PATH: ${pc_location}"
+    fi
+}
+
+# Add all found locations
+add_to_pkg_config_path "${PY3CAIRO_PC_LOCATION}"
+add_to_pkg_config_path "${PYGOBJECT_PC_LOCATION}"
+add_to_pkg_config_path "${GTK3_PC_LOCATION}"
+add_to_pkg_config_path "${GOBJECT_INTROSPECTION_PC_LOCATION}"
+add_to_pkg_config_path "${LIBXXHASH_PC_LOCATION}"
+
+echo "==> PKG_CONFIG_PATH configured: ${PKG_CONFIG_PATH}"
+
+# Final verification: Ensure all required pkg-config packages are accessible
+echo "==> Verifying required pkg-config packages for Xpra build..."
+# Initialize array to track missing packages
+MISSING_PKG_CONFIG_PACKAGES=()
+
+if ! pkg-config --exists py3cairo 2>/dev/null; then
+    MISSING_PKG_CONFIG_PACKAGES+=("py3cairo")
+    echo "⚠ WARNING: py3cairo not found in pkg-config"
+    echo "  This is required by Xpra for GTK3 support"
+    if dpkg -l | grep -q "^ii.*python3-cairo-dev"; then
+        echo "  python3-cairo-dev is installed, but py3cairo.pc may be missing"
+        find /usr -name "py3cairo.pc" 2>/dev/null | head -3 || echo "    (py3cairo.pc not found)"
+    fi
+else
+    echo "✓ py3cairo verified accessible via pkg-config"
 fi
-echo "==> PKG_CONFIG_PATH configured for codec libraries: ${PKG_CONFIG_PATH}"
+
+if ! pkg-config --exists pygobject-3.0 2>/dev/null; then
+    MISSING_PKG_CONFIG_PACKAGES+=("pygobject-3.0")
+    echo "⚠ WARNING: pygobject-3.0 not found in pkg-config"
+    echo "  This is required by Xpra for GTK3 support"
+    if dpkg -l | grep -q "^ii.*python-gi-dev"; then
+        echo "  python-gi-dev is installed, but pygobject-3.0.pc may be missing"
+        find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -3 || echo "    (pygobject-3.0.pc not found)"
+    fi
+else
+    echo "✓ pygobject-3.0 verified accessible via pkg-config"
+fi
+
+if ! pkg-config --exists gtk+-3.0 2>/dev/null; then
+    MISSING_PKG_CONFIG_PACKAGES+=("gtk+-3.0")
+    echo "⚠ WARNING: gtk+-3.0 not found in pkg-config"
+    echo "  This is required by Xpra for GTK3 support"
+else
+    echo "✓ gtk+-3.0 verified accessible via pkg-config"
+fi
+
+if ! pkg-config --exists gobject-introspection-1.0 2>/dev/null; then
+    MISSING_PKG_CONFIG_PACKAGES+=("gobject-introspection-1.0")
+    echo "⚠ WARNING: gobject-introspection-1.0 not found in pkg-config"
+    echo "  This is required by Xpra for GTK3 support"
+else
+    echo "✓ gobject-introspection-1.0 verified accessible via pkg-config"
+fi
+
+if [ "${#MISSING_PKG_CONFIG_PACKAGES[@]}" -gt 0 ]; then
+    echo "⚠ WARNING: Missing pkg-config packages: ${MISSING_PKG_CONFIG_PACKAGES[*]}"
+    echo "  Xpra installation may fail. Please ensure all dependencies are installed."
+else
+    echo "✓ All required pkg-config packages verified"
+fi
 
 # Verify codec libraries are available for wheel build
 echo "==> Verifying codec library availability..."
@@ -12063,7 +12263,7 @@ pkg-config --exists vpx && echo "✓ vpx found" || echo "⚠ vpx not found in pk
 if pkg-config --exists libxxhash 2>/dev/null; then
     echo "✓ libxxhash found in pkg-config"
     LIBXXHASH_VERSION=$(pkg-config --modversion libxxhash 2>/dev/null || echo "unknown")
-    echo "  libxxhash version: ${LIBXXHASH_VERSION}"
+    echo "  libxxhash version: ${LIBXXHASH_VERSION:-unknown}"
 else
     echo "⚠ libxxhash not found in pkg-config"
     echo "  Searching for libxxhash.pc file..."
