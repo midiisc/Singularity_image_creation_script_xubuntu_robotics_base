@@ -727,37 +727,190 @@ echo -e "${BLUE}[Step 3] Detecting CUDA version...${NC}"
 
 detect_cuda() {
     local cuda_full=""
+    local cuda_home_found=""
+    local nvcc_path=""
+    local cuda_dir=""
+    local cuda_lib=""
+    local cuda_dir_from_lib=""
     
+    # Method 1: Check if nvcc is in PATH (most reliable - means toolkit is installed)
     if command -v nvcc &> /dev/null; then
-        cuda_full=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/')
-        if [ -n "${cuda_full:-}" ]; then
-            echo "  Detected CUDA via nvcc: ${cuda_full}"
-            echo "${cuda_full}"
-            return 0
+        nvcc_path=$(command -v nvcc)
+        if [ -n "${nvcc_path:-}" ] && [ -x "${nvcc_path}" ]; then
+            cuda_full=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+            if [ -n "${cuda_full:-}" ]; then
+                echo "  Detected CUDA via nvcc: ${cuda_full}" >&2
+                # Get CUDA_HOME from nvcc path (nvcc is typically in bin/, so go up two levels)
+                cuda_home_found=$(dirname "$(dirname "${nvcc_path}")")
+                if [ -n "${cuda_home_found:-}" ] && [ -d "${cuda_home_found}" ]; then
+                    echo "${cuda_full}|${cuda_home_found}"
+                    return 0
+                fi
+            fi
         fi
     fi
     
-    local cuda_lib
-    cuda_lib=$(find /usr/local/cuda-*/lib64/libcudart.so* 2>/dev/null | head -1)
-    if [ -n "${cuda_lib:-}" ]; then
+    # Method 2: Check CUDA_HOME environment variable
+    if [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
+        if [ -f "${CUDA_HOME}/bin/nvcc" ] && [ -x "${CUDA_HOME}/bin/nvcc" ]; then
+            cuda_full=$("${CUDA_HOME}/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+            if [ -z "${cuda_full:-}" ] && [ -f "${CUDA_HOME}/version.txt" ]; then
+                # Use portable sed instead of grep -oP (Perl regex not available on all systems)
+                cuda_full=$(grep "CUDA Version" "${CUDA_HOME}/version.txt" 2>/dev/null | sed -n 's/.*CUDA Version \([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+            fi
+            if [ -n "${cuda_full:-}" ]; then
+                echo "  Detected CUDA via CUDA_HOME: ${cuda_full}" >&2
+                echo "${cuda_full}|${CUDA_HOME}"
+                return 0
+            fi
+        fi
+    fi
+    
+    # Method 3: Check common CUDA installation paths
+    # Use nullglob to handle case where glob doesn't match
+    shopt -s nullglob 2>/dev/null || true
+    for cuda_dir in /usr/local/cuda-* /usr/local/cuda; do
+        if [ -d "${cuda_dir}" ] && [ -f "${cuda_dir}/bin/nvcc" ] && [ -x "${cuda_dir}/bin/nvcc" ]; then
+            # Try to get version from nvcc
+            cuda_full=$("${cuda_dir}/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+            if [ -z "${cuda_full:-}" ] && [ -f "${cuda_dir}/version.txt" ]; then
+                # Use portable sed instead of grep -oP
+                cuda_full=$(grep "CUDA Version" "${cuda_dir}/version.txt" 2>/dev/null | sed -n 's/.*CUDA Version \([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+            fi
+            if [ -z "${cuda_full:-}" ]; then
+                # Extract version from directory name
+                cuda_full=$(echo "${cuda_dir}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
+            fi
+            if [ -n "${cuda_full:-}" ]; then
+                echo "  Detected CUDA via installation path: ${cuda_full}" >&2
+                echo "${cuda_full}|${cuda_dir}"
+                shopt -u nullglob 2>/dev/null || true
+                return 0
+            fi
+        fi
+    done
+    shopt -u nullglob 2>/dev/null || true
+    
+    # Method 4: Check for CUDA libraries (less reliable - might be runtime only)
+    # Use find with proper error handling
+    cuda_lib=$(find /usr/local/cuda-*/lib64/libcudart.so* 2>/dev/null | head -1 || echo "")
+    if [ -n "${cuda_lib:-}" ] && [ -f "${cuda_lib}" ]; then
         cuda_full=$(echo "${cuda_lib}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
         if [ -n "${cuda_full:-}" ]; then
-            echo "  Detected CUDA via library path: ${cuda_full}"
-            echo "${cuda_full}"
-            return 0
+            # Go up three directory levels: lib64 -> lib -> cuda-X.Y -> /usr/local
+            cuda_dir_from_lib=$(dirname "$(dirname "$(dirname "${cuda_lib}")")")
+            if [ -n "${cuda_dir_from_lib:-}" ] && [ -d "${cuda_dir_from_lib}" ]; then
+                echo "  Detected CUDA via library path: ${cuda_full}" >&2
+                echo "  ⚠ WARNING: CUDA libraries found but nvcc not in PATH" >&2
+                echo "  ⚠ This may indicate CUDA runtime is installed but toolkit is missing" >&2
+                echo "${cuda_full}|${cuda_dir_from_lib}"
+                return 0
+            fi
         fi
     fi
     
-    echo "unknown"
+    echo "unknown|"
     return 1
 }
 
-CUDA_VERSION=$(detect_cuda)
+CUDA_DETECTION=$(detect_cuda)
+CUDA_VERSION=$(echo "${CUDA_DETECTION}" | cut -d'|' -f1)
+CUDA_HOME_DETECTED=$(echo "${CUDA_DETECTION}" | cut -d'|' -f2)
+
+# Validate CUDA detection result
+if [ "${CUDA_VERSION}" = "unknown" ] || [ -z "${CUDA_VERSION:-}" ]; then
+    echo -e "${RED}✗ ERROR: CUDA toolkit not found${NC}"
+    echo ""
+    echo "  CUDA toolkit is required for PyTorch GPU support."
+    echo "  Please install CUDA toolkit:"
+    echo "    1. Download from: https://developer.nvidia.com/cuda-downloads"
+    echo "    2. Or install via package manager (Ubuntu/Debian):"
+    echo "       sudo apt-get install nvidia-cuda-toolkit"
+    echo ""
+    echo "  After installation, ensure:"
+    echo "    - nvcc is in PATH: command -v nvcc"
+    echo "    - CUDA_HOME is set (or /usr/local/cuda exists)"
+    echo ""
+    exit 1
+fi
+
+# Validate CUDA_VERSION format (should be X.Y where X and Y are digits)
+if ! echo "${CUDA_VERSION}" | grep -qE '^[0-9]+\.[0-9]+$'; then
+    echo -e "${RED}✗ ERROR: Invalid CUDA version format: ${CUDA_VERSION}${NC}"
+    echo "  Expected format: X.Y (e.g., 12.1)"
+    exit 1
+fi
+
+# Extract CUDA major version with validation
 CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
+if [ -z "${CUDA_MAJOR:-}" ] || ! echo "${CUDA_MAJOR}" | grep -qE '^[0-9]+$'; then
+    echo -e "${RED}✗ ERROR: Could not extract CUDA major version from: ${CUDA_VERSION}${NC}"
+    exit 1
+fi
 # CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)  # Not used elsewhere, removed to avoid unused variable warning
 
-if [ "${CUDA_MAJOR}" = "12" ]; then
-    echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}\n"
+# Set CUDA_HOME based on detected version
+# Validate CUDA_HOME_DETECTED before using it
+if [ -n "${CUDA_HOME_DETECTED:-}" ] && [ -d "${CUDA_HOME_DETECTED}" ]; then
+    export CUDA_HOME="${CUDA_HOME_DETECTED}"
+elif [ -n "${CUDA_VERSION:-}" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
+    export CUDA_HOME="/usr/local/cuda-${CUDA_VERSION}"
+elif [ -d "/usr/local/cuda" ]; then
+    export CUDA_HOME="/usr/local/cuda"
+fi
+
+# Set CUDA paths if CUDA_HOME is set
+if [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
+    # Safely update PATH - handle case where PATH might be unset
+    if [ -n "${PATH:-}" ]; then
+        export PATH="${CUDA_HOME}/bin:${PATH}"
+    else
+        export PATH="${CUDA_HOME}/bin"
+    fi
+    
+    # Safely update LD_LIBRARY_PATH
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+    else
+        export LD_LIBRARY_PATH="${CUDA_HOME}/lib64"
+    fi
+    
+    # Verify nvcc is accessible
+    if [ -f "${CUDA_HOME}/bin/nvcc" ] && [ -x "${CUDA_HOME}/bin/nvcc" ]; then
+        export CMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc"
+        echo "  CUDA_HOME: ${CUDA_HOME}"
+        echo "  CMAKE_CUDA_COMPILER: ${CMAKE_CUDA_COMPILER}"
+        
+        # Verify nvcc works
+        if ! "${CMAKE_CUDA_COMPILER}" --version &>/dev/null; then
+            echo -e "${RED}✗ ERROR: nvcc found but not working${NC}"
+            echo "  Please verify CUDA toolkit installation"
+            exit 1
+        fi
+    else
+        echo -e "${RED}✗ ERROR: nvcc not found or not executable at ${CUDA_HOME}/bin/nvcc${NC}"
+        echo "  CUDA toolkit may be incomplete. Please reinstall."
+        exit 1
+    fi
+else
+    echo -e "${RED}✗ ERROR: CUDA_HOME could not be determined${NC}"
+    echo "  Detected CUDA version: ${CUDA_VERSION:-unknown}"
+    echo "  Please set CUDA_HOME environment variable or ensure CUDA is installed in /usr/local/cuda"
+    exit 1
+fi
+
+# Final verification: Check nvcc is in PATH and working
+if ! command -v nvcc &> /dev/null; then
+    echo -e "${RED}✗ ERROR: nvcc not found in PATH after setting CUDA_HOME${NC}"
+    echo "  CUDA_HOME: ${CUDA_HOME:-not set}"
+    echo "  PATH: ${PATH:-not set}"
+    exit 1
+fi
+
+# Display CUDA version
+echo "  CUDA version: ${CUDA_VERSION}"
+if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "12" ]; then
+    echo -e "${GREEN}✓ CUDA ${CUDA_VERSION} toolkit detected and verified${NC}\n"
 else
     echo -e "${YELLOW}⚠ CUDA ${CUDA_VERSION} detected (expected 12.x)${NC}\n"
 fi
@@ -795,11 +948,27 @@ export USE_CUDNN=1
 export TORCH_CUDA_ARCH_LIST="${CUDA_ARCH_LIST}"  # Format: "8.6;8.9;9.0"
 export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}"  # Format: "86;89;90"
 
-# CUDA paths (if non-standard)
-if [ -n "${CUDA_HOME:-}" ]; then
-    export CUDA_HOME="${CUDA_HOME}"
-    export PATH="${CUDA_HOME}/bin:${PATH}"
-    export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+# CUDA paths are already set above in Step 3
+# This section is kept for backward compatibility if CUDA_HOME was set externally
+if [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
+    # Safely update PATH
+    if [ -n "${PATH:-}" ]; then
+        export PATH="${CUDA_HOME}/bin:${PATH}"
+    else
+        export PATH="${CUDA_HOME}/bin"
+    fi
+    
+    # Safely update LD_LIBRARY_PATH
+    if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+        export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
+    else
+        export LD_LIBRARY_PATH="${CUDA_HOME}/lib64"
+    fi
+    
+    # Ensure CMAKE_CUDA_COMPILER is set
+    if [ -z "${CMAKE_CUDA_COMPILER:-}" ] && [ -f "${CUDA_HOME}/bin/nvcc" ] && [ -x "${CUDA_HOME}/bin/nvcc" ]; then
+        export CMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc"
+    fi
 fi
 
 # Build configuration
@@ -883,6 +1052,12 @@ echo "    USE_CUDA=1 (CUDA enabled)"
 echo "    USE_CUDNN=1 (cuDNN enabled)"
 echo "    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 echo "    CMAKE_CUDA_ARCHITECTURES=${CMAKE_CUDA_ARCHITECTURES}"
+if [ -n "${CUDA_HOME:-}" ]; then
+    echo "    CUDA_HOME=${CUDA_HOME}"
+fi
+if [ -n "${CMAKE_CUDA_COMPILER:-}" ]; then
+    echo "    CMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}"
+fi
 echo "    CMAKE_BUILD_TYPE=Release"
 echo "    BUILD_TEST=0 (tests skipped)"
 echo "    USE_OPENMP=1 (OpenMP enabled)"
@@ -1142,25 +1317,62 @@ else
 fi
 
 # Install PyTorch build dependencies
+# IMPORTANT: PyTorch does NOT require TensorFlow or Keras for building
+# These may appear in requirements.txt for testing/CI but are NOT build dependencies
+# We install only the minimal dependencies needed for compilation
+echo "  Installing minimal PyTorch build dependencies..."
+echo "  Note: PyTorch is independent of TensorFlow/Keras - these are NOT required for building"
+echo "  Note: Installing only core build dependencies to avoid conflicts"
+
+# Core build dependencies for PyTorch (minimal set required for compilation)
+# These are the actual dependencies needed by PyTorch's setup.py
+CORE_BUILD_DEPS="numpy ninja pyyaml setuptools wheel cmake typing-extensions filelock networkx sympy"
+
+if [ -n "${pip_flags}" ]; then
+    # Install core dependencies with --ignore-installed to handle version conflicts gracefully
+    # This allows pip to install needed versions even if system packages exist
+    python3 -m pip install --no-cache-dir --ignore-installed ${pip_flags} \
+        ${CORE_BUILD_DEPS} 2>&1 | \
+        grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|^ERROR.*tensorflow|^ERROR.*keras" || {
+        echo "  ⚠ Some packages may have installation issues (non-fatal)"
+        echo "  Continuing with build - PyTorch setup.py will handle missing optional dependencies"
+    }
+else
+    python3 -m pip install --no-cache-dir --ignore-installed \
+        ${CORE_BUILD_DEPS} 2>&1 | \
+        grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|^ERROR.*tensorflow|^ERROR.*keras" || {
+        echo "  ⚠ Some packages may have installation issues (non-fatal)"
+        echo "  Continuing with build - PyTorch setup.py will handle missing optional dependencies"
+    }
+fi
+
+# Optional: Try to install from requirements.txt if it exists, but filter out problematic packages
+# This is for optional dependencies that might be useful but aren't required
 if [ -f "requirements.txt" ]; then
-    echo "  Installing PyTorch build dependencies from requirements.txt..."
-    if [ -n "${pip_flags}" ]; then
-        python3 -m pip install --no-cache-dir ${pip_flags} \
-            -r requirements.txt 2>&1 | \
-            grep -v "^Requirement\|^Collecting\|^Using\|^Already\|^WARNING" || {
-            echo "  ⚠ Some requirements.txt packages may have failed (non-fatal)"
-        }
-    else
-        python3 -m pip install --no-cache-dir \
-            -r requirements.txt 2>&1 | \
-            grep -v "^Requirement\|^Collecting\|^Using\|^Already\|^WARNING" || {
-            echo "  ⚠ Some requirements.txt packages may have failed (non-fatal)"
-        }
-    fi
+    echo "  Attempting to install optional dependencies from requirements.txt (filtered)..."
+    FILTERED_REQUIREMENTS="${BUILD_DIR}/requirements_filtered.txt"
+    # Filter out TensorFlow/Keras (not needed) and packages with apt-style versions
+    grep -vE "^(tensorflow|tf-keras|keras|devscripts)" requirements.txt > "${FILTERED_REQUIREMENTS}" 2>/dev/null || true
+    
+    if [ -f "${FILTERED_REQUIREMENTS}" ] && [ -s "${FILTERED_REQUIREMENTS}" ]; then
+        # Try installing filtered requirements, but don't fail if it doesn't work
+        if [ -n "${pip_flags}" ]; then
+            python3 -m pip install --no-cache-dir --ignore-installed ${pip_flags} \
+                -r "${FILTERED_REQUIREMENTS}" 2>&1 | \
+                grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version" || true
+        else
+            python3 -m pip install --no-cache-dir --ignore-installed \
+                -r "${FILTERED_REQUIREMENTS}" 2>&1 | \
+                grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version" || true
+        fi
     fi
     
-    echo -e "${GREEN}✓ Build dependencies installed${NC}\n"
-    save_build_state "dependencies_installed"
+    # Clean up filtered requirements file
+    rm -f "${FILTERED_REQUIREMENTS}"
+fi
+
+echo -e "${GREEN}✓ Build dependencies installed${NC}\n"
+save_build_state "dependencies_installed"
 fi
 
 #===============================================================================
