@@ -231,18 +231,18 @@ fi
 #===============================================================================
 # Check if we should run inside Singularity container
 #===============================================================================
-if [ "$RUN_INSIDE_CONTAINER" = true ]; then
-    if [ -z "$IMAGE_PATH" ]; then
+if [ "${RUN_INSIDE_CONTAINER}" = true ]; then
+    if [ -z "${IMAGE_PATH:-}" ]; then
         echo -e "${RED}Error: --image is required when using --overlay${NC}"
         exit 1
     fi
     
-    if [ ! -f "$IMAGE_PATH" ]; then
+    if [ ! -f "${IMAGE_PATH}" ]; then
         echo -e "${RED}Error: Image file not found: ${IMAGE_PATH}${NC}"
         exit 1
     fi
     
-    if [ -n "$OVERLAY_PATH" ] && [ ! -f "$OVERLAY_PATH" ]; then
+    if [ -n "${OVERLAY_PATH:-}" ] && [ ! -f "${OVERLAY_PATH}" ]; then
         echo -e "${RED}Error: Overlay file not found: ${OVERLAY_PATH}${NC}"
         exit 1
     fi
@@ -266,11 +266,11 @@ if [ "$RUN_INSIDE_CONTAINER" = true ]; then
     
     # Build Singularity command
     SINGULARITY_OPTS=("exec")
-    if [ "$USE_GPU" = true ]; then
+    if [ "${USE_GPU}" = true ]; then
         SINGULARITY_OPTS+=("--nv")
     fi
-    if [ -n "$OVERLAY_PATH" ]; then
-        OVERLAY_ABS="$(cd "$(dirname "$OVERLAY_PATH")" && pwd)/$(basename "$OVERLAY_PATH")"
+    if [ -n "${OVERLAY_PATH:-}" ]; then
+        OVERLAY_ABS="$(cd "$(dirname "${OVERLAY_PATH}")" && pwd)/$(basename "${OVERLAY_PATH}")"
         SINGULARITY_OPTS+=("--overlay" "${OVERLAY_ABS}:rw")
     fi
     
@@ -283,10 +283,10 @@ if [ "$RUN_INSIDE_CONTAINER" = true ]; then
     echo -e "${BLUE}========================================${NC}\n"
     echo -e "${GREEN}Configuration:${NC}"
     echo "  Image:  ${IMAGE_PATH}"
-    if [ -n "$OVERLAY_PATH" ]; then
+    if [ -n "${OVERLAY_PATH:-}" ]; then
         echo "  Overlay: ${OVERLAY_PATH}"
     fi
-    if [ "$USE_GPU" = true ]; then
+    if [ "${USE_GPU}" = true ]; then
         echo "  GPU:    Enabled"
     fi
     echo ""
@@ -401,7 +401,7 @@ calculate_build_jobs() {
     # Use 20% of cores (more conservative) to prevent overload and system freezes
     local jobs_by_cpu
     jobs_by_cpu=$((cpu_cores / 5))
-    if [ "$jobs_by_cpu" -lt 1 ]; then
+    if [ "${jobs_by_cpu:-0}" -lt 1 ]; then
         jobs_by_cpu=1
     fi
     
@@ -415,7 +415,7 @@ calculate_build_jobs() {
         mem_per_job_gb=4  # Default minimum
     fi
     jobs_by_mem=$((mem_for_build / mem_per_job_gb))
-    if [ "$jobs_by_mem" -lt 1 ]; then
+    if [ "${jobs_by_mem:-0}" -lt 1 ]; then
         jobs_by_mem=1
     fi
     
@@ -425,47 +425,47 @@ calculate_build_jobs() {
     if [ "${disk_type}" = "SSD" ]; then
         # SSDs can handle more parallel I/O
         jobs_by_io=$((cpu_cores / 3))  # More aggressive for SSDs
-        if [ "$jobs_by_io" -gt 6 ]; then
+        if [ "${jobs_by_io:-0}" -gt 6 ]; then
             jobs_by_io=6  # Cap at 6 for SSDs
         fi
     elif [ "${disk_type}" = "HDD" ]; then
         # HDDs need more conservative limits
         jobs_by_io=$((cpu_cores / 5))  # More conservative for HDDs
-        if [ "$jobs_by_io" -gt 3 ]; then
+        if [ "${jobs_by_io:-0}" -gt 3 ]; then
             jobs_by_io=3  # Cap at 3 for HDDs
         fi
     else
         # Unknown disk type - be conservative
         jobs_by_io=$((cpu_cores / 4))
-        if [ "$jobs_by_io" -gt 4 ]; then
+        if [ "${jobs_by_io:-0}" -gt 4 ]; then
             jobs_by_io=4
         fi
     fi
-    if [ "$jobs_by_io" -lt 1 ]; then
+    if [ "${jobs_by_io:-0}" -lt 1 ]; then
         jobs_by_io=1
     fi
     
     # Use the minimum of all three (most conservative)
     local jobs
-    jobs=$jobs_by_cpu
-    if [ "$jobs_by_mem" -lt "$jobs" ]; then
-        jobs=$jobs_by_mem
+    jobs="${jobs_by_cpu}"
+    if [ "${jobs_by_mem:-0}" -lt "${jobs:-0}" ]; then
+        jobs="${jobs_by_mem}"
     fi
-    if [ "$jobs_by_io" -lt "$jobs" ]; then
-        jobs=$jobs_by_io
+    if [ "${jobs_by_io:-0}" -lt "${jobs:-0}" ]; then
+        jobs="${jobs_by_io}"
     fi
     
     # Ensure at least 1 job
-    if [ "$jobs" -lt 1 ]; then
+    if [ "${jobs:-0}" -lt 1 ]; then
         jobs=1
     fi
     
     # Allow override via environment variable
     if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        jobs=$BUILD_JOBS_OVERRIDE
+        jobs="${BUILD_JOBS_OVERRIDE}"
     fi
     
-    echo "$jobs"
+    echo "${jobs}"
 }
 
 # Calculate dynamic resource thresholds based on system capabilities
@@ -475,14 +475,10 @@ calculate_resource_thresholds() {
     local mem_available_gb="${SYS_MEM_AVAILABLE_GB:-4}"
     local swap_total_gb="${SYS_SWAP_TOTAL_GB:-0}"
     
-    # Critical memory threshold: 10% of total RAM or 1.5GB, whichever is larger (more conservative)
+    # Critical memory threshold: 10% of total RAM or 1GB, whichever is larger (more conservative)
     # This ensures more headroom to prevent system freezes
     local critical_mem_gb
     critical_mem_gb=$((mem_total_gb * 10 / 100))
-    if [ "${critical_mem_gb}" -lt 1 ]; then
-        critical_mem_gb=1
-    fi
-    # Ensure at least 1.5GB for safety
     if [ "${critical_mem_gb}" -lt 1 ]; then
         critical_mem_gb=1
     fi
@@ -699,7 +695,7 @@ echo ""
 echo -e "${BLUE}[Step 1] Installing prerequisites and verifying performance libraries...${NC}"
 
 # Check if running as root (for apt-get install)
-if [ "$EUID" -eq 0 ]; then
+if [ "${EUID:-0}" -eq 0 ]; then
     APT_CMD="apt-get"
 else
     APT_CMD="sudo apt-get"
@@ -803,67 +799,129 @@ filter_pip_output() {
     grep -vE "^Requirement|^Collecting|^Using|^Already|^WARNING|^ERROR.*devscripts|Invalid version|parsing dependencies|^ERROR.*tensorflow|^ERROR.*keras|Error parsing dependencies|Error parsing dependencies of" 2>/dev/null || true
 }
 
-# Function to check CMake version available in Ubuntu repositories
-# Queries packages.ubuntu.com for the specific Ubuntu version
+# Function to check CMake version available in Ubuntu repositories using apt-cache
+# This is more reliable than web scraping and works offline if package lists are updated
 check_ubuntu_cmake_version() {
-    local ubuntu_codename=""
     local cmake_version=""
-    local url=""
-    local curl_output=""
+    local apt_output=""
     
-    # Detect Ubuntu version
-    if [ -f /etc/os-release ]; then
-        # Source os-release safely (may contain variables)
-        . /etc/os-release
-        if [ -n "${UBUNTU_CODENAME:-}" ]; then
-            ubuntu_codename="${UBUNTU_CODENAME}"
-        elif [ -n "${VERSION_CODENAME:-}" ]; then
-            ubuntu_codename="${VERSION_CODENAME}"
+    echo "  Checking CMake version in Ubuntu repositories (using apt-cache)..." >&2
+    
+    # Method 1: Use apt-cache policy (most reliable, shows candidate version)
+    if command -v apt-cache &>/dev/null 2>&1; then
+        apt_output=$(apt-cache policy cmake 2>/dev/null || echo "")
+        if [ -n "${apt_output:-}" ]; then
+            # Extract candidate version (highest available in repos)
+            cmake_version=$(echo "${apt_output}" | \
+                grep -E "^\s+Candidate:" | \
+                sed -n 's/.*Candidate:\s*\([0-9]\+\.[0-9]\+\.[0-9]\+\)[^0-9].*/\1/p' | \
+                head -1 || echo "")
+            
+            # If candidate not found, try installed version line
+            if [ -z "${cmake_version:-}" ]; then
+                cmake_version=$(echo "${apt_output}" | \
+                    grep -E "^\s+Installed:" | \
+                    sed -n 's/.*Installed:\s*\([0-9]\+\.[0-9]\+\.[0-9]\+\)[^0-9].*/\1/p' | \
+                    head -1 || echo "")
+            fi
         fi
     fi
     
-    if [ -z "${ubuntu_codename:-}" ]; then
-        echo ""
-        return 1
+    # Method 2: Fallback to apt-cache show (alternative method)
+    if [ -z "${cmake_version:-}" ] && command -v apt-cache &>/dev/null 2>&1; then
+        apt_output=$(apt-cache show cmake 2>/dev/null | grep -E "^Version:" | head -1 || echo "")
+        if [ -n "${apt_output:-}" ]; then
+            # Extract version (format: Version: 3.22.1-1ubuntu1)
+            cmake_version=$(echo "${apt_output}" | \
+                sed -n 's/^Version:\s*\([0-9]\+\.[0-9]\+\.[0-9]\+\)[^0-9].*/\1/p' | \
+                head -1 || echo "")
+        fi
     fi
     
-    # Validate codename (should be lowercase alphanumeric with hyphens)
-    if ! echo "${ubuntu_codename}" | grep -qE '^[a-z0-9-]+$'; then
-        echo "  ⚠ Invalid Ubuntu codename: ${ubuntu_codename}" >&2
-        echo ""
-        return 1
-    fi
-    
-    # Query packages.ubuntu.com for cmake version
-    # URL format: https://packages.ubuntu.com/{codename}/cmake
-    url="https://packages.ubuntu.com/${ubuntu_codename}/cmake"
-    echo "  Checking CMake version in Ubuntu ${ubuntu_codename} repositories..." >&2
-    
-    # Use portable sed instead of grep -oP (Perl regex not available on all systems)
-    curl_output=$(curl -s "${url}" 2>/dev/null || echo "")
-    if [ -n "${curl_output:-}" ]; then
-        # Extract version using portable sed (look for "Version: X.Y.Z" pattern)
-        cmake_version=$(echo "${curl_output}" | \
-            grep -i "version:" | \
-            sed -n 's/.*Version:\s*\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p' | \
-            head -1 || echo "")
+    # Method 3: Try dpkg if package is installed (last resort)
+    if [ -z "${cmake_version:-}" ] && command -v dpkg &>/dev/null 2>&1; then
+        apt_output=$(dpkg -l cmake 2>/dev/null | grep -E "^ii" | head -1 || echo "")
+        if [ -n "${apt_output:-}" ]; then
+            # Extract version from dpkg output (format: ii  cmake  3.22.1-1ubuntu1  ...)
+            cmake_version=$(echo "${apt_output}" | \
+                awk '{print $3}' | \
+                sed -n 's/\([0-9]\+\.[0-9]\+\.[0-9]\+\)[^0-9].*/\1/p' | \
+                head -1 || echo "")
+        fi
     fi
     
     if [ -n "${cmake_version:-}" ]; then
         # Validate version format
         if echo "${cmake_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "  Found CMake ${cmake_version} in Ubuntu ${ubuntu_codename} repositories" >&2
+            echo "  Found CMake ${cmake_version} in Ubuntu repositories" >&2
             echo "${cmake_version}"
             return 0
         else
-            echo "  ⚠ Invalid version format from packages.ubuntu.com: ${cmake_version}" >&2
+            echo "  ⚠ Invalid version format from apt-cache: ${cmake_version}" >&2
             echo ""
             return 1
         fi
     else
-        echo "  Could not determine CMake version from packages.ubuntu.com" >&2
+        echo "  Could not determine CMake version from apt-cache" >&2
+        echo "  This may mean cmake package is not in configured repositories" >&2
         echo ""
         return 1
+    fi
+}
+
+# Function to check installed CMake version
+check_installed_cmake_version() {
+    local cmake_version=""
+    
+    if command -v cmake &>/dev/null 2>&1; then
+        # Get version from cmake --version (most reliable)
+        cmake_version=$(cmake --version 2>/dev/null | head -1 | \
+            sed -n 's/.*version\s\+\([0-9]\+\.[0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+        
+        # Validate version format
+        if [ -n "${cmake_version:-}" ] && echo "${cmake_version}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "${cmake_version}"
+            return 0
+        fi
+    fi
+    
+    echo ""
+    return 1
+}
+
+# Function to check CMake build dependencies
+check_cmake_build_dependencies() {
+    local missing_deps=()
+    local dep=""
+    
+    echo "  Checking CMake build dependencies..." >&2
+    
+    # Required dependencies for building CMake from source
+    local required_deps=(
+        "build-essential"
+        "libssl-dev"
+        "libncurses5-dev"
+        "libncursesw5-dev"
+        "wget"
+        "curl"
+        "tar"
+        "gzip"
+    )
+    
+    for dep in "${required_deps[@]}"; do
+        if ! dpkg -l | grep -qE "^ii\s+${dep}\s"; then
+            missing_deps+=("${dep}")
+        fi
+    done
+    
+    if [ ${#missing_deps[@]} -gt 0 ]; then
+        echo "  Missing dependencies: ${missing_deps[*]}" >&2
+        echo "${missing_deps[*]}"
+        return 1
+    else
+        echo "  ✓ All CMake build dependencies available" >&2
+        echo ""
+        return 0
     fi
 }
 
@@ -910,20 +968,20 @@ UBUNTU_CMAKE_VERSION=$(check_ubuntu_cmake_version)
 # Initialize NEED_UPGRADE flag
 NEED_UPGRADE=false
 
-if command -v cmake &>/dev/null; then
-    CMAKE_VERSION=$(cmake --version 2>/dev/null | head -1 | sed 's/.*version \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
-    if [ -n "${CMAKE_VERSION:-}" ]; then
-        CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1)
-        CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2)
-        echo "  Found CMake ${CMAKE_VERSION} installed"
-        
-        # Validate version components are numeric
-        if [ -z "${CMAKE_MAJOR:-}" ] || [ -z "${CMAKE_MINOR:-}" ] || \
-           ! echo "${CMAKE_MAJOR}" | grep -qE '^[0-9]+$' || \
-           ! echo "${CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
-            NEED_UPGRADE=true
-            echo "  ⚠ Could not parse CMake version, will upgrade"
-        else
+# Use installed version if available, otherwise use empty
+if [ -n "${INSTALLED_CMAKE_VERSION:-}" ]; then
+    CMAKE_VERSION="${INSTALLED_CMAKE_VERSION}"
+    CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1 || echo "")
+    CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2 || echo "")
+    echo "  Found CMake ${CMAKE_VERSION} installed"
+    
+    # Validate version components are numeric
+    if [ -z "${CMAKE_MAJOR:-}" ] || [ -z "${CMAKE_MINOR:-}" ] || \
+       ! echo "${CMAKE_MAJOR}" | grep -qE '^[0-9]+$' || \
+       ! echo "${CMAKE_MINOR}" | grep -qE '^[0-9]+$'; then
+        NEED_UPGRADE=true
+        echo "  ⚠ Could not parse CMake version, will upgrade"
+    else
             # Compare against required version (dynamic based on PyTorch version)
             REQUIRED_CMAKE_MAJOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f1)
             REQUIRED_CMAKE_MINOR=$(echo "${CMAKE_REQUIRED_VERSION}" | cut -d. -f2)
@@ -941,16 +999,27 @@ if command -v cmake &>/dev/null; then
                 NEED_UPGRADE=true
                 echo "  ⚠ Could not parse required CMake version"
             fi
-        fi
-        
-        if [ "${NEED_UPGRADE}" = true ]; then
-            if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
-                echo "    Ubuntu repo has ${UBUNTU_CMAKE_VERSION}, will try alternative installation methods"
-            fi
-        fi
-        
-        if [ "${NEED_UPGRADE}" = true ]; then
-            echo "  Upgrading CMake to meet PyTorch requirements..."
+    fi
+else
+    echo "  CMake not found in PATH"
+    NEED_UPGRADE=true
+fi
+
+if [ "${NEED_UPGRADE}" = true ]; then
+    if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
+        echo "    Ubuntu repo has ${UBUNTU_CMAKE_VERSION}, will try alternative installation methods"
+    fi
+    
+    # Check build dependencies before attempting compilation
+    MISSING_DEPS=$(check_cmake_build_dependencies)
+    if [ -n "${MISSING_DEPS:-}" ]; then
+        echo "  Installing missing CMake build dependencies..."
+        ${APT_CMD} install -y -qq ${MISSING_DEPS} || {
+            echo -e "${YELLOW}⚠ Some dependencies failed to install, compilation may fail${NC}"
+        }
+    fi
+    
+    echo "  Upgrading CMake to meet PyTorch requirements..."
             
             # Method 1: Try installing cmake from pip (usually has latest version)
             echo "  Attempting to install CMake via pip..."
@@ -1054,19 +1123,46 @@ if command -v cmake &>/dev/null; then
                 fi
             fi
             
-            # Method 3: Compile CMake from source (last resort for Ubuntu 22.04)
+            # Method 3: Compile CMake from source (last resort)
             if [ "${NEED_UPGRADE}" = true ]; then
                 echo "  Attempting to compile CMake from source (this may take 10-30 minutes)..."
-                echo "  Note: Ubuntu 22.04 only has CMake 3.22.1 in default repos, compiling 3.27+ from source"
+                if [ -n "${UBUNTU_CMAKE_VERSION:-}" ]; then
+                    echo "  Note: Ubuntu repository has CMake ${UBUNTU_CMAKE_VERSION}, but ${CMAKE_REQUIRED_VERSION} is required"
+                else
+                    echo "  Note: CMake not found in repositories, compiling from source"
+                fi
+                
+                # Verify build dependencies are available
+                MISSING_BUILD_DEPS=$(check_cmake_build_dependencies)
+                if [ -n "${MISSING_BUILD_DEPS:-}" ]; then
+                    echo "  Installing missing build dependencies: ${MISSING_BUILD_DEPS}"
+                    ${APT_CMD} install -y -qq ${MISSING_BUILD_DEPS} || {
+                        echo -e "${RED}✗ ERROR: Failed to install CMake build dependencies${NC}"
+                        echo "  Missing: ${MISSING_BUILD_DEPS}"
+                        echo "  Please install manually: ${APT_CMD} install -y ${MISSING_BUILD_DEPS}"
+                        exit 1
+                    }
+                    # Re-check after installation
+                    MISSING_BUILD_DEPS=$(check_cmake_build_dependencies)
+                    if [ -n "${MISSING_BUILD_DEPS:-}" ]; then
+                        echo -e "${RED}✗ ERROR: Some dependencies still missing after installation${NC}"
+                        echo "  Missing: ${MISSING_BUILD_DEPS}"
+                        exit 1
+                    fi
+                fi
                 
                 # Check if we have a bootstrap cmake (needed to build cmake)
                 BOOTSTRAP_CMAKE=""
                 if command -v cmake &>/dev/null; then
                     BOOTSTRAP_CMAKE=$(command -v cmake)
+                    if [ -n "${INSTALLED_CMAKE_VERSION:-}" ]; then
+                        echo "  Using existing CMake ${INSTALLED_CMAKE_VERSION} as bootstrap"
+                    else
+                        echo "  Using existing CMake as bootstrap"
+                    fi
+                else
+                    echo "  No existing CMake found - will use bootstrap script"
                 fi
-                
-                # Install build dependencies
-                ${APT_CMD} install -y -qq build-essential libssl-dev libncurses5-dev libncursesw5-dev || true
                 
                 # Download CMake source from official GitHub releases
                 CMAKE_SOURCE_DIR="/tmp/cmake_build"
@@ -1361,34 +1457,16 @@ if command -v cmake &>/dev/null; then
                 echo "  ⚠ CMake not found in PATH after upgrade attempts"
                 NEED_UPGRADE=true
             fi
-        fi
-    else
-        echo "  ⚠ Could not determine CMake version"
-        echo "  Installing CMake via pip as fallback..."
-        if [ -n "${pip_flags:-}" ]; then
-            python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
-        else
-            python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
-        fi
-    fi
-else
-    echo "  ⚠ CMake not found, installing..."
-    # Try pip first (usually has latest version)
-    if [ -n "${pip_flags:-}" ]; then
-        python3 -m pip install --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || {
-            echo "  Installing CMake via apt-get..."
-            ${APT_CMD} install -y -qq cmake || {
-                echo -e "${YELLOW}⚠ CMake installation failed${NC}"
-            }
-        }
-    else
-        python3 -m pip install --no-cache-dir cmake 2>&1 | filter_pip_output || {
-            echo "  Installing CMake via apt-get..."
-            ${APT_CMD} install -y -qq cmake || {
-                echo -e "${YELLOW}⚠ CMake installation failed${NC}"
-            }
-        }
-    fi
+fi
+
+# Final fallback: If CMake still not available, try basic installation
+if ! command -v cmake &>/dev/null 2>&1; then
+    echo "  ⚠ CMake not found after all upgrade attempts"
+    echo "  Installing CMake via apt-get as final fallback..."
+    ${APT_CMD} install -y -qq cmake || {
+        echo -e "${YELLOW}⚠ CMake installation via apt-get failed${NC}"
+        echo "  You may need to install CMake manually"
+    }
 fi
 
 # Final CMake verification
@@ -1428,7 +1506,7 @@ for lib_path in \
     fi
 done
 
-if [ "$OPENBLAS_FOUND" = false ]; then
+if [ "${OPENBLAS_FOUND}" = false ]; then
     echo -e "${RED}✗ ERROR: OpenBLAS not found after installation${NC}"
     exit 1
 fi
@@ -2275,8 +2353,12 @@ else
 
     # Function to start resource monitor (will be called after build starts)
     start_resource_monitor() {
-    local build_pid="$1"
-    (
+        local build_pid="${1:-}"
+        if [ -z "${build_pid:-}" ] || ! kill -0 "${build_pid}" 2>/dev/null; then
+            echo "ERROR: Invalid build PID: ${build_pid:-}" >&2
+            return 1
+        fi
+        (
         echo "Resource Monitor Started: $(date)" > "${RESOURCE_MONITOR_LOG}"
         local consecutive_critical=0
         local max_consecutive_critical=3  # Stop after 3 consecutive critical readings
@@ -2451,11 +2533,11 @@ if [ -n "${IONICE_CMD}" ]; then
     BUILD_PID=$!
     
     # Start resource monitor with build PID
-    RESOURCE_MONITOR_PID=$(start_resource_monitor ${BUILD_PID})
+    RESOURCE_MONITOR_PID=$(start_resource_monitor "${BUILD_PID}")
     echo "  Resource monitor started (PID: ${RESOURCE_MONITOR_PID})"
     
     # Wait for build process and check exit status
-    wait ${BUILD_PID}
+    wait "${BUILD_PID}"
     BUILD_EXIT_CODE=$?
     
     if [ "${BUILD_EXIT_CODE}" -eq 0 ] && [ ! -f "${BUILD_STOP_FLAG_FILE}" ]; then
@@ -2475,10 +2557,10 @@ else
     BUILD_PID=$!
     
     # Start resource monitor with build PID
-    RESOURCE_MONITOR_PID=$(start_resource_monitor ${BUILD_PID})
+    RESOURCE_MONITOR_PID=$(start_resource_monitor "${BUILD_PID}")
     echo "  Resource monitor started (PID: ${RESOURCE_MONITOR_PID})"
     
-    wait ${BUILD_PID}
+    wait "${BUILD_PID}"
     BUILD_EXIT_CODE=$?
     
     if [ "${BUILD_EXIT_CODE}" -eq 0 ] && [ ! -f "${BUILD_STOP_FLAG_FILE}" ]; then
@@ -2494,7 +2576,8 @@ fi
 
     if [ "${BUILD_SUCCESS:-false}" = "true" ]; then
         BUILD_END=$(date +%s)
-        BUILD_DURATION=$((BUILD_END - BUILD_START))
+        BUILD_START_VAL="${BUILD_START:-${BUILD_END}}"
+        BUILD_DURATION=$((BUILD_END - BUILD_START_VAL))
         BUILD_MINUTES=$((BUILD_DURATION / 60))
         
         # Stop resource monitor
@@ -2520,7 +2603,7 @@ fi
         # Save failed state (but keep artifacts for resume)
         save_build_state "failed"
         
-        BUILD_STATUS=${PIPESTATUS[0]}
+        BUILD_STATUS="${PIPESTATUS[0]:-1}"
         echo -e "${RED}✗ PyTorch wheel build failed (exit code: ${BUILD_STATUS})${NC}"
         echo "  Build log: ${BUILD_DIR}/pytorch_build.log"
         echo "  Build state saved - you can resume by running this script again"
@@ -2634,9 +2717,10 @@ if [ -f "${BUILD_DIR}/pytorch_build.log" ]; then
         echo -e "${YELLOW}⚠ No OpenBLAS references found in build log${NC}"
     fi
     
-    if grep -qi "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" | grep -v "USE_MKL=0\|disabled\|disable"; then
+    # Check for MKL references after filtering out disabled mentions
+    if grep -qi "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | grep -q .; then
         echo -e "${YELLOW}⚠ MKL references found in build log (may indicate MKL usage)${NC}"
-        grep -i "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" | grep -v "USE_MKL=0\|disabled\|disable" | head -3
+        grep -i "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | head -3
     else
         echo -e "${GREEN}✓ MKL appears to be disabled in build${NC}"
     fi
