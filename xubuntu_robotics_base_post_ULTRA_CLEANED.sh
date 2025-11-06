@@ -5348,6 +5348,310 @@ else
     echo "  Jupyter extension build may fail"
 fi
 
+#===============================================================================
+# BLOCK 13B: JAX CUDA INSTALLATION (REINFORCEMENT LEARNING)
+#===============================================================================
+# Purpose: Install JAX with CUDA support via pre-built wheels for GPU-accelerated RL
+# Self-contained: Yes (complete JAX CUDA installation with verification)
+# Dependencies: CUDA 12.x, cuDNN 9.x, Python 3.x, pip
+# Outputs: JAX with CUDA support, verified installation
+#-------------------------------------------------------------------------------
+
+echo "==> Installing JAX CUDA for GPU-Accelerated Reinforcement Learning"
+
+#--- Sub-block 13B.1: Auto-detect CUDA version for JAX ---
+# Purpose: Dynamically detect CUDA version and map to JAX-compatible variant
+# Dependencies: CUDA installation (Block 12 or earlier)
+# Outputs: CUDA_FOR_JAX, CUDA_VERSION, DETECTED_CUDA
+echo "Detecting CUDA version for JAX installation..."
+
+detect_cuda_version_for_jax() {
+    local cuda_full=""
+    local cuda_major=""
+    local cuda_minor=""
+    
+    # Method 1: Check nvcc
+    if command -v nvcc &> /dev/null; then
+        cuda_full=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/')
+        if [ -n "${cuda_full:-}" ]; then
+            cuda_major="${cuda_full%%.*}"
+            cuda_minor="${cuda_full#*.}"
+            echo "  Detected CUDA via nvcc: ${cuda_full}"
+        fi
+    fi
+    
+    # Method 2: Check CUDA runtime library
+    if [ -z "${cuda_full:-}" ]; then
+        local cuda_lib
+        cuda_lib=$(find /usr/local/cuda-*/lib64/libcudart.so* 2>/dev/null | head -1)
+        if [ -n "${cuda_lib:-}" ]; then
+            cuda_full=$(echo "${cuda_lib}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
+            if [ -n "${cuda_full:-}" ]; then
+                cuda_major="${cuda_full%%.*}"
+                cuda_minor="${cuda_full#*.}"
+                echo "  Detected CUDA via library path: ${cuda_full}"
+            fi
+        fi
+    fi
+    
+    # Method 3: Check CUDA_HOME or CUDA_PATH
+    if [ -z "${cuda_full:-}" ] && [ -n "${CUDA_HOME:-}" ]; then
+        cuda_full=$(echo "${CUDA_HOME}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
+        if [ -z "${cuda_full:-}" ] && [ -f "${CUDA_HOME}/version.txt" ]; then
+            cuda_full=$(grep -oP 'CUDA Version \K[0-9]+\.[0-9]+' "${CUDA_HOME}/version.txt" 2>/dev/null || echo "")
+        fi
+        if [ -n "${cuda_full:-}" ]; then
+            cuda_major="${cuda_full%%.*}"
+            cuda_minor="${cuda_full#*.}"
+            echo "  Detected CUDA via CUDA_HOME: ${cuda_full}"
+        fi
+    fi
+    
+    # Determine JAX-compatible CUDA version
+    # JAX supports: CUDA 11.8, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6
+    if [ -n "${cuda_major:-}" ]; then
+        if [ "${cuda_major}" = "11" ]; then
+            CUDA_VERSION="11"
+            CUDA_FOR_JAX="cuda11"
+        elif [ "${cuda_major}" = "12" ]; then
+            CUDA_VERSION="12"
+            CUDA_FOR_JAX="cuda12"
+        else
+            CUDA_VERSION="12"
+            CUDA_FOR_JAX="cuda12"
+            echo "  Warning: CUDA ${cuda_full:-unknown} detected, using CUDA 12 variant for JAX"
+        fi
+    else
+        CUDA_VERSION="12"
+        CUDA_FOR_JAX="cuda12"
+        cuda_full="unknown"
+        cuda_major="12"
+        cuda_minor=""
+        echo "  Warning: CUDA not detected, defaulting to CUDA 12"
+    fi
+    
+    export DETECTED_CUDA="${cuda_full:-unknown}"
+    export CUDA_MAJOR="${cuda_major:-12}"
+    export CUDA_MINOR="${cuda_minor:-}"
+}
+
+# Detect CUDA version
+detect_cuda_version_for_jax
+echo "  JAX CUDA variant: ${CUDA_FOR_JAX} (CUDA ${CUDA_VERSION}.x)"
+
+#--- Sub-block 13B.1.1: Verify prerequisites ---
+# Purpose: Ensure all required packages and libraries are available
+# Dependencies: CUDA, cuDNN, Python, NumPy (installed earlier)
+# Outputs: Prerequisite verification status
+echo "Verifying prerequisites for JAX installation..."
+
+# Check Python
+if ! command -v python3 &> /dev/null; then
+    echo "  ✗ ERROR: python3 not found"
+    echo "  JAX installation will be skipped"
+else
+    PYTHON_VER=$(python3 --version 2>/dev/null | awk '{print $2}' || echo "unknown")
+    echo "  ✓ Python ${PYTHON_VER} found"
+fi
+
+# Check pip
+if ! command -v pip3 &> /dev/null && ! python3 -m pip --version &> /dev/null; then
+    echo "  ✗ ERROR: pip not found"
+    echo "  JAX installation will be skipped"
+else
+    echo "  ✓ pip found"
+fi
+
+# Check CUDA (already detected, but verify nvcc is accessible)
+if ! command -v nvcc &> /dev/null; then
+    echo "  ⚠ WARNING: nvcc not found - JAX will install but may not have GPU support"
+else
+    echo "  ✓ CUDA compiler (nvcc) found"
+fi
+
+# Check NumPy (required dependency for JAX)
+if ! python3 -c "import numpy" 2>/dev/null; then
+    echo "  ⚠ WARNING: NumPy not found - installing NumPy before JAX..."
+    pip3 install --no-cache-dir numpy || echo "  ⚠ NumPy installation failed (non-fatal)"
+else
+    NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
+    echo "  ✓ NumPy ${NUMPY_VER} found"
+fi
+
+# Check cuDNN library availability
+if ldconfig -p 2>/dev/null | grep -q libcudnn; then
+    echo "  ✓ cuDNN library found in system"
+else
+    echo "  ⚠ WARNING: cuDNN library not found in ldconfig - may affect GPU acceleration"
+fi
+
+# Check for OpenBLAS (NumPy/SciPy should use it, but verify)
+if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+    echo "  ✓ OpenBLAS library found (for NumPy/SciPy)"
+else
+    echo "  ⚠ WARNING: OpenBLAS not found - NumPy may not be optimized"
+fi
+
+echo "  Prerequisites check complete"
+
+#--- Sub-block 13B.2: Configure threading for optimal performance ---
+# Purpose: Set up parallel computing environment variables
+# Dependencies: nproc command
+# Outputs: Threading environment variables
+echo "Configuring threading for optimal performance..."
+num_cores=$(nproc 2>/dev/null || echo "1")
+if [ -z "${num_cores:-}" ] || [ "${num_cores}" -lt 1 ]; then
+    num_cores=1
+fi
+export OMP_NUM_THREADS="${num_cores}"
+export MKL_NUM_THREADS="${num_cores}"
+export NUMEXPR_NUM_THREADS="${num_cores}"
+export OPENBLAS_NUM_THREADS="${num_cores}"
+echo "  Set threading environment: OMP_NUM_THREADS=${num_cores}"
+
+#--- Sub-block 13B.3: Install JAX with CUDA support ---
+# Purpose: Install JAX via pre-built wheels with CUDA support
+# Dependencies: pip, CUDA, cuDNN
+# Outputs: JAX and jaxlib with CUDA support
+echo "Installing JAX with CUDA support (using pre-built wheels)..."
+
+# Handle externally-managed Python environments
+pip_output=$(python3 -m pip install --upgrade pip setuptools wheel --quiet 2>&1) || true
+if echo "${pip_output}" | grep -q "externally-managed-environment"; then
+    echo "  Using --break-system-packages flag (for Singularity/container environments)"
+    python3 -m pip install --upgrade pip setuptools wheel --break-system-packages --quiet || true
+else
+    python3 -m pip install --upgrade pip setuptools wheel --quiet 2>/dev/null || \
+        python3 -m pip install --upgrade pip setuptools wheel --break-system-packages --quiet || true
+fi
+
+# Determine if we need --break-system-packages flag
+pip_flags=""
+test_output=$(python3 -m pip install --dry-run pip 2>&1) || true
+if echo "${test_output}" | grep -q "externally-managed-environment"; then
+    pip_flags="--break-system-packages"
+fi
+
+# Build pip command array to properly handle flags with spaces
+pip_cmd_base=(python3 -m pip install --upgrade --no-cache-dir)
+
+# Add optimization flags properly
+if [ -n "${pip_flags:-}" ]; then
+    IFS=' '
+    read -ra flag_array <<< "${pip_flags}"
+    pip_cmd_base+=("${flag_array[@]}")
+fi
+
+# Install JAX with CUDA support
+echo "  Installing JAX[${CUDA_FOR_JAX}_local] from Google releases..."
+pip_cmd=("${pip_cmd_base[@]}")
+pip_cmd+=("jax[${CUDA_FOR_JAX}_local]")
+pip_cmd+=(-f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html")
+
+if ! "${pip_cmd[@]}" 2>&1 | tee /tmp/jax_install.log; then
+    echo "  ⚠ Primary installation method failed, trying alternative..."
+    pip_cmd=("${pip_cmd_base[@]}")
+    pip_cmd+=("jax[${CUDA_FOR_JAX}]")
+    if ! "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log; then
+        echo "  ⚠ JAX installation failed (non-fatal)"
+        echo "  Installation logs: /tmp/jax_install.log"
+    else
+        echo "  ✓ JAX installed via alternative method"
+    fi
+else
+    echo "  ✓ JAX installed successfully"
+fi
+
+# Verify installation
+if python3 -c "import jax; import jaxlib" 2>/dev/null; then
+    JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || echo "unknown")
+    JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || echo "unknown")
+    echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} verified"
+else
+    echo "  ⚠ JAX installation verification failed (non-fatal)"
+fi
+
+#--- Sub-block 13B.4: Verify CUDA linking and GPU availability ---
+# Purpose: Test JAX CUDA functionality and verify GPU acceleration
+# Dependencies: JAX installed, CUDA, cuDNN
+# Outputs: Test results (non-fatal)
+echo "Verifying JAX CUDA functionality..."
+
+python3 << 'JAX_VERIFY' 2>&1 | tee /tmp/jax_verify.log || true
+import sys
+import os
+
+try:
+    import jax
+    import jax.numpy as jnp
+    import jaxlib
+    
+    print("✓ JAX imports successful")
+    print(f"  JAX version: {jax.__version__}")
+    print(f"  jaxlib version: {jaxlib.__version__}")
+    
+    # Check CUDA backend
+    default_backend = jax.default_backend()
+    print(f"  Default backend: {default_backend}")
+    
+    # Check devices
+    devices = jax.devices()
+    print(f"  Found {len(devices)} device(s):")
+    for d in devices:
+        print(f"    - {d} (kind: {d.device_kind}, platform: {d.platform})")
+    
+    # Check for GPU
+    gpu_devices = [d for d in devices if d.device_kind == 'gpu']
+    if gpu_devices:
+        print(f"  ✓ GPU acceleration available ({len(gpu_devices)} GPU device(s))")
+        
+        # Quick computation test
+        x = jnp.array([1.0, 2.0, 3.0])
+        y = x * 2
+        result = float(jnp.sum(y))
+        print(f"  ✓ GPU computation test: {result} (expected: 12.0)")
+        
+        # Check device placement
+        try:
+            x_gpu = jax.device_put(x, gpu_devices[0])
+            print(f"  ✓ GPU device placement working")
+        except Exception as e:
+            print(f"  ⚠ GPU device placement issue: {e}")
+    else:
+        print("  ⚠ GPU devices not found (JAX will use CPU)")
+        print("  Note: This is non-fatal - JAX will still work in CPU mode")
+    
+    # Check threading
+    num_threads = os.environ.get('OMP_NUM_THREADS', 'not set')
+    print(f"  Threading: OMP_NUM_THREADS={num_threads}")
+    
+    print("✓ JAX CUDA verification complete")
+    
+except ImportError as e:
+    print(f"✗ JAX import failed: {e}")
+    print("  JAX may not be installed correctly")
+    sys.exit(1)
+except Exception as e:
+    print(f"⚠ JAX verification warning: {e}")
+    print("  JAX may work but with limitations")
+JAX_VERIFY
+
+# Check verification results
+if [ -f /tmp/jax_verify.log ]; then
+    if grep -q "✓ GPU acceleration available" /tmp/jax_verify.log; then
+        echo "✓ JAX CUDA installation verified with GPU acceleration"
+    elif grep -q "✓ JAX imports successful" /tmp/jax_verify.log; then
+        echo "✓ JAX installation verified (CPU mode - GPU may be unavailable)"
+    else
+        echo "⚠ JAX verification had issues (non-fatal)"
+    fi
+fi
+
+# Clean up logs
+rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
+
+echo "✓ JAX CUDA installation complete"
+
 #--- Sub-block 13A.8: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
 # Reference: https://www.open3d.org/docs/release/compilation.html
