@@ -2743,6 +2743,62 @@ echo ""
 #===============================================================================
 echo -e "${BLUE}[Step 6] Getting PyTorch source...${NC}"
 
+# Function to select PyTorch version compatible with CUDA version
+# PyTorch CUDA compatibility matrix:
+# - CUDA 11.x: PyTorch 2.0.x - 2.4.x (2.4.0 is last with CUDA 11.8 support)
+# - CUDA 12.x: PyTorch 2.1+ (latest versions support CUDA 12.1+)
+select_pytorch_version_for_cuda() {
+    local cuda_major="${1:-}"
+    local cuda_version="${2:-}"
+    local selected_version=""
+    
+    if [ -z "${cuda_major:-}" ] || [ -z "${cuda_version:-}" ]; then
+        echo "unknown" >&2
+        echo "unknown"
+        return 1
+    fi
+    
+    # For CUDA 11.x, use PyTorch 2.4.0 (last stable version with CUDA 11.8 support)
+    if [ "${cuda_major}" = "11" ]; then
+        selected_version="2.4.0"
+        echo "  CUDA ${cuda_version} detected - selecting PyTorch ${selected_version} (last version with CUDA 11.x support)" >&2
+        echo "  Note: PyTorch 2.5+ requires CUDA 12.1+" >&2
+    # For CUDA 12.x, use latest PyTorch version
+    elif [ "${cuda_major}" = "12" ]; then
+        # Fetch latest stable release
+        local latest_tag=""
+        latest_tag=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
+            jq -r '.tag_name' 2>/dev/null | head -1 || echo "")
+        
+        if [ -z "${latest_tag:-}" ]; then
+            # Fallback: try grep if jq fails
+            latest_tag=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
+                grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -1 || echo "")
+        fi
+        
+        if [ -z "${latest_tag:-}" ]; then
+            echo -e "  ${YELLOW}⚠ Could not fetch latest tag, using PyTorch 2.9.0 as fallback${NC}" >&2
+            selected_version="2.9.0"
+        else
+            selected_version="${latest_tag#v}"
+            # Validate version format
+            if ! echo "${selected_version}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+                echo -e "  ${YELLOW}⚠ Invalid version format from API: ${selected_version}, using fallback${NC}" >&2
+                selected_version="2.9.0"
+            else
+                echo "  CUDA ${cuda_version} detected - using latest PyTorch version: ${selected_version}" >&2
+            fi
+        fi
+    else
+        # Unknown CUDA version - use latest as fallback
+        echo -e "  ${YELLOW}⚠ Unknown CUDA major version: ${cuda_major}, using latest PyTorch${NC}" >&2
+        selected_version="2.9.0"
+    fi
+    
+    # Output version to stdout (for capture)
+    echo "${selected_version}"
+}
+
 # Skip if build already completed
 if [ "${BUILD_STATE}" = "completed" ]; then
     echo -e "  ${GREEN}✓ Skipping - build already completed${NC}"
@@ -2765,45 +2821,34 @@ else
     echo "  Official repository: https://github.com/pytorch/pytorch"
     echo "  Build instructions: https://github.com/pytorch/pytorch#from-source"
     
-    # Use selected PyTorch version or fetch latest
+    # Use selected PyTorch version or auto-select based on CUDA version
     if [ -n "${SELECTED_PYTORCH_VERSION:-}" ]; then
-        # Use specified/recommended version
+        # Use specified/recommended version (user override)
         # Validate version format before using
         if echo "${SELECTED_PYTORCH_VERSION}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
             LATEST_TAG="v${SELECTED_PYTORCH_VERSION}"
             PYTORCH_VERSION="${SELECTED_PYTORCH_VERSION}"
-            echo "  Using PyTorch version: ${PYTORCH_VERSION} (${LATEST_TAG})"
+            echo "  Using user-specified PyTorch version: ${PYTORCH_VERSION} (${LATEST_TAG})"
+            if [ -n "${CUDA_MAJOR:-}" ] && [ "${CUDA_MAJOR}" = "11" ]; then
+                echo -e "  ${YELLOW}⚠ Warning: CUDA 11.x detected - ensure PyTorch ${PYTORCH_VERSION} supports CUDA 11.8${NC}"
+            fi
         else
             echo -e "${RED}✗ ERROR: Invalid PyTorch version format: ${SELECTED_PYTORCH_VERSION}${NC}"
             echo "  Expected format: X.Y or X.Y.Z"
             exit 1
         fi
     else
-        # Fetch latest stable release from GitHub
-        echo "  Fetching latest stable PyTorch version from GitHub releases..."
-        LATEST_TAG=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
-            jq -r '.tag_name' 2>/dev/null | head -1 || echo "")
+        # Auto-select PyTorch version based on CUDA version
+        echo "  Selecting PyTorch version compatible with CUDA ${CUDA_VERSION}..."
+        PYTORCH_VERSION=$(select_pytorch_version_for_cuda "${CUDA_MAJOR}" "${CUDA_VERSION}")
         
-        if [ -z "${LATEST_TAG:-}" ]; then
-            # Fallback: try grep if jq fails
-            LATEST_TAG=$(curl -s https://api.github.com/repos/pytorch/pytorch/releases/latest 2>/dev/null | \
-                grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' | head -1 || echo "")
-        fi
-        
-        if [ -z "${LATEST_TAG:-}" ]; then
-            echo -e "${YELLOW}⚠ Could not fetch latest tag, using PyTorch 2.9.0 as fallback${NC}"
-            LATEST_TAG="v2.9.0"
-        fi
-        
-        # Remove 'v' prefix if present for version comparison
-        PYTORCH_VERSION="${LATEST_TAG#v}"
-        # Validate fetched version format
-        if ! echo "${PYTORCH_VERSION}" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
-            echo -e "${YELLOW}⚠ Invalid version format from API: ${PYTORCH_VERSION}, using fallback${NC}"
+        if [ -z "${PYTORCH_VERSION:-}" ] || [ "${PYTORCH_VERSION}" = "unknown" ]; then
+            echo -e "${YELLOW}⚠ Could not determine compatible PyTorch version, using fallback${NC}"
             PYTORCH_VERSION="2.9.0"
-            LATEST_TAG="v2.9.0"
         fi
-        echo "  Latest stable version: ${PYTORCH_VERSION}"
+        
+        LATEST_TAG="v${PYTORCH_VERSION}"
+        echo "  Selected PyTorch version: ${PYTORCH_VERSION} (${LATEST_TAG})"
     fi
     
     # Clone specific stable version tag (skip if already exists)
