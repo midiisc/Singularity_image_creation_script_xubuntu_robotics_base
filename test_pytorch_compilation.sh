@@ -2464,21 +2464,161 @@ export CMAKE_BUILD_TYPE=Release
 
 GCC_VERSION=""
 GCC_MAJOR=""
+GCC_MINOR=""
+GCC10_AVAILABLE=false
+GCC10_PATH=""
+
+# Detect GCC version and check for GCC 10 availability
 if command -v gcc &>/dev/null; then
     # Extract GCC version safely (handles errors gracefully)
     GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
     if [ -n "${GCC_VERSION}" ]; then
-        # Extract major version and validate it's numeric
+        # Extract major and minor version
         GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1 || echo "")
+        GCC_MINOR=$(echo "${GCC_VERSION}" | cut -d. -f2 || echo "")
         # Validate GCC_MAJOR is numeric before using in arithmetic comparisons
         if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null; then
             echo "  Detected GCC version: ${GCC_VERSION}"
         else
             # Invalid or non-numeric major version - reset to empty
             GCC_MAJOR=""
+            GCC_MINOR=""
             echo "  Warning: Could not extract valid GCC major version from: ${GCC_VERSION:-unknown}"
         fi
     fi
+fi
+
+# Check for GCC 10 as alternative (known to work better with CUDA)
+# GCC 10 has fewer template expansion issues with NVCC + C++17
+USE_GCC10=false
+GCC10_INSTALLED=false
+GCC10_PATH=""
+GXX10_PATH=""
+
+if command -v gcc-10 &>/dev/null || command -v gcc10 &>/dev/null; then
+    if command -v gcc-10 &>/dev/null; then
+        GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
+        GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+    elif command -v gcc10 &>/dev/null; then
+        GCC10_PATH=$(command -v gcc10 2>/dev/null || echo "")
+        GXX10_PATH=$(command -v g++10 2>/dev/null || echo "")
+    fi
+    if [ -n "${GCC10_PATH}" ] && [ -x "${GCC10_PATH}" ]; then
+        GCC10_AVAILABLE=true
+        GCC10_INSTALLED=true
+        # Verify g++-10 is also available
+        if [ -z "${GXX10_PATH}" ] || [ ! -x "${GXX10_PATH}" ]; then
+            # Try to find g++-10
+            if command -v g++-10 &>/dev/null; then
+                GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+            elif command -v g++10 &>/dev/null; then
+                GXX10_PATH=$(command -v g++10 2>/dev/null || echo "")
+            fi
+        fi
+        if [ -n "${GXX10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
+            echo -e "  ${GREEN}✓ GCC 10 detected at ${GCC10_PATH} (better CUDA compatibility)${NC}"
+            echo "    g++-10: ${GXX10_PATH}"
+        else
+            echo -e "  ${YELLOW}⚠ GCC 10 found but g++-10 not found - will install g++-10${NC}"
+            GCC10_INSTALLED=false
+            GXX10_PATH=""  # Reset to empty if not found
+        fi
+    else
+        # Reset paths if gcc-10 is not executable
+        GCC10_PATH=""
+        GXX10_PATH=""
+    fi
+fi
+
+# If GCC 11 is detected and GCC 10 is not installed, offer to install it
+if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ] && [ "${GCC10_INSTALLED}" = "false" ] && [ "${USE_CUDA:-0}" = "1" ]; then
+    echo ""
+    echo -e "  ${YELLOW}⚠ GCC 11 detected with CUDA enabled - GCC 10 recommended for better compatibility${NC}"
+    echo -e "  ${YELLOW}  Installing GCC 10 to avoid 'parameter packs not expanded' errors...${NC}"
+    
+    # Check if we can install packages
+    # Note: APT_CMD is already set earlier in the script (line ~735), but we use a local variable
+    # to avoid conflicts if this section runs in a different context
+    LOCAL_APT_CMD=""
+    if [ "${EUID:-0}" -eq 0 ]; then
+        LOCAL_APT_CMD="apt-get"
+    elif command -v sudo &>/dev/null 2>&1; then
+        LOCAL_APT_CMD="sudo apt-get"
+    fi
+    
+    if [ -n "${LOCAL_APT_CMD}" ]; then
+        # Update package lists (suppress output but capture errors)
+        echo "  Updating package lists..."
+        if ! ${LOCAL_APT_CMD} update -qq 2>&1 | grep -v "^$" | head -20; then
+            echo -e "  ${YELLOW}⚠ Package list update had warnings (continuing anyway)${NC}"
+        fi
+        
+        # Install GCC 10 and G++ 10
+        echo "  Installing gcc-10 and g++-10..."
+        if ${LOCAL_APT_CMD} install -y -qq gcc-10 g++-10 >/dev/null 2>&1; then
+            GCC10_INSTALLED=true
+            GCC10_AVAILABLE=true
+            # Find the installed paths (with error handling)
+            GCC10_PATH=""
+            GXX10_PATH=""
+            if command -v gcc-10 &>/dev/null 2>&1; then
+                GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
+            fi
+            if command -v g++-10 &>/dev/null 2>&1; then
+                GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+            fi
+            
+            if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
+                echo -e "  ${GREEN}✓ GCC 10 installed successfully${NC}"
+                echo "    gcc-10: ${GCC10_PATH}"
+                echo "    g++-10: ${GXX10_PATH}"
+            else
+                echo -e "  ${YELLOW}⚠ GCC 10 installation completed but binaries not found in PATH${NC}"
+                echo "    gcc-10 path: ${GCC10_PATH:-not found}"
+                echo "    g++-10 path: ${GXX10_PATH:-not found}"
+                GCC10_INSTALLED=false
+                GCC10_PATH=""
+                GXX10_PATH=""
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ Failed to install GCC 10 automatically${NC}"
+            echo "  You can install it manually with: sudo apt-get install -y gcc-10 g++-10"
+            echo "  Or continue with GCC 11 using enhanced workarounds"
+            GCC10_INSTALLED=false
+            GCC10_PATH=""
+            GXX10_PATH=""
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ Cannot install GCC 10 automatically (no sudo access)${NC}"
+        echo "  Please install manually: sudo apt-get install -y gcc-10 g++-10"
+        echo "  Or continue with GCC 11 using enhanced workarounds"
+    fi
+fi
+
+# If GCC 10 is available and installed, use it for CUDA builds
+# Validate all paths before using GCC 10
+if [ "${GCC10_INSTALLED}" = "true" ] && [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && \
+   [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ] && [ "${USE_CUDA:-0}" = "1" ]; then
+    USE_GCC10=true
+    echo ""
+    echo -e "  ${GREEN}✓ Using GCC 10 for PyTorch CUDA compilation (better compatibility)${NC}"
+    # Set compiler environment variables (properly quoted)
+    export CC="${GCC10_PATH}"
+    export CXX="${GXX10_PATH}"
+    export CUDA_HOST_COMPILER="${GXX10_PATH}"
+    export CMAKE_C_COMPILER="${GCC10_PATH}"
+    export CMAKE_CXX_COMPILER="${GXX10_PATH}"
+    export CMAKE_CUDA_HOST_COMPILER="${GXX10_PATH}"
+    echo "    CC=${CC}"
+    echo "    CXX=${CXX}"
+    echo "    CUDA_HOST_COMPILER=${CUDA_HOST_COMPILER}"
+elif [ "${GCC10_INSTALLED}" = "true" ] && [ "${USE_CUDA:-0}" = "1" ]; then
+    # GCC 10 was marked as installed but paths are invalid - reset state
+    echo -e "  ${YELLOW}⚠ GCC 10 marked as installed but paths invalid - resetting state${NC}"
+    GCC10_INSTALLED=false
+    USE_GCC10=false
+    GCC10_PATH=""
+    GXX10_PATH=""
 fi
 
 # C++17 is required for ONNX (std::string_view, std::filesystem)
@@ -2490,10 +2630,34 @@ if [ "${USE_CUDA:-0}" = "1" ]; then
     echo -e "  ${GREEN}✓ Using C++17 (required by ONNX for std::string_view and std::filesystem)${NC}"
     
     # Set CUDA compiler flags based on GCC version
-    # Validate GCC_MAJOR is numeric before arithmetic comparison
-    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null && [ "${GCC_MAJOR}" = "11" ]; then
+    # If GCC 10 is being used, we can use simpler flags
+    if [ "${USE_GCC10}" = "true" ]; then
+        # GCC 10: Better compatibility with NVCC + C++17, minimal workarounds needed
+        echo -e "  ${GREEN}✓ Using GCC 10 - minimal compatibility flags needed${NC}"
+        if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+            export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds"
+        else
+            # Check if -fpermissive is already in flags (shouldn't be needed for GCC 10)
+            # Use proper quoting for grep pattern
+            if ! echo "${CMAKE_CUDA_FLAGS}" | grep -qF -- "-fpermissive"; then
+                export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds"
+            fi
+        fi
+        
+        if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        else
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        fi
+        
+        echo -e "  ${GREEN}✓ GCC 10 compatibility flags applied (minimal workarounds)${NC}"
+    elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null && [ "${GCC_MAJOR}" = "11" ]; then
         # GCC 11: Enhanced workarounds for C++17 + NVCC compatibility
         echo -e "  ${YELLOW}⚠ GCC 11 detected - applying enhanced C++17 compatibility flags${NC}"
+        echo -e "  ${YELLOW}  Note: GCC 11 + NVCC + C++17 has known template expansion issues${NC}"
+        if [ "${GCC10_AVAILABLE}" = "true" ] && [ "${GCC10_INSTALLED}" = "true" ]; then
+            echo -e "  ${YELLOW}  Note: GCC 10 is available but not being used. Consider using GCC 10 for better compatibility.${NC}"
+        fi
         # Note: -fpermissive is critical for GCC 11 + NVCC + C++17 template instantiation issues
         # This works around the "parameter packs not expanded" error in std_function.h
         if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
@@ -2516,6 +2680,44 @@ if [ "${USE_CUDA:-0}" = "1" ]; then
                 echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
             fi
         fi
+        
+        # CRITICAL: Also set C++ compiler flags for host code compilation
+        # PyTorch compiles some C++ code directly (not via NVCC), and this also needs -fpermissive
+        # for GCC 11 + C++17 template compatibility
+        if [ -z "${CMAKE_CXX_FLAGS:-}" ]; then
+            export CMAKE_CXX_FLAGS="-fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+        else
+            # Check if -fpermissive is already in flags
+            if ! echo "${CMAKE_CXX_FLAGS}" | grep -q "\-fpermissive"; then
+                export CMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+            fi
+        fi
+        echo "    CMAKE_CXX_FLAGS (host compiler): ${CMAKE_CXX_FLAGS}"
+        
+        # CRITICAL: Also set CXXFLAGS environment variable (some build systems respect this)
+        # This provides an additional way for flags to be picked up by PyTorch's build system
+        if [ -z "${CXXFLAGS:-}" ]; then
+            export CXXFLAGS="-fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+        else
+            # Check if -fpermissive is already in flags
+            if ! echo "${CXXFLAGS}" | grep -q "\-fpermissive"; then
+                export CXXFLAGS="${CXXFLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+            fi
+        fi
+        echo "    CXXFLAGS (environment variable): ${CXXFLAGS}"
+        
+        # Also set CUDAFLAGS for additional compatibility (some build systems check this)
+        # Note: CUDAFLAGS is less standard but some build systems may check it
+        CUDAFLAGS_VALUE="-Xcompiler -fpermissive -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow"
+        if [ -z "${CUDAFLAGS:-}" ]; then
+            export CUDAFLAGS="${CUDAFLAGS_VALUE}"
+        else
+            # Check if -fpermissive is already in flags
+            if ! echo "${CUDAFLAGS}" | grep -q "\-fpermissive"; then
+                export CUDAFLAGS="${CUDAFLAGS} ${CUDAFLAGS_VALUE}"
+            fi
+        fi
+        echo "    CUDAFLAGS (environment variable): ${CUDAFLAGS}"
         
         echo -e "  ${GREEN}✓ GCC 11 compatibility flags applied (C++17 mode with enhanced workarounds)${NC}"
     elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null && [ "${GCC_MAJOR}" -ge "12" ]; then
@@ -3383,28 +3585,122 @@ else
     
     # Ensure CUDA compiler flags are set for PyTorch's CMake build system
     # PyTorch's setup.py uses CMake internally, and CMake respects CMAKE_CUDA_FLAGS env var
-    if [ "${USE_CUDA:-0}" = "1" ] && [ -n "${CMAKE_CUDA_FLAGS:-}" ]; then
-        echo "  CUDA compiler flags: ${CMAKE_CUDA_FLAGS}"
-        # CMAKE_CUDA_FLAGS environment variable is automatically picked up by CMake
-        # No need to set CMAKE_ARGS - CMake will use the environment variable
+    # CRITICAL: For GCC 11 + NVCC + C++17, we MUST pass -fpermissive via -Xcompiler
+    # to work around "parameter packs not expanded" errors in std_function.h
+    if [ "${USE_CUDA:-0}" = "1" ]; then
+        # Ensure CMAKE_CUDA_FLAGS is set and exported (critical for GCC 11 compatibility)
+        if [ -n "${CMAKE_CUDA_FLAGS:-}" ]; then
+            export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS}"
+            echo "  CUDA compiler flags (CMAKE_CUDA_FLAGS): ${CMAKE_CUDA_FLAGS}"
+        fi
+        
+        # Ensure CUDA_NVCC_FLAGS is set and exported
+        if [ -n "${CUDA_NVCC_FLAGS:-}" ]; then
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS}"
+            echo "  NVCC flags (CUDA_NVCC_FLAGS): ${CUDA_NVCC_FLAGS}"
+        fi
+        
+        # PyTorch's setup.py uses CMake internally and should respect environment variables
+        # However, we also set CMAKE_ARGS as a backup to ensure flags are passed
+        # Note: PyTorch's setup.py will pass CMAKE_ARGS to CMake if set
+        CMAKE_ARGS_BUILD=""
+        if [ -n "${CMAKE_CUDA_FLAGS:-}" ]; then
+            # Escape spaces and special characters for CMAKE_ARGS
+            CMAKE_CUDA_FLAGS_ESCAPED=$(printf '%s' "${CMAKE_CUDA_FLAGS}" | sed 's/"/\\"/g')
+            CMAKE_ARGS_BUILD="${CMAKE_ARGS_BUILD} -DCMAKE_CUDA_FLAGS=${CMAKE_CUDA_FLAGS_ESCAPED}"
+        fi
+        if [ -n "${CUDA_NVCC_FLAGS:-}" ]; then
+            CUDA_NVCC_FLAGS_ESCAPED=$(printf '%s' "${CUDA_NVCC_FLAGS}" | sed 's/"/\\"/g')
+            CMAKE_ARGS_BUILD="${CMAKE_ARGS_BUILD} -DCUDA_NVCC_FLAGS=${CUDA_NVCC_FLAGS_ESCAPED}"
+        fi
+        if [ -n "${CMAKE_CXX_FLAGS:-}" ]; then
+            CMAKE_CXX_FLAGS_ESCAPED=$(printf '%s' "${CMAKE_CXX_FLAGS}" | sed 's/"/\\"/g')
+            CMAKE_ARGS_BUILD="${CMAKE_ARGS_BUILD} -DCMAKE_CXX_FLAGS=${CMAKE_CXX_FLAGS_ESCAPED}"
+        fi
+        if [ -n "${CMAKE_ARGS_BUILD}" ]; then
+            # Append to existing CMAKE_ARGS if set, otherwise create new
+            if [ -n "${CMAKE_ARGS:-}" ]; then
+                export CMAKE_ARGS="${CMAKE_ARGS} ${CMAKE_ARGS_BUILD}"
+            else
+                export CMAKE_ARGS="${CMAKE_ARGS_BUILD}"
+            fi
+            echo "  CMake arguments (CMAKE_ARGS): ${CMAKE_ARGS}"
+        fi
     fi
     
     # Verify C++ standard settings (critical for GCC 11 compatibility)
     if [ -n "${CMAKE_CXX_STANDARD:-}" ]; then
+        export CMAKE_CXX_STANDARD="${CMAKE_CXX_STANDARD}"
         echo "  C++ standard (host): ${CMAKE_CXX_STANDARD} (CMAKE_CXX_STANDARD)"
     fi
     if [ -n "${CMAKE_CUDA_STANDARD:-}" ]; then
+        export CMAKE_CUDA_STANDARD="${CMAKE_CUDA_STANDARD}"
         echo "  C++ standard (CUDA): ${CMAKE_CUDA_STANDARD} (CMAKE_CUDA_STANDARD)"
-    fi
-    if [ -n "${CUDA_NVCC_FLAGS:-}" ]; then
-        echo "  NVCC flags: ${CUDA_NVCC_FLAGS}"
     fi
     
     # Set CUDA host compiler if specified (CMake also respects this as env var)
     if [ "${USE_CUDA:-0}" = "1" ] && [ -n "${CUDA_HOST_COMPILER:-}" ]; then
-        echo "  CUDA host compiler: ${CUDA_HOST_COMPILER}"
-        # Export as CMAKE_CUDA_HOST_COMPILER for CMake to pick up
         export CMAKE_CUDA_HOST_COMPILER="${CUDA_HOST_COMPILER}"
+        echo "  CUDA host compiler: ${CUDA_HOST_COMPILER}"
+    fi
+    
+    # CRITICAL: Verification summary for compiler compatibility
+    # This helps diagnose if flags are properly set before build starts
+    if [ "${USE_CUDA:-0}" = "1" ]; then
+        if [ "${USE_GCC10}" = "true" ]; then
+            echo ""
+            echo "  ════════════════════════════════════════════════════════════════"
+            echo "  GCC 10 + NVCC + C++17 Compatibility Verification"
+            echo "  ════════════════════════════════════════════════════════════════"
+            echo -e "  ${GREEN}✓ Using GCC 10 (optimal for CUDA compilation)${NC}"
+            echo "    Compiler: ${CC:-not set}"
+            echo "    C++ Compiler: ${CXX:-not set}"
+            echo "    CUDA Host Compiler: ${CUDA_HOST_COMPILER:-not set}"
+        elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ]; then
+            echo ""
+            echo "  ════════════════════════════════════════════════════════════════"
+            echo "  GCC 11 + NVCC + C++17 Compatibility Verification"
+            echo "  ════════════════════════════════════════════════════════════════"
+            
+            # Check if -fpermissive is in CUDA flags (use -F for fixed string matching)
+            if [ -n "${CMAKE_CUDA_FLAGS:-}" ] && echo "${CMAKE_CUDA_FLAGS}" | grep -qF -- "-fpermissive"; then
+                echo -e "  ${GREEN}✓ CMAKE_CUDA_FLAGS contains -fpermissive${NC}"
+            else
+                echo -e "  ${RED}✗ WARNING: CMAKE_CUDA_FLAGS missing -fpermissive${NC}"
+            fi
+            
+            # Check if -fpermissive is in CXX flags
+            if [ -n "${CMAKE_CXX_FLAGS:-}" ] && echo "${CMAKE_CXX_FLAGS}" | grep -qF -- "-fpermissive"; then
+                echo -e "  ${GREEN}✓ CMAKE_CXX_FLAGS contains -fpermissive${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ CMAKE_CXX_FLAGS missing -fpermissive (may cause issues)${NC}"
+            fi
+            
+            # Check if CXXFLAGS is set
+            if [ -n "${CXXFLAGS:-}" ] && echo "${CXXFLAGS}" | grep -qF -- "-fpermissive"; then
+                echo -e "  ${GREEN}✓ CXXFLAGS contains -fpermissive${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ CXXFLAGS not set or missing -fpermissive${NC}"
+            fi
+            
+            # Check if CUDAFLAGS is set
+            if [ -n "${CUDAFLAGS:-}" ] && echo "${CUDAFLAGS}" | grep -qF -- "-fpermissive"; then
+                echo -e "  ${GREEN}✓ CUDAFLAGS contains -fpermissive${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ CUDAFLAGS not set or missing -fpermissive${NC}"
+            fi
+        fi
+        
+        echo "  ════════════════════════════════════════════════════════════════"
+        if [ "${USE_GCC10}" != "true" ]; then
+            echo ""
+            echo "  Note: If compilation still fails with 'parameter packs not expanded' errors,"
+            echo "        consider installing and using GCC 10 for better CUDA compatibility."
+            echo "        PyTorch's CMakeLists.txt may need patching to ensure flags propagate"
+            echo "        to all CUDA compilation targets. Check build/CMakeCache.txt after"
+            echo "        CMake configuration to verify flags are applied."
+        fi
+        echo ""
     fi
     
     cd "${PYTORCH_SOURCE_DIR}" || exit 1

@@ -5790,17 +5790,34 @@ fi
 
 # Also install jupyter_packaging which is needed for Open3D's pip package installation
 echo "Installing jupyter_packaging (required for Open3D pip package installation)..."
-if pip3 install --no-cache-dir "jupyter_packaging>=0.12.0"; then
-    # Verify it's actually importable
+# Use --break-system-packages flag for externally-managed environments
+if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
+    # Installation completed, verify it's importable
+    sleep 1  # Give Python a moment to register the new module
     if python3 -c "import jupyter_packaging" 2>/dev/null; then
         JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
         echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
     else
-        echo "  ⚠ jupyter_packaging installed but not importable (may need to retry later)"
+        echo "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
+        # Try to refresh Python's import cache
+        python3 -c "import sys; sys.path.insert(0, ''); import importlib; importlib.invalidate_caches()" 2>/dev/null || true
+        # Retry import after cache refresh
+        sleep 1
+        if python3 -c "import jupyter_packaging" 2>/dev/null; then
+            JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+            echo "  ✓ jupyter_packaging now importable (version: ${JUPYTER_PACKAGING_VER})"
+        fi
     fi
 else
-    echo "  ⚠ jupyter_packaging installation failed (may affect Open3D pip package build)"
-    echo "  Will retry installation before Open3D Python package build"
+    # Installation may have succeeded but check anyway
+    sleep 1
+    if python3 -c "import jupyter_packaging" 2>/dev/null; then
+        JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+        echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
+    else
+        echo "  ⚠ jupyter_packaging installation failed or not importable (may affect Open3D pip package build)"
+        echo "  Will retry installation before Open3D Python package build"
+    fi
 fi
 
 # Verify Jupyter packages were installed
@@ -7928,26 +7945,63 @@ echo "Installing Open3D Python module..."
 # CRITICAL: Ensure Python build tools are up-to-date before Open3D installation
 # This fixes AttributeError issues and ensures jupyter_packaging is available
 echo "Upgrading pip, setuptools, and wheel (required for Open3D Python package)..."
-pip3 install --no-cache-dir --upgrade pip setuptools wheel || {
-    echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
-}
+# Handle Debian-installed packages that can't be uninstalled (RECORD file issue)
+# Use --ignore-installed to skip uninstalling Debian packages, or --break-system-packages for externally-managed environments
+pip_output=$(python3 -m pip install --upgrade pip setuptools wheel --no-cache-dir --quiet 2>&1) || true
+if echo "${pip_output}" | grep -qE "externally-managed-environment|RECORD file not found|Cannot uninstall"; then
+    echo "  Detected Debian-installed packages or externally-managed environment"
+    echo "  Using --ignore-installed and --break-system-packages flags..."
+    python3 -m pip install --upgrade --no-cache-dir --ignore-installed --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+        echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
+    }
+else
+    # Try with --ignore-installed first (handles Debian packages without RECORD files)
+    python3 -m pip install --upgrade --no-cache-dir --ignore-installed pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+        # Fallback: try with --break-system-packages if --ignore-installed fails
+        python3 -m pip install --upgrade --no-cache-dir --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+            echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
+        }
+    }
+fi
 
 # Verify and install jupyter_packaging (CRITICAL for Open3D pip package installation)
 echo "Verifying jupyter_packaging installation..."
 if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
     echo "  jupyter_packaging not found, installing..."
-    pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || {
-        echo "⚠ jupyter_packaging installation failed - will try alternative installation methods"
-    }
+    # Try installation with --break-system-packages flag (required for externally-managed environments)
+    if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
+        # Installation completed, verify it's importable
+        sleep 1  # Give Python a moment to register the new module
+        if python3 -c "import jupyter_packaging" 2>/dev/null; then
+            echo "  ✓ jupyter_packaging installed and verified"
+        else
+            echo "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
+            # Try to refresh Python's import cache
+            python3 -c "import sys; sys.path.insert(0, ''); import importlib; importlib.invalidate_caches()" 2>/dev/null || true
+        fi
+    else
+        # Installation may have succeeded but check anyway
+        sleep 1
+        if python3 -c "import jupyter_packaging" 2>/dev/null; then
+            echo "  ✓ jupyter_packaging installed and verified"
+        else
+            echo "⚠ jupyter_packaging installation failed or not importable - will try alternative installation methods"
+        fi
+    fi
 else
     echo "  ✓ jupyter_packaging is available"
 fi
 
-# Verify jupyter_packaging is actually importable
+# Final verification of jupyter_packaging importability
 if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
     echo "⚠ WARNING: jupyter_packaging still not importable after installation attempt"
     echo "  This may cause ninja install-pip-package to fail"
     echo "  Will fall back to alternative installation methods if needed"
+    # Try one more time with user site-packages enabled
+    PYTHONPATH="${PYTHONPATH:-}:$(python3 -m site --user-site 2>/dev/null || echo '')" python3 -c "import jupyter_packaging" 2>/dev/null && {
+        echo "  ✓ jupyter_packaging found in user site-packages, updating PYTHONPATH"
+        export PYTHONPATH="${PYTHONPATH}:$(python3 -m site --user-site 2>/dev/null || echo '')"
+    } || true
 fi
 
 PYTHON_INSTALLED=false
@@ -7968,28 +8022,44 @@ export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
 # Function to verify Python module installation (more robust than just import)
 verify_open3d_installation() {
     # Check 1: Basic import (required)
-    if ! python3 -c "import open3d" 2>/dev/null; then
-        return 1
-    fi
-    
-    # Check 2: Verify via pip show (shows actual installation location)
-    if pip3 show open3d >/dev/null 2>&1; then
-        OPEN3D_INSTALL_PATH=$(pip3 show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
-        if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
+    IMPORT_ERROR=$(python3 -c "import open3d" 2>&1)
+    if [ $? -eq 0 ]; then
+        # Import succeeded, do additional verification
+        # Check 2: Verify via pip show (shows actual installation location)
+        if python3 -m pip show open3d >/dev/null 2>&1; then
+            OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+            if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
+                return 0
+            fi
+        fi
+        
+        # Check 3: Verify module file location
+        OPEN3D_MODULE_FILE=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null)
+        if [ -n "${OPEN3D_MODULE_FILE}" ] && [ -d "${OPEN3D_MODULE_FILE}" ]; then
             return 0
         fi
-    fi
-    
-    # Check 3: Verify module file location
-    OPEN3D_MODULE_FILE=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null)
-    if [ -n "${OPEN3D_MODULE_FILE}" ] && [ -d "${OPEN3D_MODULE_FILE}" ]; then
+        
+        # If import worked but other checks failed, still consider it successful
         return 0
+    else
+        # Import failed - provide diagnostic information
+        if echo "${IMPORT_ERROR}" | grep -q "No module named 'open3d'"; then
+            # Module not found - check if it's installed but not in path
+            if python3 -m pip show open3d >/dev/null 2>&1; then
+                OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+                if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
+                    echo "  [Diagnostic] Open3D is installed at ${OPEN3D_INSTALL_PATH} but not importable"
+                    echo "  [Diagnostic] This may be a Python path issue"
+                fi
+            fi
+        elif echo "${IMPORT_ERROR}" | grep -qE "libOpen3D|libopen3d|undefined symbol"; then
+            # Library loading issue
+            echo "  [Diagnostic] Open3D import failed due to library loading issue"
+            echo "  [Diagnostic] Error: ${IMPORT_ERROR}"
+            echo "  [Diagnostic] Check LD_LIBRARY_PATH and ensure C++ libraries are accessible"
+        fi
+        return 1
     fi
-    
-    # If import worked but other checks failed, still consider it successful
-    python3 -c "import open3d" 2>/dev/null && return 0
-    
-    return 1
 }
 
 # Strategy 1: Try ninja install-pip-package (recommended in official Open3D docs)
@@ -8022,8 +8092,15 @@ else
             echo "  Falling back to Strategy 2 (python-package)..."
         elif grep -q "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
             echo "  Detected missing jupyter_packaging module"
-            echo "  Attempting to install jupyter_packaging and will try Strategy 2..."
-            pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || true
+            echo "  Attempting to install jupyter_packaging with --break-system-packages and will try Strategy 2..."
+            python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)" || true
+            # Verify installation
+            sleep 1
+            if python3 -c "import jupyter_packaging" 2>/dev/null; then
+                echo "  ✓ jupyter_packaging now available"
+            else
+                echo "  ⚠ jupyter_packaging still not importable"
+            fi
         fi
     fi
 fi
@@ -8039,9 +8116,23 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     # Ensure jupyter_packaging is available for wheel build (required for Jupyter extension)
     if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
         echo "  Installing jupyter_packaging for wheel build..."
-        pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || {
-            echo "  ⚠ jupyter_packaging installation failed (may affect wheel build)"
-        }
+        if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
+            sleep 1
+            if python3 -c "import jupyter_packaging" 2>/dev/null; then
+                echo "  ✓ jupyter_packaging installed and verified for wheel build"
+            else
+                echo "  ⚠ jupyter_packaging installed but not importable (may affect wheel build)"
+            fi
+        else
+            sleep 1
+            if python3 -c "import jupyter_packaging" 2>/dev/null; then
+                echo "  ✓ jupyter_packaging available for wheel build"
+            else
+                echo "  ⚠ jupyter_packaging installation failed or not importable (may affect wheel build)"
+            fi
+        fi
+    else
+        echo "  ✓ jupyter_packaging already available for wheel build"
     fi
     ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log
     NINJA_PYTHON_EXIT="${PIPESTATUS[0]}"
@@ -8289,7 +8380,8 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 
                 echo "  Installing wheel without dependencies (preserving compiled libs)..."
                 # Install WITHOUT dependencies to avoid overwriting compiled libraries
-                pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
+                # Use --break-system-packages for externally-managed environments
+                python3 -m pip install --no-deps --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
                 PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
                 if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
                         echo "  ✓ Wheel installation completed (pip exit code: 0)"
@@ -11060,70 +11152,72 @@ detect_vgl_display() {
     local vnc_display=""
     
     # Method 1: Check for Xvnc processes
-    vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
     
     # Method 2: Check for vncserver processes
-    if [ -z "${vnc_display}" ]; then
-      vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    if [ -z "${vnc_display:-}" ]; then
+      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
     fi
     
     # Method 3: Check for display :1, :2, etc.
-    if [ -z "${vnc_display}" ]; then
+    if [ -z "${vnc_display:-}" ]; then
       for i in 1 2 3 4 5; do
-        if [ -S "/tmp/.X11-unix/X${i}" ]; then
+        if [ -S "/tmp/.X11-unix/X${i}" ] 2>/dev/null; then
           vnc_display=":${i}"
           break
         fi
       done
     fi
     
-    if [ -n "${vnc_display}" ]; then
+    if [ -n "${vnc_display:-}" ]; then
       export VGL_DISPLAY="${vnc_display}"
-      [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: ${vnc_display}"
+      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: ${vnc_display}"
     else
       export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
-      [ "${VERBOSE_MODE}" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
+      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
     fi
   else
     export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
-    [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
+    [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
   fi
 }
 
 # --- VirtualGL Configuration ---
 configure_virtualgl() {
-  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     echo "Configuring VirtualGL..."
     
     # Detect display
     detect_vgl_display
     
     # Set VirtualGL environment variables
-    export VGL_COMPRESS="$VGL_COMPRESS"
-    export VGL_READBACK="$VGL_READBACK"
+    export VGL_COMPRESS
+    export VGL_READBACK
     export VGL_LOGO="0"
-    export VGL_FPS="$VGL_FPS"
-    export VGL_VERBOSE="$VGL_VERBOSE"
+    export VGL_FPS
+    export VGL_VERBOSE
     
     # Debug mode settings
-    if [ "$VGL_DEBUG" = "1" ]; then
+    if [ "${VGL_DEBUG:-0}" = "1" ]; then
       export VGL_VERBOSE="1"
       export VGL_LOG_LEVEL="2"
-      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL debug mode enabled"
+      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL debug mode enabled"
     fi
     
     # Force GPU usage
-    if [ "$VGL_FORCE_GPU" = "1" ]; then
+    if [ "${VGL_FORCE_GPU:-0}" = "1" ]; then
       export VGL_FORCE_GPU="1"
-      [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL force GPU enabled"
+      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL force GPU enabled"
     fi
     
-    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL configured:"
-    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_DISPLAY=$VGL_DISPLAY"
-    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_COMPRESS=$VGL_COMPRESS"
-    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_READBACK=$VGL_READBACK"
-    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_FPS=$VGL_FPS"
-    [ "$VERBOSE_MODE" = "1" ] && echo "    VGL_VERBOSE=$VGL_VERBOSE"
+    if [ "${VERBOSE_MODE:-0}" = "1" ]; then
+      echo "  ✓ VirtualGL configured:"
+      echo "    VGL_DISPLAY=${VGL_DISPLAY:-}"
+      echo "    VGL_COMPRESS=${VGL_COMPRESS:-}"
+      echo "    VGL_READBACK=${VGL_READBACK:-}"
+      echo "    VGL_FPS=${VGL_FPS:-}"
+      echo "    VGL_VERBOSE=${VGL_VERBOSE:-}"
+    fi
   else
     echo "VirtualGL integration disabled (software rendering)"
   fi
@@ -11131,7 +11225,7 @@ configure_virtualgl() {
 
 # --- VirtualGL Test Function ---
 test_virtualgl() {
-  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     echo "Testing VirtualGL configuration..."
     
     # Check if vglrun is available
@@ -11141,15 +11235,15 @@ test_virtualgl() {
     fi
     
     # Check if VirtualGL can access the display
-    if [ -n "${VGL_DISPLAY:-}" ]; then
-      echo "  ✓ VGL_DISPLAY set to: $VGL_DISPLAY"
+      if [ -n "${VGL_DISPLAY:-}" ]; then
+      echo "  ✓ VGL_DISPLAY set to: ${VGL_DISPLAY}"
       
       # Test VirtualGL connection
-      if vglrun -d "$VGL_DISPLAY" glxinfo >/dev/null 2>&1; then
-        echo "  ✓ VirtualGL can access display $VGL_DISPLAY"
+      if vglrun -d "${VGL_DISPLAY}" glxinfo >/dev/null 2>&1; then
+        echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
         
         # Test OpenGL rendering
-        if vglrun -d "$VGL_DISPLAY" glxinfo | grep -q "OpenGL renderer"; then
+        if vglrun -d "${VGL_DISPLAY}" glxinfo 2>/dev/null | grep -q "OpenGL renderer"; then
           echo "  ✓ OpenGL rendering available"
           return 0
         else
@@ -11157,7 +11251,7 @@ test_virtualgl() {
           return 1
         fi
       else
-        echo "  ✗ VirtualGL cannot access display $VGL_DISPLAY"
+        echo "  ✗ VirtualGL cannot access display ${VGL_DISPLAY}"
         return 1
       fi
     else
@@ -11201,7 +11295,7 @@ check_dependencies() {
     echo "  ✗ vncserver not found"
     missing=1
   else
-    echo "  ✓ vncserver: $(which vncserver)"
+    echo "  ✓ vncserver: $(command -v vncserver)"
   fi
 
 
@@ -11213,7 +11307,7 @@ check_dependencies() {
     echo "  ✗ Xvnc not found"
     missing=1
   else
-    echo "  ✓ Xvnc: $(which Xvnc)"
+    echo "  ✓ Xvnc: $(command -v Xvnc)"
   fi
 
   if ! command -v startxfce4 >/dev/null 2>&1; then
@@ -11223,10 +11317,10 @@ check_dependencies() {
     echo "  ✓ XFCE4 available"
   fi
 
-  if [ $missing -eq 1 ]; then
+  if [ "${missing}" -eq 1 ]; then
     echo ""
     echo "ERROR: Missing required dependencies"
-    echo "PATH: $PATH"
+    echo "PATH: ${PATH}"
     exit 1
   fi
 
@@ -11241,13 +11335,13 @@ check_virtualgl() {
   # Add VirtualGL to PATH
 
   if command -v vglrun >/dev/null 2>&1; then
-    echo "  ✓ VirtualGL available: $(which vglrun)"
+    echo "  ✓ VirtualGL available: $(command -v vglrun)"
 
     # Check GPU
     if command -v nvidia-smi >/dev/null 2>&1; then
-      GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-      if [ -n "$GPU_INFO" ]; then
-        echo "  ✓ GPU detected: $GPU_INFO"
+      GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+      if [ -n "${GPU_INFO:-}" ]; then
+        echo "  ✓ GPU detected: ${GPU_INFO}"
       else
         echo "  ⚠ nvidia-smi found but no GPU detected"
       fi
@@ -11282,12 +11376,12 @@ check_virtualgl() {
 
 # --- Setup VNC configuration ---
 setup_vnc_config() {
-  mkdir -p "$HOME/.vnc"
+  mkdir -p "${HOME}/.vnc"
 
   # Create xstartup script with VirtualGL integration
   # Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
   # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-  cat > "$HOME/.vnc/xstartup" << 'XSTART'
+  cat > "${HOME}/.vnc/xstartup" << 'XSTART'
 #!/bin/sh
 # Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
 # Official documentation:
@@ -11360,7 +11454,7 @@ fi
 exec /usr/bin/startxfce4
 XSTART
 
-  chmod +x "$HOME/.vnc/xstartup"
+  chmod +x "${HOME}/.vnc/xstartup"
   echo "✓ VNC configuration created"
 }
 
@@ -11370,10 +11464,10 @@ start_vnc_server() {
   echo "  Display: :${VNC_DISPLAY_NUM}"
   echo "  Geometry: ${GEOM}"
   echo "  Depth: ${DEPTH}"
-  echo "  VirtualGL Integration: $([ "$VNC_VGL_INTEGRATION" = "1" ] && echo "Enabled" || echo "Disabled")"
+  echo "  VirtualGL Integration: $([ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && echo "Enabled" || echo "Disabled")"
 
   # Check if VNC password is set
-  if [ ! -f "$HOME/.vnc/passwd" ]; then
+  if [ ! -f "${HOME}/.vnc/passwd" ]; then
     echo ""
     echo "⚠ VNC password not set. Please set it now:"
     vncpasswd
@@ -11388,25 +11482,25 @@ start_vnc_server() {
     ":${VNC_DISPLAY_NUM}"
     "-geometry" "${GEOM}"
     "-depth" "${DEPTH}"
-    ${SECURITY_ARGS}
-    "-xstartup" "$HOME/.vnc/xstartup"
+    "${SECURITY_ARGS}"
+    "-xstartup" "${HOME}/.vnc/xstartup"
   )
 
   # Add VirtualGL-specific VNC arguments if integration is enabled
   # Official TurboVNC docs: Use -vgl flag for VirtualGL integration
   # Reference: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     # CRITICAL: Add -vgl flag for VirtualGL integration (official recommendation)
     # This enables VirtualGL to send rendered 3D images to TurboVNC via shared memory
     vnc_args+=("-vgl")
     
     # Add OpenGL extensions for VirtualGL
-    if [ "$VNC_OPENGL_EXTENSIONS" = "1" ]; then
+    if [ "${VNC_OPENGL_EXTENSIONS:-1}" = "1" ]; then
       vnc_args+=("-extension" "GLX")
     fi
     
     # Add GLX extensions for VirtualGL
-    if [ "$VNC_GLX_EXTENSIONS" = "1" ]; then
+    if [ "${VNC_GLX_EXTENSIONS:-1}" = "1" ]; then
       vnc_args+=("-extension" "MIT-SHM")
     fi
     
@@ -11418,7 +11512,7 @@ start_vnc_server() {
       "-dontdisconnect"
     )
     
-    [ "$VERBOSE_MODE" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added (with -vgl flag)"
+    [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added (with -vgl flag)"
   fi
 
   # Start VNC server with arguments
@@ -11431,9 +11525,9 @@ start_vnc_server() {
   if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
     echo "ERROR: VNC server failed to start"
     echo "Check logs:"
-    ls -lt ~/.vnc/*.log 2>/dev/null | head -5
+    ls -lt "${HOME}/.vnc"/*.log 2>/dev/null | head -5 || true
     echo ""
-    tail -20 ~/.vnc/*.log 2>/dev/null
+    tail -20 "${HOME}/.vnc"/*.log 2>/dev/null || true
     exit 1
   fi
 
@@ -11473,15 +11567,15 @@ start_novnc() {
 # Purpose: Continued implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-  for candidate in /usr/bin/websockify /usr/local/bin/websockify ${MINIFORGE_HOME}/bin/websockify; do
-    if [ -x "$candidate" ]; then
-      WEBSOCKIFY="$candidate"
-      echo "  Found websockify: $WEBSOCKIFY"
+  for candidate in /usr/bin/websockify /usr/local/bin/websockify "${MINIFORGE_HOME:-/opt/miniforge3}/bin/websockify"; do
+    if [ -x "${candidate}" ]; then
+      WEBSOCKIFY="${candidate}"
+      echo "  Found websockify: ${WEBSOCKIFY}"
       break
     fi
   done
 
-  if [ -z "$WEBSOCKIFY" ]; then
+  if [ -z "${WEBSOCKIFY:-}" ]; then
     echo "  ✗ websockify not found - noVNC will not be available"
     return 1
   fi
@@ -11489,9 +11583,9 @@ start_novnc() {
   # Find noVNC web files
   NOVNC_DIR=""
   for candidate in /usr/local/share/novnc /usr/share/novnc; do
-    if [ -d "$candidate" ] && [ -f "$candidate/vnc.html" ]; then
-      NOVNC_DIR="$candidate"
-      echo "  Found noVNC: $NOVNC_DIR"
+    if [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ]; then
+      NOVNC_DIR="${candidate}"
+      echo "  Found noVNC: ${NOVNC_DIR}"
       break
     fi
   done
@@ -11502,12 +11596,12 @@ start_novnc() {
 # Outputs: Environment variables, configuration
 
   # Start websockify
-  if [ -n "$NOVNC_DIR" ]; then
-    $WEBSOCKIFY --web "$NOVNC_DIR" ${WEB_PORT} localhost:${VNC_PORT} 2>&1 | \
+  if [ -n "${NOVNC_DIR:-}" ]; then
+    "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
       grep -v "WARNING" | grep -v "numpy" &
   else
     echo "  ⚠ noVNC files not found, starting websockify without web interface"
-    $WEBSOCKIFY ${WEB_PORT} localhost:${VNC_PORT} 2>&1 | \
+    "${WEBSOCKIFY}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
       grep -v "WARNING" | grep -v "numpy" &
   fi
 
@@ -11519,7 +11613,7 @@ start_novnc() {
   WEBSOCKIFY_PID=$!
   sleep 2
 
-  if ! kill -0 $WEBSOCKIFY_PID 2>/dev/null; then
+  if ! kill -0 "${WEBSOCKIFY_PID}" 2>/dev/null; then
     echo "  ✗ websockify failed to start"
     return 1
   fi
@@ -11535,15 +11629,15 @@ start_novnc() {
 
 # --- Display connection information ---
 display_connection_info() {
-  NODE=$(hostname -f 2>/dev/null || hostname)
+  NODE=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")
 
   echo ""
   echo "=========================================="
   echo "✓ VNC Server Ready!"
   echo "=========================================="
-  echo "Hostname: $NODE"
+  echo "Hostname: ${NODE}"
   echo "Display: :${VNC_DISPLAY_NUM}"
-  echo "VirtualGL: $([ "$VNC_VGL_INTEGRATION" = "1" ] && echo "Enabled (VGL_DISPLAY=${VGL_DISPLAY:-:1})" || echo "Disabled")"
+  echo "VirtualGL: $([ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && echo "Enabled (VGL_DISPLAY=${VGL_DISPLAY:-:1})" || echo "Disabled")"
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "CONNECTION METHOD 1: Native VNC Viewer (Recommended)"
@@ -11610,13 +11704,13 @@ display_connection_info() {
     echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
     echo ""
     echo "Stage 1 - Tunnel to Login Node:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@login.hpc.edu"
+    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@login.hpc.edu"
     echo ""
     echo "Stage 2 - From Login Node to Compute Node:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@${NODE}"
+    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@${NODE}"
     echo ""
     echo "Alternative - Direct Two-Stage Tunnel:"
-    echo "   ssh -J \$USER@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \$USER@${NODE}"
+    echo "   ssh -J \${USER}@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@${NODE}"
     echo ""
     echo "Open browser to: http://localhost:${TURBOVNC_WEB_PORT}"
     echo "   (Requires Java plugin - not recommended for modern browsers)"
@@ -11637,7 +11731,7 @@ display_connection_info() {
   echo "USEFUL COMMANDS:"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "View VNC logs:"
-  echo "  tail -f ~/.vnc/*.log"
+  echo "  tail -f \${HOME}/.vnc/*.log"
   echo ""
   echo "List running VNC servers:"
   echo "  vncserver -list"
@@ -11650,7 +11744,7 @@ display_connection_info() {
   echo ""
   
   # Add VirtualGL usage instructions
-  if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "VIRTUALGL USAGE:"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -11694,7 +11788,7 @@ monitor_services() {
     # Check websockify every 3rd loop (90 seconds)
     if [ $((check_count % 3)) -eq 0 ]; then
       if [ -n "${WEBSOCKIFY_PID:-}" ]; then
-        if ! kill -0 $WEBSOCKIFY_PID 2>/dev/null; then
+        if ! kill -0 "${WEBSOCKIFY_PID}" 2>/dev/null; then
           echo "WARNING: websockify died, restarting..."
           start_novnc || echo "Failed to restart websockify"
         fi
@@ -11771,7 +11865,7 @@ set -euo pipefail
 # Auto-detect system information
 COMPUTE_NODE="${2:-$(hostname)}"
 USER_NAME="${USER:-$(whoami)}"
-NODE_IP="${NODE_IP:-$(hostname -I | awk '{print $1}')}"
+NODE_IP="${NODE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}' | head -1 || echo 'localhost')}"
 
 # Configuration with auto-detection
 LOGIN_NODE="${1:-107.122.148.226}"
@@ -11785,28 +11879,28 @@ TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM_FROM_PORT))
 # Try to detect compute node from SLURM environment
 if [ -n "${SLURM_JOB_NODELIST:-}" ]; then
     # Extract first node from SLURM_JOB_NODELIST
-    COMPUTE_NODE=$(echo "$SLURM_JOB_NODELIST" | cut -d',' -f1 | sed 's/\[.*\]//')
-    echo "Detected compute node from SLURM: $COMPUTE_NODE"
+    COMPUTE_NODE=$(echo "${SLURM_JOB_NODELIST}" | cut -d',' -f1 | sed 's/\[.*\]//')
+    echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
 elif [ -n "${SLURM_NODELIST:-}" ]; then
-    COMPUTE_NODE=$(echo "$SLURM_NODELIST" | cut -d',' -f1 | sed 's/\[.*\]//')
-    echo "Detected compute node from SLURM: $COMPUTE_NODE"
+    COMPUTE_NODE=$(echo "${SLURM_NODELIST}" | cut -d',' -f1 | sed 's/\[.*\]//')
+    echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
 fi
 
 # Try to detect node IP more accurately
-if [ -n "${SLURM_NODEID:-}" ]; then
+if [ -n "${SLURM_NODEID:-}" ] && [ -n "${COMPUTE_NODE:-}" ]; then
     # If we have SLURM node ID, try to get IP from scontrol
-    NODE_IP=$(scontrol show node "$COMPUTE_NODE" 2>/dev/null | grep -oP 'NodeAddr=\K[^\s]+' | head -1 || echo "$NODE_IP")
+    NODE_IP=$(scontrol show node "${COMPUTE_NODE}" 2>/dev/null | grep -oP 'NodeAddr=\K[^\s]+' | head -1 || echo "${NODE_IP}")
 fi
 
 # Fallback IP detection methods
-if [ -z "$NODE_IP" ] || [ "$NODE_IP" = "127.0.0.1" ]; then
+if [ -z "${NODE_IP:-}" ] || [ "${NODE_IP}" = "127.0.0.1" ]; then
     # Try to get external IP
-    NODE_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || echo "$NODE_IP")
+    NODE_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || echo "${NODE_IP:-localhost}")
 fi
 
-if [ -z "$NODE_IP" ] || [ "$NODE_IP" = "127.0.0.1" ]; then
+if [ -z "${NODE_IP:-}" ] || [ "${NODE_IP}" = "127.0.0.1" ]; then
     # Last resort - use hostname
-    NODE_IP=$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo "localhost")
+    NODE_IP=$(hostname -I 2>/dev/null | awk '{print $1}' | grep -v '^127\.' | head -1 || echo "localhost")
 fi
 
 # Colors
@@ -11841,7 +11935,7 @@ show_usage() {
 }
 
 check_vnc_running() {
-    local port=$1
+    local port="${1}"
     if ! ss -tuln 2>/dev/null | grep -q ":${port}\b"; then
         echo -e "${RED}Error: VNC server not running on port ${port}${NC}"
         echo "Start VNC first with: start_vnc_xfce.sh"
@@ -11851,15 +11945,15 @@ check_vnc_running() {
 }
 
 create_tunnel_scripts() {
-    local login_node="$1"
-    local compute_node="$2"
-    local vnc_port="$3"
-    local web_port="$4"
+    local login_node="${1}"
+    local compute_node="${2}"
+    local vnc_port="${3}"
+    local web_port="${4}"
     # Calculate TurboVNC web port more robustly
     local vnc_display_num=$((vnc_port - 5900))
     local turbovnc_web_port=$((5800 + vnc_display_num))
-    local user_name="$5"
-    local node_ip="$6"
+    local user_name="${5}"
+    local node_ip="${6}"
     # Get login_port from outer scope (defined in main script)
     local login_port="${LOGIN_PORT:-22}"
     
@@ -11936,15 +12030,15 @@ EOF
 }
 
 show_connection_info() {
-    local vnc_port="$1"
-    local web_port="$2"
+    local vnc_port="${1}"
+    local web_port="${2}"
     # Calculate TurboVNC web port more robustly
     local vnc_display_num=$((vnc_port - 5900))
     local turbovnc_web_port=$((5800 + vnc_display_num))
-    local user_name="$3"
-    local compute_node="$4"
-    local node_ip="$5"
-    local login_node="$6"
+    local user_name="${3}"
+    local compute_node="${4}"
+    local node_ip="${5}"
+    local login_node="${6}"
     # Get login_port from outer scope
     local login_port="${LOGIN_PORT:-22}"
     
@@ -12091,10 +12185,10 @@ echo ""
 # --- Check dependencies ---
 echo "[1/8] Checking dependencies..."
 for cmd in vncserver Xvnc startxfce4 vglrun websockify; do
-  if command -v $cmd >/dev/null 2>&1; then
-    echo "  ✓ $cmd"
+  if command -v "${cmd}" >/dev/null 2>&1; then
+    echo "  ✓ ${cmd}"
   else
-    echo "  ✗ $cmd - MISSING!"
+    echo "  ✗ ${cmd} - MISSING!"
     exit 1
   fi
 done
@@ -12109,8 +12203,8 @@ echo ""
 echo "[2/8] Checking GPU..."
 if command -v nvidia-smi >/dev/null 2>&1; then
   GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-  if [ -n "$GPU_NAME" ]; then
-    echo "  ✓ GPU: $GPU_NAME"
+  if [ -n "${GPU_NAME}" ]; then
+    echo "  ✓ GPU: ${GPU_NAME}"
   else
     echo "  ⚠ nvidia-smi found but no GPU detected"
   fi
@@ -12203,7 +12297,7 @@ sleep 3
 
 if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
   echo "  ✗ VNC server failed to start"
-  cat ~/.vnc/*.log 2>/dev/null | tail -20
+  cat "${HOME}/.vnc"/*.log 2>/dev/null | tail -20 || true
   exit 1
 fi
 echo "  ✓ VNC server running on :${VNC_DISPLAY_NUM}"
@@ -12233,7 +12327,7 @@ echo "[6/8] Starting noVNC (HTML5 interface)..."
 
 WEBSOCKIFY=""
 for candidate in /usr/bin/websockify /usr/local/bin/websockify; do
-  [ -x "$candidate" ] && WEBSOCKIFY="$candidate" && break
+  [ -x "${candidate}" ] && WEBSOCKIFY="${candidate}" && break
 done
 
 
@@ -12241,20 +12335,20 @@ done
 # Purpose: Continuing implementation
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
-if [ -z "$WEBSOCKIFY" ]; then
+if [ -z "${WEBSOCKIFY}" ]; then
   echo "  ✗ websockify not found - skipping web interface"
 else
   NOVNC_DIR=""
   for candidate in /usr/local/share/novnc /usr/share/novnc; do
-    [ -d "$candidate" ] && [ -f "$candidate/vnc.html" ] && NOVNC_DIR="$candidate" && break
+    [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ] && NOVNC_DIR="${candidate}" && break
   done
 
-  if [ -n "$NOVNC_DIR" ]; then
-    $WEBSOCKIFY --web "$NOVNC_DIR" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
+  if [ -n "${NOVNC_DIR}" ]; then
+    "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
       grep -v "WARNING" | grep -v "numpy" &
     WSPID=$!
     sleep 2
-    if kill -0 $WSPID 2>/dev/null; then
+    if kill -0 "${WSPID}" 2>/dev/null; then
       echo "  ✓ noVNC running on port ${WEB_PORT}"
     else
       echo "  ✗ noVNC failed to start"
@@ -12292,7 +12386,7 @@ echo "============================================"
 echo "  🎉 Remote Desktop Ready!"
 echo "============================================"
 echo ""
-echo "Node: $NODE"
+echo "Node: ${NODE}"
 echo "Display: :${VNC_DISPLAY_NUM}"
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -12301,13 +12395,13 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
 echo ""
 echo "Stage 1 - Tunnel to Login Node:"
-echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@login.hpc.edu"
+echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@login.hpc.edu"
 echo ""
 echo "Stage 2 - From Login Node to Compute Node:"
-echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@${NODE}"
 echo ""
 echo "Alternative - Direct Two-Stage Tunnel:"
-echo "   ssh -J \$USER@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} \$USER@${NODE}"
+echo "   ssh -J \${USER}@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@${NODE}"
 echo ""
 echo "Connect VNC to: localhost:${VNC_PORT}"
 echo ""
@@ -12324,13 +12418,13 @@ if [ -n "${WSPID:-}" ] && kill -0 "${WSPID}" 2>/dev/null; then
   echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
   echo ""
   echo "Stage 1 - Tunnel to Login Node:"
-  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@login.hpc.edu"
+  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@login.hpc.edu"
   echo ""
   echo "Stage 2 - From Login Node to Compute Node:"
-  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@${NODE}"
   echo ""
   echo "Alternative - Direct Two-Stage Tunnel:"
-  echo "   ssh -J \$USER@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \$USER@${NODE}"
+  echo "   ssh -J \${USER}@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@${NODE}"
   echo ""
   echo "Browse: http://localhost:${WEB_PORT}"
   echo ""
@@ -12371,9 +12465,9 @@ while true; do
 
   # Check websockify
   if [ -n "${WSPID:-}" ]; then
-    if ! kill -0 $WSPID 2>/dev/null; then
+    if ! kill -0 "${WSPID}" 2>/dev/null; then
       echo "WARNING: websockify died, restarting..."
-      $WEBSOCKIFY --web "$NOVNC_DIR" ${WEB_PORT} localhost:${VNC_PORT} 2>&1 | \
+      "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
         grep -v "WARNING" &
       WSPID=$!
     fi
@@ -12396,8 +12490,8 @@ cat > /usr/local/bin/start_novnc_advanced.sh << 'NOVNCADV'
 
 set -euo pipefail
 
-VNC_DISPLAY=${1:-:1}
-WEB_PORT=${2:-6081}
+VNC_DISPLAY="${1:-:1}"
+WEB_PORT="${2:-6081}"
 VNC_PORT=$((5900 + ${VNC_DISPLAY#:}))
 
 # Generate random token for this session
@@ -12406,23 +12500,23 @@ TOKEN=$(openssl rand -hex 16)
 echo "=========================================="
 echo "Advanced noVNC Server"
 echo "=========================================="
-echo "VNC Display: $VNC_DISPLAY"
-echo "Web Port: $WEB_PORT"
-echo "Token: $TOKEN"
+echo "VNC Display: ${VNC_DISPLAY}"
+echo "Web Port: ${WEB_PORT}"
+echo "Token: ${TOKEN}"
 echo ""
-echo "Connect: http://localhost:$WEB_PORT/?token=$TOKEN"
+echo "Connect: http://localhost:${WEB_PORT}/?token=${TOKEN}"
 echo "=========================================="
 
 # Start websockify with token authentication
 # Create temporary token file (more robust than process substitution)
 TOKEN_FILE=$(mktemp)
-echo "$TOKEN: localhost:$VNC_PORT" > "$TOKEN_FILE"
-trap "rm -f '$TOKEN_FILE'" EXIT INT TERM
+echo "${TOKEN}: localhost:${VNC_PORT}" > "${TOKEN_FILE}"
+trap "rm -f '${TOKEN_FILE}'" EXIT INT TERM
 
 /usr/bin/websockify \
   --web /usr/local/share/novnc \
   --token-plugin TokenFile \
-  --token-source "$TOKEN_FILE" \
+  --token-source "${TOKEN_FILE}" \
   "${WEB_PORT}"
 NOVNCADV
 chmod +x /usr/local/bin/start_novnc_advanced.sh
@@ -12449,7 +12543,8 @@ echo ""
 # Test 1: Check VirtualGL installation
 echo "1. Checking VirtualGL installation..."
 if command -v vglrun >/dev/null 2>&1; then
-  echo "  ✓ vglrun found: $(which vglrun)"
+  VGLRUN_PATH=$(command -v vglrun)
+  echo "  ✓ vglrun found: ${VGLRUN_PATH}"
   vglrun --version 2>/dev/null || echo "  ⚠ Could not get version"
 else
   echo "  ✗ vglrun not found"
@@ -12459,33 +12554,36 @@ fi
 # Test 2: Check display
 echo ""
 echo "2. Checking display configuration..."
-echo "  VGL_DISPLAY: $VGL_DISPLAY"
+echo "  VGL_DISPLAY: ${VGL_DISPLAY}"
 echo "  DISPLAY: ${DISPLAY:-not set}"
 
-if [ -S "/tmp/.X11-unix/X${VGL_DISPLAY#:}" ]; then
-  echo "  ✓ X socket found: /tmp/.X11-unix/X${VGL_DISPLAY#:}"
+VGL_X_SOCKET="/tmp/.X11-unix/X${VGL_DISPLAY#:}"
+if [ -S "${VGL_X_SOCKET}" ]; then
+  echo "  ✓ X socket found: ${VGL_X_SOCKET}"
 else
-  echo "  ✗ X socket not found: /tmp/.X11-unix/X${VGL_DISPLAY#:}"
+  echo "  ✗ X socket not found: ${VGL_X_SOCKET}"
 fi
 
 # Test 3: Test VirtualGL connection
 echo ""
 echo "3. Testing VirtualGL connection..."
-if vglrun -d "$VGL_DISPLAY" glxinfo >/dev/null 2>&1; then
-  echo "  ✓ VirtualGL can access display $VGL_DISPLAY"
+if vglrun -d "${VGL_DISPLAY}" glxinfo >/dev/null 2>&1; then
+  echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
 else
-  echo "  ✗ VirtualGL cannot access display $VGL_DISPLAY"
+  echo "  ✗ VirtualGL cannot access display ${VGL_DISPLAY}"
   echo "  Trying to get more info..."
-  vglrun -d "$VGL_DISPLAY" glxinfo 2>&1 | head -10
+  vglrun -d "${VGL_DISPLAY}" glxinfo 2>&1 | head -10
 fi
 
 # Test 4: Check OpenGL rendering
 echo ""
 echo "4. Checking OpenGL rendering..."
-if vglrun -d "$VGL_DISPLAY" glxinfo | grep -q "OpenGL renderer"; then
+if vglrun -d "${VGL_DISPLAY}" glxinfo | grep -q "OpenGL renderer"; then
   echo "  ✓ OpenGL rendering available"
-  echo "  OpenGL renderer: $(vglrun -d "$VGL_DISPLAY" glxinfo | grep "OpenGL renderer" | head -1)"
-  echo "  OpenGL version: $(vglrun -d "$VGL_DISPLAY" glxinfo | grep "OpenGL version" | head -1)"
+  OPENGL_RENDERER=$(vglrun -d "${VGL_DISPLAY}" glxinfo | grep "OpenGL renderer" | head -1)
+  OPENGL_VERSION=$(vglrun -d "${VGL_DISPLAY}" glxinfo | grep "OpenGL version" | head -1)
+  echo "  OpenGL renderer: ${OPENGL_RENDERER}"
+  echo "  OpenGL version: ${OPENGL_VERSION}"
 else
   echo "  ✗ OpenGL rendering not available"
 fi
@@ -12496,7 +12594,7 @@ echo "5. Testing glxspheres64..."
 if command -v glxspheres64 >/dev/null 2>&1; then
   echo "  ✓ glxspheres64 found"
   echo "  Running glxspheres64 test (5 seconds)..."
-  timeout 5s vglrun -d "$VGL_DISPLAY" glxspheres64 2>&1 | head -10 || echo "  ⚠ glxspheres64 test timed out or failed"
+  timeout 5s vglrun -d "${VGL_DISPLAY}" glxspheres64 2>&1 | head -10 || echo "  ⚠ glxspheres64 test timed out or failed"
 else
   echo "  ✗ glxspheres64 not found"
 fi
@@ -12514,12 +12612,12 @@ echo "  VGL_VERBOSE: ${VGL_VERBOSE:-not set}"
 # Test 7: X11 authentication
 echo ""
 echo "7. Checking X11 authentication..."
-if [ -f "$HOME/.Xauthority" ]; then
+if [ -f "${HOME}/.Xauthority" ]; then
   echo "  ✓ .Xauthority file found"
-  if xauth list 2>/dev/null | grep -q "$VGL_DISPLAY"; then
-    echo "  ✓ X11 auth for display $VGL_DISPLAY found"
+  if xauth list 2>/dev/null | grep -q "${VGL_DISPLAY}"; then
+    echo "  ✓ X11 auth for display ${VGL_DISPLAY} found"
   else
-    echo "  ⚠ X11 auth for display $VGL_DISPLAY not found"
+    echo "  ⚠ X11 auth for display ${VGL_DISPLAY} not found"
   fi
 else
   echo "  ⚠ .Xauthority file not found"
@@ -12568,10 +12666,11 @@ echo "==> Installing KasmVNC (modern alternative)..."
 # KasmVNC has better web integration and modern features (version from config.sh)
 ARCH="amd64"
 
-cd /tmp
-if wget -q "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb"; then
-    apt-get install -y ./kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb || echo "⚠ KasmVNC installation failed (non-critical)"
-    rm -f ./kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb
+cd /tmp || exit 1
+KASMVNC_DEB="kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb"
+if wget -q "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${KASMVNC_DEB}"; then
+    apt-get install -y "./${KASMVNC_DEB}" || echo "⚠ KasmVNC installation failed (non-critical)"
+    rm -f "./${KASMVNC_DEB}"
     echo "✓ KasmVNC installed successfully"
 else
     echo "⚠ Failed to download KasmVNC (non-critical, continuing)"
@@ -12588,16 +12687,16 @@ DISPLAY_NUM=1
 VNC_PORT=$((5900 + DISPLAY_NUM))
 WEB_PORT=6901
 
-mkdir -p ~/.vnc
+mkdir -p "${HOME}/.vnc"
 
 # Create KasmVNC xstartup
-cat > ~/.vnc/xstartup << 'XS'
+cat > "${HOME}/.vnc/xstartup" << 'XS'
 #!/bin/sh
 eval "$(dbus-launch --sh-syntax)" 2>/dev/null || true
 xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
 exec startxfce4
 XS
-chmod +x ~/.vnc/xstartup
+chmod +x "${HOME}/.vnc/xstartup"
 
 echo "Starting KasmVNC..."
 echo "  Display: :${DISPLAY_NUM}"
@@ -12624,7 +12723,7 @@ kasmvncserver ":${DISPLAY_NUM}" \
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "KasmVNC started!"
-tail -f ~/.vnc/*.log
+tail -f "${HOME}/.vnc"/*.log
 KASMSTART
 chmod +x /usr/local/bin/start_kasmvnc.sh
 
@@ -12988,7 +13087,7 @@ fi
 # Install Xpra from PyPI (uses version from config.sh)
 # Using PyPI ensures we get the latest from GitHub releases
 # CRITICAL: Export PKG_CONFIG_PATH explicitly for pip subprocess
-cd /tmp
+cd /tmp || exit 1
 echo "  Installing Xpra ${XPRA_VERSION} from PyPI..."
 echo "  PKG_CONFIG_PATH for build: ${PKG_CONFIG_PATH}"
 if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" pip3 install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
@@ -13004,10 +13103,16 @@ else
         tail -20 /tmp/xpra_install.log || true
         echo "  Installing from Xpra official repository as fallback..."
         # Add Xpra official repository as fallback
-        echo "deb https://xpra.org/ stable main" > /etc/apt/sources.list.d/xpra.list
+        if [ ! -f /etc/apt/sources.list.d/xpra.list ]; then
+            echo "deb https://xpra.org/ stable main" > /etc/apt/sources.list.d/xpra.list
+        fi
         # Modern GPG key handling (replaces deprecated apt-key)
-        wget -qO- https://xpra.org/gpg.asc | gpg --dearmor > /etc/apt/trusted.gpg.d/xpra.gpg 2>/dev/null || true
-        apt-get update -qq
+        if ! wget -qO- https://xpra.org/gpg.asc | gpg --dearmor > /etc/apt/trusted.gpg.d/xpra.gpg 2>/dev/null; then
+            echo "⚠ WARNING: Failed to add Xpra GPG key, repository may not be trusted"
+        fi
+        if ! apt-get update -qq; then
+            echo "⚠ WARNING: apt-get update failed for Xpra repository"
+        fi
         if apt-get install -y --no-install-recommends xpra 2>/dev/null; then
             echo "✓ Xpra installed from official repository"
             XPRA_INSTALLED=true
@@ -13042,7 +13147,8 @@ else
             if [ -n "${XPRA_HTML5_EXTRACTED}" ] && [ -d "${XPRA_HTML5_EXTRACTED}/html5" ]; then
                 # Construct full source path for robust glob expansion
                 XPRA_HTML5_SOURCE="${XPRA_HTML5_EXTRACTED}/html5"
-                if cp -r "${XPRA_HTML5_SOURCE}"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                # Use find to handle empty directories and avoid glob expansion issues
+                if [ -d "${XPRA_HTML5_SOURCE}" ] && find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -exec cp -r {} "${XPRA_HTML5_DIR}/" \; 2>/dev/null; then
                     echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR}"
                     XPRA_HTML5_INSTALLED=true
                 else
@@ -13068,7 +13174,8 @@ else
                 if [ -n "${XPRA_HTML5_MASTER}" ] && [ -d "${XPRA_HTML5_MASTER}/html5" ]; then
                     # Construct full source path for robust glob expansion
                     XPRA_HTML5_SOURCE_MASTER="${XPRA_HTML5_MASTER}/html5"
-                    if cp -r "${XPRA_HTML5_SOURCE_MASTER}"/* "${XPRA_HTML5_DIR}/" 2>/dev/null; then
+                    # Use find to handle empty directories and avoid glob expansion issues
+                    if [ -d "${XPRA_HTML5_SOURCE_MASTER}" ] && find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -exec cp -r {} "${XPRA_HTML5_DIR}/" \; 2>/dev/null; then
                         echo "✓ Xpra HTML5 client installed from master branch"
                         XPRA_HTML5_INSTALLED=true
                     else
@@ -13192,6 +13299,11 @@ cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
 set -euo pipefail
 
 DISPLAY_NUM=${1:-1}
+# Validate DISPLAY_NUM is a positive integer
+if ! [[ "${DISPLAY_NUM}" =~ ^[0-9]+$ ]] || [ "${DISPLAY_NUM}" -le 0 ]; then
+    echo "ERROR: Display number must be a positive integer" >&2
+    exit 1
+fi
 PORT=$((5900 + DISPLAY_NUM))
 
 echo "Starting x11vnc on display :${DISPLAY_NUM} (port ${PORT})"
@@ -13334,6 +13446,16 @@ cat > /usr/local/bin/gpu_monitor.sh << 'GPUMON'
 #!/usr/bin/env bash
 # Real-time GPU monitoring
 
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+    echo "ERROR: nvidia-smi not found. NVIDIA drivers may not be installed." >&2
+    exit 1
+fi
+
+if ! command -v watch >/dev/null 2>&1; then
+    echo "ERROR: watch command not found. Please install procps package." >&2
+    exit 1
+fi
+
 watch -n 1 "nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu,power.draw --format=csv,noheader,nounits | column -t -s','"
 GPUMON
 chmod +x /usr/local/bin/gpu_monitor.sh
@@ -13394,16 +13516,6 @@ echo "=========================================="
 VNCMON
 chmod +x /usr/local/bin/vnc_monitor.sh
 
-#--- Sub-block: Section continuation (5272) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 5137 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo "✓ Performance monitoring tools installed"
 
 #===============================================================================
@@ -13428,7 +13540,18 @@ echo "==> Rust tools (bat, fd, ripgrep, eza, bottom, procs) compiled from source
 # Outputs: Environment variables, configuration
 
 # zoxide (better cd)
-curl -sS https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh | bash
+# Download and verify script before execution
+if curl -sSf https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh -o /tmp/zoxide_install.sh; then
+    if [ -s /tmp/zoxide_install.sh ]; then
+        bash /tmp/zoxide_install.sh
+        rm -f /tmp/zoxide_install.sh
+    else
+        echo "⚠ WARNING: zoxide install script is empty, skipping installation"
+        rm -f /tmp/zoxide_install.sh
+    fi
+else
+    echo "⚠ WARNING: Failed to download zoxide install script, skipping installation"
+fi
 # Add /root/.local/bin to PATH so zoxide is available
 export PATH="/root/.local/bin:${PATH}"
 echo "==> Added /root/.local/bin to PATH for zoxide"
@@ -13518,16 +13641,6 @@ ${JULIA_HOME}/bin/julia -e '
   # IPC packages
   Pkg.add(["ZMQ", "MsgPack", "JSON3"])
 
-#--- Sub-block: Section continuation (5423) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Rust CLI tools compilation ---
-# Purpose: Build modern command-line utilities
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
   # GPU packages
   Pkg.add(["CUDA"])
 
@@ -13548,7 +13661,7 @@ ${JULIA_HOME}/bin/julia -e '
 apt-get install -y \
   htop \
   iotop \
-  glances \
+  glances
 
 # Install nvtop (GPU monitor)
 echo "Building nvtop (GPU monitoring tool)..."
@@ -13624,16 +13737,6 @@ cat > /etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml << 'EOF'
         </rtps>
     </participant>
 
-#--- Sub-block: Section continuation (5485) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 5338 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     <transport_descriptors>
         <transport_descriptor>
             <transport_id>shm_transport</transport_id>
@@ -13693,15 +13796,28 @@ export CARGO_HOME=/opt/rust/cargo
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
 echo "--> Downloading and installing rustup..."
-if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-  sh -s -- \
-    -y \
-    --no-modify-path \
-    --profile minimal \
-    --default-toolchain stable; then
-  echo "✓ rustup installation completed"
+# Download rustup installer script first for verification
+if curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o /tmp/rustup-init.sh; then
+  if [ -s /tmp/rustup-init.sh ]; then
+    if sh /tmp/rustup-init.sh \
+        -y \
+        --no-modify-path \
+        --profile minimal \
+        --default-toolchain stable; then
+      echo "✓ rustup installation completed"
+      rm -f /tmp/rustup-init.sh
+    else
+      echo "✗ rustup installation failed"
+      rm -f /tmp/rustup-init.sh
+      exit 1
+    fi
+  else
+    echo "✗ rustup installer script is empty"
+    rm -f /tmp/rustup-init.sh
+    exit 1
+  fi
 else
-  echo "✗ rustup installation failed"
+  echo "✗ rustup installation failed - could not download installer"
   exit 1
 fi
 
@@ -13730,14 +13846,8 @@ echo "Compiling Rust Tools from Source"
 echo "This will take 15-20 minutes..."
 echo
 
-#--- Sub-block: Section continuation (5580) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
 # Set build flags for generic x86-64 compatibility
 export RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
-
 
 #--- Sub-block 24.4: Rust tool installation function ---
 # Purpose: Reusable function for cargo install with error tracking
@@ -13745,13 +13855,21 @@ export RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
 # Outputs: Populates INSTALLED_TOOLS and FAILED_TOOLS
 # Self-contained: Yes (complete function definition)
 install_rust_tool() {
-  local package="$1"
-  local version="$2"
-  local description="$3"
-  local build_time="$4"
+  local package="${1:-}"
+  local version="${2:-}"
+  local description="${3:-unknown tool}"
+  local build_time="${4:-unknown}"
+  
+  # Validate required parameters
+  if [ -z "${package}" ]; then
+    echo "ERROR: install_rust_tool called without package name" >&2
+    return 1
+  fi
   
   echo "==> Compiling ${package} (${description})..."
-  echo "  This takes ~${build_time} minutes..."
+  if [ -n "${build_time}" ] && [ "${build_time}" != "unknown" ]; then
+    echo "  This takes ~${build_time} minutes..."
+  fi
   
   if [ -n "$version" ]; then
     # Try first with --locked (respect Cargo.lock)
@@ -13797,11 +13915,20 @@ install_rust_tool() {
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Binary in /opt/rust/tools/bin
 install_prebuilt_binary() {
-  local tool_name="$1"
-  local binary_url="$2"
-  local binary_name="$3"
+  local tool_name="${1:-}"
+  local binary_url="${2:-}"
+  local binary_name="${3:-}"
+  
+  # Validate required parameters
+  if [ -z "${tool_name}" ] || [ -z "${binary_url}" ] || [ -z "${binary_name}" ]; then
+    echo "ERROR: install_prebuilt_binary called with missing parameters" >&2
+    return 1
+  fi
   
   echo "==> Attempting binary fallback for ${tool_name}..."
+  
+  # Ensure target directory exists
+  mkdir -p /opt/rust/tools/bin || return 1
   
   if curl -fsSL -o "/tmp/${binary_name}" "${binary_url}"; then
     chmod +x "/tmp/${binary_name}"
@@ -13964,16 +14091,31 @@ if [ "$OX_INSTALLED" = false ]; then
     if [ -f "/tmp/ox" ] && [ -s "/tmp/ox" ]; then
       # Check if it's a valid binary
       if file "/tmp/ox" 2>/dev/null | grep -qE "(ELF|executable|binary)"; then
-        chmod +x "/tmp/ox"
-        mkdir -p /opt/rust/tools/bin
-        mv "/tmp/ox" "/opt/rust/tools/bin/ox"
-        # Final verification
-        if [ -x "/opt/rust/tools/bin/ox" ]; then
-          echo "✓ ox ${OX_VERSION} installed from pre-built binary"
-          INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
-          OX_INSTALLED=true
+        if chmod +x "/tmp/ox" 2>/dev/null; then
+          if mkdir -p /opt/rust/tools/bin 2>/dev/null; then
+            if mv "/tmp/ox" "/opt/rust/tools/bin/ox" 2>/dev/null; then
+              # Final verification
+              if [ -x "/opt/rust/tools/bin/ox" ]; then
+                echo "✓ ox ${OX_VERSION} installed from pre-built binary"
+                INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
+                OX_INSTALLED=true
+              else
+                echo "✗ ox binary not executable after installation"
+                FAILED_TOOLS="${FAILED_TOOLS} ox"
+              fi
+            else
+              echo "✗ Failed to move ox binary"
+              rm -f "/tmp/ox"
+              FAILED_TOOLS="${FAILED_TOOLS} ox"
+            fi
+          else
+            echo "✗ Failed to create /opt/rust/tools/bin directory"
+            rm -f "/tmp/ox"
+            FAILED_TOOLS="${FAILED_TOOLS} ox"
+          fi
         else
-          echo "✗ ox binary not executable after installation"
+          echo "✗ Failed to make ox binary executable"
+          rm -f "/tmp/ox"
           FAILED_TOOLS="${FAILED_TOOLS} ox"
         fi
       else
@@ -14011,7 +14153,9 @@ echo "Creating Symlinks"
 # Map actual binary names (as installed by cargo) to desired command names
 # NOTE: Cargo installs with the actual binary name, not the package name
 # e.g., package "ripgrep" installs binary "rg"
-declare -A TOOL_MAP
+if ! declare -p TOOL_MAP &>/dev/null; then
+  declare -A TOOL_MAP
+fi
 TOOL_MAP["zellij"]="zellij"
 TOOL_MAP["rg"]="rg"           # ripgrep installs as 'rg'
 TOOL_MAP["bat"]="bat"
@@ -14025,8 +14169,11 @@ TOOL_MAP["ox"]="ox"
 for binary in "${!TOOL_MAP[@]}"; do
   cmd_name="${TOOL_MAP[$binary]}"
   if [ -f "/opt/rust/tools/bin/${binary}" ]; then
-    ln -sf "/opt/rust/tools/bin/${binary}" "/usr/local/bin/${cmd_name}"
-    echo "✓ ${binary} -> /usr/local/bin/${cmd_name}"
+    if ln -sf "/opt/rust/tools/bin/${binary}" "/usr/local/bin/${cmd_name}" 2>/dev/null; then
+      echo "✓ ${binary} -> /usr/local/bin/${cmd_name}"
+    else
+      echo "✗ Failed to create symlink for ${binary}"
+    fi
   else
     echo "✗ ${binary} binary not found (not installed)"
   fi
@@ -14041,8 +14188,14 @@ echo ""
 # Outputs: Rust binaries in /opt/rust/tools/bin
 echo "Cleaning Up Build Artifacts"
 # Calculate sizes before cleanup
-REGISTRY_SIZE=$(du -sh /opt/rust/cargo/registry 2>/dev/null | cut -f1 || echo "0")
-GIT_SIZE=$(du -sh /opt/rust/cargo/git 2>/dev/null | cut -f1 || echo "0")
+REGISTRY_SIZE="0"
+GIT_SIZE="0"
+if [ -d "/opt/rust/cargo/registry" ]; then
+  REGISTRY_SIZE=$(du -sh /opt/rust/cargo/registry 2>/dev/null | cut -f1 || echo "0")
+fi
+if [ -d "/opt/rust/cargo/git" ]; then
+  GIT_SIZE=$(du -sh /opt/rust/cargo/git 2>/dev/null | cut -f1 || echo "0")
+fi
 
 echo "  Cargo registry: $REGISTRY_SIZE"
 echo "  Cargo git cache: $GIT_SIZE"
@@ -14077,17 +14230,21 @@ echo ""
 # Outputs: Rust binaries in /opt/rust/tools/bin
 echo "Rust Tools Installation Summary"
 echo ""
-if [ -n "$INSTALLED_TOOLS" ]; then
+if [ -n "${INSTALLED_TOOLS}" ]; then
   echo "✓ Successfully installed tools:"
-  for tool in $INSTALLED_TOOLS; do
-    echo "  - $tool"
+  # Use proper word splitting with IFS to handle spaces
+  IFS=' ' read -ra TOOLS_ARRAY <<< "${INSTALLED_TOOLS}"
+  for tool in "${TOOLS_ARRAY[@]}"; do
+    [ -n "${tool}" ] && echo "  - ${tool}"
   done
 fi
 
-if [ -n "$FAILED_TOOLS" ]; then
+if [ -n "${FAILED_TOOLS}" ]; then
   echo "✗ Failed to install (non-critical):"
-  for tool in $FAILED_TOOLS; do
-    echo "  - $tool"
+  # Use proper word splitting to handle spaces
+  IFS=' ' read -ra FAILED_ARRAY <<< "${FAILED_TOOLS}"
+  for tool in "${FAILED_ARRAY[@]}"; do
+    [ -n "${tool}" ] && echo "  - ${tool}"
   done
 fi
 
@@ -14103,12 +14260,13 @@ echo "✓ Rust toolchain setup complete"
 
 # ... [after cargo install commands] ...
 # VERIFY before claiming success
-if [ -d "/opt/rust/tools/bin" ] && [ "$(ls -A /opt/rust/tools/bin)" ]; then
+if [ -d "/opt/rust/tools/bin" ] && [ "$(find /opt/rust/tools/bin -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
   echo "✓ Rust tools installed successfully"
-  ls -lh /opt/rust/tools/bin/
+  ls -lh /opt/rust/tools/bin/ 2>/dev/null || echo "  (directory exists but listing failed)"
 else
   echo "Rust tools directory empty or missing"
   echo "Creating directory for manual installation later..."
+  mkdir -p /opt/rust/tools/bin 2>/dev/null || true
 fi
 
 #--- Sub-block 24.8: Configure Rust tool aliases ---
@@ -14131,10 +14289,21 @@ alias top='btm'
 alias ps='procs'
 
 # Add /root/.local/bin to PATH for zoxide (if not already present)
-export PATH="/root/.local/bin:${PATH}"
-# Initialize zoxide (better cd) - installed earlier via curl script
-eval "$(zoxide init bash)"
-alias cd='z'
+if [ -d "/root/.local/bin" ]; then
+  case ":${PATH}:" in
+    *:/root/.local/bin:*)
+      # Already in PATH
+      ;;
+    *)
+      export PATH="/root/.local/bin:${PATH}"
+      ;;
+  esac
+  # Initialize zoxide (better cd) - installed earlier via curl script
+  if command -v zoxide >/dev/null 2>&1; then
+    eval "$(zoxide init bash 2>/dev/null)" || true
+    alias cd='z'
+  fi
+fi
 RUSTALIASES
 
 echo "✓ Rust tool aliases configured"
@@ -14155,7 +14324,7 @@ chmod +x /etc/profile.d/zoxide-path.sh
 echo "✓ System-wide PATH configuration for zoxide created"
 
 # ZELLIJ CONFIGURATION
-mkdir -p /etc/zellij
+mkdir -p /etc/zellij || { echo "✗ Failed to create /etc/zellij directory"; exit 1; }
 cat > /etc/zellij/config.kdl << 'EOF'
 // Zellij configuration for ROS 2 multi-workspace development
 
@@ -14191,7 +14360,7 @@ copy_on_select true
 EOF
 
 # OX EDITOR CONFIGURATION
-mkdir -p /etc/ox
+mkdir -p /etc/ox || { echo "✗ Failed to create /etc/ox directory"; exit 1; }
 cat > /etc/ox/config.ron << 'EOX'
 Config(
     general: General(
@@ -14311,8 +14480,21 @@ layout {
 }
 LAYOUT
 
+if [ ! -f /tmp/ros_layout.kdl ]; then
+  echo "✗ Failed to create Zellij layout file" >&2
+  exit 1
+fi
+
 # Launch Zellij with layout
-zellij --layout /tmp/ros_layout.kdl attach -c $SESSION
+if command -v zellij >/dev/null 2>&1; then
+  zellij --layout /tmp/ros_layout.kdl attach -c "${SESSION}" || {
+    echo "✗ Failed to launch Zellij session" >&2
+    exit 1
+  }
+else
+  echo "Error: zellij not found. Please install zellij first." >&2
+  exit 1
+fi
 EOF
 chmod +x /usr/local/bin/ros_multiterm_zellij
 
@@ -14324,22 +14506,30 @@ cat > /usr/local/bin/ros_multiterm_tmux << 'EOF'
 SESSION="ros_multi"
 
 # Create new tmux session
-tmux new-session -d -s $SESSION
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "Error: tmux not found. Please install tmux first." >&2
+  exit 1
+fi
+
+if ! tmux new-session -d -s "${SESSION}" 2>/dev/null; then
+  echo "✗ Failed to create tmux session ${SESSION}" >&2
+  exit 1
+fi
 
 # Window 0: Humble workspace
-tmux rename-window -t $SESSION:0 'Humble'
-tmux send-keys -t $SESSION:0 "conda activate ros2_humble" C-m
-tmux send-keys -t $SESSION:0 "cd /workspaces/humble_ws" C-m
+tmux rename-window -t "${SESSION}:0" 'Humble' 2>/dev/null || true
+tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble" C-m 2>/dev/null || true
+tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m 2>/dev/null || true
 
 # Window 1: Jazzy workspace
-tmux new-window -t $SESSION:1 -n 'Jazzy'
-tmux send-keys -t $SESSION:1 "conda activate ros2_jazzy" C-m
-tmux send-keys -t $SESSION:1 "cd /workspaces/jazzy_ws" C-m
+tmux new-window -t "${SESSION}:1" -n 'Jazzy' 2>/dev/null || true
+tmux send-keys -t "${SESSION}:1" "conda activate ros2_jazzy" C-m 2>/dev/null || true
+tmux send-keys -t "${SESSION}:1" "cd /workspaces/jazzy_ws" C-m 2>/dev/null || true
 
 # Window 2: Bridge/monitoring
-tmux new-window -t $SESSION:2 -n 'Bridge'
-tmux send-keys -t $SESSION:2 "echo 'Start domain bridge when ready'" C-m
-tmux send-keys -t $SESSION:2 "python3 /opt/scripts/domain_bridge.py" C-m
+tmux new-window -t "${SESSION}:2" -n 'Bridge' 2>/dev/null || true
+tmux send-keys -t "${SESSION}:2" "echo 'Start domain bridge when ready'" C-m 2>/dev/null || true
+tmux send-keys -t "${SESSION}:2" "python3 /opt/scripts/domain_bridge.py" C-m 2>/dev/null || true
 
 #--- Sub-block: Section continuation (5987) ---
 # Purpose: Implementation details
@@ -14347,9 +14537,9 @@ tmux send-keys -t $SESSION:2 "python3 /opt/scripts/domain_bridge.py" C-m
 # Outputs: Julia packages, environments
 
 # Window 3: Julia processing
-tmux new-window -t $SESSION:3 -n 'Julia'
-tmux send-keys -t $SESSION:3 "echo 'Julia server: julia /opt/scripts/julia_vision_server.jl'" C-m
-tmux send-keys -t $SESSION:3 "julia" C-m
+tmux new-window -t "${SESSION}:3" -n 'Julia' 2>/dev/null || true
+tmux send-keys -t "${SESSION}:3" "echo 'Julia server: julia /opt/scripts/julia_vision_server.jl'" C-m 2>/dev/null || true
+tmux send-keys -t "${SESSION}:3" "julia" C-m 2>/dev/null || true
 
 
 #--- Sub-block: Code section 5830 ---
@@ -14357,13 +14547,16 @@ tmux send-keys -t $SESSION:3 "julia" C-m
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
 # Window 4: Monitoring (split pane)
-tmux new-window -t $SESSION:4 -n 'Monitor'
-tmux send-keys -t $SESSION:4 'btm' C-m
-tmux split-window -h -t $SESSION:4
-tmux send-keys -t $SESSION:4.1 'nvtop' C-m
+tmux new-window -t "${SESSION}:4" -n 'Monitor' 2>/dev/null || true
+tmux send-keys -t "${SESSION}:4" 'btm' C-m 2>/dev/null || true
+tmux split-window -h -t "${SESSION}:4" 2>/dev/null || true
+tmux send-keys -t "${SESSION}:4.1" 'nvtop' C-m 2>/dev/null || true
 
 # Attach to session
-tmux attach-session -t $SESSION
+tmux attach-session -t "${SESSION}" || {
+  echo "✗ Failed to attach to tmux session ${SESSION}" >&2
+  exit 1
+}
 EOF
 chmod +x /usr/local/bin/ros_multiterm_tmux
 
@@ -14371,12 +14564,12 @@ chmod +x /usr/local/bin/ros_multiterm_tmux
 cat > /usr/local/bin/ros_multiterm << 'EOF'
 #!/bin/bash
 # Default to Zellij, fallback to tmux
-if command -v zellij &>/dev/null; then
+if command -v zellij >/dev/null 2>&1; then
   exec /usr/local/bin/ros_multiterm_zellij "$@"
-elif command -v tmux &>/dev/null; then
+elif command -v tmux >/dev/null 2>&1; then
   exec /usr/local/bin/ros_multiterm_tmux "$@"
 else
-  echo "Error: No terminal multiplexer found (zellij or tmux)"
+  echo "Error: No terminal multiplexer found (zellij or tmux)" >&2
   exit 1
 fi
 EOF
@@ -14384,11 +14577,13 @@ chmod +x /usr/local/bin/ros_multiterm
 
 # CLEANUP RUST BUILD ARTIFACTS
 # Remove cargo cache to save space
-rm -rf /opt/rust/cargo/registry
-rm -rf /opt/rust/cargo/git
+[ -d "/opt/rust/cargo/registry" ] && rm -rf /opt/rust/cargo/registry
+[ -d "/opt/rust/cargo/git" ] && rm -rf /opt/rust/cargo/git
 # Keep only the installed binaries
 echo "Rust tools installed successfully"
-ls -lh /opt/rust/tools/bin/
+if [ -d "/opt/rust/tools/bin" ]; then
+  ls -lh /opt/rust/tools/bin/ 2>/dev/null || echo "  (directory exists but listing failed)"
+fi
 
 # ZENOH INSTALLATION (with error checking)
 
@@ -14407,49 +14602,57 @@ ls -lh /opt/rust/tools/bin/
 # Outputs: Environment variables, configuration
 echo "==> Installing Zenoh"
 ZENOH_INSTALLED=false
-mkdir -p /opt/zenoh
+mkdir -p /opt/zenoh || { echo "✗ Failed to create /opt/zenoh directory"; exit 1; }
 cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
 
 # Using Zenoh configuration from config.sh
-ZENOH_FILE="${ZENOH_FILE}"
-ZENOH_URL="${ZENOH_URL}"
+ZENOH_FILE="${ZENOH_FILE:-}"
+ZENOH_URL="${ZENOH_URL:-}"
+
+if [ -z "${ZENOH_FILE}" ] || [ -z "${ZENOH_URL}" ]; then
+  echo "✗ Zenoh configuration variables not set (ZENOH_FILE or ZENOH_URL)"
+  exit 1
+fi
 
 # Downloading Zenoh from GitHub with retry logic...
 ZENOH_DOWNLOAD_SUCCESS=false
 for attempt in 1 2 3; do
   echo "Attempt ${attempt}/3: Downloading Zenoh..."
-  if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_URL}"; then
+  if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_URL}" && [ -f "${ZENOH_FILE}" ]; then
     echo "✓ Download successful"
     ZENOH_DOWNLOAD_SUCCESS=true
     break
   else
     echo "✗ Download attempt ${attempt} failed"
-    if [ $attempt -lt 3 ]; then
+    if [ "${attempt}" -lt 3 ]; then
       echo "  Retrying in 5 seconds..."
       sleep 5
     fi
   fi
 done
 
-if [ "$ZENOH_DOWNLOAD_SUCCESS" = true ]; then
+if [ "${ZENOH_DOWNLOAD_SUCCESS}" = true ]; then
   if unzip -q "${ZENOH_FILE}" -d /opt/zenoh; then
     echo "✓ Extraction successful"
     
     # Find and install zenohd binary
     ZENOH_BIN=$(find /opt/zenoh -type f -name "zenohd" 2>/dev/null | head -1)
     if [ -n "${ZENOH_BIN}" ] && [ -f "${ZENOH_BIN}" ]; then
-      chmod +x "${ZENOH_BIN}"
-      ln -sf "${ZENOH_BIN}" /usr/local/bin/zenohd
-      echo "✓ Zenoh router installed: ${ZENOH_VERSION}"
-      
-      # Handle plugins (zenohd looks for plugins in same directory or via plugin-search-dir)
-      ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
-      mkdir -p "${ZENOH_PLUGINS_DIR}"
-      find /opt/zenoh -type f -name "libzenoh_plugin*.so" -exec cp {} "${ZENOH_PLUGINS_DIR}/" \; 2>/dev/null
-      if [ "$(ls -A ${ZENOH_PLUGINS_DIR} 2>/dev/null)" ]; then
-        echo "✓ Zenoh plugins installed: $(ls ${ZENOH_PLUGINS_DIR} | wc -l) plugin(s)"
-        # Make plugins executable and set library path
-        chmod +x ${ZENOH_PLUGINS_DIR}/*.so 2>/dev/null || true
+      if chmod +x "${ZENOH_BIN}" 2>/dev/null && ln -sf "${ZENOH_BIN}" /usr/local/bin/zenohd 2>/dev/null; then
+        echo "✓ Zenoh router installed: ${ZENOH_VERSION:-unknown}"
+        
+        # Handle plugins (zenohd looks for plugins in same directory or via plugin-search-dir)
+        ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
+        mkdir -p "${ZENOH_PLUGINS_DIR}" || { echo "✗ Failed to create plugins directory"; }
+        find /opt/zenoh -type f -name "libzenoh_plugin*.so" -exec cp {} "${ZENOH_PLUGINS_DIR}/" \; 2>/dev/null || true
+        PLUGIN_COUNT=$(find "${ZENOH_PLUGINS_DIR}" -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l)
+        if [ "${PLUGIN_COUNT}" -gt 0 ]; then
+          echo "✓ Zenoh plugins installed: ${PLUGIN_COUNT} plugin(s)"
+          # Make plugins executable and set library path
+          chmod +x "${ZENOH_PLUGINS_DIR}"/*.so 2>/dev/null || true
+        fi
+      else
+        echo "✗ Failed to install zenohd binary"
       fi
       
       # Verify installation
@@ -14468,7 +14671,7 @@ if [ "$ZENOH_DOWNLOAD_SUCCESS" = true ]; then
   else
     echo "✗ Extraction failed"
   fi
-  rm -f "${ZENOH_FILE}"
+  [ -f "${ZENOH_FILE}" ] && rm -f "${ZENOH_FILE}"
 else
   echo "✗ Download failed after 3 attempts - Zenoh will not be available"
   echo "  URL: ${ZENOH_URL}"
@@ -14480,35 +14683,40 @@ fi
 # Purpose: Install ROS 2 DDS bridge plugin for Zenoh
 # Dependencies: Successful Zenoh installation (but can be installed independently)
 # Outputs: DDS bridge plugin and binaries
-if [ "$ZENOH_INSTALLED" = true ]; then
+if [ "${ZENOH_INSTALLED}" = true ]; then
   echo "==> Installing Zenoh ROS 2 DDS Bridge"
   cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
   
-  ZENOH_ROS2DDS_FILE="${ZENOH_ROS2DDS_FILE}"
-  ZENOH_ROS2DDS_URL="${ZENOH_ROS2DDS_URL}"
+  ZENOH_ROS2DDS_FILE="${ZENOH_ROS2DDS_FILE:-}"
+  ZENOH_ROS2DDS_URL="${ZENOH_ROS2DDS_URL:-}"
   ZENOH_ROS2DDS_INSTALLED=false
   
-  # Downloading Zenoh ROS2DDS bridge with retry logic...
-  ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=false
-  for attempt in 1 2 3; do
-    echo "Attempt ${attempt}/3: Downloading Zenoh ROS 2 DDS Bridge..."
-    if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_ROS2DDS_URL}"; then
-      echo "✓ Download successful"
-      ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=true
-      break
-    else
-      echo "✗ Download attempt ${attempt} failed"
-      if [ $attempt -lt 3 ]; then
-        echo "  Retrying in 5 seconds..."
-        sleep 5
+  if [ -z "${ZENOH_ROS2DDS_FILE}" ] || [ -z "${ZENOH_ROS2DDS_URL}" ]; then
+    echo "✗ Zenoh ROS2DDS configuration variables not set"
+    echo "  Skipping ROS2DDS bridge installation"
+  else
+    # Downloading Zenoh ROS2DDS bridge with retry logic...
+    ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=false
+    for attempt in 1 2 3; do
+      echo "Attempt ${attempt}/3: Downloading Zenoh ROS 2 DDS Bridge..."
+      if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_ROS2DDS_URL}" && [ -f "${ZENOH_ROS2DDS_FILE}" ]; then
+        echo "✓ Download successful"
+        ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=true
+        break
+      else
+        echo "✗ Download attempt ${attempt} failed"
+        if [ "${attempt}" -lt 3 ]; then
+          echo "  Retrying in 5 seconds..."
+          sleep 5
+        fi
       fi
-    fi
-  done
+    done
+  fi
   
-  if [ "$ZENOH_ROS2DDS_DOWNLOAD_SUCCESS" = true ]; then
+  if [ "${ZENOH_ROS2DDS_DOWNLOAD_SUCCESS}" = true ]; then
     # Extract to temporary location first
     TEMP_EXTRACT_DIR="/tmp/zenoh-ros2dds-extract"
-    mkdir -p "${TEMP_EXTRACT_DIR}"
+    mkdir -p "${TEMP_EXTRACT_DIR}" || { echo "✗ Failed to create temp extract directory"; exit 1; }
     
     if unzip -q "${ZENOH_ROS2DDS_FILE}" -d "${TEMP_EXTRACT_DIR}"; then
       echo "✓ Extraction successful"
@@ -14516,43 +14724,55 @@ if [ "$ZENOH_INSTALLED" = true ]; then
       # Find and install zenoh-bridge-ros2dds binary
       ROS2DDS_BRIDGE_BIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "zenoh-bridge-ros2dds" 2>/dev/null | head -1)
       if [ -n "${ROS2DDS_BRIDGE_BIN}" ] && [ -f "${ROS2DDS_BRIDGE_BIN}" ]; then
-        chmod +x "${ROS2DDS_BRIDGE_BIN}"
-        ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-ros2dds
-        # Also create alias for zenoh-bridge-dds (common name)
-        ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-dds
-        echo "✓ Zenoh ROS 2 DDS bridge binary installed"
-        ZENOH_ROS2DDS_INSTALLED=true
+        if chmod +x "${ROS2DDS_BRIDGE_BIN}" 2>/dev/null && \
+           ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-ros2dds 2>/dev/null && \
+           ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-dds 2>/dev/null; then
+          echo "✓ Zenoh ROS 2 DDS bridge binary installed"
+          ZENOH_ROS2DDS_INSTALLED=true
+        else
+          echo "✗ Failed to install bridge binary"
+        fi
       fi
       
       # Find and install ROS2DDS plugin
       ROS2DDS_PLUGIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "libzenoh_plugin_ros2dds*.so" 2>/dev/null | head -1)
       if [ -n "${ROS2DDS_PLUGIN}" ] && [ -f "${ROS2DDS_PLUGIN}" ]; then
         ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
-        mkdir -p "${ZENOH_PLUGINS_DIR}"
-        cp "${ROS2DDS_PLUGIN}" "${ZENOH_PLUGINS_DIR}/"
-        chmod +x "${ZENOH_PLUGINS_DIR}/$(basename ${ROS2DDS_PLUGIN})"
-        echo "✓ Zenoh ROS 2 DDS plugin installed"
-        ZENOH_ROS2DDS_INSTALLED=true
+        mkdir -p "${ZENOH_PLUGINS_DIR}" || { echo "✗ Failed to create plugins directory"; }
+        if cp "${ROS2DDS_PLUGIN}" "${ZENOH_PLUGINS_DIR}/" 2>/dev/null; then
+          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}")
+          chmod +x "${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}" 2>/dev/null || true
+          echo "✓ Zenoh ROS 2 DDS plugin installed"
+          ZENOH_ROS2DDS_INSTALLED=true
+        else
+          echo "✗ Failed to copy plugin"
+        fi
       fi
       
       # Verify installation
-      if command -v zenoh-bridge-ros2dds >/dev/null 2>&1 || [ -n "${ROS2DDS_PLUGIN}" ]; then
+      if command -v zenoh-bridge-ros2dds >/dev/null 2>&1 || [ -n "${ROS2DDS_PLUGIN:-}" ]; then
         echo "✓ Zenoh ROS 2 DDS Bridge installation verified"
-        echo "  Bridge binary: $(command -v zenoh-bridge-ros2dds 2>/dev/null || echo 'N/A (plugin only)')"
-        echo "  Plugin: ${ZENOH_PLUGINS_DIR}/$(basename ${ROS2DDS_PLUGIN} 2>/dev/null || echo 'N/A')"
+        BRIDGE_BIN_PATH=$(command -v zenoh-bridge-ros2dds 2>/dev/null || echo 'N/A (plugin only)')
+        echo "  Bridge binary: ${BRIDGE_BIN_PATH}"
+        if [ -n "${ROS2DDS_PLUGIN:-}" ]; then
+          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}")
+          echo "  Plugin: ${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}"
+        fi
       fi
       
       # Cleanup
-      rm -rf "${TEMP_EXTRACT_DIR}"
+      [ -d "${TEMP_EXTRACT_DIR}" ] && rm -rf "${TEMP_EXTRACT_DIR}"
     else
       echo "✗ Extraction failed"
     fi
-    rm -f "${ZENOH_ROS2DDS_FILE}"
+    [ -f "${ZENOH_ROS2DDS_FILE}" ] && rm -f "${ZENOH_ROS2DDS_FILE}"
   else
-    echo "✗ Download failed after 3 attempts - Zenoh ROS 2 DDS Bridge will not be available"
-    echo "  URL: ${ZENOH_ROS2DDS_URL}"
-    echo "  File: ${ZENOH_ROS2DDS_FILE}"
-    echo "  You can install manually later if needed"
+    if [ -n "${ZENOH_ROS2DDS_URL:-}" ]; then
+      echo "✗ Download failed after 3 attempts - Zenoh ROS 2 DDS Bridge will not be available"
+      echo "  URL: ${ZENOH_ROS2DDS_URL}"
+      echo "  File: ${ZENOH_ROS2DDS_FILE}"
+      echo "  You can install manually later if needed"
+    fi
   fi
 else
   echo "⚠ Skipping Zenoh ROS 2 DDS Bridge installation (Zenoh not installed)"
@@ -14565,9 +14785,9 @@ cd /
 # Outputs: Environment variables, configuration
 
 # Only configure Zenoh if installation was successful
-if [ "$ZENOH_INSTALLED" = true ]; then
+if [ "${ZENOH_INSTALLED}" = true ]; then
   echo "==> Configuring Zenoh"
-  mkdir -p /etc/zenoh
+  mkdir -p /etc/zenoh || { echo "✗ Failed to create /etc/zenoh directory"; exit 1; }
 # Zenoh Router Configuration
 cat > /etc/zenoh/zenoh-router.json5 << 'EOF'
 // Zenoh router configuration for ROS 2 multi-version bridge
@@ -14707,15 +14927,19 @@ EOF
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
 # ZENOH JULIA BINDINGS (Optional, but useful)
-${JULIA_HOME}/bin/julia -e '
-  using Pkg
-  # Zenoh.jl wrapper (community package)
-  # Note: Official Julia bindings may not exist yet
-  # Use ZMQ bridge to Zenoh as fallback
-  Pkg.add(["ZMQ", "JSON3", "HTTP"])
-  # If official Zenoh.jl becomes available:
-  # Pkg.add("Zenoh")
-'
+if [ -n "${JULIA_HOME:-}" ] && [ -x "${JULIA_HOME}/bin/julia" ]; then
+  "${JULIA_HOME}/bin/julia" -e '
+    using Pkg
+    # Zenoh.jl wrapper (community package)
+    # Note: Official Julia bindings may not exist yet
+    # Use ZMQ bridge to Zenoh as fallback
+    Pkg.add(["ZMQ", "JSON3", "HTTP"])
+    # If official Zenoh.jl becomes available:
+    # Pkg.add("Zenoh")
+  ' || echo "⚠ Failed to install Zenoh Julia bindings (non-critical)"
+else
+  echo "⚠ Julia not found - skipping Zenoh Julia bindings"
+fi
 
 # ZENOH MANAGEMENT SCRIPTS
 # Zenoh startup script
@@ -14726,7 +14950,8 @@ cat > /usr/local/bin/zenoh_start << 'EOF'
 echo "Starting Zenoh infrastructure..."
 
 # Set plugin search directory if plugins are installed
-if [ -d "/opt/zenoh/plugins" ] && [ "$(ls -A /opt/zenoh/plugins 2>/dev/null)" ]; then
+PLUGIN_COUNT=$(find /opt/zenoh/plugins -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l)
+if [ -d "/opt/zenoh/plugins" ] && [ "${PLUGIN_COUNT}" -gt 0 ]; then
   export ZENOH_PLUGIN_SEARCH_DIR="/opt/zenoh/plugins"
   PLUGIN_OPT="--plugin-search-dir ${ZENOH_PLUGIN_SEARCH_DIR}"
 else
@@ -14736,7 +14961,7 @@ fi
 # Start Zenoh router in background
 echo "  Starting Zenoh router on port 7447..."
 if [ -n "${PLUGIN_OPT}" ]; then
-  zenohd ${PLUGIN_OPT} --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
+  zenohd "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
 else
   zenohd --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
 fi
@@ -14744,12 +14969,12 @@ ROUTER_PID=$!
 sleep 2
 
 # Check if router started
-if ! ps -p $ROUTER_PID > /dev/null; then
+if ! ps -p "${ROUTER_PID}" > /dev/null 2>&1; then
   echo "  ✗ Failed to start Zenoh router"
-  cat /tmp/zenoh-router.log
+  cat /tmp/zenoh-router.log 2>/dev/null || true
   exit 1
 fi
-echo "  ✓ Zenoh router started (PID: $ROUTER_PID)"
+echo "  ✓ Zenoh router started (PID: ${ROUTER_PID})"
 
 # Start Humble bridge (if zenoh-bridge-ros2dds is available)
 if [ -d "/conda/envs/ros2_humble" ]; then
@@ -14764,17 +14989,17 @@ if [ -d "/conda/envs/ros2_humble" ]; then
   if [ -n "${BRIDGE_CMD}" ]; then
     echo "  Starting Zenoh ROS 2 DDS bridge for Humble (Domain 1)..."
     if [ -n "${PLUGIN_OPT}" ]; then
-      ${BRIDGE_CMD} ${PLUGIN_OPT} --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
+      "${BRIDGE_CMD}" "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
     else
-      ${BRIDGE_CMD} --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
+      "${BRIDGE_CMD}" --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
     fi
     HUMBLE_PID=$!
     sleep 1
-    if ps -p $HUMBLE_PID > /dev/null; then
-      echo "  ✓ Humble bridge started (PID: $HUMBLE_PID)"
+    if ps -p "${HUMBLE_PID}" > /dev/null 2>&1; then
+      echo "  ✓ Humble bridge started (PID: ${HUMBLE_PID})"
     else
       echo "  ✗ Failed to start Humble bridge"
-      cat /tmp/zenoh-humble.log
+      cat /tmp/zenoh-humble.log 2>/dev/null || true
     fi
   else
     echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Humble bridge"
@@ -14793,7 +15018,7 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Start Jazzy bridge (if zenoh-bridge-ros2dds is available)
-if [ -d "/conda/envs/ros2_jazzy" ] || [ -d "/opt/ros/${ROS_DISTRO}" ]; then
+if [ -d "/conda/envs/ros2_jazzy" ] || ([ -n "${ROS_DISTRO:-}" ] && [ -d "/opt/ros/${ROS_DISTRO}" ]); then
   # Try zenoh-bridge-ros2dds first, fallback to zenoh-bridge-dds for compatibility
   BRIDGE_CMD=""
   if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
@@ -14805,17 +15030,17 @@ if [ -d "/conda/envs/ros2_jazzy" ] || [ -d "/opt/ros/${ROS_DISTRO}" ]; then
   if [ -n "${BRIDGE_CMD}" ]; then
     echo "  Starting Zenoh ROS 2 DDS bridge for Jazzy (Domain 2)..."
     if [ -n "${PLUGIN_OPT}" ]; then
-      ${BRIDGE_CMD} ${PLUGIN_OPT} --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
+      "${BRIDGE_CMD}" "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
     else
-      ${BRIDGE_CMD} --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
+      "${BRIDGE_CMD}" --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
     fi
     JAZZY_PID=$!
     sleep 1
-    if ps -p $JAZZY_PID > /dev/null; then
-      echo "  ✓ Jazzy bridge started (PID: $JAZZY_PID)"
+    if ps -p "${JAZZY_PID}" > /dev/null 2>&1; then
+      echo "  ✓ Jazzy bridge started (PID: ${JAZZY_PID})"
     else
       echo "  ✗ Failed to start Jazzy bridge"
-      cat /tmp/zenoh-jazzy.log
+      cat /tmp/zenoh-jazzy.log 2>/dev/null || true
     fi
   else
     echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Jazzy bridge"
@@ -14869,14 +15094,14 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Check Humble bridge
-if pgrep -f "zenoh-bridge.*humble\|zenoh-bridge-ros2dds.*humble" > /dev/null; then
+if pgrep -f 'zenoh-bridge.*humble\|zenoh-bridge-ros2dds.*humble' > /dev/null 2>&1; then
   echo "✓ Humble Bridge: RUNNING (Domain 1 -> /humble namespace)"
 else
   echo "✗ Humble Bridge: STOPPED"
 fi
 
 # Check Jazzy bridge
-if pgrep -f "zenoh-bridge.*jazzy\|zenoh-bridge-ros2dds.*jazzy" > /dev/null; then
+if pgrep -f 'zenoh-bridge.*jazzy\|zenoh-bridge-ros2dds.*jazzy' > /dev/null 2>&1; then
   echo "✓ Jazzy Bridge: RUNNING (Domain 2 -> /jazzy namespace)"
 else
   echo "✗ Jazzy Bridge: STOPPED"
@@ -14899,11 +15124,10 @@ import sys
 try:
     import zenoh
 except ImportError:
-
-#--- Sub-block: Helper scripts generation ---
-# Purpose: Create utility and monitoring scripts
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+    #--- Sub-block: Helper scripts generation ---
+    # Purpose: Create utility and monitoring scripts
+    # Dependencies: None (foundational)
+    # Outputs: Environment variables, configuration
     print(" Zenoh-Python package not installed")
     print("Install with: pip3 install eclipse-zenoh")
     sys.exit(1)
@@ -14927,24 +15151,23 @@ class ZenohTopicBridge:
             self.session.put(to_topic, sample.payload)
             print(f"Bridged: {from_topic} -> {to_topic}")
 
+        #--- Sub-block: Utility scripts ---
+        # Purpose: Helper scripts creation
+        # Dependencies: None (foundational)
+        # Outputs: Environment variables, configuration
 
-#--- Sub-block: Utility scripts ---
-# Purpose: Helper scripts creation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: Code section 6161 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+        #--- Sub-block: Code section 6161 ---
+        # Purpose: Continuing implementation
+        # Dependencies: None (foundational)
+        # Outputs: Environment variables, configuration
         # Subscribe and forward
         subscriber = self.session.declare_subscriber(from_topic, callback)
         print(f"Bridge active: {from_topic} -> {to_topic}")
 
-#--- Sub-block: Script generation ---
-# Purpose: Create additional helper scripts
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+        #--- Sub-block: Script generation ---
+        # Purpose: Create additional helper scripts
+        # Dependencies: None (foundational)
+        # Outputs: Environment variables, configuration
         return subscriber
 
     def run(self):
@@ -15096,7 +15319,7 @@ TURBOVNC_BINS="vncserver Xvnc vncpasswd vncconnect vncviewer webserver tvncconfi
 for binary in $TURBOVNC_BINS; do
   if [ ! -L "/usr/local/bin/$binary" ] && [ -x "/opt/TurboVNC/bin/$binary" ]; then
     ln -sf "/opt/TurboVNC/bin/$binary" "/usr/local/bin/$binary"
-    echo "  ✓ Created missing symlink: $binary"
+    echo "  ✓ Created missing symlink: ${binary}"
   fi
 done
 
@@ -15104,7 +15327,8 @@ done
 VIRTUALGL_BINS="vglrun vglclient vglconfig vglconnect vglgenkey vgllogin vglserver_config glxinfo glxspheres64 eglinfo eglxinfo eglxspheres64 cpustat nettest tcbench"
 for binary in $VIRTUALGL_BINS; do
   if [ ! -L "/usr/local/bin/$binary" ] && [ -x "/opt/VirtualGL/bin/$binary" ]; then
-    echo "  ✓ Created missing symlink: $binary"
+    ln -sf "/opt/VirtualGL/bin/$binary" "/usr/local/bin/$binary"
+    echo "  ✓ Created missing symlink: ${binary}"
   fi
 done
 
@@ -15122,15 +15346,15 @@ declare -A CRITICAL_BINS=(
 
 for binary in "${!CRITICAL_BINS[@]}"; do
   expected="${CRITICAL_BINS[$binary]}"
-  if [ -L "/usr/local/bin/$binary" ]; then
-    actual=$(readlink "/usr/local/bin/$binary")
-    if [ -x "$actual" ]; then
-      echo "  ✓ $binary -> $actual [OK]"
+  if [ -L "/usr/local/bin/${binary}" ]; then
+    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}")
+    if [ -n "${actual}" ] && [ -x "${actual}" ]; then
+      echo "  ✓ ${binary} -> ${actual} [OK]"
     else
-      echo "  ✗ $binary -> $actual [BROKEN]"
+      echo "  ✗ ${binary} -> ${actual} [BROKEN]"
     fi
   else
-    echo "  ✗ $binary [MISSING]"
+    echo "  ✗ ${binary} [MISSING]"
   fi
 done
 
@@ -15154,10 +15378,10 @@ echo "==> Cleaning temporary files while preserving cache..."
 
 # Clean APT lists (safe to remove)
 echo "  » APT LISTS CLEANUP - Monitoring cache before APT lists cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 echo "  » APT LISTS CLEANUP - Monitoring cache after APT lists cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 
 # Clean temporary APT directories that might cause issues
 rm -rf /tmp/apt-dpkg-install* 2>/dev/null || true
@@ -15165,22 +15389,22 @@ rm -rf /tmp/apt-dpkg-install* 2>/dev/null || true
 
 # Clean temporary files but preserve our container cache
 echo "  » CLEANUP SECTION - Monitoring cache before cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 # DEBUG: Check for symlinks or unusual directory structure
 echo "  DEBUG: Checking for symlinks or unusual paths..."
 ls -la /tmp/ | grep -E "(container_cache|apt/archives)" || echo "No suspicious symlinks in /tmp"
-ls -la ${CONTAINER_APT_CACHE}/ | head -5
+ls -la "${CONTAINER_APT_CACHE}/" | head -5
 echo "  DEBUG: About to run: find /tmp -type f -name '*.deb' -delete"
 find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
 find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true
 find /tmp -type f -name "*.whl" -delete 2>/dev/null || true
 echo "  » CLEANUP SECTION - Monitoring cache after cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 
 # === FINAL CACHE PRESERVATION ===
 # Reverting cache file permissions to normal ===
 if command -v chattr >/dev/null 2>&1; then
-    chattr -i ${CONTAINER_APT_CACHE}/*.deb 2>/dev/null
+    chattr -i "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null || true
     echo "chattr -i command executed successfully"
 else
     echo "WARNING: chattr command not available - cannot revert file permissions"
@@ -15202,11 +15426,11 @@ cache_summary
 # Outputs: Environment variables, configuration
 echo "  » DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
 echo "  Container cache directory contents:"
-ls -la ${CONTAINER_APT_CACHE}/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+ls -la "${CONTAINER_APT_CACHE}/" 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo "  Var cache directory contents:"
 ls -la /var/cache/apt/archives/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo "Cache file counts:"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 echo "  /var/cache/apt/archives: $(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
 
 # Ensure all downloaded packages are preserved in the cache directory
@@ -15214,17 +15438,17 @@ echo "==> Preserving APT cache for future builds ==="
 # Check if packages are in the standard APT cache location
 if [ -d "/var/cache/apt/archives" ]; then
     echo "Copying packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
-    find /var/cache/apt/archives -name "*.deb" -type f -exec cp {} ${CONTAINER_APT_CACHE}/ \; 2>/dev/null || true
+    find /var/cache/apt/archives -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
     echo "After copying from /var/cache/apt/archives:"
-    echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+    echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 fi
 
 # Also preserve any packages that might be in the system cache
 if [ -d "/var/lib/apt/cache" ]; then
     echo "Checking system APT cache for additional packages..."
-    find /var/lib/apt/cache -name "*.deb" -type f -exec cp {} ${CONTAINER_APT_CACHE}/ \; 2>/dev/null || true
+    find /var/lib/apt/cache -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
     echo "After copying from /var/lib/apt/cache:"
-    echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+    echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 fi
 
 # Final monitoring before cache harvest
@@ -15233,17 +15457,17 @@ monitor_cache "Final cache status before harvest"
 # Add one more detailed check right before the script ends
 echo "  » FINAL CACHE CHECK - RIGHT BEFORE SCRIPT END"
 echo "Final container cache contents:"
-ls -la ${CONTAINER_APT_CACHE}/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+ls -la "${CONTAINER_APT_CACHE}/" 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo ""
 echo "Final cache file count:"
-echo "  ${CONTAINER_APT_CACHE}: $(find ${CONTAINER_APT_CACHE} -name "*.deb" 2>/dev/null | wc -l) .deb files"
+echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 echo ""
 # Report cache status
 echo "[debug] Container cache status:"
-echo "  APT archives: $(ls ${CONTAINER_APT_CACHE}/*.deb 2>/dev/null | wc -l) files"
-echo "  Conda packages: $(ls ${CONTAINER_CONDA_CACHE}/* 2>/dev/null | wc -l) files"
-echo "  Pip wheels: $(ls ${CONTAINER_WHEELS_CACHE}/* 2>/dev/null | wc -l) files"
-echo "  Julia packages: $(ls ${CONTAINER_JULIA_CACHE}/* 2>/dev/null | wc -l) files"
+echo "  APT archives: $(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l) files"
+echo "  Conda packages: $(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l) files"
+echo "  Pip wheels: $(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l) files"
+echo "  Julia packages: $(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l) files"
 echo "=========================================================================="
 
 #--- Sub-block: Section continuation (6624) ---
@@ -15268,7 +15492,9 @@ echo "=========================================="
 echo ""
 echo "TurboVNC Installation:"
 if [ -x /usr/local/bin/vncserver ]; then
-  /usr/local/bin/vncserver -help 2>&1 | head -1 || echo "  ✓ vncserver binary present"
+  if /usr/local/bin/vncserver -help >/dev/null 2>&1; then
+    /usr/local/bin/vncserver -help 2>&1 | head -1 || true
+  fi
   echo "  ✓ TurboVNC installed"
 else
   echo "  ✗ TurboVNC not found!"
@@ -15278,7 +15504,9 @@ fi
 echo ""
 echo "VirtualGL Installation:"
 if [ -x /usr/local/bin/vglrun ]; then
-  /usr/local/bin/vglrun --version 2>&1 | head -1 || echo "  ✓ vglrun binary present"
+  if /usr/local/bin/vglrun --version >/dev/null 2>&1; then
+    /usr/local/bin/vglrun --version 2>&1 | head -1 || true
+  fi
   echo "  ✓ VirtualGL installed"
 else
   echo "  ✗ VirtualGL not found!"
@@ -15288,10 +15516,10 @@ fi
 echo ""
 echo "Helper Scripts:"
 for script in start_vnc_xfce.sh test_virtualgl.sh vgl_benchmark.sh vgl_info.sh vgl_launch.sh; do
-  if [ -x "/usr/local/bin/$script" ]; then
-    echo "  ✓ $script"
+  if [ -x "/usr/local/bin/${script}" ]; then
+    echo "  ✓ ${script}"
   else
-    echo "  ✗ $script missing"
+    echo "  ✗ ${script} missing"
   fi
 done
 
@@ -15402,7 +15630,7 @@ INFO
 
 # If argument provided, start that server
 if [ $# -gt 0 ]; then
-  case "$1" in
+  case "${1}" in
     turbovnc|1)
       exec start_vnc_xfce.sh
       ;;
@@ -15419,7 +15647,7 @@ if [ $# -gt 0 ]; then
       exec start_x11vnc.sh
       ;;
     *)
-      echo "Unknown option: $1"
+      echo "Unknown option: ${1}"
       exit 1
       ;;
   esac
@@ -15549,22 +15777,22 @@ EOF
 # Outputs: VNC server, GPU acceleration
 
 handle_choice() {
-  case $1 in
+  case "${1}" in
     1) start_vnc_xfce.sh ;;
     2) start_vnc_ultrahq.sh ;;
     3) start_vnc_lowbw.sh ;;
     4) start_vnc_tigervnc.sh ;;
     5) read -p "Display number (default 1): " disp
-       start_x11vnc.sh ${disp:-1} ;;
+       start_x11vnc.sh "${disp:-1}" ;;
     6) start_kasmvnc.sh ;;
     7) start_xpra.sh ;;
     8) start_sunshine.sh ;;
-    9) vncserver -list
+    9) vncserver -list 2>/dev/null || true
        echo ""
-       ps aux | grep -E "vnc|xpra|sunshine" | grep -v grep ;;
-   10) vncserver -kill :1 2>/dev/null
-       pkill -f vnc
-       pkill -f xpra
+       ps aux | grep -E "vnc|xpra|sunshine" | grep -v grep || true ;;
+   10) vncserver -kill :1 2>/dev/null || true
+       pkill -f vnc || true
+       pkill -f xpra || true
        echo "All VNC servers killed" ;;
    11) test_virtualgl.sh ;;
    12) vgl_benchmark.sh ;;
@@ -15574,11 +15802,10 @@ handle_choice() {
     *) echo "Invalid option" ;;
   esac
 
-
-#--- Sub-block: Code section 6693 ---
-# Purpose: Continuing implementation
-# Dependencies: System (Container runtime)
-# Outputs: Configured system components
+  #--- Sub-block: Code section 6693 ---
+  # Purpose: Continuing implementation
+  # Dependencies: System (Container runtime)
+  # Outputs: Configured system components
   read -p "Press Enter to continue..."
   show_menu
 }
@@ -15617,30 +15844,51 @@ echo ""
 
 # System Info
 echo "SYSTEM INFORMATION:"
-echo "  CPU: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)"
-echo "  Cores: $(nproc)"
-echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
+if [ -r /proc/cpuinfo ]; then
+  echo "  CPU: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)"
+fi
+if command -v nproc >/dev/null 2>&1; then
+  echo "  Cores: $(nproc)"
+fi
+if command -v free >/dev/null 2>&1; then
+  echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
+fi
 
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "  GPU: $(nvidia-smi --query-gpu=name --format=csv,noheader | head -1)"
-  echo "  VRAM: $(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1) MB"
+  gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+  gpu_vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+  if [ -n "${gpu_name}" ]; then
+    echo "  GPU: ${gpu_name}"
+  fi
+  if [ -n "${gpu_vram}" ]; then
+    echo "  VRAM: ${gpu_vram} MB"
+  fi
 fi
 echo ""
 
 # VirtualGL Performance
 echo "VIRTUALGL PERFORMANCE:"
-if [ -n "${DISPLAY}" ] && command -v vglrun >/dev/null 2>&1; then
+if [ -n "${DISPLAY}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxspheres64 >/dev/null 2>&1; then
   echo "  Testing GPU rendering..."
-  timeout 10s vglrun glxspheres64 2>&1 | grep "frames" | tail -1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 10s vglrun glxspheres64 2>&1 | grep "frames" | tail -1 || echo "  ⚠ GPU test failed or incomplete"
+  else
+    vglrun glxspheres64 2>&1 | grep "frames" | tail -1 || echo "  ⚠ GPU test failed or incomplete"
+  fi
 else
-  echo "  ⚠ DISPLAY not set or vglrun not available"
+  echo "  ⚠ DISPLAY not set or vglrun/glxspheres64 not available"
 fi
 echo ""
 
 # CPU Performance
 echo "CPU PERFORMANCE:"
-echo "  Running CPU benchmark..."
-sysbench cpu --threads=$(nproc) --time=10 run 2>&1 | grep "events per second"
+if command -v sysbench >/dev/null 2>&1; then
+  echo "  Running CPU benchmark..."
+  cores=$(nproc 2>/dev/null || echo "1")
+  sysbench cpu --threads="${cores}" --time=10 run 2>&1 | grep "events per second" || echo "  ⚠ CPU benchmark failed"
+else
+  echo "  ⚠ sysbench not available"
+fi
 echo ""
 
 #--- Sub-block: Section continuation (6965) ---
@@ -15650,10 +15898,13 @@ echo ""
 
 # Disk I/O
 echo "DISK I/O:"
-dd if=/dev/zero of=/tmp/testfile bs=1M count=1024 conv=fdatasync 2>&1 | grep copied
-rm -f /tmp/testfile
+if command -v dd >/dev/null 2>&1; then
+  dd if=/dev/zero of=/tmp/testfile bs=1M count=1024 conv=fdatasync 2>&1 | grep copied || echo "  ⚠ Disk I/O test failed"
+  rm -f /tmp/testfile 2>/dev/null || true
+else
+  echo "  ⚠ dd not available"
+fi
 echo ""
-
 
 #--- Sub-block: Code section 6761 ---
 # Purpose: Continuing implementation
@@ -15661,7 +15912,11 @@ echo ""
 # Outputs: Environment variables, configuration
 # Network (if available)
 echo "NETWORK:"
-ping -c 4 8.8.8.8 2>&1 | grep "rtt\|avg" || echo "  Network test skipped"
+if command -v ping >/dev/null 2>&1; then
+  ping -c 4 8.8.8.8 2>&1 | grep -E "rtt|avg" || echo "  Network test skipped or failed"
+else
+  echo "  ⚠ ping not available"
+fi
 echo ""
 
 echo "=========================================="
