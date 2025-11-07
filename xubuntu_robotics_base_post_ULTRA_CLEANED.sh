@@ -124,12 +124,13 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     fi
     
     # Get 12-hour format with AM/PM
-    HOUR_12=$(date +"%I")
-    MINUTE=$(date +"%M")
-    AMPM=$(date +"%p")
+    HOUR_12=$(date +"%I" 2>/dev/null || echo "12")
+    MINUTE=$(date +"%M" 2>/dev/null || echo "00")
+    AMPM=$(date +"%p" 2>/dev/null || echo "AM")
     
     # Remove leading zero from hour for cleaner format
-    HOUR_12=$((10#$HOUR_12))
+    # Use default if arithmetic fails
+    HOUR_12=$((10#${HOUR_12:-12})) || HOUR_12=12
     
     # Create timestamp: YYYYMMDD_Day_HHMM_AMPM
     BUILD_TIMESTAMP=$(date +"%Y%m%d")_${DAY_NAME}_${HOUR_12}${MINUTE}_${AMPM}
@@ -348,15 +349,17 @@ export DEBIAN_FRONTEND=noninteractive
 # Outputs: Configured system components
 debug_glibc() {
   local stage="$1"
+  # Temporarily disable pipefail to prevent pipeline failures from stopping the script
+  set +o pipefail
   echo "=========================================================="
   echo -e "${BLUE}DEBUG CHECKPOINT: ${stage}${NC}"
   echo "Time: $(date)"
   echo "=========================================================="
   echo "GLIBC version:"
-  /lib/x86_64-linux-gnu/libc.so.6 | head -1
+  /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 || echo "GLIBC version check failed"
   echo "---"
   echo "ldd version:"
-  ldd --version | head -1
+  (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 || true
   echo "---"
   echo "GCC version:"
   gcc --version 2>/dev/null | head -1 || echo "GCC not installed yet"
@@ -379,6 +382,8 @@ debug_glibc() {
   echo
   # Reset terminal state after debug output (gcc -v can leave control codes)
   printf '\033[0m\n'
+  # Restore pipefail
+  set -o pipefail
 }
 # End function (self-contained)
 
@@ -2609,7 +2614,7 @@ else
 fi
 
 # Verify OpenBLAS is now in ldconfig cache
-if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+if timeout 5 ldconfig -p 2>/dev/null | grep -q libopenblas; then
     echo -e "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
 else
     echo -e "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}"
@@ -2685,9 +2690,9 @@ fi
 
 # Check ldconfig
 echo "  Checking ldconfig:"
-if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+if timeout 5 ldconfig -p 2>/dev/null | grep -q libopenblas; then
     echo -e "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
-    ldconfig -p 2>/dev/null | grep libopenblas | head -3 | sed 's/^/      /'
+    timeout 5 ldconfig -p 2>/dev/null | grep libopenblas | head -3 | sed 's/^/      /' || true
 else
     echo -e "    ${YELLOW}⚠ OpenBLAS not in ldconfig cache (may need manual update)${NC}"
 fi
@@ -2849,9 +2854,9 @@ echo "Detected CUDA version: ${CUDA_VERSION}"
 # Outputs: GPU libraries, CUDA toolkit
 cat > /etc/profile.d/cuda.sh << EOF
 #!/bin/sh
-export PATH=/usr/local/cuda-${CUDA_VERSION}/bin\${PATH:+:\$PATH}
-export LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
-export CUDA_HOME=/usr/local/cuda-${CUDA_VERSION}
+export PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/bin\${PATH:+:\$PATH}
+export LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
+export CUDA_HOME=/usr/local/cuda-${CUDA_VERSION:-12.6}
 EOF
 chmod +x /etc/profile.d/cuda.sh
 
@@ -2889,7 +2894,7 @@ else
   echo -e "  - nvcc command: ${GREEN}OK (Found in PATH)${NC}"
   nvcc --version
 fi
-if ! ldconfig -p | grep -q 'libcudnn.so'; then
+if ! timeout 5 ldconfig -p 2>/dev/null | grep -q 'libcudnn.so'; then
   echo -e "${RED}[VERIFICATION FAILED] 'libcudnn.so' not found in linker cache.${NC}"
   PHASE2_SUCCESS=false
 else
@@ -3438,7 +3443,7 @@ fi
 # Outputs: Environment variables, configuration
 cat > /etc/profile.d/drake.sh << EOF
 # Drake Python bindings
-# NOTE: This is for system Python (${SYSTEM_PYTHON_VER}) and ROS 2 ${ROS_DISTRO}
+# NOTE: This is for system Python (${SYSTEM_PYTHON_VER:-3.12}) and ROS 2 ${ROS_DISTRO:-jazzy}
 # will be automatically unset when Conda environments activate
 export DRAKE_ROOT="${DRAKE_HOME:-/opt/drake}"
 site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "3.12")
@@ -3981,10 +3986,11 @@ tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
 
 # Window 1: ROS workspace (using ROS_DISTRO from config.sh)
 # Note: ${ROS_DISTRO^} is bash parameter expansion to capitalize first letter
-ROS_WINDOW_NAME="${ROS_DISTRO^}"
+ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
+ROS_WINDOW_NAME="${ROS_WINDOW_NAME^}"  # Capitalize first letter
 tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
-tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO}" C-m
-tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO}_ws" C-m
+tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy}" C-m
+tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO:-jazzy}_ws" C-m
 
 
 #--- Sub-block: Code section 1755 ---
@@ -4214,7 +4220,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔍 Checking for conflicting glog versions..."
 echo ""
 echo "1. Checking all glog libraries in system:"
-ldconfig -p | grep glog || echo "  ⚠ No glog libraries found in ldconfig cache"
+timeout 5 ldconfig -p 2>/dev/null | grep glog || echo "  ⚠ No glog libraries found in ldconfig cache"
 echo ""
 
 echo "2. Checking all glog headers:"
@@ -4404,7 +4410,7 @@ ldconfig
 
 #--- Sub-block 8.5: Verify Ceres installation ---
 # Critical: Confirm Ceres libraries in linker cache
-if ! ldconfig -p | grep -q "libceres.so"; then
+if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
   echo -e "${RED}✗ Ceres compilation FAILED.${NC}"
   PHASE3_ALL_SUCCESS=false
 fi
@@ -4546,7 +4552,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 8.9: Verify g2o installation ---
   # Critical: Confirm g2o libraries are in linker cache
-  if ! ldconfig -p | grep -q "libg2o_core.so"; then
+  if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
     echo -e "${RED}✗ g2o compilation FAILED.${NC}"
     PHASE3_ALL_SUCCESS=false
   fi
@@ -4665,7 +4671,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 8.13: Verify GTSAM installation ---
   # Critical: Confirm GTSAM libraries in linker cache
-  if ! ldconfig -p | grep -q "libgtsam.so"; then
+  if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libgtsam.so"; then
     echo -e "${RED}✗ GTSAM compilation FAILED.${NC}"
     PHASE3_ALL_SUCCESS=false
   fi
@@ -5786,12 +5792,12 @@ colcon build --cmake-args -D CMAKE_BUILD_TYPE=Release -D CMAKE_POLICY_DEFAULT_CM
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo -e "${YELLOW}[Phase 5 | Verification] Checking linkage of new cv_bridge library...${NC}"
-if ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so | grep -q "/usr/local/lib/libopencv_core"; then
+if timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep -q "/usr/local/lib/libopencv_core"; then
   echo -e "${GREEN}✓ New cv_bridge is correctly linked to custom OpenCV in /usr/local.${NC}"
   export PHASE5_STATUS="PASS"
 else
   echo -e "${RED}✗ FAILED: New cv_bridge is NOT linked to custom OpenCV. Overlay failed.${NC}"
-  ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so | grep opencv
+  timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep opencv || echo "  (ldd check failed or timed out)"
   PHASE5_SUCCESS=false
   export PHASE5_STATUS="FAIL"
   exit 1
@@ -5966,9 +5972,9 @@ chmod +x /etc/profile.d/compiled-libs.sh
 echo "Verifying compiled libraries..."
 echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'Not in pkg-config')"
 echo "  OpenCV: $(pkg-config --modversion opencv4 2>/dev/null || echo 'Not in pkg-config')"
-echo "  Ceres: $(ldconfig -p | grep -c libceres || echo 0) libraries"
-echo "  G2O: $(ldconfig -p | grep -c libg2o || echo 0) libraries"
-echo "  GTSAM: $(ldconfig -p | grep -c libgtsam || echo 0) libraries"
+echo "  Ceres: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libceres || echo 0) libraries"
+echo "  G2O: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libg2o || echo 0) libraries"
+echo "  GTSAM: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || echo 0) libraries"
 
 echo "✓ pip configured to protect compiled libraries"
 
@@ -6064,8 +6070,8 @@ fi
 # 3. Check Ceres installation and glog linkage
 echo ""
 echo "3. Checking Ceres installation:"
-if ldconfig -p | grep -q "libceres.so"; then
-    CERES_LOCATION=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
+if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
+    CERES_LOCATION=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || echo "")
     if [ -z "${CERES_LOCATION}" ]; then
         echo "  ✗ ERROR: Ceres library path is empty!"
         exit 1
@@ -6077,8 +6083,8 @@ if ldconfig -p | grep -q "libceres.so"; then
     echo "  ✓ Ceres found: ${CERES_LOCATION}"
     
     # Check if Ceres links to glog
-    if ldd "${CERES_LOCATION}" 2>/dev/null | grep -q "libglog"; then
-        CERES_GLOG=$(ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog)
+    if timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep -q "libglog"; then
+        CERES_GLOG=$(timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog || echo "")
         echo "  ✓ Ceres glog linkage:"
         echo "    ${CERES_GLOG}"
         
@@ -6276,8 +6282,8 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
     echo "📊 Diagnostic checks:"
     echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
-    echo "  Ceres: $(ldconfig -p | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')"
-    echo "  CUDA: $(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
+    echo "  Ceres: $(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')"
+    echo "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
     echo ""
     echo "Full CMake log saved to: /tmp/colmap_cmake.log"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -6351,7 +6357,7 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
             echo "  glog version: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
             echo "  glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo 'NOT FOUND')"
             echo "  glog libraries found:"
-            ldconfig -p | grep glog | sed 's/^/    /'
+            timeout 5 ldconfig -p 2>/dev/null | grep glog | sed 's/^/    /' || echo "    (ldconfig check failed)"
             echo "  glog headers found:"
             find /usr /usr/local -path "*/include/glog/logging.h" 2>/dev/null | sed 's/^/    /'
         else
@@ -6367,11 +6373,11 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
             echo ""
             echo "📊 Current Ceres environment:"
             echo "  Ceres library:"
-            ldconfig -p | grep libceres | sed 's/^/    /' || echo "    NOT FOUND"
+            timeout 5 ldconfig -p 2>/dev/null | grep libceres | sed 's/^/    /' || echo "    NOT FOUND"
             echo "  Ceres → glog linkage:"
-            CERES_LIB=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
+            CERES_LIB=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || echo "")
             if [ -n "${CERES_LIB:-}" ] && [ -f "${CERES_LIB}" ]; then
-                ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
+                timeout 10 ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
             else
                 echo "    Ceres library path not found or invalid"
             fi
@@ -6471,6 +6477,11 @@ echo "Installing PyCOLMAP Python bindings for COLMAP..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 COLMAP_SOURCE_DIR=$(cd .. && pwd)  # Save COLMAP source root path
+# Validate COLMAP source directory is set
+if [ -z "${COLMAP_SOURCE_DIR:-}" ]; then
+    echo "ERROR: Failed to determine COLMAP source directory"
+    exit 1
+fi
 BUILD_DIR=$(pwd)  # Current build directory
 
 # Set library paths to prioritize our compiled versions
@@ -7570,7 +7581,7 @@ fi
 
 # If GCC 11+ detected and GCC 10 not installed, install GCC 10
 if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" = false ]; then
-    echo -e "  ${YELLOW}⚠ GCC ${GCC_VERSION} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
+    echo -e "  ${YELLOW}⚠ GCC ${GCC_VERSION:-unknown} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
     echo "  Installing GCC 10 for better compatibility..."
     apt-get update -o Acquire::Retries=3 -qq
     if apt-get install -y -qq gcc-10 g++-10 >/dev/null 2>&1; then
@@ -9673,6 +9684,11 @@ fi
 
 PYTHON_INSTALLED=false
 OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path (should be /tmp/Open3D/build)
+# Validate build directory is set
+if [ -z "${OPEN3D_BUILD_DIR:-}" ]; then
+    echo "ERROR: Failed to determine current build directory"
+    exit 1
+fi
 # Source directory (/tmp/Open3D) - safely get parent directory
 if cd .. 2>/dev/null; then
     OPEN3D_SOURCE_DIR=$(pwd)
@@ -11096,7 +11112,7 @@ echo ""
 echo "4. GPU Detection:"
 if command -v nvidia-smi >/dev/null 2>&1; then
   echo "  NVIDIA GPU:"
-  nvidia-smi --query-gpu=name,driver_version --format=csv,noheader | head -1
+  timeout 5 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo "GPU info unavailable"
 else
   echo "  ⚠ nvidia-smi not found"
 fi
@@ -13116,7 +13132,7 @@ check_virtualgl() {
 
     # Check GPU
     if command -v nvidia-smi >/dev/null 2>&1; then
-      GPU_INFO=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+      GPU_INFO=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
       if [ -n "${GPU_INFO:-}" ]; then
         echo "  ✓ GPU detected: ${GPU_INFO}"
       else
@@ -13979,7 +13995,7 @@ done
 echo ""
 echo "[2/8] Checking GPU..."
 if command -v nvidia-smi >/dev/null 2>&1; then
-  GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+  GPU_NAME=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
   if [ -n "${GPU_NAME}" ]; then
     echo "  ✓ GPU: ${GPU_NAME}"
   else
@@ -17653,8 +17669,8 @@ if command -v free >/dev/null 2>&1; then
 fi
 
 if command -v nvidia-smi >/dev/null 2>&1; then
-  gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
-  gpu_vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1)
+  gpu_name=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
+  gpu_vram=$(timeout 5 nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "")
   if [ -n "${gpu_name}" ]; then
     echo "  GPU: ${gpu_name}"
   fi

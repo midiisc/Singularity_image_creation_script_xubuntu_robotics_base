@@ -2579,10 +2579,10 @@ From: ${BASE_IMAGE}
     echo "Time: \$(date)"
 
     echo "GLIBC version:"
-    /lib/x86_64-linux-gnu/libc.so.6 | head -1
+    /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 || echo "GLIBC version check failed"
 
     echo "ldd version:"
-    ldd --version | head -1
+    (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 || true
 
     echo "GCC version:"
     gcc --version 2>/dev/null | head -1 || echo "GCC not installed yet"
