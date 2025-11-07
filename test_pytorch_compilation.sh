@@ -152,6 +152,7 @@ IMAGE_PATH=""
 USE_GPU=false
 RUN_INSIDE_CONTAINER=false
 PYTORCH_VERSION_OVERRIDE=""
+FORCE_RECONFIGURE=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -172,6 +173,10 @@ while [[ $# -gt 0 ]]; do
             PYTORCH_VERSION_OVERRIDE="$2"
             shift 2
             ;;
+        --reconfigure|--rebuild|--clean)
+            FORCE_RECONFIGURE=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
@@ -183,6 +188,9 @@ while [[ $# -gt 0 ]]; do
             echo "                         Default: Auto-detect based on Ubuntu version"
             echo "                         Ubuntu 22.04: 2.6.0 (CMake 3.22 compatible)"
             echo "                         Ubuntu 24.04: 2.7.0 (CMake 3.27+ required)"
+            echo "  --reconfigure|--rebuild|--clean"
+            echo "                         Force clean rebuild: remove CMake cache and build artifacts"
+            echo "                         This will reconfigure and recompile from scratch"
             echo "  --help, -h             Show this help message"
             echo ""
             echo "Examples:"
@@ -190,6 +198,7 @@ while [[ $# -gt 0 ]]; do
             echo "  $0 --overlay overlay.img --image image.sif  # Run in Singularity with overlay"
             echo "  $0 --overlay overlay.img --image image.sif --gpu  # With GPU support"
             echo "  $0 --pytorch-version 2.6.0            # Use specific PyTorch version"
+            echo "  $0 --reconfigure                      # Force clean rebuild"
             exit 0
             ;;
         *)
@@ -2431,10 +2440,18 @@ export BUILD_SHARED_LIBS=ON
 export CMAKE_BUILD_TYPE=Release
 
 #===============================================================================
-# CUDA Compiler Compatibility Workarounds
+# CUDA Compiler Compatibility Workarounds - Hybrid C++ Standard Approach
 #===============================================================================
-# Check GCC version and apply workarounds for known NVCC compatibility issues
-# GCC 11 has known issues with NVCC and C++17 parameter pack expansion
+# Strategy: Default to C++14 for maximum compatibility, upgrade to C++17 for GCC 12+
+# This avoids GCC 11 + NVCC + C++17 parameter pack expansion errors while still
+# benefiting from C++17 features on newer compilers where it's safe.
+#
+# Known issue: GCC 11 + NVCC + C++17 causes "parameter packs not expanded with '...'"
+# error in std_function.h. This is a known bug: https://github.com/pytorch/pytorch/issues/51026
+#
+# Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D).
+# This is used as a safety net in addition to C++14/C++17 standard selection, which fixes the root cause.
+
 GCC_VERSION=""
 GCC_MAJOR=""
 if command -v gcc &>/dev/null; then
@@ -2445,50 +2462,85 @@ if command -v gcc &>/dev/null; then
     fi
 fi
 
-# Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
-# Error: parameter packs not expanded with '...' in std_function.h
-# This is a known issue: https://github.com/pytorch/pytorch/issues/51026
-if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ] && [ "${USE_CUDA:-0}" = "1" ]; then
-    echo -e "  ${YELLOW}⚠ GCC 11 detected with CUDA - applying compatibility workarounds${NC}"
-    echo "    Known issue: NVCC + GCC 11 + C++17 parameter pack expansion errors"
-    echo "    Solution: Adding compiler flags to work around std_function.h issues"
+# Hybrid approach: Default to C++14, upgrade to C++17 for GCC 12+
+if [ "${USE_CUDA:-0}" = "1" ]; then
+    # Default: Use C++14 for maximum compatibility (works with all GCC versions)
+    export CMAKE_CXX_STANDARD=14
+    export CMAKE_CUDA_STANDARD=14
     
-    # Set CUDA compiler flags to work around GCC 11 compatibility issues
-    # These flags are passed to NVCC via CMake
-    if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
-        export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations"
+    # Upgrade to C++17 if GCC 12+ is detected (GCC 12+ works fine with NVCC + C++17)
+    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge "12" ]; then
+        export CMAKE_CXX_STANDARD=17
+        export CMAKE_CUDA_STANDARD=17
+        echo -e "  ${GREEN}✓ GCC 12+ detected - using C++17 (compatible with NVCC)${NC}"
     else
-        export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations"
+        echo -e "  ${GREEN}✓ Using C++14 for maximum compatibility (works with all GCC versions)${NC}"
     fi
     
-    # Also set CUDA_NVCC_FLAGS for direct NVCC invocation
-    if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
-        export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler"
+    # Set CUDA compiler flags based on GCC version
+    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ]; then
+        # GCC 11: More aggressive workarounds needed
+        echo -e "  ${YELLOW}⚠ GCC 11 detected - applying enhanced compatibility flags${NC}"
+        # Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D)
+        # This is a safety net in addition to C++14, which fixes the root cause
+        if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+            export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow -Xcompiler -fpermissive"
+        else
+            export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow -Xcompiler -fpermissive"
+        fi
+        
+        if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++14"
+        else
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++14"
+        fi
+        
+        # Set host compiler explicitly to help NVCC
+        if [ -z "${CUDA_HOST_COMPILER:-}" ] && command -v g++ &>/dev/null; then
+            export CUDA_HOST_COMPILER="$(command -v g++)"
+            echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
+        fi
+        
+        echo -e "  ${GREEN}✓ GCC 11 compatibility flags applied (C++14 mode)${NC}"
+    elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge "12" ]; then
+        # GCC 12+: Basic flags + fpermissive for template robustness (consistent with other libraries)
+        # C++17 is safe with GCC 12+, but -fpermissive adds robustness for complex templates
+        if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+            export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
+        else
+            export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
+        fi
+        
+        if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        else
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        fi
+        
+        echo -e "  ${GREEN}✓ GCC 12+ standard flags applied (C++17 mode)${NC}"
     else
-        export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler"
+        # Unknown or older GCC: Use C++14 with basic flags + fpermissive for template robustness
+        if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+            export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
+        else
+            export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
+        fi
+        
+        if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++14"
+        else
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -std=c++14"
+        fi
+        
+        echo -e "  ${GREEN}✓ Using C++14 with standard CUDA flags${NC}"
     fi
     
-    # Set host compiler explicitly to help NVCC
-    if [ -z "${CUDA_HOST_COMPILER:-}" ] && command -v g++ &>/dev/null; then
-        export CUDA_HOST_COMPILER="$(command -v g++)"
-        echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
-    fi
-    
-    # Alternative: Use C++14 instead of C++17 if the above doesn't work
-    # Uncomment the following lines if the error persists:
-    # export CMAKE_CXX_STANDARD=14
-    # export CMAKE_CUDA_STANDARD=14
-    # echo "    Using C++14 instead of C++17 to avoid GCC 11 compatibility issues"
-    
-    echo -e "  ${GREEN}✓ Compatibility flags applied${NC}"
-elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -gt "11" ] && [ "${USE_CUDA:-0}" = "1" ]; then
-    # GCC 12+ generally works better with NVCC, but still add basic flags
-    if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
-        export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations"
-    else
-        export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations"
-    fi
-    echo "  GCC ${GCC_VERSION} detected - using standard CUDA flags"
+    # Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D)
+    # This is used as a safety net in addition to the C++14/C++17 standard selection, which fixes the root cause.
+    # The combination provides:
+    #   1. Primary fix: C++14 (GCC 11) or C++17 (GCC 12+) avoids the problematic code path
+    #   2. Safety net: -fpermissive provides robustness for complex template instantiations
+    # This approach is consistent with other template-heavy libraries in the codebase that compile successfully.
 fi
 
 # Optional: Disable features we don't need (faster build)
@@ -2723,6 +2775,18 @@ fi
 if [ -n "${CMAKE_CUDA_COMPILER:-}" ]; then
     echo "    CMAKE_CUDA_COMPILER=${CMAKE_CUDA_COMPILER}"
 fi
+if [ -n "${CMAKE_CXX_STANDARD:-}" ]; then
+    echo "    CMAKE_CXX_STANDARD=${CMAKE_CXX_STANDARD} (C++ standard for host code)"
+fi
+if [ -n "${CMAKE_CUDA_STANDARD:-}" ]; then
+    echo "    CMAKE_CUDA_STANDARD=${CMAKE_CUDA_STANDARD} (C++ standard for CUDA code)"
+fi
+if [ -n "${CMAKE_CUDA_FLAGS:-}" ]; then
+    echo "    CMAKE_CUDA_FLAGS=${CMAKE_CUDA_FLAGS}"
+fi
+if [ -n "${CUDA_NVCC_FLAGS:-}" ]; then
+    echo "    CUDA_NVCC_FLAGS=${CUDA_NVCC_FLAGS}"
+fi
 echo "    CMAKE_BUILD_TYPE=Release"
 echo "    BUILD_TEST=0 (tests skipped)"
 echo "    USE_OPENMP=1 (OpenMP enabled - required for OpenBLAS)"
@@ -2845,8 +2909,79 @@ save_build_state() {
     date +%s >> "${BUILD_STATE_FILE}"  # Timestamp
 }
 
+# Function to clean build artifacts for reconfigure
+clean_build_artifacts() {
+    local build_dir="${BUILD_DIR}"
+    local cleaned_items=0
+    
+    echo -e "${YELLOW}⚠ --reconfigure flag detected - cleaning build artifacts...${NC}"
+    
+    # Find PyTorch source directory
+    local pytorch_source=""
+    if [ -n "${PYTORCH_SOURCE_DIR:-}" ] && [ -d "${PYTORCH_SOURCE_DIR}" ]; then
+        pytorch_source="${PYTORCH_SOURCE_DIR}"
+    else
+        pytorch_source=$(find "${build_dir}" -maxdepth 1 -type d -name "pytorch-*" 2>/dev/null | head -1)
+    fi
+    
+    # Remove CMake cache and build artifacts
+    if [ -n "${pytorch_source}" ] && [ -d "${pytorch_source}" ]; then
+        # Remove CMake cache files
+        if [ -d "${pytorch_source}/build" ]; then
+            echo "  Removing CMake cache and build artifacts from ${pytorch_source}/build..."
+            rm -rf "${pytorch_source}/build"/* 2>/dev/null || true
+            find "${pytorch_source}/build" -name "CMakeCache.txt" -delete 2>/dev/null || true
+            find "${pytorch_source}/build" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+            cleaned_items=$((cleaned_items + 1))
+        fi
+        
+        # Remove any other CMake artifacts in source directory
+        find "${pytorch_source}" -maxdepth 2 -name "CMakeCache.txt" -delete 2>/dev/null || true
+        find "${pytorch_source}" -maxdepth 2 -type d -name "CMakeFiles" -exec rm -rf {} + 2>/dev/null || true
+        find "${pytorch_source}" -maxdepth 2 -name "*.cmake" -type f -delete 2>/dev/null || true
+    fi
+    
+    # Remove wheel files
+    if [ -d "${build_dir}/wheels" ]; then
+        local wheel_count
+        wheel_count=$(find "${build_dir}/wheels" -name "torch-*.whl" 2>/dev/null | wc -l || echo "0")
+        if [ "${wheel_count}" -gt 0 ]; then
+            echo "  Removing ${wheel_count} wheel file(s) from ${build_dir}/wheels..."
+            find "${build_dir}/wheels" -name "torch-*.whl" -delete 2>/dev/null || true
+            cleaned_items=$((cleaned_items + 1))
+        fi
+    fi
+    
+    # Remove build state file
+    if [ -f "${BUILD_STATE_FILE}" ]; then
+        echo "  Removing build state file..."
+        rm -f "${BUILD_STATE_FILE}" 2>/dev/null || true
+        cleaned_items=$((cleaned_items + 1))
+    fi
+    
+    # Remove any temporary build files
+    find "${build_dir}" -name ".build_*" -type f -delete 2>/dev/null || true
+    find "${build_dir}" -name ".log_*" -type f -delete 2>/dev/null || true
+    find "${build_dir}" -name ".pipeline_*" -type f -delete 2>/dev/null || true
+    
+    if [ "${cleaned_items}" -gt 0 ]; then
+        echo -e "  ${GREEN}✓ Cleaned ${cleaned_items} item(s) - ready for fresh rebuild${NC}"
+    else
+        echo -e "  ${GREEN}✓ No build artifacts found to clean${NC}"
+    fi
+    echo ""
+}
+
 # Check current build state
 BUILD_STATE=$(check_build_state)
+
+# Handle --reconfigure flag
+if [ "${FORCE_RECONFIGURE}" = "true" ]; then
+    clean_build_artifacts
+    # Re-check build state after cleanup
+    BUILD_STATE=$(check_build_state)
+fi
+
 echo -e "${GREEN}✓ Build directory ready: ${BUILD_DIR}${NC}"
 echo "  Build state: ${BUILD_STATE}"
 if [ "${BUILD_STATE}" = "completed" ]; then
@@ -2854,11 +2989,19 @@ if [ "${BUILD_STATE}" = "completed" ]; then
     if [ -n "${WHEEL_FILE:-}" ]; then
         WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
         echo -e "  ${GREEN}✓ Build already completed! Wheel found: $(basename "${WHEEL_FILE}") (${WHEEL_SIZE})${NC}"
-        echo "  To rebuild, delete the wheel file or use: rm -f ${WHEEL_FILE}"
+        if [ "${FORCE_RECONFIGURE}" != "true" ]; then
+            echo "  To rebuild, delete the wheel file or use: rm -f ${WHEEL_FILE}"
+            echo "  Or use --reconfigure flag to force clean rebuild"
+        fi
     fi
 elif [ "${BUILD_STATE}" = "in_progress" ]; then
-    echo -e "  ${YELLOW}⚠ Partial build detected - will resume from where it left off${NC}"
-    echo "  Build artifacts preserved for incremental build"
+    if [ "${FORCE_RECONFIGURE}" = "true" ]; then
+        echo "  Clean rebuild initiated - will start fresh build"
+    else
+        echo -e "  ${YELLOW}⚠ Partial build detected - will resume from where it left off${NC}"
+        echo "  Build artifacts preserved for incremental build"
+        echo "  Use --reconfigure flag to force clean rebuild"
+    fi
 elif [ "${BUILD_STATE}" = "source_ready" ]; then
     echo "  Source code ready - will start fresh build"
 else
@@ -3186,6 +3329,17 @@ else
         # No need to set CMAKE_ARGS - CMake will use the environment variable
     fi
     
+    # Verify C++ standard settings (critical for GCC 11 compatibility)
+    if [ -n "${CMAKE_CXX_STANDARD:-}" ]; then
+        echo "  C++ standard (host): ${CMAKE_CXX_STANDARD} (CMAKE_CXX_STANDARD)"
+    fi
+    if [ -n "${CMAKE_CUDA_STANDARD:-}" ]; then
+        echo "  C++ standard (CUDA): ${CMAKE_CUDA_STANDARD} (CMAKE_CUDA_STANDARD)"
+    fi
+    if [ -n "${CUDA_NVCC_FLAGS:-}" ]; then
+        echo "  NVCC flags: ${CUDA_NVCC_FLAGS}"
+    fi
+    
     # Set CUDA host compiler if specified (CMake also respects this as env var)
     if [ "${USE_CUDA:-0}" = "1" ] && [ -n "${CUDA_HOST_COMPILER:-}" ]; then
         echo "  CUDA host compiler: ${CUDA_HOST_COMPILER}"
@@ -3198,7 +3352,10 @@ else
     # Check if this is a resume (partial build exists)
     # Re-check build state now that PYTORCH_SOURCE_DIR is set
     BUILD_STATE=$(check_build_state)
-    if [ "${BUILD_STATE}" = "in_progress" ]; then
+    if [ "${FORCE_RECONFIGURE}" = "true" ]; then
+        echo -e "  ${GREEN}✓ Clean rebuild mode - starting fresh build from scratch${NC}"
+        echo "  All CMake cache and build artifacts have been removed"
+    elif [ "${BUILD_STATE}" = "in_progress" ]; then
         echo -e "  ${YELLOW}⚠ Resuming from previous build (incremental build)${NC}"
         echo "  PyTorch setup.py will automatically continue from where it left off"
         echo "  Build artifacts preserved for incremental compilation"

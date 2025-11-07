@@ -3002,9 +3002,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 BASE_GLOG_INSTALLED=false
 BASE_GLOG_VERSION=""
 
-if dpkg -l 2>/dev/null | grep -q "^ii.*libgoogle-glog\|^ii.*libglog"; then
+# Use extended regex for better pattern matching
+DPKG_OUTPUT=$(dpkg -l 2>/dev/null || echo "")
+if echo "${DPKG_OUTPUT}" | grep -qE "^ii.*libgoogle-glog|^ii.*libglog"; then
     BASE_GLOG_INSTALLED=true
-    BASE_GLOG_VERSION=$(dpkg -l | grep -E "^ii.*(libgoogle-glog|libglog)" | awk '{printf "  - %s %s\n", $2, $3}')
+    BASE_GLOG_VERSION=$(echo "${DPKG_OUTPUT}" | grep -E "^ii.*(libgoogle-glog|libglog)" | awk '{printf "  - %s %s\n", $2, $3}')
     echo "ℹ Base image already has glog packages installed:"
     echo "$BASE_GLOG_VERSION"
     echo ""
@@ -3169,12 +3171,12 @@ cat > /usr/local/bin/ros_multiterm << 'EOF'
 SESSION="ros_multi"
 
 # Create new tmux session
-tmux new-session -d -s $SESSION
+tmux new-session -d -s "${SESSION}"
 
 # Window 0: Humble workspace
-tmux rename-window -t $SESSION:0 'Humble'
-tmux send-keys -t $SESSION:0 "conda activate ros2_humble" C-m
-tmux send-keys -t $SESSION:0 "cd /workspaces/humble_ws" C-m
+tmux rename-window -t "${SESSION}:0" 'Humble'
+tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble" C-m
+tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
 
 #--- Sub-block: Section continuation (1774) ---
 # Purpose: Implementation details
@@ -3182,9 +3184,11 @@ tmux send-keys -t $SESSION:0 "cd /workspaces/humble_ws" C-m
 # Outputs: Python packages, conda environments
 
 # Window 1: ROS workspace (using ROS_DISTRO from config.sh)
-tmux new-window -t $SESSION:1 -n "${ROS_DISTRO^}"  # Capitalize first letter
-tmux send-keys -t $SESSION:1 "conda activate ros2_${ROS_DISTRO}" C-m
-tmux send-keys -t $SESSION:1 "cd /workspaces/${ROS_DISTRO}_ws" C-m
+# Note: ${ROS_DISTRO^} is bash parameter expansion to capitalize first letter
+ROS_WINDOW_NAME="${ROS_DISTRO^}"
+tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
+tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO}" C-m
+tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO}_ws" C-m
 
 
 #--- Sub-block: Code section 1755 ---
@@ -3192,15 +3196,15 @@ tmux send-keys -t $SESSION:1 "cd /workspaces/${ROS_DISTRO}_ws" C-m
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Window 2: Bridge/monitoring
-tmux new-window -t $SESSION:2 -n 'Bridge'
-tmux send-keys -t $SESSION:2 "echo 'Domain bridge - start when ready'" C-m
+tmux new-window -t "${SESSION}:2" -n 'Bridge'
+tmux send-keys -t "${SESSION}:2" "echo 'Domain bridge - start when ready'" C-m
 
 # Window 3: Julia processing
-tmux new-window -t $SESSION:3 -n 'Julia'
-tmux send-keys -t $SESSION:3 'julia' C-m
+tmux new-window -t "${SESSION}:3" -n 'Julia'
+tmux send-keys -t "${SESSION}:3" 'julia' C-m
 
 # Attach to session
-tmux attach-session -t $SESSION
+tmux attach-session -t "${SESSION}"
 EOF
 chmod +x /usr/local/bin/ros_multiterm
 
@@ -3245,7 +3249,8 @@ echo "✓ Linker configured to prioritize /usr/local/lib"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> Updating dynamic linker cache..."
-sudo ldconfig
+# Note: ldconfig should be run without sudo in container context (already root)
+ldconfig
 echo "Linker cache updated."
 
 # Verify /usr/local/lib is prioritized in cache
@@ -3280,25 +3285,28 @@ clone_with_retry() {
     local retry_count=0
     
     # Convert relative paths to absolute (critical for Singularity environment)
-    if [[ "$target_dir" != /* ]]; then
-        target_dir="$(cd "$(dirname "$target_dir")" 2>/dev/null && pwd)/$(basename "$target_dir")"
-        # If still relative, use current directory
-        if [[ "$target_dir" != /* ]]; then
-            target_dir="$(pwd)/$target_dir"
+    if [[ "${target_dir}" != /* ]]; then
+        local parent_dir
+        parent_dir="$(cd "$(dirname "${target_dir}")" 2>/dev/null && pwd || echo "")"
+        if [ -n "${parent_dir}" ]; then
+            target_dir="${parent_dir}/$(basename "${target_dir}")"
+        else
+            # If still relative, use current directory
+            target_dir="$(pwd)/${target_dir}"
         fi
     fi
     
-    echo "Cloning $repo_url to $target_dir..."
+    echo "Cloning ${repo_url} to ${target_dir}..."
     
     # CRITICAL: Remove existing directory before cloning (essential for Singularity builds)
     # In Singularity, /tmp persists between build attempts, so directories may already exist
-    if [ -d "$target_dir" ] || [ -f "$target_dir" ]; then
-        echo "  Removing existing target directory: $target_dir"
-        rm -rf "$target_dir" 2>/dev/null || true
+    if [ -d "${target_dir}" ] || [ -f "${target_dir}" ]; then
+        echo "  Removing existing target directory: ${target_dir}"
+        rm -rf "${target_dir}" 2>/dev/null || true
     fi
     
-    while [ $retry_count -lt $max_retries ]; do
-        echo "Attempt $((retry_count + 1))/$max_retries..."
+    while [ "${retry_count}" -lt "${max_retries}" ]; do
+        echo "Attempt $((retry_count + 1))/${max_retries}..."
         
         # Configure git for better network handling
         git config --global http.postBuffer 524288000
@@ -3306,47 +3314,60 @@ clone_with_retry() {
         git config --global core.compression 0
         
         # Try cloning with different strategies
-        if [ $retry_count -eq 0 ]; then
+        local clone_success=false
+        if [ "${retry_count}" -eq 0 ]; then
             # First attempt: standard clone
-            git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 1 ]; then
+            if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
+                clone_success=true
+            fi
+        elif [ "${retry_count}" -eq 1 ]; then
             # Second attempt: with single branch
-            git clone --depth 1 --single-branch --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 2 ]; then
+            if git clone --depth 1 --single-branch --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
+                clone_success=true
+            fi
+        elif [ "${retry_count}" -eq 2 ]; then
             # Third attempt: with no tags
-            git clone --depth 1 --no-tags --branch "$branch" "$repo_url" "$target_dir"
-        elif [ $retry_count -eq 3 ]; then
+            if git clone --depth 1 --no-tags --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
+                clone_success=true
+            fi
+        elif [ "${retry_count}" -eq 3 ]; then
             # Fourth attempt: with different protocol
-            if [[ "$repo_url" == https://* ]]; then
+            if [[ "${repo_url}" == https://* ]]; then
                 local git_url="${repo_url/https:\/\//git@}"
                 git_url="${git_url/github.com/github.com:}"
-                git clone --depth 1 --branch "$branch" "$git_url" "$target_dir"
+                if git clone --depth 1 --branch "${branch}" "${git_url}" "${target_dir}" 2>/dev/null; then
+                    clone_success=true
+                fi
             else
-                git clone --depth 1 --branch "$branch" "$repo_url" "$target_dir"
+                if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
+                    clone_success=true
+                fi
             fi
         else
             # Final attempt: shallow clone with retry
-            git clone --depth 1 --branch "$branch" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "$repo_url" "$target_dir"
+            if git clone --depth 1 --branch "${branch}" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "${repo_url}" "${target_dir}" 2>/dev/null; then
+                clone_success=true
+            fi
         fi
         
-        if [ $? -eq 0 ]; then
-            echo "✓ Successfully cloned $repo_url"
+        if [ "${clone_success}" = true ]; then
+            echo "✓ Successfully cloned ${repo_url}"
             return 0
         else
             echo "✗ Clone attempt $((retry_count + 1)) failed"
             retry_count=$((retry_count + 1))
             
             # Clean up failed attempt
-            rm -rf "$target_dir" 2>/dev/null || true
+            rm -rf "${target_dir}" 2>/dev/null || true
             
-            if [ $retry_count -lt $max_retries ]; then
+            if [ "${retry_count}" -lt "${max_retries}" ]; then
                 echo "Waiting 10 seconds before retry..."
                 sleep 10
             fi
         fi
     done
     
-    echo "✗ Failed to clone $repo_url after $max_retries attempts"
+    echo "✗ Failed to clone ${repo_url} after ${max_retries} attempts"
     return 1
 }
 
@@ -3435,15 +3456,22 @@ echo ""
 # Check glog version for COLMAP compatibility
 echo "5. Checking glog version compatibility with COLMAP 3.12.6..."
 GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
-if [ "$GLOG_VERSION" != "unknown" ]; then
+if [ "${GLOG_VERSION}" != "unknown" ]; then
     echo "  ✓ pkg-config reports glog version: ${GLOG_VERSION}"
     # Extract major.minor version
-    GLOG_MAJOR=$(echo "$GLOG_VERSION" | cut -d. -f1)
-    GLOG_MINOR=$(echo "$GLOG_VERSION" | cut -d. -f2)
+    GLOG_MAJOR=$(echo "${GLOG_VERSION}" | cut -d. -f1)
+    GLOG_MINOR=$(echo "${GLOG_VERSION}" | cut -d. -f2)
     
-    if [ "$GLOG_MAJOR" -eq 0 ] && [ "$GLOG_MINOR" -eq 6 ]; then
-        echo "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches"
-        echo "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)"
+    # Validate version components are numeric before comparison
+    if [ -n "${GLOG_MAJOR}" ] && [ -n "${GLOG_MINOR}" ] && \
+       echo "${GLOG_MAJOR}" | grep -qE '^[0-9]+$' && \
+       echo "${GLOG_MINOR}" | grep -qE '^[0-9]+$'; then
+        if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
+            echo "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches"
+            echo "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)"
+        fi
+    else
+        echo "  ⚠ WARNING: Could not parse glog version format: ${GLOG_VERSION}"
     fi
 else
     echo "  ℹ glog version not available via pkg-config (non-fatal)"
@@ -3560,12 +3588,13 @@ cmake .. \
 #--- Sub-block 8.4: Build and install Ceres ---
 # Critical: Compile with ninja using memory-aware job calculation
 BUILD_JOBS=$(calculate_build_jobs)
-echo "Building Ceres with $BUILD_JOBS parallel jobs..."
+echo "Building Ceres with ${BUILD_JOBS} parallel jobs..."
 echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
-if ! ninja -j${BUILD_JOBS}; then
+# Note: BUILD_JOBS is intentionally unquoted to allow numeric value
+if ! ninja -j"${BUILD_JOBS}"; then
     echo ""
     echo "⚠️  Parallel build failed, retrying single-threaded..."
     if ! ninja -j1; then
@@ -3936,7 +3965,7 @@ fi
 # Purpose: Fetch Julia tarball with retry logic
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-if [ "$need_fetch" -eq 1 ]; then
+if [ "${need_fetch}" -eq 1 ]; then
   echo "[julia] fetching ${JULIA_URL}"
   # Retry, follow redirects, fail on HTTP errors
   curl -fsSL --retry 5 --retry-all-errors --connect-timeout 5 --max-time 180 \
@@ -3956,9 +3985,9 @@ echo "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "[julia] Performing optional GPG signature verification..."
-GNUPGHOME=/root/.gnupg
-mkdir -p "$GNUPGHOME"
-chmod 700 "$GNUPGHOME"
+GNUPGHOME="/root/.gnupg"
+mkdir -p "${GNUPGHOME}"
+chmod 700 "${GNUPGHOME}"
 # Download .asc file if available
 curl -fsSL --retry 3 "${JULIA_ASC_URL}" -o "${LATEST_TGZ}.asc" || true
 #--- Sub-block 8.5.7: Import Julia GPG key ---
@@ -3993,9 +4022,15 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "[julia] Installing to ${INSTALL_DIR}/julia-${JVER}"
-tar -xzf "${LATEST_TGZ}" -C "${INSTALL_DIR}" 2>/dev/null || true
+if ! tar -xzf "${LATEST_TGZ}" -C "${INSTALL_DIR}"; then
+  echo "[julia] ERROR: Failed to extract Julia tarball"
+  exit 1
+fi
 rm -f "${INSTALL_DIR}/julia" 2>/dev/null || true
-ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"
+if ! ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"; then
+  echo "[julia] ERROR: Failed to create Julia symlink"
+  exit 1
+fi
 echo "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
 
 #--- Sub-block 8.5.10: Verify Julia installation ---
@@ -4043,37 +4078,45 @@ if [ -x "$JULIA_BIN" ]; then
   if [ ! -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
     echo "Building libCxxWrap-julia from source..."
     # Get Julia paths
-    JULIA_INCLUDE=$("$JULIA_BIN" -e 'print(joinpath(Sys.BINDIR, "..", "include", "julia"))')
-    JULIA_LIB=$("$JULIA_BIN" -e 'print(joinpath(Sys.BINDIR, "..", "lib"))')
-    echo "  Julia include: $JULIA_INCLUDE"
-    echo "  Julia library: $JULIA_LIB"
+    JULIA_INCLUDE=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "include", "julia"))')
+    JULIA_LIB=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "lib"))')
+    echo "  Julia include: ${JULIA_INCLUDE}"
+    echo "  Julia library: ${JULIA_LIB}"
     # Clone and build
     BUILD_DIR="/tmp/cxxwrap_build"
-    rm -rf "$BUILD_DIR"
-    git clone -q --depth 1 https://github.com/JuliaInterop/libcxxwrap-julia.git "$BUILD_DIR" || { echo "ERROR: Failed to clone libcxxwrap-julia"; exit 1; }
-    cd "$BUILD_DIR" || { echo "ERROR: Failed to access libcxxwrap-julia directory"; exit 1; }
+    rm -rf "${BUILD_DIR}"
+    git clone -q --depth 1 https://github.com/JuliaInterop/libcxxwrap-julia.git "${BUILD_DIR}" || { echo "ERROR: Failed to clone libcxxwrap-julia"; exit 1; }
+    cd "${BUILD_DIR}" || { echo "ERROR: Failed to access libcxxwrap-julia directory"; exit 1; }
     # Clean build directory for fresh compilation
     rm -rf build
     mkdir -p build
     cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
-    cmake .. \
-      -DCMAKE_INSTALL_PREFIX="$CXXWRAP_PREFIX" \
+    if ! cmake .. \
+      -DCMAKE_INSTALL_PREFIX="${CXXWRAP_PREFIX}" \
       -DCMAKE_BUILD_TYPE=Release \
-      -DJulia_EXECUTABLE="$JULIA_BIN" \
-      -DJulia_INCLUDE_DIR="$JULIA_INCLUDE" \
-      -DJulia_LIBRARY_DIR="$JULIA_LIB" \
-      -DCMAKE_INSTALL_LIBDIR=lib \
-      >/dev/null 2>&1
+      -DJulia_EXECUTABLE="${JULIA_BIN}" \
+      -DJulia_INCLUDE_DIR="${JULIA_INCLUDE}" \
+      -DJulia_LIBRARY_DIR="${JULIA_LIB}" \
+      -DCMAKE_INSTALL_LIBDIR=lib; then
+      echo "ERROR: CMake configuration failed for libCxxWrap-julia"
+      exit 1
+    fi
 
     #--- Sub-block 8.5.13: Build and install CxxWrap ---
     # Critical: Compile with make using all CPU cores
-    make -j$(nproc) >/dev/null 2>&1
-    make install >/dev/null
+    if ! make -j"$(nproc)"; then
+      echo "ERROR: Build failed for libCxxWrap-julia"
+      exit 1
+    fi
+    if ! make install; then
+      echo "ERROR: Installation failed for libCxxWrap-julia"
+      exit 1
+    fi
 
     cd /
-    rm -rf "$BUILD_DIR"
-    echo "✓ Libcxxwrap-julia built to $CXXWRAP_PREFIX"
+    rm -rf "${BUILD_DIR}"
+    echo "✓ Libcxxwrap-julia built to ${CXXWRAP_PREFIX}"
   else
     echo "✓ Libcxxwrap-julia already installed"
   fi
@@ -4188,7 +4231,10 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
-unzip -q "${SDK_ZIP_FILENAME}"
+if ! unzip -q "${SDK_ZIP_FILENAME}"; then
+  echo "ERROR: Failed to extract NVIDIA Video Codec SDK"
+  exit 1
+fi
 
 #--- Sub-block 9.4: Move SDK to /opt ---
 # Purpose: Install SDK to system location
@@ -4196,22 +4242,41 @@ unzip -q "${SDK_ZIP_FILENAME}"
 # Outputs: Environment variables, configuration
 SDK_FOLDER="Video_Codec_SDK_${SDK_VERSION}"
 echo "Moving ${SDK_FOLDER} to /opt/${SDK_FOLDER}"
-sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}"
-sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK"
+if [ "$(id -u)" -eq 0 ]; then
+  # Running as root, no sudo needed
+  mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
+  mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+else
+  # Not root, use sudo if available
+  sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
+  sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+fi
 
 #--- Sub-block 9.5: Set SDK ownership and permissions ---
 # Purpose: Ensure SDK is accessible without sudo
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-sudo chown -R ${USER}:${USER} "/opt/Video_Codec_SDK"
+if [ "$(id -u)" -eq 0 ]; then
+  # Running as root, set ownership to root or preserve current
+  CURRENT_USER="${SUDO_USER:-root}"
+  CURRENT_GROUP="${SUDO_GID:-0}"
+  chown -R "${CURRENT_USER}:${CURRENT_GROUP}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+else
+  # Not root, use sudo if available
+  sudo chown -R "${USER}:${USER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+fi
 echo "SDK successfully moved to /opt/Video_Codec_SDK"
 
 #--- Sub-block 9.6: Copy SDK headers to system locations ---
 # Critical: Make headers available for FFmpeg/OpenCV compilation
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include
-cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/cuda-${CUDA_VERSION}/include
+if ! cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include 2>/dev/null; then
+  echo "WARNING: Failed to copy SDK headers to /usr/local/include (may not exist)"
+fi
+if ! cp "/opt/Video_Codec_SDK/Interface/"*.h "/usr/local/cuda-${CUDA_VERSION}/include" 2>/dev/null; then
+  echo "WARNING: Failed to copy SDK headers to CUDA include directory"
+fi
 
 #--- Sub-block 9.7: Verify SDK header installation ---
 # Critical: Ensure required headers are in place
@@ -4276,15 +4341,21 @@ echo "========================================="
 # Dependencies: Block 6 (APT configuration), PHASE 1 (Build tools), PHASE 1 (Compilers)
 # Outputs: Installed packages
 echo "Installing dependencies..."
-apt-get update
-apt-get install -y \
+if ! apt-get update; then
+  echo "ERROR: Failed to update package lists"
+  exit 1
+fi
+if ! apt-get install -y \
   build-essential cmake ninja-build pkg-config \
   libopenblas-dev liblapacke-dev gfortran \
   libtbb-dev libeigen3-dev \
   libjpeg-dev libpng-dev libtiff-dev \
   libavcodec-dev libavformat-dev libswscale-dev \
   libgtk-3-dev python3-dev python3-numpy \
-  g++ gcc libc6-dev linux-libc-dev libstdc++-11-dev gcc-12 g++-12 libtesseract-dev
+  g++ gcc libc6-dev linux-libc-dev libstdc++-11-dev gcc-12 g++-12 libtesseract-dev; then
+  echo "ERROR: Failed to install OpenCV build dependencies"
+  exit 1
+fi
 
 #--- Sub-block 10.5: Download OpenCV source code ---
 # Purpose: Clone OpenCV core and contrib modules
@@ -4406,7 +4477,7 @@ cmake -G Ninja \
   -D WITH_LAPACK=ON \
   -D WITH_TIFF=ON \
   -D WITH_OPENMP=ON \
-  -D JlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/ \
+  -D JlCxx_DIR="${JULIA_HOME}/CxxWrap/deps/build/JlCxx/" \
   -D LAPACK_ENABLE_LAPACKE=ON \
   -D WITH_VTK=ON \
   -D VTK_DIR=/usr/lib/x86_64-linux-gnu/cmake/vtk-9.3 \
@@ -4464,11 +4535,11 @@ cmake -G Ninja \
   -D CV_ENABLE_INTRINSICS=ON \
   -D PARALLEL_ENABLE_PLUGINS=ON \
   -D VIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK \
-  -D Julia_EXECUTABLE=${JULIA_HOME}/bin/julia \
-  -D Julia_INCLUDE_DIRS=${JULIA_HOME}/include/julia \
-  -D Julia_LIBRARIES=${JULIA_HOME}/lib/libjulia.so \
-  -D JlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx \
-  -D CMAKE_PREFIX_PATH="/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH}" \
+  -D Julia_EXECUTABLE="${JULIA_HOME}/bin/julia" \
+  -D Julia_INCLUDE_DIRS="${JULIA_HOME}/include/julia" \
+  -D Julia_LIBRARIES="${JULIA_HOME}/lib/libjulia.so" \
+  -D JlCxx_DIR="/opt/libcxxwrap-julia/lib/cmake/JlCxx" \
+  -D CMAKE_PREFIX_PATH="/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}" \
   -D CMAKE_IGNORE_PATH="/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl" \
   -D WITH_NVCUVID=OFF \
   -D WITH_NVCUVENC=OFF \
@@ -4518,7 +4589,7 @@ echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
-if ! ninja -j${BUILD_JOBS}; then
+if ! ninja -j"${BUILD_JOBS}"; then
     echo ""
     echo "⚠️  Parallel build failed, retrying single-threaded..."
     if ! ninja -j1; then
@@ -4545,7 +4616,7 @@ ldconfig
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 echo "Verifying installation..."
-python3 -c "import cv2; print(f'OpenCV version: {cv2.__version__}'); print(f'CUDA: {cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else 'N/A'}')"
+python3 -c "import cv2; print('OpenCV version:', cv2.__version__); print('CUDA:', cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else 'N/A')" || echo "WARNING: OpenCV Python verification failed"
 
 pkg-config --modversion opencv4 || echo "pkg-config not found (normal for some builds)"
 
@@ -4669,7 +4740,9 @@ OVERRIDE
   #--- Sub-block 11.4: Install CxxWrap Julia package ---
   # Critical: Install CxxWrap package using source build via artifact override
   echo "Installing CxxWrap Julia package (will use source build)..."
-  "${JULIA_BIN}" -e 'using Pkg; Pkg.add("CxxWrap"); Pkg.build("CxxWrap")'
+  if ! "${JULIA_BIN}" -e 'using Pkg; Pkg.add("CxxWrap"); Pkg.build("CxxWrap")'; then
+    echo "[warn] CxxWrap Julia package installation failed"
+  fi
 
   #--- Sub-block 11.5: Verify CxxWrap source build usage ---
   # Purpose: Confirm Julia is using our source-built CxxWrap
@@ -4678,7 +4751,7 @@ OVERRIDE
   #--- Sub-block 11.6: Create robotics Julia environment ---
   # Purpose: Set up dedicated environment for robotics packages
   echo "Setting up Julia robotics environment..."
-  mkdir -p ${JULIA_HOME}envs
+  mkdir -p "${JULIA_HOME}envs"
   "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/robotics_env\"); Pkg.add([\"RigidBodyDynamics\", \"MeshCat\", \"ControlSystems\", \"DifferentialEquations\", \"ForwardDiff\", \"StaticArrays\", \"Rotations\", \"CoordinateTransformations\", \"Interpolations\", \"Optim\"]); Pkg.precompile()" || echo "[warn] Robotic env setup failed"
 
   #--- Sub-block 11.7: Create CUDA Julia environment ---
@@ -4720,11 +4793,11 @@ fi
 
 ENV_DIR="${1:-${JULIA_HOME}envs/robotics-cuda}"
 PROJECT_OPT="-e"
-if [ -d "$ENV_DIR" ]; then
-  PROJECT_OPT="--project=$ENV_DIR"
+if [ -d "${ENV_DIR}" ]; then
+  PROJECT_OPT="--project=${ENV_DIR}"
 fi
 
-"$JULIA_BIN" $PROJECT_OPT -e '
+"${JULIA_BIN}" "${PROJECT_OPT}" -e '
   try
     using Pkg
     Pkg.instantiate()
@@ -5058,16 +5131,20 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 # 1. Check glog version (CRITICAL)
 echo "1. Checking glog installation:"
 GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
-GLOG_SONAME=$(ls -la /usr/lib/x86_64-linux-gnu/libglog.so 2>/dev/null | awk '{print $NF}')
-if [ "$GLOG_VERSION" != "unknown" ]; then
+GLOG_SONAME=$(ls -la /usr/lib/x86_64-linux-gnu/libglog.so 2>/dev/null | awk '{print $NF}' || echo "")
+if [ "${GLOG_VERSION}" != "unknown" ]; then
     echo "  ✓ glog version: ${GLOG_VERSION}"
-    echo "  ✓ glog soname: ${GLOG_SONAME}"
+    if [ -n "${GLOG_SONAME}" ]; then
+        echo "  ✓ glog soname: ${GLOG_SONAME}"
+    else
+        echo "  ⚠ glog soname: not found (library may not exist)"
+    fi
     echo "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo '/usr/lib/x86_64-linux-gnu')"
     
     # Verify it's glog 0.6.x (required for COLMAP 3.12.6)
-    GLOG_MAJOR=$(echo $GLOG_VERSION | cut -d. -f1)
-    GLOG_MINOR=$(echo $GLOG_VERSION | cut -d. -f2)
-    if [ "$GLOG_MAJOR" -eq 0 ] && [ "$GLOG_MINOR" -eq 6 ]; then
+    GLOG_MAJOR=$(echo "${GLOG_VERSION}" | cut -d. -f1)
+    GLOG_MINOR=$(echo "${GLOG_VERSION}" | cut -d. -f2)
+    if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
         echo "  ✓ glog 0.6.x detected - COMPATIBLE with COLMAP 3.12.6"
     else
         echo "  ⚠️  WARNING: glog ${GLOG_VERSION} detected - expected 0.6.x for COLMAP 3.12.6"
@@ -5081,7 +5158,9 @@ fi
 echo ""
 echo "2. Checking for multiple glog installations:"
 GLOG_COUNT=$(find /usr /usr/local -name "libglog.so*" 2>/dev/null | wc -l)
-if [ "$GLOG_COUNT" -gt 3 ]; then  # .so, .so.1, .so.0.6.0 = 3 files expected
+# Ensure GLOG_COUNT is numeric for comparison
+GLOG_COUNT=${GLOG_COUNT:-0}
+if [ "${GLOG_COUNT}" -gt 3 ]; then  # .so, .so.1, .so.0.6.0 = 3 files expected
     echo "  ⚠️  WARNING: Found ${GLOG_COUNT} glog library files (potential conflict)"
     find /usr /usr/local -name "libglog.so*" 2>/dev/null | sed 's/^/    /'
 else
@@ -5093,6 +5172,14 @@ echo ""
 echo "3. Checking Ceres installation:"
 if ldconfig -p | grep -q "libceres.so"; then
     CERES_LOCATION=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
+    if [ -z "${CERES_LOCATION}" ]; then
+        echo "  ✗ ERROR: Ceres library path is empty!"
+        exit 1
+    fi
+    if [ ! -f "${CERES_LOCATION}" ]; then
+        echo "  ✗ ERROR: Ceres library file not found: ${CERES_LOCATION}"
+        exit 1
+    fi
     echo "  ✓ Ceres found: ${CERES_LOCATION}"
     
     # Check if Ceres links to glog
@@ -5130,7 +5217,11 @@ fi
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "PRE-FLIGHT CHECK SUMMARY:"
-echo "  glog: ${GLOG_VERSION} (${GLOG_SONAME})"
+if [ -n "${GLOG_SONAME:-}" ]; then
+    echo "  glog: ${GLOG_VERSION} (${GLOG_SONAME})"
+else
+    echo "  glog: ${GLOG_VERSION} (soname not available)"
+fi
 echo "  Ceres: Installed in /usr/local"
 echo "  Status: Ready for COLMAP compilation"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -5234,10 +5325,11 @@ if command -v gcc &>/dev/null; then
         echo "  Detected GCC version for COLMAP: ${GCC_VERSION_FOR_COLMAP}"
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
+        # Validate GCC_MAJOR_FOR_COLMAP is numeric before comparison
         if [ "${GCC_MAJOR_FOR_COLMAP}" = "11" ]; then
             echo -e "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
             COLMAP_CUDA_FLAGS="-allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
-        elif [ "${GCC_MAJOR_FOR_COLMAP}" -gt "11" ]; then
+        elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -gt "11" ] 2>/dev/null; then
             # GCC 12+ generally works better, but keep basic compatibility flags
             COLMAP_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
         fi
@@ -5327,15 +5419,17 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Use memory-aware job calculation to prevent memory issues
 BUILD_JOBS=$(calculate_build_jobs)
-echo "Using $BUILD_JOBS parallel jobs for COLMAP build..."
+# Ensure BUILD_JOBS is set to a valid numeric value
+BUILD_JOBS=${BUILD_JOBS:-1}
+echo "Using ${BUILD_JOBS} parallel jobs for COLMAP build..."
 echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with Ninja (better error messages than make)
-if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
+if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ COLMAP build FAILED with $BUILD_JOBS jobs"
+    echo "✗ COLMAP build FAILED with ${BUILD_JOBS} jobs"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "Trying single-threaded build for better error diagnostics..."
@@ -5382,8 +5476,10 @@ if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
             ldconfig -p | grep libceres | sed 's/^/    /' || echo "    NOT FOUND"
             echo "  Ceres → glog linkage:"
             CERES_LIB=$(ldconfig -p | grep libceres.so | awk '{print $NF}' | head -1)
-            if [ -n "$CERES_LIB" ]; then
-                ldd "$CERES_LIB" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
+            if [ -n "${CERES_LIB:-}" ] && [ -f "${CERES_LIB}" ]; then
+                ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
+            else
+                echo "    Ceres library path not found or invalid"
             fi
             echo "  System Ceres packages:"
             dpkg -l | grep libceres | sed 's/^/    /' || echo "    None (expected)"
@@ -5396,9 +5492,11 @@ if ! ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/colmap_build.log; then
         echo "3️⃣ FIRST COMPILATION ERROR (with context):"
         # Find the first actual error (not warning)
         FIRST_ERROR_LINE=$(grep -n "error:" /tmp/colmap_build.log | head -1 | cut -d: -f1)
-        if [ -n "$FIRST_ERROR_LINE" ]; then
+        if [ -n "${FIRST_ERROR_LINE:-}" ] && [ "${FIRST_ERROR_LINE}" -gt 0 ] 2>/dev/null; then
             START_LINE=$((FIRST_ERROR_LINE - 5))
-            [ $START_LINE -lt 1 ] && START_LINE=1
+            if [ "${START_LINE}" -lt 1 ]; then
+                START_LINE=1
+            fi
             END_LINE=$((FIRST_ERROR_LINE + 10))
             sed -n "${START_LINE},${END_LINE}p" /tmp/colmap_build.log | sed 's/^/  /'
         else
@@ -5557,8 +5655,12 @@ fi
 
 # Verify installation
 if command -v colmap &> /dev/null; then
-    COLMAP_VER=$(colmap -h 2>&1 | grep "COLMAP" | head -1)
-    echo "✓ COLMAP installed: $COLMAP_VER"
+    COLMAP_VER=$(colmap -h 2>&1 | grep "COLMAP" | head -1 || echo "")
+    if [ -n "${COLMAP_VER}" ]; then
+        echo "✓ COLMAP installed: ${COLMAP_VER}"
+    else
+        echo "✓ COLMAP installed (version check unavailable)"
+    fi
 else
     echo "✗ COLMAP installation verification failed"
     exit 1
@@ -5923,7 +6025,10 @@ echo "  Prerequisites check complete"
 # Outputs: Threading environment variables
 echo "Configuring threading for optimal performance..."
 num_cores=$(nproc 2>/dev/null || echo "1")
-if [ -z "${num_cores:-}" ] || [ "${num_cores}" -lt 1 ]; then
+# Validate that num_cores is numeric before arithmetic comparison
+if [ -z "${num_cores:-}" ] || ! expr "${num_cores}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+    num_cores=1
+elif [ "${num_cores}" -lt 1 ] 2>/dev/null; then
     num_cores=1
 fi
 export OMP_NUM_THREADS="${num_cores}"
@@ -5964,8 +6069,11 @@ pip_cmd_base=(python3 -m pip install --upgrade --no-cache-dir --ignore-installed
 
 # Add optimization flags properly
 if [ -n "${pip_flags:-}" ]; then
+    # Save and restore IFS to avoid affecting other commands
+    OLD_IFS="${IFS}"
     IFS=' '
     read -ra flag_array <<< "${pip_flags}"
+    IFS="${OLD_IFS}"
     pip_cmd_base+=("${flag_array[@]}")
 fi
 
@@ -5996,26 +6104,55 @@ if python3 -c "import jax; import jaxlib" 2>/dev/null; then
     JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || echo "unknown")
     JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || echo "unknown")
     
-    # Extract base version (without CUDA variant suffix) for comparison
-    JAX_BASE_VER=$(echo "${JAX_VER}" | sed 's/[^0-9.]*$//' | sed 's/\.[0-9]*$//' | head -c 10)
-    JAXLIB_BASE_VER=$(echo "${JAXLIB_VER}" | sed 's/+.*$//' | sed 's/\.[0-9]*$//' | head -c 10)
-    
-    echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
-    
-    # Check if base versions align (allowing for CUDA variant suffixes in jaxlib)
-    if [ "${JAX_BASE_VER}" = "${JAXLIB_BASE_VER}" ] || [ "${JAX_VER}" = "${JAXLIB_BASE_VER}" ]; then
-        echo "  ✓ Version alignment verified: jax and jaxlib versions match"
-    else
-        echo "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
-        echo "    This may cause compatibility issues. Consider reinstalling with matching versions."
+    # Validate that versions were retrieved successfully
+    if [ "${JAX_VER}" = "unknown" ] || [ -z "${JAX_VER}" ]; then
+        echo "  ⚠ WARNING: Could not retrieve JAX version"
+        JAX_VER="unknown"
+    fi
+    if [ "${JAXLIB_VER}" = "unknown" ] || [ -z "${JAXLIB_VER}" ]; then
+        echo "  ⚠ WARNING: Could not retrieve jaxlib version"
+        JAXLIB_VER="unknown"
     fi
     
-    # Verify CUDA variant in jaxlib version string
-    if echo "${JAXLIB_VER}" | grep -qE "(cuda11|cuda12)"; then
-        CUDA_VARIANT=$(echo "${JAXLIB_VER}" | grep -oE "cuda(11|12)" | head -1)
-        echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
+    if [ "${JAX_VER}" != "unknown" ] && [ "${JAXLIB_VER}" != "unknown" ]; then
+        # Extract base version (without CUDA variant suffix) for comparison
+        # Use explicit error handling for pipe failures
+        JAX_BASE_VER=$(echo "${JAX_VER}" | sed 's/[^0-9.]*$//' 2>/dev/null | sed 's/\.[0-9]*$//' 2>/dev/null | head -c 10 2>/dev/null || echo "")
+        if [ -z "${JAX_BASE_VER}" ]; then
+            JAX_BASE_VER="${JAX_VER}"
+        fi
+        JAXLIB_BASE_VER=$(echo "${JAXLIB_VER}" | sed 's/+.*$//' 2>/dev/null | sed 's/\.[0-9]*$//' 2>/dev/null | head -c 10 2>/dev/null || echo "")
+        if [ -z "${JAXLIB_BASE_VER}" ]; then
+            JAXLIB_BASE_VER="${JAXLIB_VER}"
+        fi
+        
+        echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
+        
+        # Check if base versions align (allowing for CUDA variant suffixes in jaxlib)
+        if [ -n "${JAX_BASE_VER}" ] && [ -n "${JAXLIB_BASE_VER}" ]; then
+            if [ "${JAX_BASE_VER}" = "${JAXLIB_BASE_VER}" ] || [ "${JAX_VER}" = "${JAXLIB_BASE_VER}" ]; then
+                echo "  ✓ Version alignment verified: jax and jaxlib versions match"
+            else
+                echo "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
+                echo "    This may cause compatibility issues. Consider reinstalling with matching versions."
+            fi
+        else
+            echo "  ⚠ WARNING: Could not extract base versions for comparison"
+        fi
+        
+        # Verify CUDA variant in jaxlib version string
+        if echo "${JAXLIB_VER}" | grep -qE "(cuda11|cuda12)" 2>/dev/null; then
+            CUDA_VARIANT=$(echo "${JAXLIB_VER}" | grep -oE "cuda(11|12)" 2>/dev/null | head -1 || echo "")
+            if [ -n "${CUDA_VARIANT}" ]; then
+                echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
+            else
+                echo "  ⚠ WARNING: CUDA variant pattern found but extraction failed"
+            fi
+        else
+            echo "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
+        fi
     else
-        echo "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
+        echo "  ✓ JAX and jaxlib installed (version verification unavailable)"
     fi
 else
     echo "  ⚠ JAX installation verification failed (non-fatal)"
@@ -6315,8 +6452,8 @@ JAX_VERIFY
 if [ -f /tmp/jax_verify.log ]; then
     # Use grep with proper escaping for Unicode characters
     # Check for success message (multiple patterns for robustness)
-    if grep -q "All JAX verification tests passed" /tmp/jax_verify.log 2>/dev/null || \
-       grep -q "All.*tests.*passed" /tmp/jax_verify.log 2>/dev/null; then
+    if { grep -q "All JAX verification tests passed" /tmp/jax_verify.log 2>/dev/null || \
+         grep -q "All.*tests.*passed" /tmp/jax_verify.log 2>/dev/null; }; then
         echo "✓ JAX comprehensive verification: All tests passed"
     elif grep -q "GPU acceleration available" /tmp/jax_verify.log 2>/dev/null; then
         echo "✓ JAX CUDA installation verified with GPU acceleration"
@@ -6343,22 +6480,22 @@ echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
 
 # Verify CMake version requirement (>= 3.24 per official docs)
 echo "Verifying CMake version (required: >= 3.24)..."
-CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}' | cut -d. -f1,2)
-if [ -z "$CMAKE_VERSION" ]; then
+CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}' 2>/dev/null | cut -d. -f1,2 2>/dev/null || echo "")
+if [ -z "${CMAKE_VERSION}" ]; then
     echo "⚠ WARNING: Could not determine CMake version"
 else
-    CMAKE_MAJOR=$(echo "$CMAKE_VERSION" | cut -d. -f1)
-    CMAKE_MINOR=$(echo "$CMAKE_VERSION" | cut -d. -f2)
+    CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1 2>/dev/null || echo "")
+    CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2 2>/dev/null || echo "")
     # Validate that we got numeric values (check if they're non-empty and numeric)
-    if [ -z "$CMAKE_MAJOR" ] || ! expr "$CMAKE_MAJOR" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
-        echo "⚠ WARNING: Could not parse CMake major version"
-    elif [ -z "$CMAKE_MINOR" ] || ! expr "$CMAKE_MINOR" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
-        echo "⚠ WARNING: Could not parse CMake minor version"
-    elif [ "$CMAKE_MAJOR" -lt 3 ] || ([ "$CMAKE_MAJOR" -eq 3 ] && [ "$CMAKE_MINOR" -lt 24 ]); then
-        echo "⚠ WARNING: CMake version $CMAKE_VERSION < 3.24 (official requirement)"
+    if [ -z "${CMAKE_MAJOR}" ] || ! expr "${CMAKE_MAJOR}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        echo "⚠ WARNING: Could not parse CMake major version from: ${CMAKE_VERSION}"
+    elif [ -z "${CMAKE_MINOR}" ] || ! expr "${CMAKE_MINOR}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        echo "⚠ WARNING: Could not parse CMake minor version from: ${CMAKE_VERSION}"
+    elif [ "${CMAKE_MAJOR}" -lt 3 ] || ([ "${CMAKE_MAJOR}" -eq 3 ] && [ "${CMAKE_MINOR}" -lt 24 ]) 2>/dev/null; then
+        echo "⚠ WARNING: CMake version ${CMAKE_VERSION} < 3.24 (official requirement)"
         echo "  Open3D may not build correctly. Consider upgrading CMake."
     else
-        echo "✓ CMake $CMAKE_VERSION meets requirement (>= 3.24)"
+        echo "✓ CMake ${CMAKE_VERSION} meets requirement (>= 3.24)"
     fi
 fi
 
@@ -6444,7 +6581,8 @@ if apt-get install -y --no-install-recommends \
     libunwind-14-dev \
     2>&1 | tee /tmp/llvm14_install.log; then
     # Verify packages were actually installed
-    if dpkg -l | grep -E -q "^ii.*libc\+\+-14-dev" && dpkg -l | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
+    if { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+-14-dev"; } && \
+       { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+abi-14-dev"; }; then
         LLVM14_INSTALLED=true
         echo "✓ LLVM-14 libc++ packages installed successfully"
     else
@@ -6503,31 +6641,31 @@ apt-get install -y --no-install-recommends \
     2>&1 | grep -v "Unable to locate package" || true
 
 # Check which optional packages were installed
-if dpkg -l | grep -q "^ii.*libflann-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libflann-dev"; then
     echo "✓ FLANN installed (point cloud nearest neighbor search)"
 fi
-if dpkg -l | grep -q "^ii.*libpcl-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libpcl-dev"; then
     echo "✓ PCL installed (Point Cloud Library)"
 else
     echo "ℹ PCL not available (may require universe repo - optional)"
 fi
-if dpkg -l | grep -q "^ii.*libnetcdf-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libnetcdf-dev"; then
     echo "✓ NetCDF installed (scientific data formats)"
 fi
-if dpkg -l | grep -q "^ii.*libfmt-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libfmt-dev"; then
     echo "✓ fmt installed (C++ formatting library - enables USE_SYSTEM_FMT=ON)"
 fi
-if dpkg -l | grep -q "^ii.*libassimp-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libassimp-dev"; then
     echo "✓ Assimp installed (3D model loading - enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)"
 fi
-if dpkg -l | grep -q "^ii.*pybind11-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*pybind11-dev"; then
     echo "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
 fi
-if dpkg -l | grep -q "^ii.*libtbb-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libtbb-dev"; then
     echo "✓ TBB installed (System Threading Building Blocks from libtbb-dev - not MKL TBB)"
     echo "  This ensures OpenBLAS compatibility and enables USE_SYSTEM_TBB=ON"
 fi
-if dpkg -l | grep -q "^ii.*libspdlog-dev"; then
+if dpkg -l 2>/dev/null | grep -q "^ii.*libspdlog-dev"; then
     echo "✓ spdlog installed (C++ logging library)"
 fi
 
@@ -6547,13 +6685,13 @@ fi
 
 # Check LLVM-14 packages (stable on Ubuntu 24.04 Noble)
 # NOTE: LLVM-11 not available on Noble. LLVM-14 is more stable than LLVM-18
-if dpkg -l | grep -E -q "^ii.*libc\+\+-14-dev"; then
+if dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+-14-dev"; then
     echo "✓ LLVM-14 libc++ development package installed"
 else
     echo "⚠ WARNING: libc++-14-dev not installed (libunwind conflict possible with Python exceptions)"
     VERIFY_ERROR=1
 fi
-if dpkg -l | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
+if dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
     echo "✓ LLVM-14 libc++abi development package installed"
 else
     echo "⚠ WARNING: libc++abi-14-dev not installed (libunwind conflict possible)"
@@ -6563,7 +6701,7 @@ fi
 # Check GLFW3
 if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake" ]; then
     echo "✓ GLFW3 CMake config found"
-elif dpkg -l | grep -q libglfw3-dev; then
+elif dpkg -l 2>/dev/null | grep -q "^ii.*libglfw3-dev"; then
     echo "✓ libglfw3-dev package installed"
 else
     echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
@@ -6572,7 +6710,7 @@ fi
 
 # Check OpenBLAS (CRITICAL - required to prevent build errors)
 if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
-   dpkg -l | grep -q "^ii.*libopenblas-dev"; then
+   (dpkg -l 2>/dev/null | grep -q "^ii.*libopenblas-dev"); then
     echo "✓ OpenBLAS development package installed"
 else
     echo "⚠ WARNING: libopenblas-dev may not be installed correctly"
@@ -6580,20 +6718,22 @@ else
 fi
 
 # Check OpenMP (optional but recommended for parallel operations)
-if ldconfig -p | grep -q libomp || dpkg -l | grep -q "^ii.*libomp"; then
+if (ldconfig -p 2>/dev/null | grep -q libomp) || (dpkg -l 2>/dev/null | grep -q "^ii.*libomp"); then
     echo "✓ OpenMP library installed"
 else
     echo "⚠ WARNING: OpenMP not found (parallel operations may be limited)"
 fi
 
 # Check FLANN (optional - used for nearest neighbor searches)
-if dpkg -l | grep -q "^ii.*libflann-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
+if (dpkg -l 2>/dev/null | grep -q "^ii.*libflann-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
     echo "✓ FLANN library installed"
 else
     echo "ℹ FLANN not found (optional - may be in universe repo)"
 fi
 
-if [ $VERIFY_ERROR -eq 1 ]; then
+# Ensure VERIFY_ERROR is initialized if not set
+VERIFY_ERROR=${VERIFY_ERROR:-0}
+if [ "${VERIFY_ERROR}" -eq 1 ]; then
     echo ""
     echo "⚠ WARNING: Some critical Open3D dependencies are missing!"
     echo "  The build may fail. Check the apt-get install output above."
@@ -6606,32 +6746,32 @@ fi
 # - libstdc++ (GCC's C++ library) - primary for this build
 # - libc++ (Clang's C++ library) - compatibility/fallback
 echo "Verifying C++ standard library availability..."
-CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libstdc++.so*" 2>/dev/null | head -1)
-if [ -n "$CPP_LIB_PATH" ]; then
+CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libstdc++.so*" 2>/dev/null | head -1 || echo "")
+if [ -n "${CPP_LIB_PATH}" ]; then
     echo "✓ C++ standard library (libstdc++ - GCC) found"
-    echo "  Located at: $CPP_LIB_PATH"
-    export CPP_LIBRARY="$CPP_LIB_PATH"
+    echo "  Located at: ${CPP_LIB_PATH}"
+    export CPP_LIBRARY="${CPP_LIB_PATH}"
 else
     # Also check for libc++ (Clang's C++ library) for compatibility
-    CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libc++.so*" 2>/dev/null | head -1)
-    if [ -n "$CPP_LIB_PATH" ]; then
+    CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libc++.so*" 2>/dev/null | head -1 || echo "")
+    if [ -n "${CPP_LIB_PATH}" ]; then
         echo "✓ C++ standard library (libc++ - Clang) found (compatibility)"
-        echo "  Located at: $CPP_LIB_PATH"
-        export CPP_LIBRARY="$CPP_LIB_PATH"
+        echo "  Located at: ${CPP_LIB_PATH}"
+        export CPP_LIBRARY="${CPP_LIB_PATH}"
     fi
 fi
 
-if [ -z "$CPP_LIBRARY" ]; then
+if [ -z "${CPP_LIBRARY:-}" ]; then
     echo "⚠ WARNING: No C++ standard library found in standard locations"
     echo "  Open3D CMake may fail during configuration"
 fi
 
 # Verify Python executable (as recommended in official docs)
 echo "Verifying Python setup..."
-PYTHON_EXECUTABLE=$(which python3)
-if [ -n "$PYTHON_EXECUTABLE" ]; then
-    echo "✓ Python executable: $PYTHON_EXECUTABLE"
-    python3 --version
+PYTHON_EXECUTABLE=$(command -v python3 2>/dev/null || echo "")
+if [ -n "${PYTHON_EXECUTABLE}" ]; then
+    echo "✓ Python executable: ${PYTHON_EXECUTABLE}"
+    python3 --version 2>/dev/null || echo "  (version check unavailable)"
 else
     echo "⚠ WARNING: python3 not found in PATH"
 fi
@@ -6742,8 +6882,11 @@ if [ -f "cpp/pybind/make_python_package.cmake" ]; then
         JUPYTER_DIR_FOUND=true
     elif [ -d "jupyter" ]; then
         JUPYTER_DIR_FOUND=true
-    elif [ -n "$(find . -maxdepth 3 -type d -name "*jupyter*" 2>/dev/null | head -1)" ]; then
-        JUPYTER_DIR_FOUND=true
+    else
+        JUPYTER_FIND_RESULT=$(find . -maxdepth 3 -type d -name "*jupyter*" 2>/dev/null | head -1 || echo "")
+        if [ -n "${JUPYTER_FIND_RESULT}" ]; then
+            JUPYTER_DIR_FOUND=true
+        fi
     fi
     
     if [ "${JUPYTER_DIR_FOUND}" = "true" ]; then
@@ -6884,9 +7027,9 @@ elif [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" ]; then
 else
     echo "⚠ WARNING: System OpenBLAS shared library not found in expected location"
     echo "  Searching for OpenBLAS libraries..."
-    OPENBLAS_SEARCH=$(find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -1)
-    if [ -n "$OPENBLAS_SEARCH" ]; then
-        OPENBLAS_SO_LIB="$OPENBLAS_SEARCH"
+    OPENBLAS_SEARCH=$(find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -1 || echo "")
+    if [ -n "${OPENBLAS_SEARCH}" ]; then
+        OPENBLAS_SO_LIB="${OPENBLAS_SEARCH}"
         echo "  Found OpenBLAS library: ${OPENBLAS_SO_LIB}"
     else
         echo "  ⚠ No OpenBLAS libraries found - Open3D may build from source or fail"
@@ -6896,7 +7039,7 @@ fi
 # Prepare BLAS_LIBRARIES flag if OpenBLAS library found
 BLAS_LIBRARIES_FLAG=""
 LAPACK_LIBRARIES_FLAG=""
-if [ -n "$OPENBLAS_SO_LIB" ]; then
+if [ -n "${OPENBLAS_SO_LIB:-}" ]; then
     BLAS_LIBRARIES_FLAG="-DBLAS_LIBRARIES=${OPENBLAS_SO_LIB}"
     # OpenBLAS includes LAPACK, so use same library for LAPACK
     LAPACK_LIBRARIES_FLAG="-DLAPACK_LIBRARIES=${OPENBLAS_SO_LIB}"
@@ -6920,7 +7063,7 @@ fi
 # Verify LAPACKE is available (required for Open3D when using system BLAS)
 echo "Verifying LAPACKE installation..."
 LAPACKE_FOUND=false
-if ldconfig -p | grep -q liblapacke; then
+if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q liblapacke; then
     LAPACKE_FOUND=true
     echo "✓ LAPACKE library found via ldconfig"
 elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so.3" ]; then
@@ -6938,8 +7081,9 @@ fi
 
 # Verify OpenMP is available (required for Open3D parallel operations)
 echo "Verifying OpenMP installation..."
-if [ -f "/usr/lib/x86_64-linux-gnu/libomp.so" ] || \
-   ldconfig -p | grep -q libomp; then
+if [ -f "/usr/lib/x86_64-linux-gnu/libomp.so" ]; then
+    echo "✓ OpenMP library found"
+elif command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libomp; then
     echo "✓ OpenMP library found"
 else
     echo "⚠ WARNING: OpenMP library not found"
@@ -6967,8 +7111,19 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 
 # Clean build directory (critical for rebuilds)
 echo "🧹 Cleaning build directory for fresh Open3D build..."
-rm -rf build CMakeCache.txt
-mkdir -p build && cd build
+if [ -d "build" ] || [ -f "CMakeCache.txt" ]; then
+    rm -rf build CMakeCache.txt || {
+        echo "⚠ WARNING: Failed to clean build directory (continuing anyway)"
+    }
+fi
+mkdir -p build || {
+    echo "✗ ERROR: Failed to create build directory"
+    exit 1
+}
+if ! cd build; then
+    echo "✗ ERROR: Failed to change to build directory"
+    exit 1
+fi
 echo "✓ Clean build directory created"
 echo ""
 
@@ -6988,19 +7143,32 @@ echo "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
 
 # Pre-copy WebRTC binaries if downloaded on host (VPN-friendly pre-download)
 echo "Checking for pre-downloaded WebRTC binaries..."
-echo "  Host cache: ${CONTAINER_BIN_CACHE}"
-echo "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
-echo "  Looking for: ${OPEN3D_WEBRTC_FILE}"
-ls -lh "${CONTAINER_BIN_CACHE}/" | grep -i webrtc || echo "  No WebRTC files in host cache"
-
-if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
-    echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
-    cp -v "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
-    echo "✓ WebRTC binaries pre-copied from host cache"
-    ls -lh "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" | cat
+if [ -z "${CONTAINER_BIN_CACHE:-}" ]; then
+    echo "  ⚠ CONTAINER_BIN_CACHE not set, skipping WebRTC pre-copy check"
+elif [ -z "${OPEN3D_WEBRTC_FILE:-}" ]; then
+    echo "  ⚠ OPEN3D_WEBRTC_FILE not set, skipping WebRTC pre-copy check"
+elif [ ! -d "${CONTAINER_BIN_CACHE}" ]; then
+    echo "  ⚠ Host cache directory does not exist: ${CONTAINER_BIN_CACHE}"
 else
-    echo "ℹ WebRTC binaries not found in host cache, will download during build"
-    echo "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+    echo "  Host cache: ${CONTAINER_BIN_CACHE}"
+    echo "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
+    echo "  Looking for: ${OPEN3D_WEBRTC_FILE}"
+    if [ -d "${CONTAINER_BIN_CACHE}" ]; then
+        ls -lh "${CONTAINER_BIN_CACHE}/" 2>/dev/null | grep -i webrtc || echo "  No WebRTC files in host cache"
+    fi
+    
+    if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
+        echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
+        if cp -v "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"; then
+            echo "✓ WebRTC binaries pre-copied from host cache"
+            ls -lh "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" 2>/dev/null | cat || true
+        else
+            echo "⚠ WARNING: Failed to copy WebRTC binaries (will download during build)"
+        fi
+    else
+        echo "ℹ WebRTC binaries not found in host cache, will download during build"
+        echo "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+    fi
 fi
 echo ""
 
@@ -7086,8 +7254,8 @@ if [ -n "$GLFW_CONFIG_DIR" ] && [ -f "$GLFW_CONFIG_DIR" ]; then
         echo "✓ GLFW CMake config found: $GLFW_CONFIG_DIR"
         echo "  Setting glfw3_DIR to: $GLFW_DIR"
         # Use glfw3_DIR (preferred method when config file exists)
-        # CMake handles paths with spaces automatically, no need for quotes in -D flags
-        GLFW_CMAKE_FLAGS="-Dglfw3_DIR=$GLFW_DIR"
+        # CMake handles paths with spaces automatically, no quotes needed in variable
+        GLFW_CMAKE_FLAGS="-Dglfw3_DIR=${GLFW_DIR}"
         # Store the cmake directory for CMAKE_PREFIX_PATH (parent of glfw3 dir)
         # CMake searches <prefix>/lib/cmake/ and <prefix>/<package>/, so we add the parent
         GLFW_CMAKE_PREFIX=$(dirname "$GLFW_DIR")  # e.g., /usr/lib/x86_64-linux-gnu/cmake
@@ -7139,13 +7307,13 @@ if [ -z "$GLFW_CONFIG_DIR" ] || [ -z "$GLFW_DIR" ]; then
         GLFW_INCLUDE_PATH=""
     fi
     
-    # Use explicit paths as fallback (CMake handles spaces automatically)
+    # Use explicit paths as fallback (CMake handles paths with spaces automatically)
     if [ -n "$GLFW_LIB_PATH" ] && [ -n "$GLFW_INCLUDE_DIR" ]; then
-        GLFW_CMAKE_FLAGS="-DGLFW3_LIBRARY=$GLFW_LIB_PATH -DGLFW3_INCLUDE_DIR=$GLFW_INCLUDE_DIR"
-        echo "  Using explicit GLFW paths: lib=$GLFW_LIB_PATH, include=$GLFW_INCLUDE_DIR"
+        GLFW_CMAKE_FLAGS="-DGLFW3_LIBRARY=${GLFW_LIB_PATH} -DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
+        echo "  Using explicit GLFW paths: lib=${GLFW_LIB_PATH}, include=${GLFW_INCLUDE_DIR}"
     elif [ -n "$GLFW_INCLUDE_DIR" ]; then
-        GLFW_CMAKE_FLAGS="-DGLFW3_INCLUDE_DIR=$GLFW_INCLUDE_DIR"
-        echo "  Using GLFW include directory for CMake search: $GLFW_INCLUDE_DIR"
+        GLFW_CMAKE_FLAGS="-DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
+        echo "  Using GLFW include directory for CMake search: ${GLFW_INCLUDE_DIR}"
     else
         echo "⚠ Could not determine GLFW paths, CMake will attempt auto-detection"
         GLFW_CMAKE_FLAGS=""
@@ -7203,12 +7371,25 @@ echo ""
 echo "Detecting C++ standard library for explicit CMake configuration..."
 if [ -z "${CPP_LIBRARY:-}" ]; then
     CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
-    if [ -n "$CPP_LIB_PATH" ] && [ -f "$CPP_LIB_PATH" ]; then
-        export CPP_LIBRARY="$CPP_LIB_PATH"
-        echo "✓ C++ library detected: $CPP_LIBRARY"
+    if [ -n "${CPP_LIB_PATH}" ] && [ -f "${CPP_LIB_PATH}" ]; then
+        export CPP_LIBRARY="${CPP_LIB_PATH}"
+        echo "✓ C++ library detected: ${CPP_LIBRARY}"
     else
         echo "⚠ C++ standard library not found in standard locations"
         export CPP_LIBRARY=""
+    fi
+else
+    # Verify existing CPP_LIBRARY value is valid
+    if [ ! -f "${CPP_LIBRARY}" ]; then
+        echo "⚠ WARNING: CPP_LIBRARY is set to non-existent file: ${CPP_LIBRARY}"
+        echo "  Attempting to detect C++ library automatically..."
+        CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
+        if [ -n "${CPP_LIB_PATH}" ] && [ -f "${CPP_LIB_PATH}" ]; then
+            export CPP_LIBRARY="${CPP_LIB_PATH}"
+            echo "✓ C++ library re-detected: ${CPP_LIBRARY}"
+        else
+            export CPP_LIBRARY=""
+        fi
     fi
 fi
 
@@ -7325,12 +7506,12 @@ elif [ -n "${CLANG_LIBDIR_DETECTED:-}" ] && [ -d "${CLANG_LIBDIR_DETECTED}" ]; t
     LLVM_VERSION_DETECTED=""
     LLVM_VERSION_DETECTED=$(echo "${CLANG_LIBDIR_TO_USE}" | sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' | head -1 || echo "")
     if [ -n "${LLVM_VERSION_DETECTED}" ]; then
-        # Check if version is numeric and greater than 11
-        if expr "${LLVM_VERSION_DETECTED}" : '^[0-9][0-9]*$' >/dev/null 2>&1 && [ "${LLVM_VERSION_DETECTED}" -gt 11 ]; then
+        # Check if version is numeric and greater than 11 (use bash arithmetic instead of expr)
+        if [[ "${LLVM_VERSION_DETECTED}" =~ ^[0-9]+$ ]] && [ "${LLVM_VERSION_DETECTED}" -gt 11 ]; then
             echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE} (may have libunwind conflict)"
             echo "  Warning: LLVM-${LLVM_VERSION_DETECTED} may cause Python exception issues with Filament renderer"
             echo "  Workaround: If Python exceptions fail, set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally"
-        elif expr "${LLVM_VERSION_DETECTED}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        elif [[ "${LLVM_VERSION_DETECTED}" =~ ^[0-9]+$ ]]; then
             echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE}"
         else
             echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
@@ -7354,22 +7535,23 @@ SYSTEM_LIB_FLAGS=""
 
 # Use system libraries when available for better compatibility and faster builds
 # Check if libraries exist before enabling USE_SYSTEM_* flags
-if dpkg -l | grep -q "^ii.*libfmt-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libfmt.so" ]; then
+if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libfmt-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libfmt.so" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_FMT=ON"
     echo "  Will use system fmt library"
 fi
 
-if dpkg -l | grep -q "^ii.*libtbb-dev" || ldconfig -p | grep -q libtbb; then
+if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libtbb-dev") || \
+   (command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libtbb); then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_TBB=ON"
     echo "  Will use system TBB library (from libtbb-dev, not MKL TBB - ensures OpenBLAS compatibility)"
 fi
 
-if dpkg -l | grep -q "^ii.*libassimp-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libassimp.so" ]; then
+if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libassimp-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libassimp.so" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_ASSIMP=ON"
     echo "  Will use system Assimp library"
 fi
 
-if dpkg -l | grep -q "^ii.*pybind11-dev" || [ -f "/usr/include/pybind11/pybind11.h" ]; then
+if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*pybind11-dev") || [ -f "/usr/include/pybind11/pybind11.h" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_PYBIND11=ON"
     echo "  Will use system pybind11 library"
 fi
@@ -7403,11 +7585,17 @@ fi
 
 # CUDA configuration flags for better performance
 CUDA_FLAGS=""
-if [ -n "${CUDA_VERSION}" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
-    CUDA_FLAGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-${CUDA_VERSION}/bin/nvcc"
-    CUDA_FLAGS="${CUDA_FLAGS} -DENABLE_CACHED_CUDA_MANAGER=ON"
-    CUDA_FLAGS="${CUDA_FLAGS} -DBUILD_WITH_CUDA_STATIC=ON"
-    echo "  Using CUDA ${CUDA_VERSION} with cached memory manager and static libraries"
+if [ -n "${CUDA_VERSION:-}" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
+    if [ -f "/usr/local/cuda-${CUDA_VERSION}/bin/nvcc" ]; then
+        CUDA_FLAGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-${CUDA_VERSION}/bin/nvcc"
+        CUDA_FLAGS="${CUDA_FLAGS} -DENABLE_CACHED_CUDA_MANAGER=ON"
+        CUDA_FLAGS="${CUDA_FLAGS} -DBUILD_WITH_CUDA_STATIC=ON"
+        echo "  Using CUDA ${CUDA_VERSION} with cached memory manager and static libraries"
+    else
+        echo "  ⚠ WARNING: CUDA ${CUDA_VERSION} directory exists but nvcc not found"
+    fi
+elif [ -z "${CUDA_VERSION:-}" ]; then
+    echo "  ⚠ WARNING: CUDA_VERSION not set - CMake will attempt to auto-detect CUDA"
 fi
 
 # Enhanced include path with OpenBLAS headers if found
@@ -7444,7 +7632,15 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
     cd "${WEBRTC_EXTRACT_DIR}" || exit 1
     
     # Extract tar.gz and handle the webrtc_release subdirectory
-    if tar -xzf "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" 2>/dev/null; then
+    WEBRTC_ARCHIVE="${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+    if [ ! -f "${WEBRTC_ARCHIVE}" ]; then
+        echo "✗ ERROR: WebRTC archive not found: ${WEBRTC_ARCHIVE}"
+    elif [ ! -r "${WEBRTC_ARCHIVE}" ]; then
+        echo "✗ ERROR: WebRTC archive is not readable: ${WEBRTC_ARCHIVE}"
+    elif ! tar -xzf "${WEBRTC_ARCHIVE}" 2>/dev/null; then
+        echo "✗ ERROR: Manual extraction failed for ${WEBRTC_ARCHIVE}"
+        echo "  Archive may be corrupted or incomplete"
+    else
         # Check if extraction created webrtc_release subdirectory
         if [ -d "webrtc_release" ]; then
             echo "  Archive extracted to webrtc_release/, moving contents to parent..."
@@ -7463,8 +7659,6 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
         else
             echo "⚠ WARNING: lib/libwebrtc.a not found after extraction"
         fi
-    else
-        echo "✗ Manual extraction failed!"
     fi
     
     # Return to build directory (we came from /tmp/Open3D/build)
@@ -7638,18 +7832,20 @@ echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
-# Note: Use separate variable to capture exit status correctly
+# Note: Must check PIPESTATUS[0] to get ninja exit status, not tee exit status
 BUILD_SUCCESS=false
-if ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log; then
+ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log
+NINJA_EXIT=${PIPESTATUS[0]}
+if [ "${NINJA_EXIT}" -eq 0 ]; then
     BUILD_SUCCESS=true
 else
-    NINJA_EXIT=${PIPESTATUS[0]}
     echo ""
     echo "⚠️  Parallel build failed (exit code: ${NINJA_EXIT}), retrying single-threaded..."
-    if ninja -j1 2>&1 | tee -a /tmp/open3d_build.log; then
+    ninja -j1 2>&1 | tee -a /tmp/open3d_build.log
+    SINGLE_EXIT=${PIPESTATUS[0]}
+    if [ "${SINGLE_EXIT}" -eq 0 ]; then
         BUILD_SUCCESS=true
     else
-        SINGLE_EXIT=${PIPESTATUS[0]}
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "✗ Open3D build FAILED"
@@ -7688,9 +7884,11 @@ echo "✓ Open3D built successfully with Ninja"
 # Outputs: Open3D installed to /usr/local
 echo ""
 echo "Installing Open3D to /usr/local..."
-if ! ninja install 2>&1 | tee /tmp/open3d_install.log; then
+ninja install 2>&1 | tee /tmp/open3d_install.log
+INSTALL_EXIT=${PIPESTATUS[0]}
+if [ "${INSTALL_EXIT}" -ne 0 ]; then
     echo ""
-    echo "⚠️  Open3D installation failed"
+    echo "⚠️  Open3D installation failed (exit code: ${INSTALL_EXIT})"
     echo "Last 50 lines of install log:"
     tail -50 /tmp/open3d_install.log
     echo ""
@@ -7787,37 +7985,20 @@ verify_open3d_installation() {
 echo "Strategy 1: ninja install-pip-package (official recommended method)..."
 # Clear any previous log
 > /tmp/open3d_python_install.log
-if ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log; then
-    # Check exit status - tee doesn't preserve it
-    if [ ${PIPESTATUS[0]} -eq 0 ]; then
-        # Give pip a moment to finalize installation
-        sleep 1
-        if verify_open3d_installation; then
-            echo "✓ Python module installed via install-pip-package (official method)"
-            PYTHON_INSTALLED=true
-        else
-            echo "⚠ install-pip-package succeeded but module not yet importable"
-        fi
+ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log
+NINJA_EXIT=${PIPESTATUS[0]}
+if [ "${NINJA_EXIT}" -eq 0 ]; then
+    # Give pip a moment to finalize installation
+    sleep 1
+    if verify_open3d_installation; then
+        echo "✓ Python module installed via install-pip-package (official method)"
+        PYTHON_INSTALLED=true
     else
-        NINJA_EXIT=${PIPESTATUS[0]}
-        echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
-        # Check for specific error patterns in the log
-        if grep -q "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
-            echo "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
-            echo "  This is a known issue with Open3D build scripts on Python 3.10+"
-            echo "  Falling back to Strategy 2 (python-package)..."
-        elif grep -q "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
-            echo "  Detected missing jupyter_packaging module"
-            echo "  Attempting to install jupyter_packaging and retry..."
-            pip3 install --no-cache-dir "jupyter_packaging>=0.12.0" || true
-            echo "  Falling back to Strategy 2 (python-package)..."
-        fi
+        echo "⚠ install-pip-package succeeded but module not yet importable"
     fi
 else
-    # Capture exit status when if condition fails
-    NINJA_EXIT=${PIPESTATUS[0]:-$?}
     echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
-    # Check log for specific errors
+    # Check for specific error patterns in the log
     if [ -f /tmp/open3d_python_install.log ]; then
         if grep -q "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
             echo "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
@@ -7846,9 +8027,9 @@ if [ "$PYTHON_INSTALLED" = false ]; then
             echo "  ⚠ jupyter_packaging installation failed (may affect wheel build)"
         }
     fi
-    if ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log; then
-        # Check exit status - tee doesn't preserve it
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+    ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log
+    NINJA_PYTHON_EXIT=${PIPESTATUS[0]}
+    if [ "${NINJA_PYTHON_EXIT}" -eq 0 ]; then
             WHEEL_FILE=""
             
             # Comprehensive wheel search - check multiple locations:
