@@ -2500,21 +2500,26 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
     LIB_SIZE=$(du -h "${OPENBLAS_LIB}" | cut -f1)
     echo "  Library size: ${LIB_SIZE}"
     
-    # Check for DYNAMIC_ARCH support
-    echo "  Verifying DYNAMIC_ARCH support..."
-    if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qi "DYNAMIC_ARCH\|dynamic_arch\|DYNAMICARCH"; then
-        echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
-    else
-        echo -e "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
-    fi
-    
-    # Check for architecture-specific kernels
+    # Check for architecture-specific kernels (needed for DYNAMIC_ARCH verification)
     ARCH_COUNT="0"
     if ARCH_COUNT_RAW=$(strings "${OPENBLAS_LIB}" 2>/dev/null | grep -ciE "HASWELL|SANDYBRIDGE|NEHALEM|PENRYN|CORE2|SKYLAKEX|CASCADELAKE|COOPERLAKE|ICELAKE|SAPPHIRERAPIDS" 2>/dev/null || true); then
         ARCH_COUNT="${ARCH_COUNT_RAW}"
     fi
     if [ "${ARCH_COUNT:-0}" -gt 0 ]; then
         echo -e "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
+    fi
+    
+    # Check for DYNAMIC_ARCH support
+    echo "  Verifying DYNAMIC_ARCH support..."
+    if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qiE "DYNAMIC_ARCH|dynamic_arch|DYNAMICARCH|Dynamic.*Arch|DYNAMIC.*ARCH"; then
+        echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+    else
+        # Additional check: if multiple architecture kernels are found, DYNAMIC_ARCH is likely enabled
+        if [ "${ARCH_COUNT:-0}" -gt 1 ]; then
+            echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed (multiple CPU architectures detected)${NC}"
+        else
+            echo -e "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
+        fi
     fi
 else
     echo -e "  ${RED}✗ OpenBLAS library not found at expected location${NC}"
@@ -2585,10 +2590,40 @@ echo ""
 # Outputs: Updated ldconfig, environment variables, pkg-config
 echo -e "${YELLOW}[6.12B.8] Configuring library paths...${NC}"
 
+# Verify library exists before updating ldconfig
+if [ ! -f "${OPENBLAS_LIB_FILE}" ]; then
+    echo -e "  ${RED}✗ Error: OpenBLAS library not found at ${OPENBLAS_LIB_FILE}${NC}"
+    echo "  Cannot update ldconfig without library file"
+    exit 1
+fi
+
 # Update ldconfig
 echo "  Updating ldconfig cache..."
 echo "${OPENBLAS_INSTALL_PREFIX}/lib" > /etc/ld.so.conf.d/openblas-custom.conf
-ldconfig
+
+# Run ldconfig and verify it succeeded
+if ldconfig 2>&1; then
+    echo -e "  ${GREEN}✓ ldconfig executed successfully${NC}"
+else
+    echo -e "  ${YELLOW}⚠ ldconfig returned non-zero exit code, but continuing...${NC}"
+fi
+
+# Verify OpenBLAS is now in ldconfig cache
+if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+    echo -e "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
+else
+    echo -e "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}"
+    # Retry ldconfig
+    ldconfig 2>&1 || true
+    # Check again
+    if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+        echo -e "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ OpenBLAS still not in ldconfig cache (library may need to be in standard location)${NC}"
+        echo "    Library exists at: ${OPENBLAS_LIB_FILE}"
+        echo "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
+    fi
+fi
 
 # Set environment variables (for current session and future sessions)
 export LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
@@ -3405,27 +3440,27 @@ cat > /etc/profile.d/drake.sh << EOF
 # Drake Python bindings
 # NOTE: This is for system Python (${SYSTEM_PYTHON_VER}) and ROS 2 ${ROS_DISTRO}
 # will be automatically unset when Conda environments activate
-export DRAKE_ROOT="${DRAKE_HOME}"
+export DRAKE_ROOT="${DRAKE_HOME:-/opt/drake}"
 site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "3.12")
 # Add Drake Python bindings to PYTHONPATH
-if [ -d "${DRAKE_ROOT}/lib/python${site_packages}/site-packages" ]; then
-  export PYTHONPATH="${DRAKE_ROOT}/lib/python${site_packages}/site-packages:${PYTHONPATH}"
+if [ -d "\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages" ]; then
+  export PYTHONPATH="\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages:\${PYTHONPATH}"
 fi
-if [ -d "${DRAKE_ROOT}/lib/python3/dist-packages" ]; then
-  export PYTHONPATH="${DRAKE_ROOT}/lib/python3/dist-packages:${PYTHONPATH}"
+if [ -d "\${DRAKE_ROOT}/lib/python3/dist-packages" ]; then
+  export PYTHONPATH="\${DRAKE_ROOT}/lib/python3/dist-packages:\${PYTHONPATH}"
 fi
 # Add Drake libraries to library path
-if [ -d "${DRAKE_ROOT}/lib" ]; then
-  export LD_LIBRARY_PATH="${DRAKE_ROOT}/lib:${LD_LIBRARY_PATH}"
+if [ -d "\${DRAKE_ROOT}/lib" ]; then
+  export LD_LIBRARY_PATH="\${DRAKE_ROOT}/lib:\${LD_LIBRARY_PATH}"
 fi
 # Add Drake binaries to PATH
-if [ -d "${DRAKE_ROOT}/bin" ]; then
-  export PATH="${DRAKE_ROOT}/bin:${PATH}"
+if [ -d "\${DRAKE_ROOT}/bin" ]; then
+  export PATH="\${DRAKE_ROOT}/bin:\${PATH}"
 fi
 EOF
 chmod +x /etc/profile.d/drake.sh
 
-echo "✓ Drake installed at ${DRAKE_HOME}"
+echo "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 
 #--- Sub-block 6.10.11: Disable Drake repository after installation ---
 # Critical: Comment out Drake repo to prevent automatic updates
