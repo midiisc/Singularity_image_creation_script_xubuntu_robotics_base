@@ -3509,9 +3509,60 @@ echo "  Note: Ignoring apt package version parsing errors (e.g., devscripts) - t
 export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PIP_NO_WARN_SCRIPT_LOCATION=1
 
+# Check for existing PyTorch installations that might conflict
+echo "  Checking for existing PyTorch installations and dependency conflicts..."
+python3 << 'CHECK_PYTORCH_EOF'
+import sys
+warnings = []
+try:
+    import torch
+    torch_ver = torch.__version__
+    warnings.append(f"  ⚠ WARNING: torch {torch_ver} is already installed")
+    warnings.append("    This script compiles PyTorch from source and does not require pre-installed torch")
+    warnings.append("    If you see dependency conflicts, consider uninstalling existing torch:")
+    warnings.append("      pip uninstall -y torch torchvision torchaudio")
+except ImportError:
+    print("  ✓ No existing torch installation found (good for source compilation)")
+
+try:
+    import torchvision
+    tv_ver = torchvision.__version__
+    warnings.append(f"  ⚠ WARNING: torchvision {tv_ver} is already installed")
+except ImportError:
+    pass
+
+# Check for numpy/sympy version conflicts
+try:
+    import numpy
+    numpy_ver = numpy.__version__
+    major, minor = map(int, numpy_ver.split('.')[:2])
+    if major >= 2:
+        warnings.append(f"  ⚠ WARNING: numpy {numpy_ver} >= 2.0.0 detected")
+        warnings.append("    Will downgrade to numpy <2.0.0 to avoid conflicts")
+except ImportError:
+    pass
+
+try:
+    import sympy
+    sympy_ver = sympy.__version__
+    if sympy_ver != "1.13.1":
+        warnings.append(f"  ⚠ WARNING: sympy {sympy_ver} != 1.13.1 detected")
+        warnings.append("    Will install sympy==1.13.1 (required by torch 2.6.0)")
+except ImportError:
+    pass
+
+if warnings:
+    for warning in warnings:
+        print(warning)
+CHECK_PYTORCH_EOF
+
 # Core build dependencies for PyTorch (minimal set required for compilation)
 # These are the actual dependencies needed by PyTorch's setup.py
-CORE_BUILD_DEPS="numpy ninja pyyaml setuptools wheel cmake typing-extensions filelock networkx sympy"
+# CRITICAL: Pin compatible versions to avoid dependency conflicts
+# - numpy <2.0.0: Required by many packages (cflib, isaacsim-core, langchain, numba, ultralytics)
+# - sympy==1.13.1: Required by torch 2.6.0 (torch 2.6.0 requires sympy==1.13.1)
+# - Other packages: Use latest compatible versions
+CORE_BUILD_DEPS="numpy<2.0.0,>=1.23.0 ninja pyyaml setuptools wheel cmake typing-extensions filelock networkx sympy==1.13.1"
 
 if [ -n "${pip_flags}" ]; then
     # Install core dependencies with --ignore-installed to handle version conflicts gracefully
@@ -3524,7 +3575,9 @@ if [ -n "${pip_flags}" ]; then
     }
     
     # Now install with dependencies for packages that need them (but suppress errors)
+    # CRITICAL: Ensure numpy and sympy versions are enforced even with dependencies
     python3 -m pip install --no-cache-dir --ignore-installed ${pip_flags} \
+        "numpy<2.0.0,>=1.23.0" "sympy==1.13.1" \
         ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || true
 else
     python3 -m pip install --no-cache-dir --ignore-installed --no-deps \
@@ -3534,9 +3587,45 @@ else
     }
     
     # Now install with dependencies for packages that need them (but suppress errors)
+    # CRITICAL: Ensure numpy and sympy versions are enforced even with dependencies
     python3 -m pip install --no-cache-dir --ignore-installed \
+        "numpy<2.0.0,>=1.23.0" "sympy==1.13.1" \
         ${CORE_BUILD_DEPS} 2>&1 | filter_pip_output || true
 fi
+
+# Verify critical dependencies are at correct versions
+echo "  Verifying critical dependency versions..."
+python3 << 'VERIFY_DEPS_EOF'
+import sys
+import numpy
+import sympy
+
+errors = []
+if hasattr(numpy, '__version__'):
+    numpy_ver = numpy.__version__
+    # Check if numpy is < 2.0.0
+    major, minor = map(int, numpy_ver.split('.')[:2])
+    if major >= 2:
+        errors.append(f"ERROR: numpy {numpy_ver} >= 2.0.0 (should be <2.0.0)")
+    else:
+        print(f"  ✓ numpy: {numpy_ver} (<2.0.0)")
+else:
+    errors.append("ERROR: Could not determine numpy version")
+
+if hasattr(sympy, '__version__'):
+    sympy_ver = sympy.__version__
+    if sympy_ver != "1.13.1":
+        errors.append(f"ERROR: sympy {sympy_ver} != 1.13.1 (required by torch 2.6.0)")
+    else:
+        print(f"  ✓ sympy: {sympy_ver} (required by torch 2.6.0)")
+else:
+    errors.append("ERROR: Could not determine sympy version")
+
+if errors:
+    for error in errors:
+        print(f"  {error}", file=sys.stderr)
+    sys.exit(1)
+VERIFY_DEPS_EOF
 
 # Optional: Try to install from requirements.txt if it exists, but filter out problematic packages
 # This is for optional dependencies that might be useful but aren't required

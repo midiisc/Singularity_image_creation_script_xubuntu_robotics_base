@@ -405,9 +405,9 @@ if [ "${DO_DEEP_LEARNING}" = "1" ]; then
     create_environment "deep_learning" \
         "Deep Learning with PyTorch, TensorFlow + Multi-language kernels + Full Jupyter" \
         python=3.11 \
-        pytorch torchvision torchaudio pytorch-cuda=12.1 \
+        pytorch=2.4.1 torchvision=0.19.1 torchaudio pytorch-cuda=12.1 \
         tensorflow \
-        numpy scipy matplotlib pandas seaborn plotly bokeh altair \
+        "numpy<2.0.0" scipy matplotlib pandas seaborn plotly bokeh altair \
         scikit-learn opencv pillow \
         jupyterlab jupyter-lsp jupyterlab-git jupyterlab-code-formatter \
         jupyterlab-spellchecker jupyterlab-latex \
@@ -416,6 +416,10 @@ if [ "${DO_DEEP_LEARNING}" = "1" ]; then
         tensorboard wandb \
         r-base r-irkernel \
         nodejs
+    
+    # Fix PyTorch dependency conflicts: ensure sympy==1.13.1 for torch compatibility
+    echo -e "${BLUE}Fixing PyTorch dependencies (sympy version)...${NC}"
+    ${CONDA_ROOT}/envs/deep_learning/bin/pip install --upgrade "sympy==1.13.1" "numpy<2.0.0,>=1.23.0" || true
     
     echo -e "${BLUE}Installing additional DL packages via pip...${NC}"
     ${CONDA_ROOT}/envs/deep_learning/bin/pip install \
