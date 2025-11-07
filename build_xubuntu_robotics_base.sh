@@ -78,24 +78,227 @@ source "${CONFIG_FILE}"
 echo "✓ Configuration loaded from ${CONFIG_FILE}"
 
 #===============================================================================
-# BLOCK 3: HOST DEPENDENCY VALIDATION
+# BLOCK 3: HOST DEPENDENCY VALIDATION AND INSTALLATION
 #===============================================================================
-# Purpose: Check for required host tools before starting build
-# Self-contained: Yes (complete if-fi block with exit)
-# Dependencies: None
-# Outputs: Environment variables, configuration
+# Purpose: Check for and install best-in-class host tools before starting build
+# Self-contained: Yes (complete if-fi blocks with installation)
+# Dependencies: sudo access for package installation
+# Outputs: Installed packages, verified tools
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 3.1: Check for dpkg-deb (required for .deb package inspection) ---
-# Critical: dpkg-deb is needed to verify downloaded .deb packages
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-if ! command -v dpkg-deb >/dev/null 2>&1; then
-    echo -e "\nERROR: Host dependency 'dpkg-deb' not found."
-    echo "Please install it with: sudo apt update && sudo apt install dpkg-dev"
+#--- Sub-block 3.1: Check sudo availability ---
+# Purpose: Verify sudo is available before attempting installations
+# Dependencies: None (foundational check)
+# Outputs: Error message if sudo unavailable
+if ! command -v sudo >/dev/null 2>&1; then
+    echo "ERROR: sudo is required for installing host tools but is not available"
+    echo "Please install sudo or run this script with appropriate privileges"
     exit 1
 fi
+
+# Test sudo access (non-interactive, may fail if password required)
+if ! sudo -n true 2>/dev/null; then
+    echo "WARNING: sudo access may require a password"
+    echo "The script will attempt to install tools, but may prompt for your password"
+fi
 # End if-fi block (self-contained)
+
+#--- Sub-block 3.2: Function to install missing tools ---
+# Purpose: Install tools if missing, with proper error handling
+# Dependencies: sudo access, apt package manager
+# Outputs: Installed packages
+install_host_tool() {
+    local tool_name="${1:-}"
+    local package_name="${2:-}"
+    local description="${3:-}"
+    
+    # Parameter validation
+    if [ -z "${tool_name}" ] || [ -z "${package_name}" ] || [ -z "${description}" ]; then
+        echo "ERROR: install_host_tool() called with empty parameters" >&2
+        return 1
+    fi
+    
+    # Check if tool already available
+    if command -v "${tool_name}" >/dev/null 2>&1; then
+        echo "✓ ${description} (${tool_name}) already installed"
+        return 0
+    fi
+    
+    # Attempt installation
+    echo "Installing ${description} (${package_name})..."
+    local install_output
+    local install_status=0
+    
+    # Run installation and capture output for better error reporting
+    install_output=$(sudo apt-get install -y --no-install-recommends "${package_name}" 2>&1) || install_status=$?
+    
+    if [ ${install_status} -eq 0 ]; then
+        # Refresh command cache (hash -r) to ensure newly installed tools are found
+        hash -r 2>/dev/null || true
+        
+        # Verify tool is now available
+        if command -v "${tool_name}" >/dev/null 2>&1; then
+            echo "✓ Successfully installed ${description} (${tool_name})"
+            return 0
+        else
+            echo "⚠ WARNING: ${package_name} installed but ${tool_name} not found in PATH" >&2
+            echo "Installation output: ${install_output}" >&2
+            return 1
+        fi
+    else
+        echo "✗ ERROR: Failed to install ${package_name}" >&2
+        echo "Installation output: ${install_output}" >&2
+        return 1
+    fi
+}
+# End function (self-contained)
+
+#--- Sub-block 3.3: Update package list once ---
+# Purpose: Update APT package list once before installing tools (more efficient)
+# Dependencies: sudo access
+# Outputs: Updated package index
+echo "Updating package list..."
+if ! sudo apt-get update -qq 2>&1; then
+    echo "WARNING: apt-get update had issues, but continuing with installations..." >&2
+fi
+# End if-fi block (self-contained)
+
+#--- Sub-block 3.4: Function to check find -printf support ---
+# Purpose: Test if find supports -printf in a portable way
+# Dependencies: None (test function)
+# Outputs: Return code (0 if supported, 1 if not)
+check_find_printf_support() {
+    # Create a temporary test file instead of using /dev/null
+    # /dev/null may not exist in all environments (e.g., chroot)
+    local test_file
+    local test_result=1
+    
+    # Try to create a temporary file in /tmp
+    if test_file=$(mktemp -t find_test.XXXXXX 2>/dev/null); then
+        # Test file created successfully
+        # Test find -printf support
+        if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
+            test_result=0
+        fi
+        # Clean up test file
+        rm -f "${test_file}" 2>/dev/null || true
+    else
+        # Fallback: use /tmp with PID-based name
+        test_file="/tmp/find_test.$$"
+        if touch "${test_file}" 2>/dev/null; then
+            # Test find -printf support
+            if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
+                test_result=0
+            fi
+            # Clean up test file
+            rm -f "${test_file}" 2>/dev/null || true
+        else
+            # Last resort: test with current directory
+            if [ -d "/tmp" ] && [ -w "/tmp" ]; then
+                test_file="/tmp/find_test_check"
+                if touch "${test_file}" 2>/dev/null; then
+                    if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
+                        test_result=0
+                    fi
+                    rm -f "${test_file}" 2>/dev/null || true
+                fi
+            fi
+        fi
+    fi
+    
+    return ${test_result}
+}
+# End function (self-contained)
+
+#--- Sub-block 3.5: Install essential host tools ---
+# Critical: Install best-in-class tools for robust script operation
+# Dependencies: sudo access, BLOCK 3.3 (package list update)
+# Outputs: Installed packages
+echo "Checking and installing essential host tools..."
+
+# Tool 1: dpkg-deb (required for .deb package inspection)
+if ! install_host_tool "dpkg-deb" "dpkg-dev" "dpkg-deb tool"; then
+    echo ""
+    echo "ERROR: Failed to install dpkg-dev (required for .deb package inspection)" >&2
+    echo "Please install manually with: sudo apt update && sudo apt install dpkg-dev" >&2
+    exit 1
+fi
+
+# Tool 2: pgrep (better than ps|grep for process management)
+# Critical: Script uses pgrep directly, must be installed
+if ! install_host_tool "pgrep" "procps" "pgrep process finder"; then
+    # Try alternative package name (some systems use procps-ng)
+    if ! install_host_tool "pgrep" "procps-ng" "pgrep process finder"; then
+        echo ""
+        echo "ERROR: Failed to install pgrep (required for process management)" >&2
+        echo "Please install manually with: sudo apt update && sudo apt install procps" >&2
+        exit 1
+    fi
+fi
+
+# Tool 3: GNU findutils (for find -printf support)
+# Critical: Script uses find -printf directly, must be available
+if check_find_printf_support; then
+    echo "✓ GNU find with -printf support already available"
+else
+    echo "Installing GNU findutils for better find command support..."
+    # Note: Cannot use 'local' here as we're not in a function
+    findutils_install_output=""
+    findutils_install_status=0
+    
+    findutils_install_output=$(sudo apt-get install -y --no-install-recommends findutils 2>&1) || findutils_install_status=$?
+    
+    if [ ${findutils_install_status} -eq 0 ]; then
+        # Refresh command cache
+        hash -r 2>/dev/null || true
+        
+        # Verify find -printf now works
+        if check_find_printf_support; then
+            echo "✓ Successfully installed GNU findutils"
+        else
+            echo ""
+            echo "ERROR: findutils installed but find -printf not working" >&2
+            echo "Installation output: ${findutils_install_output}" >&2
+            echo "This may indicate a system compatibility issue" >&2
+            exit 1
+        fi
+    else
+        echo ""
+        echo "ERROR: Failed to install findutils (required for robust file operations)" >&2
+        echo "Installation output: ${findutils_install_output}" >&2
+        echo "Please install manually with: sudo apt update && sudo apt install findutils" >&2
+        exit 1
+    fi
+fi
+
+# Tool 4: aria2c (for fast parallel downloads)
+if ! install_host_tool "aria2c" "aria2" "aria2 download accelerator"; then
+    echo "⚠ WARNING: aria2c not available, will use curl/wget (slower downloads)" >&2
+fi
+
+# Tool 5: curl (essential download tool)
+if ! install_host_tool "curl" "curl" "curl download tool"; then
+    echo ""
+    echo "ERROR: curl is required but could not be installed" >&2
+    exit 1
+fi
+
+# Tool 6: wget (fallback download tool)
+if ! install_host_tool "wget" "wget" "wget download tool"; then
+    echo "⚠ WARNING: wget not available, curl will be used as fallback" >&2
+fi
+
+# Tool 7: jq (JSON processor - useful for API responses)
+if ! install_host_tool "jq" "jq" "jq JSON processor"; then
+    echo "⚠ WARNING: jq not available (optional, for JSON processing)" >&2
+fi
+
+# Tool 8: rsync (for efficient file copying)
+if ! install_host_tool "rsync" "rsync" "rsync file sync tool"; then
+    echo "⚠ WARNING: rsync not available (will use cp fallback)" >&2
+fi
+
+echo "✓ Host tool validation and installation complete"
 
 #===============================================================================
 # BLOCK 4: LOCALE AND ENVIRONMENT SETUP
@@ -172,8 +375,12 @@ mkdir -p "${LOG_DIR}"
 # to account for the new log that will be created. This ensures total = LOG_RETENTION_COUNT
 if [ -d "${LOG_DIR}" ] && [ "${LOG_RETENTION_COUNT:-1}" -gt 0 ]; then
     # Count existing log files (match actual pattern: build-*.log and errors-*.log with hyphen)
-    BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f 2>/dev/null | wc -l)
-    ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f 2>/dev/null | wc -l)
+    # Use tr to remove whitespace from wc output for robust numeric comparison
+    BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    # Ensure numeric values, default to 0 if empty
+    BUILD_LOGS="${BUILD_LOGS:-0}"
+    ERROR_LOGS="${ERROR_LOGS:-0}"
     
     echo "  Found: ${BUILD_LOGS} build log(s), ${ERROR_LOGS} error log(s)"
     
@@ -184,26 +391,37 @@ if [ -d "${LOG_DIR}" ] && [ "${LOG_RETENTION_COUNT:-1}" -gt 0 ]; then
     fi
     
     # Clean build logs if we have more than we want to keep
-    # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
+    # Use GNU find -printf (installed in BLOCK 3) for reliable file listing with modification time sorting
     if [ "${BUILD_LOGS:-0}" -gt "${KEEP_OLD_LOGS}" ]; then
         echo "Cleaning old build logs (found ${BUILD_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         DELETED_COUNT=0
         # Use while read loop instead of xargs to handle spaces/special chars better
         # CRITICAL: Use hyphen pattern to match actual log file names
-        if ls -t "${LOG_DIR}/build-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
-            while read -r old_log; do
-                if [ -f "${old_log}" ]; then
-                    if rm -f "${old_log}"; then
-                        echo "  Removed: $(basename "${old_log}")"
-                        DELETED_COUNT=$((DELETED_COUNT + 1))
-                    else
-                        echo "  ⚠ Failed to remove: $(basename "${old_log}")"
-                    fi
+        # Store files in array first to avoid subshell issues with variable persistence
+        # Note: Cannot use 'local' here as we're not in a function
+        old_logs_array=()
+        # Use GNU find with -printf (installed in BLOCK 3) for reliable file listing
+        while IFS= read -r old_log; do
+            [ -z "${old_log}" ] && continue
+            old_logs_array+=("${old_log}")
+        done < <(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f -printf '%T@ %p\n' 2>/dev/null | \
+            sort -rn | cut -d' ' -f2- | tail -n +$((KEEP_OLD_LOGS + 2)) 2>/dev/null || true)
+        
+        for old_log in "${old_logs_array[@]}"; do
+            if [ -f "${old_log}" ]; then
+                if rm -f "${old_log}"; then
+                    echo "  Removed: $(basename "${old_log}")"
+                    DELETED_COUNT=$((DELETED_COUNT + 1))
+                else
+                    echo "  ⚠ Failed to remove: $(basename "${old_log}")"
                 fi
-            done; then
-            echo "✓ Old build log files cleaned up"
+            fi
+        done
+        
+        if [ "${DELETED_COUNT}" -gt 0 ]; then
+            echo "✓ Old build log files cleaned up (${DELETED_COUNT} removed)"
         else
-            echo "⚠ Warning: Build log cleanup may have failed (check permissions)"
+            echo "⚠ Warning: No build log files were removed (check permissions or file count)"
         fi
     fi
     
@@ -211,19 +429,32 @@ if [ -d "${LOG_DIR}" ] && [ "${LOG_RETENTION_COUNT:-1}" -gt 0 ]; then
     if [ "${ERROR_LOGS:-0}" -gt "${KEEP_OLD_LOGS}" ]; then
         echo "Cleaning old error logs (found ${ERROR_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         # CRITICAL: Use hyphen pattern to match actual log file names
-        if ls -t "${LOG_DIR}/errors-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
-            while read -r old_log; do
-                if [ -f "${old_log}" ]; then
-                    if rm -f "${old_log}"; then
-                        echo "  Removed: $(basename "${old_log}")"
-                    else
-                        echo "  ⚠ Failed to remove: $(basename "${old_log}")"
-                    fi
+        # Store files in array first to avoid subshell issues with variable persistence
+        # Note: Cannot use 'local' here as we're not in a function
+        old_error_logs_array=()
+        # Use GNU find with -printf (installed in BLOCK 3) for reliable file listing
+        while IFS= read -r old_log; do
+            [ -z "${old_log}" ] && continue
+            old_error_logs_array+=("${old_log}")
+        done < <(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f -printf '%T@ %p\n' 2>/dev/null | \
+            sort -rn | cut -d' ' -f2- | tail -n +$((KEEP_OLD_LOGS + 2)) 2>/dev/null || true)
+        
+        error_deleted_count=0
+        for old_log in "${old_error_logs_array[@]}"; do
+            if [ -f "${old_log}" ]; then
+                if rm -f "${old_log}"; then
+                    echo "  Removed: $(basename "${old_log}")"
+                    error_deleted_count=$((error_deleted_count + 1))
+                else
+                    echo "  ⚠ Failed to remove: $(basename "${old_log}")"
                 fi
-            done; then
-            echo "✓ Old error log files cleaned up"
+            fi
+        done
+        
+        if [ "${error_deleted_count}" -gt 0 ]; then
+            echo "✓ Old error log files cleaned up (${error_deleted_count} removed)"
         else
-            echo "⚠ Warning: Error log cleanup may have failed (check permissions)"
+            echo "⚠ Warning: No error log files were removed (check permissions or file count)"
         fi
     fi
     
@@ -488,7 +719,8 @@ strict_cleanup_our_dirs() {
     # End if-fi block
 
     local count
-    count=$(echo "${target_dirs}" | wc -l)
+    count=$(echo "${target_dirs}" | wc -l | tr -d '[:space:]')
+    count="${count:-0}"
     echo "Found ${count} directories"
 
     # Critical: Try up to 3 times with escalating force
@@ -544,7 +776,8 @@ strict_cleanup_our_dirs() {
             -name "build-temp-*" \
             -o -name "bundle-temp-*" \
             -o -name "sbuild-*" \
-        \) 2>/dev/null | wc -l)
+        \) 2>/dev/null | wc -l | tr -d '[:space:]')
+        remaining="${remaining:-0}"
 
         if [ "${remaining:-0}" -eq 0 ]; then
             echo " ✓ All directories removed"
@@ -585,7 +818,8 @@ comprehensive_cleanup() {
     echo ""
     echo "1. Killing OUR ${CONTAINER_CMD} processes..."
     # Critical: Find all singularity/apptainer processes owned by current user
-    ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | awk '{print $2}' | while IFS= read -r pid || [ -n "${pid}" ]; do
+    # Use pgrep (installed in BLOCK 3) for reliable process finding
+    pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null | while IFS= read -r pid || [ -n "${pid}" ]; do
         # Verify it's actually our process before killing
         local cmd
         cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
@@ -632,7 +866,8 @@ comprehensive_cleanup() {
         echo "   Cleaning ${cache_base}/cache/tmp..."
         if [ -d "${cache_base}/cache/tmp" ]; then
             local tmp_count
-            tmp_count=$(find "${cache_base}/cache/tmp" -type f 2>/dev/null | wc -l)
+            tmp_count=$(find "${cache_base}/cache/tmp" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+            tmp_count="${tmp_count:-0}"
             echo "   Found ${tmp_count} temporary files"
             sudo rm -rf "${cache_base}/cache/tmp"/* 2>/dev/null || true
         fi
@@ -641,7 +876,8 @@ comprehensive_cleanup() {
         # Clean any .lock files (stale locks from failed builds)
         echo "   Cleaning stale lock files..."
         local lock_count
-        lock_count=$(find "${cache_base}" -name "*.lock" 2>/dev/null | wc -l)
+        lock_count=$(find "${cache_base}" -name "*.lock" 2>/dev/null | wc -l | tr -d '[:space:]')
+        lock_count="${lock_count:-0}"
         if [ "${lock_count:-0}" -gt 0 ]; then
             echo "   Found ${lock_count} lock files"
             find "${cache_base}" -name "*.lock" -exec rm -f {} + 2>/dev/null || true
@@ -652,7 +888,8 @@ comprehensive_cleanup() {
         if [ -d "${cache_base}/cache/oci-tmp" ]; then
             echo "   Cleaning partial downloads..."
             local partial_count
-            partial_count=$(find "${cache_base}/cache/oci-tmp" -type d 2>/dev/null | wc -l)
+            partial_count=$(find "${cache_base}/cache/oci-tmp" -type d 2>/dev/null | wc -l | tr -d '[:space:]')
+            partial_count="${partial_count:-0}"
             echo "   Found ${partial_count} partial OCI downloads"
             sudo rm -rf "${cache_base}/cache/oci-tmp"/* 2>/dev/null || true
         fi
@@ -873,7 +1110,8 @@ comprehensive_cleanup() {
         -name "build-temp-*" \
         -o -name "bundle-temp-*" \
         -o -name "sbuild-*" \
-    \) 2>/dev/null | wc -l)
+    \) 2>/dev/null | wc -l | tr -d '[:space:]')
+    remaining_temps="${remaining_temps:-0}"
 
     if [ "${remaining_temps:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_temps} temp directories"
@@ -890,11 +1128,18 @@ comprehensive_cleanup() {
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
     local remaining_procs
-    remaining_procs=$(ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | wc -l)
+    # Use pgrep (installed in BLOCK 3) for reliable process counting
+    remaining_procs=$(pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null | wc -l | tr -d '[:space:]')
+    remaining_procs="${remaining_procs:-0}"
+    
     if [ "${remaining_procs:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_procs} container processes running"
-        ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | while IFS= read -r line || [ -n "${line}" ]; do
-            echo "    - $(echo "${line}" | awk '{print $2, $11}')"
+        pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null | while IFS= read -r pid || [ -n "${pid}" ]; do
+            local cmd
+            cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
+            if [ -n "${cmd}" ]; then
+                echo "    - PID ${pid}: $(echo "${cmd}" | cut -c1-60)"
+            fi
         done
         issues=$((issues + remaining_procs))
     else
@@ -914,7 +1159,8 @@ comprehensive_cleanup() {
 # Outputs: Configured system components
     # Check 3: Orphaned mounts
     local remaining_mounts
-    remaining_mounts=$(mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | wc -l)
+    remaining_mounts=$(mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | wc -l | tr -d '[:space:]')
+    remaining_mounts="${remaining_mounts:-0}"
     if [ "${remaining_mounts:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_mounts} orphaned mounts"
         issues=$((issues + remaining_mounts))
@@ -964,18 +1210,25 @@ fi
 log "✓ Comprehensive cleanup verified successful"
 
 #===============================================================================
-# BLOCK 12.5: SOURCE CONFIGURATION
+# BLOCK 12.5: SOURCE CONFIGURATION (VERIFICATION)
 #===============================================================================
-# Purpose: Load configuration and unified functions (including analyze_build_log)
-# Dependencies: config.sh must exist in same directory
-# Outputs: Configuration variables and functions loaded
+# Purpose: Verify configuration is loaded (already loaded in BLOCK 2)
+# Dependencies: config.sh should already be sourced in BLOCK 2
+# Outputs: Error if config not loaded
 #-------------------------------------------------------------------------------
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "${SCRIPT_DIR}/config.sh" ]; then
-    source "${SCRIPT_DIR}/config.sh"
-else
-    echo "ERROR: config.sh not found in ${SCRIPT_DIR}"
-    exit 1
+# Note: Configuration is already loaded in BLOCK 2 (line 76)
+# This block verifies that config.sh functions (like analyze_build_log) are available
+# If config.sh was not sourced earlier, this will fail
+if ! type analyze_build_log >/dev/null 2>&1; then
+    log_error "analyze_build_log function not found. config.sh may not have been loaded properly."
+    # Try to source config.sh again as fallback
+    if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+        source "${SCRIPT_DIR}/config.sh"
+        log_warning "Re-loaded config.sh as fallback"
+    else
+        log_error "config.sh not found in ${SCRIPT_DIR}"
+        exit 1
+    fi
 fi
 
 #===============================================================================
@@ -1003,7 +1256,20 @@ cleanup_on_exit() {
     echo "=========================================="
     
     # Analyze build log for errors/warnings with context before cleanup
-    analyze_build_log || true
+    # Ensure analyze_build_log function is available (re-source config.sh if needed)
+    if ! type analyze_build_log >/dev/null 2>&1; then
+        if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+            source "${SCRIPT_DIR}/config.sh"
+        elif [ -f /etc/config.sh ]; then
+            source /etc/config.sh
+        fi
+    fi
+    # Only call if function exists
+    if type analyze_build_log >/dev/null 2>&1; then
+        analyze_build_log || true
+    else
+        echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+    fi
     
     comprehensive_cleanup || true  # Run cleanup, ignore failures at exit
 
@@ -1055,10 +1321,33 @@ fi
 # Set up filtered output redirection
 # stdout goes to main log and terminal, stderr goes to both and is also filtered for errors
 # Validate LOG_FILE is set and writable before redirection
-if [ -z "${LOG_FILE}" ] || [ ! -w "$(dirname "${LOG_FILE}")" ] 2>/dev/null; then
-    log_error "LOG_FILE not set or directory not writable: ${LOG_FILE}"
+if [ -z "${LOG_FILE:-}" ]; then
+    log_error "LOG_FILE is not set"
     exit 1
 fi
+
+# Ensure log directory exists and is writable
+LOG_FILE_DIR="$(dirname "${LOG_FILE}")"
+if [ ! -d "${LOG_FILE_DIR}" ]; then
+    mkdir -p "${LOG_FILE_DIR}" || {
+        log_error "Failed to create log directory: ${LOG_FILE_DIR}"
+        exit 1
+    }
+fi
+
+if [ ! -w "${LOG_FILE_DIR}" ] 2>/dev/null; then
+    log_error "LOG_FILE directory is not writable: ${LOG_FILE_DIR}"
+    exit 1
+fi
+
+# Create log file if it doesn't exist
+touch "${LOG_FILE}" 2>/dev/null || {
+    log_error "Cannot create log file: ${LOG_FILE}"
+    exit 1
+}
+
+# Set up output redirection with process substitution
+# Note: Process substitution may not work in all shells, but this is bash-specific
 exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings)
 
 # Log script start with detailed information
@@ -1284,8 +1573,8 @@ fetch() {
     local dst="$2"
 
     # Validate parameters
-    if [ -z "${url}" ] || [ -z "${dst}" ]; then
-        err "fetch() called with empty URL or destination: url='${url}', dst='${dst}'"
+    if [ -z "${url:-}" ] || [ -z "${dst:-}" ]; then
+        err "fetch() called with empty URL or destination: url='${url:-}', dst='${dst:-}'"
     fi
 
     # Validate destination directory exists or can be created
@@ -1316,9 +1605,9 @@ fetch() {
             file_size_mb=$((content_length / 1024 / 1024))
         fi
         local connections=4
-        if [[ ${file_size_mb} -gt 100 ]]; then
+        if [[ "${file_size_mb:-0}" -gt 100 ]]; then
             connections=8  # Large files: more connections
-        elif [[ ${file_size_mb} -gt 50 ]]; then
+        elif [[ "${file_size_mb:-0}" -gt 50 ]]; then
             connections=6  # Medium files: moderate connections
         fi
         # End if-elif-fi block
@@ -1414,7 +1703,8 @@ if (( KEEP < 1 )); then echo "[apt-prune] ERROR: --keep must be >= 1 (got '$KEEP
 cd "$CACHE" || { echo "[apt-prune] ERROR: could not cd to '$CACHE'" >&2; exit 1; }
 
 # Collect .deb files quietly
-mapfile -t ALL_DEBS < <(find . -maxdepth 1 -type f -name '*.deb' -printf '%f\n')
+# Use GNU find -printf (installed in BLOCK 3) for reliable file listing
+mapfile -t ALL_DEBS < <(find . -maxdepth 1 -type f -name '*.deb' -printf '%f\n' 2>/dev/null)
 if (( ${#ALL_DEBS[@]} == 0 )); then echo "[apt-prune] INFO: no .deb files to consider"; exit 0; fi
 
 # Derive unique package bases (before first underscore)
@@ -1422,8 +1712,13 @@ mapfile -t BASES < <(printf '%s\n' "${ALL_DEBS[@]}" | awk -F '_' '{print $1}' | 
 
 removed_total=0
 for pkg in "${BASES[@]}"; do
-    # List *this* package's debs newest first (lexicographical version sort is OK for APT pools)
-    mapfile -t ALL_FOR_PKG < <(ls -1t "$pkg"_*.deb 2>/dev/null || true)
+    # List *this* package's debs newest first
+    # Use GNU find -printf (installed in BLOCK 3) for reliable sorting
+    ALL_FOR_PKG=()
+    while IFS= read -r line; do
+        [ -z "${line}" ] && continue
+        ALL_FOR_PKG+=("$(echo "${line}" | cut -d' ' -f2-)")
+    done < <(find . -maxdepth 1 -type f -name "${pkg}_*.deb" -printf '%T@ %f\n' 2>/dev/null | sort -rn | cut -d' ' -f2- || true)
     if (( ${#ALL_FOR_PKG[@]} <= KEEP )); then continue; fi
 
   # Determine files to prune
@@ -1495,7 +1790,8 @@ if (( KEEP < 1 )); then echo "[conda-prune] ERROR: --keep must be >= 1 (got '$KE
 cd "$CACHE" || { echo "[conda-prune] ERROR: could not cd to '$CACHE'" >&2; exit 1; }
 
 # List package files (quiet if none)
-mapfile -t PKGFILES < <(find . -maxdepth 1 -type f \( -name '*.conda' -o -name '*.tar.bz2' \) -printf '%f\n')
+# Use GNU find -printf (installed in BLOCK 3) for reliable file listing
+mapfile -t PKGFILES < <(find . -maxdepth 1 -type f \( -name '*.conda' -o -name '*.tar.bz2' \) -printf '%f\n' 2>/dev/null)
 if (( ${#PKGFILES[@]} == 0 )); then echo "[conda-prune] INFO: no conda artifacts found"; exit 0; fi
 
 # Derive base names: strip version-build-suffix and extension
@@ -1506,7 +1802,12 @@ mapfile -t BASES < <(printf '%s\n' "${PKGFILES[@]}" | \
 removed_total=0
 for base in "${BASES[@]}"; do
   # All variants for this base (sort with -V to respect 1.10 > 1.9 etc.)
-    mapfile -t ALL_FOR_BASE < <(ls -1 "${base}"-[0-9]*.{conda,tar.bz2} 2>/dev/null | sort -rV || true)
+    ALL_FOR_BASE=()
+    # Use GNU find -printf (installed in BLOCK 3) for reliable file listing
+    while IFS= read -r pkg_file; do
+        [ -z "${pkg_file}" ] || [ ! -f "${pkg_file}" ] && continue
+        ALL_FOR_BASE+=("$(basename "${pkg_file}")")
+    done < <(find . -maxdepth 1 -type f \( -name "${base}-*.conda" -o -name "${base}-*.tar.bz2" \) -printf '%f\n' 2>/dev/null | sort -rV || true)
     if (( ${#ALL_FOR_BASE[@]} <= KEEP )); then continue; fi
 
 #--- Sub-block: Section continuation (1053) ---
@@ -1563,9 +1864,12 @@ log_with_timestamp "Prefetching required artifacts to host cache..."
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 fetch_binary() {
-    local url="$1"
-    local dst="$2"
-    fetch "$url" "$dst" && chmod +x "$dst"
+    local url="${1:-}"
+    local dst="${2:-}"
+    if [ -z "${url:-}" ] || [ -z "${dst:-}" ]; then
+        err "fetch_binary() called with empty URL or destination: url='${url:-}', dst='${dst:-}'"
+    fi
+    fetch "${url}" "${dst}" && chmod +x "${dst}"
 }
 # End function (self-contained)
 
@@ -1576,6 +1880,12 @@ fetch_binary() {
 check_cache_complete() {
     local missing=0
     # Check each required artifact
+    # Validate cache directories exist before checking files
+    if [ ! -d "${BIN_CACHE:-}" ] || [ ! -d "${DEB_CACHE:-}" ]; then
+        echo "2"  # Return non-zero count if cache directories don't exist
+        return 0
+    fi
+    
     [[ ! -f "${BIN_CACHE}/${MINIFORGE_SH}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${MICROMAMBA_BIN}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${YQ_BIN}" ]] && ((missing++))
@@ -1589,7 +1899,7 @@ check_cache_complete() {
     [[ ! -f "${BIN_CACHE}/drake.asc" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${JULIA_TARBALL}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/julia_key.asc" ]] && ((missing++))
-    echo $missing
+    echo "${missing}"
 
 #--- Sub-block: Cache validation ---
 # Purpose: Verify cached files
@@ -1706,17 +2016,21 @@ check_and_download_required_files() {
         IFS="${OLD_IFS}"
         
         # Determine cache directory based on file type
-        if [[ "${file_name}" == *.deb ]]; then
-            file_path="${DEB_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "drake.asc" ]]; then
-            file_path="${BIN_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
-            file_path="${BIN_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "julia-"*.tar.gz*".asc" ]]; then
-            file_path="${BIN_CACHE}/${file_name}"
-        else
-            file_path="${BIN_CACHE}/${file_name}"
-        fi
+        # Use case statement for better pattern matching reliability
+        case "${file_name}" in
+            *.deb)
+                file_path="${DEB_CACHE}/${file_name}"
+                ;;
+            drake.asc)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+            julia-*.tar.gz|julia-*.tar.gz.asc)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+            *)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+        esac
         
         # Check if file exists and is not empty
         if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
@@ -1768,15 +2082,21 @@ check_and_download_required_files() {
             echo "  → Downloading: $file_name"
             
             # Determine destination directory
-            if [[ "$file_name" == *.deb ]]; then
-                dest_path="${DEB_CACHE}/${file_name}"
-            elif [[ "$file_name" == "drake.asc" ]]; then
-                dest_path="${BIN_CACHE}/${file_name}"
-            elif [[ "$file_name" == "julia-"*.tar.gz* ]]; then
-                dest_path="${BIN_CACHE}/${file_name}"
-            else
-                dest_path="${BIN_CACHE}/${file_name}"
-            fi
+            # Use case statement for better pattern matching reliability
+            case "${file_name}" in
+                *.deb)
+                    dest_path="${DEB_CACHE}/${file_name}"
+                    ;;
+                drake.asc)
+                    dest_path="${BIN_CACHE}/${file_name}"
+                    ;;
+                julia-*.tar.gz|julia-*.tar.gz.asc)
+                    dest_path="${BIN_CACHE}/${file_name}"
+                    ;;
+                *)
+                    dest_path="${BIN_CACHE}/${file_name}"
+                    ;;
+            esac
             
             # Create parent directory if it doesn't exist
             mkdir -p "$(dirname "${dest_path}")"
@@ -1844,11 +2164,15 @@ check_and_download_required_files() {
             echo "  → Attempting download: $file_name"
             
             # Determine destination directory
-            if [[ "$file_name" == *.deb ]]; then
-                dest_path="${DEB_CACHE}/${file_name}"
-            else
-                dest_path="${BIN_CACHE}/${file_name}"
-            fi
+            # Use case statement for better pattern matching reliability
+            case "${file_name}" in
+                *.deb)
+                    dest_path="${DEB_CACHE}/${file_name}"
+                    ;;
+                *)
+                    dest_path="${BIN_CACHE}/${file_name}"
+                    ;;
+            esac
             
             # Create parent directory if it doesn't exist
             mkdir -p "$(dirname "${dest_path}")"
@@ -1897,15 +2221,21 @@ check_and_download_required_files() {
         IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
         IFS="${OLD_IFS}"
         
-        if [[ "${file_name}" == *.deb ]]; then
-            file_path="${DEB_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "drake.asc" ]]; then
-            file_path="${BIN_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
-            file_path="${BIN_CACHE}/${file_name}"
-        else
-            file_path="${BIN_CACHE}/${file_name}"
-        fi
+        # Use case statement for better pattern matching reliability
+        case "${file_name}" in
+            *.deb)
+                file_path="${DEB_CACHE}/${file_name}"
+                ;;
+            drake.asc)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+            julia-*.tar.gz|julia-*.tar.gz.asc)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+            *)
+                file_path="${BIN_CACHE}/${file_name}"
+                ;;
+        esac
         
         if [ ! -f "${file_path}" ] || [ ! -s "${file_path}" ]; then
             if [[ "${optional_flag}" == "optional" ]] || [[ "${file_url}" == "optional_manual" ]]; then
@@ -1948,7 +2278,9 @@ check_and_download_required_files() {
 check_and_download_required_files
 
 # Skip downloads if all artifacts are cached (legacy check - kept for compatibility)
-if [[ $(check_cache_complete) -eq 0 ]]; then
+CACHE_COMPLETE_RESULT="$(check_cache_complete 2>/dev/null || echo "1")"
+CACHE_COMPLETE_RESULT="${CACHE_COMPLETE_RESULT:-1}"
+if [[ "${CACHE_COMPLETE_RESULT}" -eq 0 ]]; then
     log "All artifacts already cached, skipping legacy download phase"
 else
     # Export functions for parallel execution
@@ -1965,7 +2297,11 @@ else
 # Purpose: Check file integrity
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-    cat > /tmp/download_tasks << EOF
+    # Use a safer temporary file location with proper cleanup
+    DOWNLOAD_TASKS_FILE="${BUILD_TMP_DIR:-/tmp}/download_tasks_$$"
+    trap "rm -f '${DOWNLOAD_TASKS_FILE}' 2>/dev/null || true" EXIT INT TERM
+    
+    cat > "${DOWNLOAD_TASKS_FILE}" << EOF
 MINIFORGE|${MINIFORGE_URL}|${BIN_CACHE}/${MINIFORGE_SH}|binary
 MICROMAMBA|${MICROMAMBA_URL}|${BIN_CACHE}/${MICROMAMBA_BIN}|binary
 YQ|${YQ_URL}|${BIN_CACHE}/${YQ_BIN}|binary
@@ -1981,10 +2317,14 @@ EOF
     log "Downloading any remaining artifacts in parallel..."
     # Process downloads sequentially for safety (parallel execution removed due to complexity with exported functions)
     # Note: This is safer than xargs with bash -c which has quoting/injection risks
-    if [ -f /tmp/download_tasks ]; then
-        while IFS='|' read -r name url dst type || [ -n "${name}" ]; do
+    if [ -f "${DOWNLOAD_TASKS_FILE}" ]; then
+        while IFS='|' read -r name url dst type || [ -n "${name:-}" ]; do
             # Skip empty lines
-            [ -z "${name}" ] && continue
+            [ -z "${name:-}" ] && continue
+            # Validate required fields
+            [ -z "${url:-}" ] && continue
+            [ -z "${dst:-}" ] && continue
+            [ -z "${type:-}" ] && continue
             # Skip if file already exists and is not empty
             if [ -f "${dst}" ] && [ -s "${dst}" ]; then
                 echo "Skipping (already cached): ${name}"
@@ -1997,9 +2337,9 @@ EOF
                 fi
                 echo "Completed download: ${name}"
             fi
-        done < /tmp/download_tasks
+        done < "${DOWNLOAD_TASKS_FILE}"
     fi
-    rm -f /tmp/download_tasks
+    rm -f "${DOWNLOAD_TASKS_FILE}" 2>/dev/null || true
 fi
 
 # --- Prefetch GPG Keys ---
@@ -2034,7 +2374,7 @@ if [ ! -s "${JULIA_KEY_FILE}" ]; then
                     break
                 fi
             fi
-            [ ${attempt} -lt 2 ] && sleep 2
+            [ "${attempt}" -lt 2 ] && sleep 2
         done
     fi
     
@@ -2642,26 +2982,26 @@ if [ -z "${WHEELS_CACHE_COUNT:-}" ]; then
 fi
 
 cat >> "${ARCHITECTURE_FILE}" << ARCH_INFO_EOF
-- **Build Date**: ${BUILD_DATE_STR}
-- **Build Timestamp**: ${BUILD_TIMESTAMP}
-- **Image Name**: ${SIF_NAME}
-- **Image Size**: ${IMAGE_SIZE_STR}
-- **Build Duration**: ${BUILD_HOURS_NOW}h ${BUILD_MINUTES_NOW}m ${BUILD_SECONDS_NOW}s
+- **Build Date**: ${BUILD_DATE_STR:-unknown}
+- **Build Timestamp**: ${BUILD_TIMESTAMP:-unknown}
+- **Image Name**: ${SIF_NAME:-unknown}
+- **Image Size**: ${IMAGE_SIZE_STR:-unknown}
+- **Build Duration**: ${BUILD_HOURS_NOW:-0}h ${BUILD_MINUTES_NOW:-0}m ${BUILD_SECONDS_NOW:-0}s
 
 ## Base System Architecture
 
-- **Operating System**: ${BASE_OS} ${BASE_OS_VERSION} (${BASE_OS_CODENAME})
+- **Operating System**: ${BASE_OS:-Ubuntu} ${BASE_OS_VERSION:-24.04} (${BASE_OS_CODENAME:-noble})
 - **Desktop Environment**: Xubuntu (XFCE4)
-- **System Python**: ${SYSTEM_PYTHON_VER}
-- **ROS Distribution**: ${ROS_DISTRO} Desktop Full
-- **Base Image**: ${BASE_IMAGE}
+- **System Python**: ${SYSTEM_PYTHON_VER:-3.12}
+- **ROS Distribution**: ${ROS_DISTRO:-jazzy} Desktop Full
+- **Base Image**: ${BASE_IMAGE:-ubuntu:24.04}
 
 ## Software Architecture Overview
 
 ### Package Management Systems
 - **APT**: Ubuntu package manager with apt-aria wrapper for parallel downloads
-- **Conda/Mamba**: Miniforge3 ${MINIFORGE_VER} with Micromamba ${MICROMAMBA_VER}
-- **Julia**: ${JULIA_LTS_VER} LTS
+- **Conda/Mamba**: Miniforge3 ${MINIFORGE_VER:-latest} with Micromamba ${MICROMAMBA_VER:-latest}
+- **Julia**: ${JULIA_LTS_VER:-1.10} LTS
 - **Pip**: Python package manager
 - **Cargo**: Rust package manager
 
@@ -2670,79 +3010,79 @@ ARCH_INFO_EOF
 
 cat >> "${ARCHITECTURE_FILE}" << ARCH_DIRS_EOF
 - **System Packages**: /usr/lib, /usr/local/lib
-- **Conda/Mamba**: ${MINIFORGE_HOME}
-- **Conda Environments**: ${MAMBA_ENVS}
-- **Julia**: ${JULIA_HOME}
-- **Julia Environments**: ${JULIA_ENVS}
-- **Rust Tools**: ${RUST_HOME}
-- **Drake**: ${DRAKE_HOME}
-- **Zenoh**: ${ZENOH_HOME}
-- **TurboVNC**: ${TURBOVNC_HOME}
-- **VirtualGL**: ${VIRTUALGL_HOME}
-- **CUDA**: /usr/local/cuda-${CUDA_VERSION}
+- **Conda/Mamba**: ${MINIFORGE_HOME:-/opt/conda}
+- **Conda Environments**: ${MAMBA_ENVS:-/opt/mamba/envs}
+- **Julia**: ${JULIA_HOME:-/opt/julia}
+- **Julia Environments**: ${JULIA_ENVS:-/opt/julia-envs}
+- **Rust Tools**: ${RUST_HOME:-/opt/rust}
+- **Drake**: ${DRAKE_HOME:-/opt/drake}
+- **Zenoh**: ${ZENOH_HOME:-/opt/zenoh}
+- **TurboVNC**: ${TURBOVNC_HOME:-/opt/TurboVNC}
+- **VirtualGL**: ${VIRTUALGL_HOME:-/opt/VirtualGL}
+- **CUDA**: /usr/local/cuda-${CUDA_VERSION:-12.6}
 
 ## Installed Libraries and Software
 
 ### GPU & CUDA Support
-- **CUDA Toolkit**: ${CUDA_VERSION} (Architecture: ${CUDA_ARCH})
-- **cuDNN**: ${CUDNN_VER}
-- **NVIDIA Video Codec SDK**: ${NVIDIA_VIDEO_SDK_VERSION}
-- **NVIDIA Keyring**: ${NVIDIA_KEYRING_VER}
+- **CUDA Toolkit**: ${CUDA_VERSION:-12.6} (Architecture: ${CUDA_ARCH:-89})
+- **cuDNN**: ${CUDNN_VER:-latest}
+- **NVIDIA Video Codec SDK**: ${NVIDIA_VIDEO_SDK_VERSION:-latest}
+- **NVIDIA Keyring**: ${NVIDIA_KEYRING_VER:-latest}
 
 ### Remote Desktop Stack
-- **TurboVNC**: ${TURBOVNC_VER}
-- **VirtualGL**: ${VIRTUALGL_VER}
-- **noVNC**: ${NOVNC_VER}
-- **KasmVNC**: ${KASMVNC_VERSION}
-- **Xpra**: ${XPRA_VERSION}
-- **Xpra HTML5**: ${XPRA_HTML5_VERSION}
+- **TurboVNC**: ${TURBOVNC_VER:-latest}
+- **VirtualGL**: ${VIRTUALGL_VER:-latest}
+- **noVNC**: ${NOVNC_VER:-latest}
+- **KasmVNC**: ${KASMVNC_VERSION:-latest}
+- **Xpra**: ${XPRA_VERSION:-latest}
+- **Xpra HTML5**: ${XPRA_HTML5_VERSION:-latest}
 
 ### Robotics & SLAM Libraries
-- **Ceres Solver**: ${CERES_VERSION}
-- **PyCeres**: ${PYCERES_VERSION}
-- **g2o**: ${G2O_VERSION}
-- **GTSAM**: ${GTSAM_VERSION}
-- **OpenCV**: ${OPENCV_VERSION} (custom compiled with CUDA support)
+- **Ceres Solver**: ${CERES_VERSION:-latest}
+- **PyCeres**: ${PYCERES_VERSION:-latest}
+- **g2o**: ${G2O_VERSION:-latest}
+- **GTSAM**: ${GTSAM_VERSION:-latest}
+- **OpenCV**: ${OPENCV_VERSION:-latest} (custom compiled with CUDA support)
 
 ### 3D Reconstruction & SfM
-- **COLMAP**: ${COLMAP_VERSION} (with CUDA, CGAL, OpenMP)
-- **Open3D**: ${OPEN3D_VERSION} (with CUDA ${CUDA_VERSION} support)
-- **Open3D WebRTC**: ${OPEN3D_WEBRTC_VER}
-- **PyCOLMAP**: ${COLMAP_VERSION} (Python bindings)
+- **COLMAP**: ${COLMAP_VERSION:-latest} (with CUDA, CGAL, OpenMP)
+- **Open3D**: ${OPEN3D_VERSION:-latest} (with CUDA ${CUDA_VERSION:-12.6} support)
+- **Open3D WebRTC**: ${OPEN3D_WEBRTC_VER:-latest}
+- **PyCOLMAP**: ${COLMAP_VERSION:-latest} (Python bindings)
 
 ### Desktop Applications
-- **FreeCAD**: ${FREECAD_VERSION}
+- **FreeCAD**: ${FREECAD_VERSION:-latest}
 
 ### Modern CLI Tools (Rust-based, compiled from source)
-- **bat**: ${BAT_VERSION} - Syntax highlighting for cat
-- **fd**: ${FD_VERSION} - Fast find alternative
-- **ripgrep**: ${RIPGREP_VERSION} - Fast recursive grep
-- **eza**: ${EZA_VERSION} - Modern ls replacement
-- **bottom**: ${BOTTOM_VERSION} - System monitor (btm)
-- **procs**: ${PROCS_VERSION} - Modern ps replacement
-- **zellij**: ${ZELLIJ_VERSION} - Terminal multiplexer
-- **dust**: ${DU_DUST_VERSION} - Intuitive du replacement
-- **ox**: ${OX_VERSION} - Modern text editor
+- **bat**: ${BAT_VERSION:-latest} - Syntax highlighting for cat
+- **fd**: ${FD_VERSION:-latest} - Fast find alternative
+- **ripgrep**: ${RIPGREP_VERSION:-latest} - Fast recursive grep
+- **eza**: ${EZA_VERSION:-latest} - Modern ls replacement
+- **bottom**: ${BOTTOM_VERSION:-latest} - System monitor (btm)
+- **procs**: ${PROCS_VERSION:-latest} - Modern ps replacement
+- **zellij**: ${ZELLIJ_VERSION:-latest} - Terminal multiplexer
+- **dust**: ${DU_DUST_VERSION:-latest} - Intuitive du replacement
+- **ox**: ${OX_VERSION:-latest} - Modern text editor
 
 ### Development Tools
-- **yq**: ${YQ_VER} - YAML/JSON processor
-- **Julia**: ${JULIA_LTS_VER} LTS
+- **yq**: ${YQ_VER:-latest} - YAML/JSON processor
+- **Julia**: ${JULIA_LTS_VER:-1.10} LTS
 
 ### Middleware
-- **Zenoh**: ${ZENOH_VERSION}
-- **Zenoh ROS 2 DDS Bridge**: ${ZENOH_ROS2DDS_VERSION}
+- **Zenoh**: ${ZENOH_VERSION:-latest}
+- **Zenoh ROS 2 DDS Bridge**: ${ZENOH_ROS2DDS_VERSION:-latest}
 
 ### Python Packages (Data Formats)
-- **h5py**: ${H5PY_VERSION}
-- **zarr**: ${ZARR_VERSION}
+- **h5py**: ${H5PY_VERSION:-latest}
+- **zarr**: ${ZARR_VERSION:-latest}
 
 ### Python Packages (Messaging/IPC)
-- **pyzmq**: ${PYZMQ_VERSION}
-- **msgpack**: ${MSGPACK_VERSION}
+- **pyzmq**: ${PYZMQ_VERSION:-latest}
+- **msgpack**: ${MSGPACK_VERSION:-latest}
 
 ### Python Packages (Julia Bridge)
-- **Juliapkg**: ${JULIAPKG_VERSION}
-- **JulianCall**: ${JULIACALL_VERSION}
+- **Juliapkg**: ${JULIAPKG_VERSION:-latest}
+- **JulianCall**: ${JULIACALL_VERSION:-latest}
 
 ## Compilation Flags & Optimizations
 
@@ -2752,8 +3092,8 @@ cat >> "${ARCHITECTURE_FILE}" << ARCH_DIRS_EOF
 - Link-Time Optimization (LTO): Enabled where supported
 
 ### CUDA Optimizations
-- Compute Capability: ${CUDA_ARCH} (optimized for NVIDIA A6000)
-- CUDA Architecture: sm_${CUDA_ARCH}
+- Compute Capability: ${CUDA_ARCH:-89} (optimized for NVIDIA A6000)
+- CUDA Architecture: sm_${CUDA_ARCH:-89}
 
 ### Build System Features
 - Parallel compilation (uses all available CPU cores)
@@ -2769,11 +3109,11 @@ cat >> "${ARCHITECTURE_FILE}" << ARCH_DIRS_EOF
 ARCH_DIRS_EOF
 
 cat >> "${ARCHITECTURE_FILE}" << ARCH_CACHE_EOF
-- **Total Cache Size**: ${CACHE_TOTAL_SIZE}
-- **APT Cache**: ${APT_CACHE_SIZE} (${APT_CACHE_COUNT} .deb files)
-- **Conda Cache**: ${CONDA_CACHE_SIZE} (${CONDA_CACHE_COUNT} packages)
-- **Pip Wheels**: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)
-- **Julia Cache**: ${JULIA_CACHE_SIZE}
+- **Total Cache Size**: ${CACHE_TOTAL_SIZE:-0B}
+- **APT Cache**: ${APT_CACHE_SIZE:-0B} (${APT_CACHE_COUNT:-0} .deb files)
+- **Conda Cache**: ${CONDA_CACHE_SIZE:-0B} (${CONDA_CACHE_COUNT:-0} packages)
+- **Pip Wheels**: ${WHEELS_CACHE_SIZE:-0B} (${WHEELS_CACHE_COUNT:-0} wheels)
+- **Julia Cache**: ${JULIA_CACHE_SIZE:-0B}
 
 ## System Configuration
 
@@ -2783,9 +3123,9 @@ cat >> "${ARCHITECTURE_FILE}" << ARCH_CACHE_EOF
 - Package holding for compiled libraries
 
 ### Environment Variables
-- ROS 2 environment sourced from /opt/ros/${ROS_DISTRO}/setup.bash
+- ROS 2 environment sourced from /opt/ros/${ROS_DISTRO:-jazzy}/setup.bash
 - Conda base environment pre-activated
-- CUDA paths configured in /usr/local/cuda-${CUDA_VERSION}
+- CUDA paths configured in /usr/local/cuda-${CUDA_VERSION:-12.6}
 - VirtualGL paths configured
 - TurboVNC paths configured
 
@@ -2798,8 +3138,8 @@ cat >> "${ARCHITECTURE_FILE}" << ARCH_CACHE_EOF
 
 ## Build Logs
 
-- **Build Log**: ${BUILD_LOG_BASENAME}
-- **Error Log**: ${ERROR_LOG_BASENAME}
+- **Build Log**: ${BUILD_LOG_BASENAME:-unknown.log}
+- **Error Log**: ${ERROR_LOG_BASENAME:-unknown.log}
 
 Both logs are included in this directory for troubleshooting and review.
 

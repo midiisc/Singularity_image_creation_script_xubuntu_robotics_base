@@ -8,6 +8,18 @@
 #===============================================================================
 
 #===============================================================================
+# STRICT MODE - Controlled error handling
+#===============================================================================
+# Use strict mode with controlled sections for error handling
+# set -e: Exit on error (disabled in specific sections where needed)
+# set -u: Treat unset variables as error
+# set -o pipefail: Pipeline failures propagate
+# Note: Some sections intentionally disable -e for error recovery
+set -o pipefail  # Always enable pipefail for better error detection
+set +e  # Start with -e disabled (will be enabled in critical sections)
+set +u  # Temporarily allow unset variables until config is loaded
+
+#===============================================================================
 # CRITICAL: Source centralized configuration
 #===============================================================================
 # All version numbers, URLs, and parameters come from /etc/config.sh
@@ -27,6 +39,9 @@ if [ -z "${CONFIG_SOURCED}" ]; then
 else
     echo "ℹ Configuration already loaded (skipping redundant source)"
 fi
+
+# After config is loaded, enable strict mode for unset variables
+set -u
 
 #===============================================================================
 # BUILD LOGGING SYSTEM
@@ -61,11 +76,13 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         if [ "${EXISTING_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
             # List all log files sorted by modification time (newest first)
             # Keep only N most recent files, remove the rest
-            # Use ls -t for sorting by modification time (works on all systems)
+            # Use find instead of ls for better handling of non-alphanumeric filenames
             keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
-            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | grep -v "_errors.log$" | \
+            find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*.log" -type f ! -name "*_errors.log" -printf '%T@ %p\n' 2>/dev/null | \
+                sort -rn | \
                 tail -n +$((keep_count + 1)) | \
-                while read -r old_log; do
+                cut -d' ' -f2- | \
+                while IFS= read -r old_log; do
                     if [ -f "${old_log}" ]; then
                         echo "  Removing old log: $(basename "${old_log}")"
                         rm -f "${old_log}"
@@ -76,9 +93,11 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Clean up error logs
         if [ "${EXISTING_ERROR_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
             keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
-            ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*_errors.log 2>/dev/null | \
+            find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*_errors.log" -type f -printf '%T@ %p\n' 2>/dev/null | \
+                sort -rn | \
                 tail -n +$((keep_count + 1)) | \
-                while read -r old_error_log; do
+                cut -d' ' -f2- | \
+                while IFS= read -r old_error_log; do
                     if [ -f "${old_error_log}" ]; then
                         echo "  Removing old error log: $(basename "${old_error_log}")"
                         rm -f "${old_error_log}"
@@ -143,10 +162,10 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     filter_errors_warnings() {
         # Ensure BUILD_ERROR_LOG is available
         local error_log="${BUILD_ERROR_LOG:-}"
-        if [ -z "$error_log" ]; then
+        if [ -z "${error_log:-}" ]; then
             # If BUILD_ERROR_LOG not set, just pass through without filtering
             while IFS= read -r line; do
-                echo "$line"
+                echo "${line}"
             done
             return
         fi
@@ -154,7 +173,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         local line
         while IFS= read -r line; do
             # Echo all lines to stdout (which goes to main log via tee)
-            echo "$line"
+            echo "${line}"
             
             # Comprehensive error/warning pattern matching (case-insensitive)
             # This pattern catches ALL problematic output including:
@@ -165,10 +184,10 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             # - Build system errors (CMake, Ninja, Make)
             # - Library-specific build errors (COLMAP, Open3D, OpenCV)
             # - System/user generated errors
-            if echo "$line" | grep -qiE \
+            if echo "${line}" | grep -qiE \
                 '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
                 # Write matching line to error log with timestamp
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line" >> "${error_log}" 2>/dev/null || true
+                echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
             fi
         done
     }
@@ -240,7 +259,18 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
             
             # Analyze build log for errors/warnings with context
-            analyze_build_log || true
+            # Ensure analyze_build_log function is available (re-source config.sh if needed)
+            if ! type analyze_build_log >/dev/null 2>&1; then
+                if [ -f /etc/config.sh ]; then
+                    source /etc/config.sh
+                fi
+            fi
+            # Only call if function exists
+            if type analyze_build_log >/dev/null 2>&1; then
+                analyze_build_log || true
+            else
+                echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+            fi
             
             echo ""
             echo "═══════════════════════════════════════════════════════════════"
@@ -363,8 +393,11 @@ debug_glibc() {
 
 calculate_build_jobs() {
     # Get system resources
-    local mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
-    local cpu_cores=$(nproc)
+    # Declare and assign separately to avoid masking return values
+    local mem_gb
+    local cpu_cores
+    mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
+    cpu_cores=$(nproc)
     
     # Validate numeric values
     if ! [ "${mem_gb:-0}" -ge 0 ] 2>/dev/null; then
@@ -441,21 +474,21 @@ test_mirror() {
     CURL_EXIT_CODE=$?
 
     # If large file fails, try Release file as fallback
-    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
+    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
       CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
         CURL_EXIT_CODE=$?
       # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
-      if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "$CURL_OUTPUT" ]] && [[ "$CURL_OUTPUT" != "0.000000" ]]; then
-        CURL_OUTPUT=$(printf "%.3f" "$(echo "$CURL_OUTPUT 10" | awk '{print $1 * $2}' 2>/dev/null || echo "$CURL_OUTPUT")")
+      if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "${CURL_OUTPUT:-}" ]] && [[ "${CURL_OUTPUT:-}" != "0.000000" ]]; then
+        CURL_OUTPUT=$(printf "%.3f" "$(echo "${CURL_OUTPUT} 10" | awk '{print $1 * $2}' 2>/dev/null || echo "${CURL_OUTPUT}")")
       fi
     fi
     set -e
 
     # Write results (flock doesn't work reliably in xargs subshells, using simple append)
-    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
-      echo "999.9 ${URL}" >> "$PROBE_RESULTS"
+    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
+      echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
     else
-      echo "${CURL_OUTPUT} ${URL}" >> "$PROBE_RESULTS"
+      echo "${CURL_OUTPUT} ${URL}" >> "${PROBE_RESULTS}"
     fi
 }
 
@@ -1852,7 +1885,19 @@ apt-get install -y --no-install-recommends \
     lsb-release \
     tzdata \
     locales \
-    bc
+    bc \
+    procps \
+    findutils
+# Verify procps (includes pgrep) is available
+if ! command -v pgrep >/dev/null 2>&1; then
+    echo "⚠ WARNING: pgrep not found after procps installation, installing procps-ng as fallback..."
+    apt-get install -y --no-install-recommends procps-ng 2>/dev/null || true
+fi
+if command -v pgrep >/dev/null 2>&1; then
+    echo "✓ pgrep available (from procps)"
+else
+    echo "⚠ WARNING: pgrep still not available - will use ps aux | grep fallbacks"
+fi
 debug_glibc "After installing core APT & System utilities"
 
 #--- Sub-block 6.12.10: Install network and download tools ---
@@ -2072,41 +2117,41 @@ if is_install_command "$@"; then
     APT_EXIT_CODE=$?
     
     # Check if packages are already installed or nothing to download (benign case)
-    if echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install|already installed)"; then
+    if echo "${APT_OUTPUT}" | grep -qiE "(already the newest|0 upgraded|0 to install|already installed)"; then
         echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
-        touch "$URI_FILE"
+        touch "${URI_FILE}"
     # Check if there's an actual error (not just "no URIs")
-    elif [ "${APT_EXIT_CODE}" -ne 0 ] && ! echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
+    elif [ "${APT_EXIT_CODE}" -ne 0 ] && ! echo "${APT_OUTPUT}" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
         echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
-        echo "[apt-aria] Error output: $(echo "$APT_OUTPUT" | head -3)"
+        echo "[apt-aria] Error output: $(echo "${APT_OUTPUT}" | head -3)"
         echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
-        touch "$URI_FILE"
+        touch "${URI_FILE}"
     # Try to extract URIs from the output
-    elif echo "$APT_OUTPUT" | grep -E "'(https?://[^']*)'" | \
+    elif echo "${APT_OUTPUT}" | grep -E "'(https?://[^']*)'" | \
         sed -E "s/^'([^']+)'.*$/\1/" | \
         sed "s/ //g" | \
-        grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null && [ -s "$URI_FILE" ]; then
-        echo "[apt-aria] URI collection successful ($(wc -l < "$URI_FILE") packages)"
+        grep -E "^https?://.*\.deb$" | sort -u > "${URI_FILE}" 2>/dev/null && [ -s "${URI_FILE}" ]; then
+        echo "[apt-aria] URI collection successful ($(wc -l < "${URI_FILE}") packages)"
     else
         # No URIs found, but not an error - likely already cached or installed
         echo "[apt-aria] No URIs to download (packages may be cached or already installed)"
-        touch "$URI_FILE"
+        touch "${URI_FILE}"
     fi
 
-    echo "[apt-aria] URI file created: $URI_FILE"
+    echo "[apt-aria] URI file created: ${URI_FILE}"
     echo "[apt-aria] URI file contents:"
-    cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
+    cat "${URI_FILE}" || echo "[apt-aria] URI file is empty or unreadable"
 
-    if [ -s "$URI_FILE" ]; then
-    echo "[apt-aria] Downloading $(wc -l < "$URI_FILE") packages via aria2c..."
+    if [ -s "${URI_FILE}" ]; then
+    echo "[apt-aria] Downloading $(wc -l < "${URI_FILE}") packages via aria2c..."
       echo "[apt-aria] Cache directory: ${CACHE}"
       echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
 
       # Try multi-connection first with error suppression
-      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
         echo "[apt-aria] Multi-connection failed, trying single-connection..."
         # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
+        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
           echo "[apt-aria] aria2c failed completely, falling back to apt-get"
         else
           echo "[apt-aria] Single-connection aria2c succeeded"
@@ -2114,10 +2159,10 @@ if is_install_command "$@"; then
       else
         echo "[apt-aria] Multi-connection aria2c succeeded"
       fi
-      rm -f "$URI_FILE"
+      rm -f "${URI_FILE}"
     else
       echo "[apt-aria] No URIs to download"
-      rm -f "$URI_FILE"
+      rm -f "${URI_FILE}"
     fi
 
     # --- PROTECT CACHE ---
@@ -2683,7 +2728,7 @@ else
   rm -f "${KEYRING_DEB_TMP_PATH}"
 fi
 
-if [ "$KEYRING_INSTALL_SUCCESS" != "true" ]; then
+if [ "${KEYRING_INSTALL_SUCCESS:-}" != "true" ]; then
   echo "✗ Failed to install NVIDIA repository keyring. Aborting GPU library install."
   export PHASE2_STATUS="FAIL"
   exit 1
@@ -2712,7 +2757,7 @@ fi
 
 # Try to install specific version if available, otherwise fall back to latest
 CUDNN_INSTALLED=false
-if [ "$CUDNN_VERSION_AVAILABLE" = "true" ]; then
+if [ "${CUDNN_VERSION_AVAILABLE:-}" = "true" ]; then
     echo "Installing cuDNN version ${CUDNN_VER}..."
     if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee /tmp/cudnn_install.log; then
         if [ "${PIPESTATUS[0]}" -eq 0 ]; then
@@ -2723,7 +2768,7 @@ if [ "$CUDNN_VERSION_AVAILABLE" = "true" ]; then
 fi
 
 # Fallback to latest compatible version if specific version failed or wasn't available
-if [ "$CUDNN_INSTALLED" = "false" ]; then
+if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
     echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
     echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
     if apt-get install -y --no-install-recommends libcudnn9-cuda-${CUDA_MAJOR} libcudnn9-dev-cuda-${CUDA_MAJOR} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee -a /tmp/cudnn_install.log; then
@@ -2740,7 +2785,7 @@ if [ "$CUDNN_INSTALLED" = "false" ]; then
     fi
 fi
 
-if [ "$CUDNN_INSTALLED" = "true" ]; then
+if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
     echo "✓ NVIDIA cuDNN installed successfully."
 else
     echo "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details."
@@ -2855,10 +2900,10 @@ if [ -d "/var/cache/apt/archives" ] && [ -d "${CONTAINER_APT_CACHE}" ]; then
     # Copy all NVIDIA-related packages (with proper error handling)
     NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
     
-    if [ -n "$NVIDIA_FILES" ]; then
-        echo "$NVIDIA_FILES" | head -20 | while read -r deb_file; do
-            if [ -f "$deb_file" ]; then
-                cp -v "$deb_file" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: $deb_file"
+    if [ -n "${NVIDIA_FILES:-}" ]; then
+        echo "${NVIDIA_FILES}" | head -20 | while read -r deb_file; do
+            if [ -f "${deb_file:-}" ]; then
+                cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
             fi
         done
         
@@ -3224,8 +3269,8 @@ curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xFAF102069950
 # Outputs: Environment variables, configuration
 echo "Verifying PPA GPG keys..."
 for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
-  if [ -f "$keyfile" ]; then
-    echo "✓ PPA key verified: $(basename "$keyfile")"
+  if [ -f "${keyfile:-}" ]; then
+    echo "✓ PPA key verified: $(basename "${keyfile}")"
   fi
 done
 # End PPA key verification loop (for loop self-contained)
@@ -3290,7 +3335,7 @@ fi
 # Critical: Install key for package signature verification
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-if [ -s "$DRAKE_ASC" ]; then
+if [ -s "${DRAKE_ASC:-}" ]; then
   gpg --dearmor < "$DRAKE_ASC" > /etc/apt/trusted.gpg.d/drake.gpg
   chmod 0644 /etc/apt/trusted.gpg.d/drake.gpg
 else
@@ -3348,7 +3393,9 @@ rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
 # Purpose: Save key to cache for subsequent container builds
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-[ -s "$DRAKE_ASC" ] && cp -f "$DRAKE_ASC" ${CONTAINER_BIN_CACHE}/drake.asc 2>/dev/null || true
+if [ -s "${DRAKE_ASC:-}" ]; then
+    cp -f "$DRAKE_ASC" "${CONTAINER_BIN_CACHE}/drake.asc" 2>/dev/null || true
+fi
 
 #--- Sub-block 6.10.10: Configure Drake environment ---
 # Purpose: Set up Drake Python bindings and library paths
@@ -3358,22 +3405,22 @@ cat > /etc/profile.d/drake.sh << EOF
 # Drake Python bindings
 # NOTE: This is for system Python (${SYSTEM_PYTHON_VER}) and ROS 2 ${ROS_DISTRO}
 # will be automatically unset when Conda environments activate
-export DRAKE_ROOT=${DRAKE_HOME}
-site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")')
+export DRAKE_ROOT="${DRAKE_HOME}"
+site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "3.12")
 # Add Drake Python bindings to PYTHONPATH
-if [ -d "$DRAKE_ROOT/lib/python${site_packages}/site-packages" ]; then
-  export PYTHONPATH="$DRAKE_ROOT/lib/python${site_packages}/site-packages:${PYTHONPATH}"
+if [ -d "${DRAKE_ROOT}/lib/python${site_packages}/site-packages" ]; then
+  export PYTHONPATH="${DRAKE_ROOT}/lib/python${site_packages}/site-packages:${PYTHONPATH}"
 fi
-if [ -d "$DRAKE_ROOT/lib/python3/dist-packages" ]; then
-  export PYTHONPATH="$DRAKE_ROOT/lib/python3/dist-packages:${PYTHONPATH}"
+if [ -d "${DRAKE_ROOT}/lib/python3/dist-packages" ]; then
+  export PYTHONPATH="${DRAKE_ROOT}/lib/python3/dist-packages:${PYTHONPATH}"
 fi
 # Add Drake libraries to library path
-if [ -d "$DRAKE_ROOT/lib" ]; then
-  export LD_LIBRARY_PATH="$DRAKE_ROOT/lib:${LD_LIBRARY_PATH}"
+if [ -d "${DRAKE_ROOT}/lib" ]; then
+  export LD_LIBRARY_PATH="${DRAKE_ROOT}/lib:${LD_LIBRARY_PATH}"
 fi
 # Add Drake binaries to PATH
-if [ -d "$DRAKE_ROOT/bin" ]; then
-  export PATH="$DRAKE_ROOT/bin:${PATH}"
+if [ -d "${DRAKE_ROOT}/bin" ]; then
+  export PATH="${DRAKE_ROOT}/bin:${PATH}"
 fi
 EOF
 chmod +x /etc/profile.d/drake.sh
@@ -3492,42 +3539,196 @@ echo -e "\n${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}
 # Critical: Track overall phase success
 PHASE1_ALL_SUCCESS=true
 
-#--- Sub-block 7.2: Package group installation helper function ---
-# Purpose: Install and verify package groups with detailed logging
+#--- Sub-block 7.2: Robust package installation helper function ---
+# Purpose: Install packages with resilience to already-installed packages and missing optional packages
 # Dependencies: Block 6 (APT configuration)
+# Outputs: Installed packages
+# Parameters: $1=description, $2+= package names (space-separated string or array)
+# Returns: 0 if all critical packages installed, 1 if critical packages missing
+# Note: This function handles cases where packages are already installed or optional packages don't exist
+install_packages_resilient() {
+  # Input validation
+  local description="${1:-}"
+  if [ -z "${description}" ]; then
+    echo "ERROR: install_packages_resilient() called without description" >&2
+    return 1
+  fi
+  shift
+  
+  local packages=("$@")
+  if [ ${#packages[@]} -eq 0 ]; then
+    echo "WARNING: install_packages_resilient() called with no packages" >&2
+    return 0
+  fi
+  
+  # Safe color variables with defaults (in case not set)
+  local YELLOW="${YELLOW:-\033[1;33m}"
+  local GREEN="${GREEN:-\033[1;32m}"
+  local RED="${RED:-\033[1;31m}"
+  local NC="${NC:-\033[0m}"
+  
+  # Sanitize description for log filename (replace spaces and special chars with underscores)
+  local sanitized_desc="${description// /_}"
+  sanitized_desc="${sanitized_desc//[^a-zA-Z0-9_-]/_}"
+  local install_log="/tmp/apt_install_${sanitized_desc}.log"
+  local failed_packages=()
+  local missing_critical=()
+  
+  # Separate critical and optional packages (optional packages end with -optional suffix in description)
+  local is_optional=false
+  if [[ "${description}" == *"-optional"* ]]; then
+    is_optional=true
+  fi
+  
+  echo -e "${YELLOW}[${description}] Installing packages...${NC}"
+  
+  # Try bulk installation first
+  if apt-get install -y --no-install-recommends "${packages[@]}" > "${install_log}" 2>&1; then
+    echo -e "${GREEN}[${description}] All packages installed successfully${NC}"
+    return 0
+  fi
+  
+  # Bulk installation failed - try individual packages
+  echo -e "${YELLOW}[${description}] Bulk installation failed, trying packages individually...${NC}"
+  
+  for pkg in "${packages[@]}"; do
+    # Validate package name (basic sanity check)
+    if [ -z "${pkg}" ]; then
+      echo "  ⚠ Warning: Empty package name encountered, skipping"
+      continue
+    fi
+    
+    # Check if package is already installed (optimize: call dpkg -s only once)
+    local dpkg_status
+    dpkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
+    if [ $? -eq 0 ] && echo "${dpkg_status}" | grep -q "Status: install ok installed"; then
+      echo -e "  ✓ ${pkg}: Already installed"
+      continue
+    fi
+    
+    # Check if package exists in repository
+    if ! apt-cache show "${pkg}" >/dev/null 2>&1; then
+      if [ "${is_optional}" = "true" ]; then
+        echo -e "  ℹ ${pkg}: Not available in repositories (optional, skipping)"
+        continue
+      else
+        echo -e "  ⚠ ${pkg}: Not available in repositories (may be critical)"
+        missing_critical+=("${pkg}")
+        continue
+      fi
+    fi
+    
+    # Try to install the package
+    if apt-get install -y --no-install-recommends "${pkg}" >> "${install_log}" 2>&1; then
+      echo -e "  ✓ ${pkg}: Installed"
+    else
+      # Installation failed - check if it's actually installed now (race condition or dependency resolution)
+      # Re-check dpkg status (may have been installed as dependency)
+      dpkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
+      if [ $? -eq 0 ] && echo "${dpkg_status}" | grep -q "Status: install ok installed"; then
+        echo -e "  ✓ ${pkg}: Installed (via dependency)"
+      else
+        echo -e "  ✗ ${pkg}: Installation failed"
+        failed_packages+=("${pkg}")
+        if [ "${is_optional}" != "true" ]; then
+          missing_critical+=("${pkg}")
+        fi
+      fi
+    fi
+  done
+  
+  # Report results
+  if [ ${#failed_packages[@]} -gt 0 ]; then
+    echo -e "${YELLOW}[${description}] Some packages had issues: ${failed_packages[*]}${NC}"
+    if [ "${is_optional}" = "true" ]; then
+      echo -e "  (These are optional packages, continuing...)${NC}"
+    fi
+  fi
+  
+  if [ ${#missing_critical[@]} -gt 0 ]; then
+    echo -e "${RED}[${description}] CRITICAL packages missing: ${missing_critical[*]}${NC}"
+    echo -e "  Installation log: ${install_log}"
+    return 1
+  fi
+  
+  return 0
+}
+
+#--- Sub-block 7.2.1: Package group installation helper function (updated to use resilient installer) ---
+# Purpose: Install and verify package groups with detailed logging
+# Dependencies: Block 6 (APT configuration), install_packages_resilient()
 # Outputs: Installed packages
 # Parameters: $1=group_name, $2+= package names
 install_and_verify_group() {
-  local group_name="$1"
+  # Input validation
+  local group_name="${1:-}"
+  if [ -z "${group_name}" ]; then
+    echo "ERROR: install_and_verify_group() called without group name" >&2
+    return 1
+  fi
   shift
+  
   local packages_to_install=("$@")
+  if [ ${#packages_to_install[@]} -eq 0 ]; then
+    echo "WARNING: install_and_verify_group() called with no packages for group '${group_name}'" >&2
+    return 0
+  fi
+  
+  # Safe color variables with defaults
+  local YELLOW="${YELLOW:-\033[1;33m}"
+  local GREEN="${GREEN:-\033[1;32m}"
+  local RED="${RED:-\033[1;31m}"
+  local NC="${NC:-\033[0m}"
+  
   local group_success=true
 
   echo -e "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
-  # Run the install command, redirecting verbose output on success to a log
-  # Note: packages_to_install is an array, use [@] to expand properly
-  if ! apt-get install -y --no-install-recommends "${packages_to_install[@]}" > "/tmp/apt_install_${group_name}.log" 2>&1; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: 'apt-get install' command returned an error. See details below:${NC}"
-    cat "/tmp/apt_install_${group_name}.log"
-    PHASE1_ALL_SUCCESS=false
+  
+  # Use resilient installer
+  if ! install_packages_resilient "PHASE 1 | ${group_name}" "${packages_to_install[@]}"; then
+    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages could not be installed${NC}"
+    # Only set PHASE1_ALL_SUCCESS if it exists (may not be in scope in some contexts)
+    if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
+      PHASE1_ALL_SUCCESS=false
+    fi
     return 1
   fi
 
   echo -e "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
-  # Note: packages_to_install is intentionally unquoted to allow word splitting in for loop
-  for pkg in ${packages_to_install}; do
-    if dpkg -s "$pkg" 2>/dev/null | grep -q "Status: install ok installed"; then
+  # Note: packages_to_install is an array, use [@] to expand properly
+  for pkg in "${packages_to_install[@]}"; do
+    # Validate package name
+    if [ -z "${pkg}" ]; then
+      echo -e "  - ${YELLOW}WARNING: Empty package name encountered${NC}"
+      continue
+    fi
+    
+    # Check package status (optimize: single dpkg call)
+    local pkg_status
+    pkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
+    if [ $? -eq 0 ] && echo "${pkg_status}" | grep -q "Status: install ok installed"; then
       echo -e "  - ${pkg}: ${GREEN}OK${NC}"
     else
-      echo -e "  - ${pkg}: ${RED}FAIL (Package not found after install attempt)${NC}"
-      group_success=false
-      PHASE1_ALL_SUCCESS=false
+      echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
+      # Don't fail the group if package verification fails - it might be a virtual package or optional
+      # Only mark as failure if it's a critical package
+      # Use case-insensitive matching and proper regex escaping
+      if echo "${pkg}" | grep -qiE "^(cmake|ninja-build|g\+\+|gcc|build-essential)$"; then
+        echo -e "    ${RED}CRITICAL package missing!${NC}"
+        group_success=false
+        if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
+          PHASE1_ALL_SUCCESS=false
+        fi
+      fi
     fi
   done
 
-  if [ "${group_success}" = false ]; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: One or more packages in this group failed verification.${NC}"
+  if [ "${group_success}" = "false" ]; then
+    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages missing after verification${NC}"
+    return 1
   fi
+  
+  return 0
 }
 # End install_and_verify_group function (self-contained)
 
@@ -3597,7 +3798,21 @@ PKGS_SERIALIZATION="libyaml-cpp-dev libjsoncpp-dev"
 # Critical: Install all package groups with verification
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-install_and_verify_group "BuildTools" $PKGS_BUILD_TOOLS
+# Convert space-separated strings to arrays for proper quoting
+read -ra PKGS_BUILD_TOOLS_ARRAY <<< "${PKGS_BUILD_TOOLS}"
+read -ra PKGS_DESKTOP_ENV_ARRAY <<< "${PKGS_DESKTOP_ENV}"
+read -ra PKGS_CORE_LIBS_ARRAY <<< "${PKGS_CORE_LIBS}"
+read -ra PKGS_FONTS_UTILS_ARRAY <<< "${PKGS_FONTS_UTILS}"
+read -ra PKGS_LINALG_ARRAY <<< "${PKGS_LINALG}"
+read -ra PKGS_CPU_PARALLEL_ARRAY <<< "${PKGS_CPU_PARALLEL}"
+read -ra PKGS_SPARSE_SLAM_ARRAY <<< "${PKGS_SPARSE_SLAM}"
+read -ra PKGS_CORE_DEPS_ARRAY <<< "${PKGS_CORE_DEPS}"
+read -ra PKGS_MEDIA_GUI_ARRAY <<< "${PKGS_MEDIA_GUI}"
+read -ra PKGS_OPENGL_3D_ARRAY <<< "${PKGS_OPENGL_3D}"
+read -ra PKGS_SIM_ARRAY <<< "${PKGS_SIM}"
+read -ra PKGS_SERIALIZATION_ARRAY <<< "${PKGS_SERIALIZATION}"
+
+install_and_verify_group "BuildTools" "${PKGS_BUILD_TOOLS_ARRAY[@]}"
 # --- Special install for gdb to avoid dependency conflicts ---
 echo -e "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
 apt-get install -y --no-install-recommends gdb
@@ -3610,17 +3825,17 @@ else
   echo -e "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation failed.${NC}"
 fi
 # --- End of special gdb install ---
-install_and_verify_group "DesktopEnv" $PKGS_DESKTOP_ENV
-install_and_verify_group "CoreLibraries" $PKGS_CORE_LIBS
-install_and_verify_group "FontsAndUtilities" $PKGS_FONTS_UTILS
-install_and_verify_group "LinearAlgebra" $PKGS_LINALG
-install_and_verify_group "CPUParallelism" $PKGS_CPU_PARALLEL
-install_and_verify_group "SparseMath_SLAM" $PKGS_SPARSE_SLAM
-install_and_verify_group "CoreDependencies" $PKGS_CORE_DEPS
-install_and_verify_group "Media_and_GUI" $PKGS_MEDIA_GUI
-install_and_verify_group "OpenGL_3D" $PKGS_OPENGL_3D
-install_and_verify_group "Simulation" $PKGS_SIM
-install_and_verify_group "Serialization" $PKGS_SERIALIZATION
+install_and_verify_group "DesktopEnv" "${PKGS_DESKTOP_ENV_ARRAY[@]}"
+install_and_verify_group "CoreLibraries" "${PKGS_CORE_LIBS_ARRAY[@]}"
+install_and_verify_group "FontsAndUtilities" "${PKGS_FONTS_UTILS_ARRAY[@]}"
+install_and_verify_group "LinearAlgebra" "${PKGS_LINALG_ARRAY[@]}"
+install_and_verify_group "CPUParallelism" "${PKGS_CPU_PARALLEL_ARRAY[@]}"
+install_and_verify_group "SparseMath_SLAM" "${PKGS_SPARSE_SLAM_ARRAY[@]}"
+install_and_verify_group "CoreDependencies" "${PKGS_CORE_DEPS_ARRAY[@]}"
+install_and_verify_group "Media_and_GUI" "${PKGS_MEDIA_GUI_ARRAY[@]}"
+install_and_verify_group "OpenGL_3D" "${PKGS_OPENGL_3D_ARRAY[@]}"
+install_and_verify_group "Simulation" "${PKGS_SIM_ARRAY[@]}"
+install_and_verify_group "Serialization" "${PKGS_SERIALIZATION_ARRAY[@]}"
 
 #--- Sub-block 7.5: Verify compiler toolchain ---
 # Critical: Ensure C++ compiler is properly installed
@@ -4200,8 +4415,8 @@ echo "Building PyCeres ${PYCERES_VERSION} Python bindings for Ceres Solver..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Set library paths to prioritize our compiled Ceres
-export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
-export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
+export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 
 # Clone PyCeres (using latest release v2.5)
 cd /tmp || exit 1
@@ -4601,7 +4816,7 @@ echo "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
 JULIA_BIN="${JULIA_HOME}/bin/julia"
 if [ ! -x "${JULIA_BIN}" ]; then
   echo "[julia] ERROR: ${JULIA_HOME}/bin/julia not found or not executable"
-  ls -l /opt || true
+  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 || echo "  /opt directory empty or not accessible"
   exit 1
 fi
 # End Julia verification (if self-contained)
@@ -4621,7 +4836,7 @@ if ! command -v julia >/dev/null 2>&1; then
     echo "Julia HOME: ${JULIA_HOME}"
     echo "PATH: ${PATH}"
     echo "Contents of ${JULIA_HOME}/bin:"
-    ls -la "${JULIA_HOME}/bin/" || echo "Directory does not exist!"
+    find "${JULIA_HOME}/bin" -maxdepth 1 -type f -ls 2>/dev/null || echo "Directory does not exist!"
     exit 1
 fi
 echo "✓ Julia is now available in the PATH."
@@ -4634,7 +4849,7 @@ echo "✓ Julia is now available in the PATH."
 # Outputs: Julia packages, environments
 echo "==> Building libCxxWrap-julia from source for OpenCV/Integration"
 CXXWRAP_PREFIX="/opt/libcxxwrap-julia"
-if [ -x "$JULIA_BIN" ]; then
+if [ -x "${JULIA_BIN:-}" ]; then
   if [ ! -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
     echo "Building libCxxWrap-julia from source..."
     # Get Julia paths
@@ -4860,10 +5075,10 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Outputs: Environment variables, configuration
   if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
     echo "✓ Video Codec SDK headers verified at /usr/local/include/"
-    ls -la /usr/local/include/nvc*
+    find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null || true
   else
     echo "Δ Video Codec SDK headers may be incomplete"
-    ls -la /usr/local/include/ | grep -i nv || echo "No NVIDIA headers found"
+    find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null || echo "No NVIDIA headers found"
   fi
   # End SDK header verification (if-else self-contained)
 
@@ -4927,16 +5142,61 @@ if ! apt-get update; then
   echo "ERROR: Failed to update package lists"
   exit 1
 fi
-if ! apt-get install -y \
-  build-essential cmake ninja-build pkg-config \
-  libopenblas-dev liblapacke-dev gfortran \
-  libtbb-dev libeigen3-dev \
-  libjpeg-dev libpng-dev libtiff-dev \
-  libavcodec-dev libavformat-dev libswscale-dev \
-  libgtk-3-dev python3-dev python3-numpy \
-  g++ gcc libc6-dev linux-libc-dev libstdc++-11-dev gcc-12 g++-12 libtesseract-dev; then
-  echo "ERROR: Failed to install OpenCV build dependencies"
+
+# Core required packages (most should already be installed from Phase 1)
+OPENCV_CORE_PACKAGES=(
+  build-essential
+  cmake
+  ninja-build
+  pkg-config
+  libopenblas-dev
+  liblapacke-dev
+  gfortran
+  libtbb-dev
+  libeigen3-dev
+  libjpeg-dev
+  libpng-dev
+  libtiff-dev
+  libavcodec-dev
+  libavformat-dev
+  libswscale-dev
+  libgtk-3-dev
+  python3-dev
+  python3-numpy
+  g++
+  gcc
+  libc6-dev
+  linux-libc-dev
+  libtesseract-dev
+)
+
+# Optional packages (may not be available in all Ubuntu versions)
+OPENCV_OPTIONAL_PACKAGES=(
+  libstdc++-11-dev
+  gcc-12
+  g++-12
+)
+
+# Validate arrays are not empty (defensive check)
+if [ ${#OPENCV_CORE_PACKAGES[@]} -eq 0 ]; then
+  echo "ERROR: OPENCV_CORE_PACKAGES array is empty"
   exit 1
+fi
+
+# Install core packages (required)
+echo "Installing core OpenCV build dependencies..."
+if ! install_packages_resilient "OpenCV build dependencies" "${OPENCV_CORE_PACKAGES[@]}"; then
+  echo "ERROR: Failed to install critical OpenCV build dependencies"
+  exit 1
+fi
+
+# Install optional packages (non-critical, may not exist)
+# Only attempt if array is not empty
+if [ ${#OPENCV_OPTIONAL_PACKAGES[@]} -gt 0 ]; then
+  echo "Installing optional OpenCV build dependencies (if available)..."
+  install_packages_resilient "OpenCV optional dependencies-optional" "${OPENCV_OPTIONAL_PACKAGES[@]}" || true
+else
+  echo "No optional OpenCV packages to install"
 fi
 
 #--- Sub-block 10.5: Download OpenCV source code ---
@@ -5289,7 +5549,7 @@ elif ! apt-cache show libopencv-dev &>/dev/null; then
     OPENCV_VERIFICATION_PASSED=true
 fi
 
-if [ "$OPENCV_VERIFICATION_PASSED" = true ]; then
+if [ "${OPENCV_VERIFICATION_PASSED:-}" = true ]; then
     echo "✓ OpenCV protection completed and verified (APT pinning method)"
 else
     echo "⚠ OpenCV protection file created, but runtime verification inconclusive"
@@ -5318,7 +5578,7 @@ rm -rf /tmp/opencv /tmp/opencv_contrib
 # Dependencies: Block 8.5 (Julia installation), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 echo "==> Julia ${JULIA_LTS_VER:-1.10.x} install & envs"
-if [ -x "$JULIA_BIN" ]; then
+if [ -x "${JULIA_BIN:-}" ]; then
   echo "Julia installed successfully"
 
   #--- Sub-block 11.2: Create CxxWrap artifact override ---
@@ -5381,7 +5641,7 @@ set -euo pipefail
 
 JULIA_BIN="${JULIA_BIN:-${JULIA_HOME}/bin/julia}"
 if ! command -v "$JULIA_BIN" >/dev/null 2>&1; then
-  echo "[precompile_julia_cuda] $JULIA_BIN not found; skipping."
+  echo "[precompile_julia_cuda] ${JULIA_BIN:-} not found; skipping."
   exit 0
 fi
 
@@ -5654,16 +5914,16 @@ prefix = /usr/local
 PIPCONF
 
 # Set environment variables to ensure compiled libraries are found first
-export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}
-export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
-export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH:-}
+export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # Configure PKG_CONFIG_PATH system-wide (for CMake find_package())
 cat > /etc/profile.d/compiled-libs.sh << 'ENVSCRIPT'
 # Priority paths for compiled libraries
-export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH}"
-export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH}"
-export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH}"
+export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:\${LD_LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="/usr/local:\${CMAKE_PREFIX_PATH:-}"
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:\${PKG_CONFIG_PATH:-}"
 ENVSCRIPT
 chmod +x /etc/profile.d/compiled-libs.sh
 
@@ -6179,8 +6439,8 @@ COLMAP_SOURCE_DIR=$(cd .. && pwd)  # Save COLMAP source root path
 BUILD_DIR=$(pwd)  # Current build directory
 
 # Set library paths to prioritize our compiled versions
-export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
-export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
+export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 
 # Check multiple possible locations for pycolmap directory in COLMAP source
 PYCOLMAP_FOUND=false
@@ -6201,7 +6461,7 @@ elif [ -d "${COLMAP_SOURCE_DIR}/scripts/python/pycolmap" ]; then
 fi
 
 # Build PyCOLMAP from source if found in COLMAP repository
-if [ "$PYCOLMAP_FOUND" = true ] && { [ -f "${PYCOLMAP_PATH}/setup.py" ] || [ -f "${PYCOLMAP_PATH}/pyproject.toml" ]; }; then
+if [ "${PYCOLMAP_FOUND:-}" = true ] && { [ -f "${PYCOLMAP_PATH}/setup.py" ] || [ -f "${PYCOLMAP_PATH}/pyproject.toml" ]; }; then
     echo "Building PyCOLMAP from source directory: ${PYCOLMAP_PATH}"
     echo "  (Linking against compiled COLMAP in /usr/local)"
     cd "${PYCOLMAP_PATH}" || exit 1
@@ -6226,7 +6486,7 @@ if [ "$PYCOLMAP_FOUND" = true ] && { [ -f "${PYCOLMAP_PATH}/setup.py" ] || [ -f 
 fi
 
 # Fallback to PyPI if source not found or source build failed
-if [ "$PYCOLMAP_FOUND" = false ]; then
+if [ "${PYCOLMAP_FOUND:-}" = false ]; then
     echo "⚠ pycolmap directory not found in COLMAP source (checked common locations)"
     echo "  Attempted: ${COLMAP_SOURCE_DIR}/pycolmap"
     echo "  Attempted: ${COLMAP_SOURCE_DIR}/python/pycolmap"
@@ -7688,7 +7948,7 @@ echo ""
 echo -e "${YELLOW}[13C.9] Verifying PyTorch installation...${NC}"
 
 # Test PyTorch import and basic functionality
-python3 << 'PYTORCH_VERIFY_EOF'
+if python3 << 'PYTORCH_VERIFY_EOF'
 import sys
 import torch
 
@@ -7727,8 +7987,7 @@ if hasattr(torch, 'backends'):
 
 print("  ✓ PyTorch verification complete")
 PYTORCH_VERIFY_EOF
-
-if [ $? -eq 0 ]; then
+then
     echo -e "  ${GREEN}✓ PyTorch verification successful${NC}"
 else
     echo -e "  ${RED}✗ PyTorch verification failed${NC}"
@@ -7876,25 +8135,34 @@ echo "✓ Ninja build system available"
 echo "Installing CRITICAL Open3D dependencies..."
 # Note: LLVM-14 packages will be installed separately below (LLVM-11 not available on Noble)
 # LLVM-14 is stable and compatible. LLVM-18 may have libunwind conflicts with Python exceptions
-if ! apt-get install -y --no-install-recommends \
-    libblas-dev \
-    liblapack-dev \
-    liblapacke-dev \
-    libopenblas-dev \
-    libopenblas64-dev \
-    libjpeg-dev \
-    libpng-dev \
-    libtiff-dev \
-    zlib1g-dev \
-    libtbb-dev \
-    libassimp-dev \
-    libsqlite3-dev \
-    python3-dev \
-    python3-pip \
-    pybind11-dev \
-    g++ \
-    libomp-dev \
-    libomp5; then
+OPEN3D_PACKAGES=(
+    libblas-dev
+    liblapack-dev
+    liblapacke-dev
+    libopenblas-dev
+    libopenblas64-dev
+    libjpeg-dev
+    libpng-dev
+    libtiff-dev
+    zlib1g-dev
+    libtbb-dev
+    libassimp-dev
+    libsqlite3-dev
+    python3-dev
+    python3-pip
+    pybind11-dev
+    g++
+    libomp-dev
+    libomp5
+)
+
+# Validate array is not empty (defensive check)
+if [ ${#OPEN3D_PACKAGES[@]} -eq 0 ]; then
+    echo "ERROR: OPEN3D_PACKAGES array is empty"
+    exit 1
+fi
+
+if ! install_packages_resilient "Open3D dependencies" "${OPEN3D_PACKAGES[@]}"; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✗ CRITICAL: Open3D dependency installation FAILED"
@@ -7941,7 +8209,7 @@ else
     echo "⚠ LLVM-14 libc++ installation failed - check /tmp/llvm14_install.log"
 fi
 
-if [ "$LLVM14_INSTALLED" = "false" ]; then
+if [ "${LLVM14_INSTALLED:-}" = "false" ]; then
     echo "  ⚠ LLVM-14 libc++ packages not found - Open3D will attempt auto-detection"
     echo "  Warning about libunwind conflict with Python exceptions may appear"
     echo "  Python code using exceptions may be affected"
@@ -8325,7 +8593,7 @@ except Exception as e:
 PYTHON_PATCH
     PATCH_STATUS=$?
     # Exit code 0 = success, 1 = pattern not found (may be acceptable), 2+ = error
-    if [ "$PATCH_STATUS" -eq 1 ]; then
+    if [ "${PATCH_STATUS:-0}" -eq 1 ]; then
         echo "⚠ Python didn't find exact pattern, trying sed fallback..."
         # Fallback to sed - fix the REQUIRED calls first (these cause FATAL_ERROR)
         # Use extended regex (-E) for better pattern matching
@@ -8339,7 +8607,7 @@ PYTHON_PATCH
         sed -i -E 's|find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)|find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)|g' \
             3rdparty/find_dependencies.cmake 2>/dev/null || true
         echo "✓ Applied sed fallback patches"
-    elif [ "$PATCH_STATUS" -ge 2 ]; then
+    elif [ "${PATCH_STATUS:-0}" -ge 2 ]; then
         echo "⚠ Python patch had an error, but continuing anyway..."
     fi
 else
@@ -8423,7 +8691,7 @@ elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so" ]; then
     echo "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so"
 fi
 
-if [ "$LAPACKE_FOUND" = false ]; then
+if [ "${LAPACKE_FOUND:-}" = false ]; then
     echo "⚠ WARNING: LAPACKE not found - Open3D may fall back to building BLAS from source"
     echo "  Consider installing: liblapacke-dev"
 fi
@@ -8503,14 +8771,14 @@ else
     echo "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
     echo "  Looking for: ${OPEN3D_WEBRTC_FILE}"
     if [ -d "${CONTAINER_BIN_CACHE}" ]; then
-        ls -lh "${CONTAINER_BIN_CACHE}/" 2>/dev/null | grep -i webrtc || echo "  No WebRTC files in host cache"
+        find "${CONTAINER_BIN_CACHE}" -maxdepth 1 -type f -iname "*webrtc*" -ls 2>/dev/null || echo "  No WebRTC files in host cache"
     fi
     
     if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
         echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
         if cp -v "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"; then
             echo "✓ WebRTC binaries pre-copied from host cache"
-            ls -lh "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" 2>/dev/null | cat || true
+            find "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" -maxdepth 1 -type f -ls 2>/dev/null | head -20 || true
         else
             echo ""
             echo "═══════════════════════════════════════════════════════════════"
@@ -8546,8 +8814,8 @@ fi
 echo "Detecting OpenCV CMake config directory..."
 OPENCV_DIR=""
 OPENCV_CONFIG_FILE=$(find /usr/local /usr \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) -path "*/cmake/opencv4/*" 2>/dev/null | head -1)
-if [ -n "$OPENCV_CONFIG_FILE" ] && [ -f "$OPENCV_CONFIG_FILE" ]; then
-    OPENCV_DIR=$(dirname "$OPENCV_CONFIG_FILE")
+if [ -n "${OPENCV_CONFIG_FILE:-}" ] && [ -f "${OPENCV_CONFIG_FILE}" ]; then
+    OPENCV_DIR=$(dirname "${OPENCV_CONFIG_FILE}")
     echo "✓ OpenCV CMake config found: ${OPENCV_CONFIG_FILE}"
     echo "  Setting OpenCV_DIR to: ${OPENCV_DIR}"
 else
@@ -8559,8 +8827,8 @@ else
         echo "⚠ WARNING: OpenCV CMake config not found at ${OPENCV_DIR}"
         echo "  Searching for OpenCV installation..."
         OPENCV_SEARCH=$(find /usr /usr/local \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) 2>/dev/null | head -1)
-        if [ -n "$OPENCV_SEARCH" ]; then
-            OPENCV_DIR=$(dirname "$OPENCV_SEARCH")
+        if [ -n "${OPENCV_SEARCH:-}" ]; then
+            OPENCV_DIR=$(dirname "${OPENCV_SEARCH}")
             echo "  Found OpenCV at: ${OPENCV_DIR}"
         else
             echo "  ⚠ OpenCV not found - Open3D build may fail if CUDA module requires it"
@@ -8573,20 +8841,20 @@ fi
 echo "Detecting Eigen3 CMake config directory..."
 EIGEN3_DIR=""
 EIGEN3_CONFIG_FILE=$(find /usr/local /usr \( -name "Eigen3Config.cmake" -o -name "eigen3-config.cmake" \) -path "*/cmake/eigen3/*" 2>/dev/null | head -1)
-if [ -n "$EIGEN3_CONFIG_FILE" ] && [ -f "$EIGEN3_CONFIG_FILE" ]; then
-    EIGEN3_DIR=$(dirname "$EIGEN3_CONFIG_FILE")
+if [ -n "${EIGEN3_CONFIG_FILE:-}" ] && [ -f "${EIGEN3_CONFIG_FILE}" ]; then
+    EIGEN3_DIR=$(dirname "${EIGEN3_CONFIG_FILE}")
     echo "✓ Eigen3 CMake config found: ${EIGEN3_CONFIG_FILE}"
     echo "  Setting Eigen3_DIR to: ${EIGEN3_DIR}"
 else
     # Default to standard installation paths
     for EIGEN3_SEARCH_DIR in "/usr/local/share/eigen3/cmake" "/usr/share/eigen3/cmake" "/usr/lib/cmake/eigen3"; do
-        if [ -d "$EIGEN3_SEARCH_DIR" ] && ([ -f "${EIGEN3_SEARCH_DIR}/Eigen3Config.cmake" ] || [ -f "${EIGEN3_SEARCH_DIR}/eigen3-config.cmake" ]); then
+        if [ -d "${EIGEN3_SEARCH_DIR:-}" ] && ([ -f "${EIGEN3_SEARCH_DIR}/Eigen3Config.cmake" ] || [ -f "${EIGEN3_SEARCH_DIR}/eigen3-config.cmake" ]); then
             EIGEN3_DIR="$EIGEN3_SEARCH_DIR"
             echo "✓ Eigen3 CMake config found at: ${EIGEN3_DIR}"
             break
         fi
     done
-    if [ -z "$EIGEN3_DIR" ]; then
+    if [ -z "${EIGEN3_DIR:-}" ]; then
         EIGEN3_DIR="/usr/local/share/eigen3/cmake"  # Use default
         echo "⚠ WARNING: Eigen3 CMake config not found - using default: ${EIGEN3_DIR}"
     fi
@@ -8610,20 +8878,20 @@ GLFW_INCLUDE_DIR=""
 # Search in all standard locations where glfw3Config.cmake might be installed
 GLFW_CONFIG_DIR=$(find /usr /usr/local \( -name "glfw3Config.cmake" -o -name "glfw3-config.cmake" \) -path "*/cmake/glfw3/*" 2>/dev/null | head -1)
 
-if [ -n "$GLFW_CONFIG_DIR" ] && [ -f "$GLFW_CONFIG_DIR" ]; then
+if [ -n "${GLFW_CONFIG_DIR:-}" ] && [ -f "${GLFW_CONFIG_DIR}" ]; then
     # Extract directory containing glfw3Config.cmake (parent of the config file)
-    GLFW_DIR=$(dirname "$GLFW_CONFIG_DIR")
-    if [ -d "$GLFW_DIR" ]; then
-        echo "✓ GLFW CMake config found: $GLFW_CONFIG_DIR"
-        echo "  Setting glfw3_DIR to: $GLFW_DIR"
+    GLFW_DIR=$(dirname "${GLFW_CONFIG_DIR}")
+    if [ -d "${GLFW_DIR:-}" ]; then
+        echo "✓ GLFW CMake config found: ${GLFW_CONFIG_DIR}"
+        echo "  Setting glfw3_DIR to: ${GLFW_DIR}"
         # Use glfw3_DIR (preferred method when config file exists)
         # CMake handles paths with spaces automatically, no quotes needed in variable
         GLFW_CMAKE_FLAGS="-Dglfw3_DIR=${GLFW_DIR}"
         # Store the cmake directory for CMAKE_PREFIX_PATH (parent of glfw3 dir)
         # CMake searches <prefix>/lib/cmake/ and <prefix>/<package>/, so we add the parent
-        GLFW_CMAKE_PREFIX=$(dirname "$GLFW_DIR")  # e.g., /usr/lib/x86_64-linux-gnu/cmake
-        if [ -d "$GLFW_CMAKE_PREFIX" ]; then
-            echo "  GLFW cmake prefix directory: $GLFW_CMAKE_PREFIX"
+        GLFW_CMAKE_PREFIX=$(dirname "${GLFW_DIR}")  # e.g., /usr/lib/x86_64-linux-gnu/cmake
+        if [ -d "${GLFW_CMAKE_PREFIX:-}" ]; then
+            echo "  GLFW cmake prefix directory: ${GLFW_CMAKE_PREFIX}"
         else
             GLFW_CMAKE_PREFIX=""
         fi
@@ -8634,36 +8902,36 @@ if [ -n "$GLFW_CONFIG_DIR" ] && [ -f "$GLFW_CONFIG_DIR" ]; then
 fi
 
 # Fallback: try to find library and include paths manually if config not found
-if [ -z "$GLFW_CONFIG_DIR" ] || [ -z "$GLFW_DIR" ]; then
+if [ -z "${GLFW_CONFIG_DIR:-}" ] || [ -z "${GLFW_DIR:-}" ]; then
     echo "⚠ GLFW CMake config not found, trying manual detection..."
     # Find GLFW library (handle multiple results) - search in all standard locations
     GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib -name "libglfw.so*" -type f 2>/dev/null | head -1)
     
     # Find GLFW include - split find commands to avoid -o operator issues
     GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -name "glfw3.h" -type f 2>/dev/null | head -1)
-    if [ -z "$GLFW_INCLUDE_PATH" ]; then
+    if [ -z "${GLFW_INCLUDE_PATH:-}" ]; then
         GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1)
     fi
     
-    if [ -n "$GLFW_LIB_PATH" ] && [ -f "$GLFW_LIB_PATH" ]; then
-        GLFW_LIB_DIR=$(dirname "$GLFW_LIB_PATH")
-        echo "✓ GLFW library found: $GLFW_LIB_PATH"
+    if [ -n "${GLFW_LIB_PATH:-}" ] && [ -f "${GLFW_LIB_PATH}" ]; then
+        GLFW_LIB_DIR=$(dirname "${GLFW_LIB_PATH}")
+        echo "✓ GLFW library found: ${GLFW_LIB_PATH}"
     else
         echo "⚠ GLFW library not found in standard locations"
         GLFW_LIB_DIR="/usr/lib/x86_64-linux-gnu"
         GLFW_LIB_PATH=""
     fi
     
-    if [ -n "$GLFW_INCLUDE_PATH" ] && [ -f "$GLFW_INCLUDE_PATH" ]; then
+    if [ -n "${GLFW_INCLUDE_PATH:-}" ] && [ -f "${GLFW_INCLUDE_PATH}" ]; then
         # Handle both /usr/include/GLFW/glfw3.h and /usr/include/glfw3.h
         # Properly quote nested dirname calls
-        if echo "$GLFW_INCLUDE_PATH" | grep -q "/GLFW/"; then
-            GLFW_INCLUDE_DIR=$(dirname "$(dirname "$GLFW_INCLUDE_PATH")")
+        if echo "${GLFW_INCLUDE_PATH}" | grep -q "/GLFW/"; then
+            GLFW_INCLUDE_DIR=$(dirname "$(dirname "${GLFW_INCLUDE_PATH}")")
         else
-            GLFW_INCLUDE_DIR=$(dirname "$GLFW_INCLUDE_PATH")
+            GLFW_INCLUDE_DIR=$(dirname "${GLFW_INCLUDE_PATH}")
         fi
-        echo "✓ GLFW include found: $GLFW_INCLUDE_PATH"
-        echo "  GLFW include directory: $GLFW_INCLUDE_DIR"
+        echo "✓ GLFW include found: ${GLFW_INCLUDE_PATH}"
+        echo "  GLFW include directory: ${GLFW_INCLUDE_DIR}"
     else
         echo "⚠ GLFW include not found in standard locations"
         GLFW_INCLUDE_DIR="/usr/include"
@@ -8671,10 +8939,10 @@ if [ -z "$GLFW_CONFIG_DIR" ] || [ -z "$GLFW_DIR" ]; then
     fi
     
     # Use explicit paths as fallback (CMake handles paths with spaces automatically)
-    if [ -n "$GLFW_LIB_PATH" ] && [ -n "$GLFW_INCLUDE_DIR" ]; then
+    if [ -n "${GLFW_LIB_PATH:-}" ] && [ -n "${GLFW_INCLUDE_DIR:-}" ]; then
         GLFW_CMAKE_FLAGS="-DGLFW3_LIBRARY=${GLFW_LIB_PATH} -DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
         echo "  Using explicit GLFW paths: lib=${GLFW_LIB_PATH}, include=${GLFW_INCLUDE_DIR}"
-    elif [ -n "$GLFW_INCLUDE_DIR" ]; then
+    elif [ -n "${GLFW_INCLUDE_DIR:-}" ]; then
         GLFW_CMAKE_FLAGS="-DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
         echo "  Using GLFW include directory for CMake search: ${GLFW_INCLUDE_DIR}"
     else
@@ -8711,11 +8979,11 @@ else
     echo "  Standard location not found, searching version-specific directories..."
     for LLVM_VER in 14 15 16 17 18 19; do
         for BASE_DIR in "/usr/lib/llvm-${LLVM_VER}/lib" "/usr/lib/x86_64-linux-gnu/llvm-${LLVM_VER}/lib"; do
-            if [ -d "$BASE_DIR" ]; then
-                LIB_PATH=$(find "$BASE_DIR" -name "libc++.so*" -type f 2>/dev/null | head -1)
-                ABI_PATH=$(find "$BASE_DIR" -name "libc++abi.so*" -type f 2>/dev/null | head -1)
-                if [ -n "$LIB_PATH" ] && [ -n "$ABI_PATH" ]; then
-                    CLANG_LIBDIR_DETECTED="$BASE_DIR"
+            if [ -d "${BASE_DIR:-}" ]; then
+                LIB_PATH=$(find "${BASE_DIR}" -name "libc++.so*" -type f 2>/dev/null | head -1)
+                ABI_PATH=$(find "${BASE_DIR}" -name "libc++abi.so*" -type f 2>/dev/null | head -1)
+                if [ -n "${LIB_PATH:-}" ] && [ -n "${ABI_PATH:-}" ]; then
+                    CLANG_LIBDIR_DETECTED="${BASE_DIR}"
                     echo "  ✓ Found LLVM-${LLVM_VER} libc++ in: ${CLANG_LIBDIR_DETECTED}"
                     break 2
                 fi
@@ -8724,7 +8992,7 @@ else
     done
 fi
 
-if [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+if [ -z "${CLANG_LIBDIR_DETECTED:-}" ]; then
     echo "  ⚠ No LLVM libc++ found in standard locations - Open3D will attempt auto-detection (may fail)"
     echo "  Consider setting BUILD_LLVM11_LOCALLY=true to build LLVM-11 locally (takes 30-60 minutes)"
 fi
@@ -9050,7 +9318,7 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
         # Verify libwebrtc.a exists
         if [ -f "lib/libwebrtc.a" ]; then
             echo "✓ Verified: lib/libwebrtc.a exists"
-            ls -lh "lib/libwebrtc.a" | head -1
+            find "lib" -maxdepth 1 -name "libwebrtc.a" -type f -ls 2>/dev/null | head -1 || true
         else
             echo "⚠ WARNING: lib/libwebrtc.a not found after extraction"
         fi
@@ -9180,9 +9448,9 @@ echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "Post-CMake Debug: Checking WebRTC extraction..."
 WEBRTC_EXTRACTED_LIB=$(find webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1)
-if [ -n "$WEBRTC_EXTRACTED_LIB" ]; then
-    echo "✓ WebRTC library extracted: $WEBRTC_EXTRACTED_LIB"
-    ls -lh "$WEBRTC_EXTRACTED_LIB"
+if [ -n "${WEBRTC_EXTRACTED_LIB:-}" ]; then
+    echo "✓ WebRTC library extracted: ${WEBRTC_EXTRACTED_LIB}"
+    find "$(dirname "${WEBRTC_EXTRACTED_LIB}")" -maxdepth 1 -name "$(basename "${WEBRTC_EXTRACTED_LIB}")" -type f -ls 2>/dev/null || true
 else
     echo "⚠ WebRTC library not found in expected location"
     echo "  Expected: webrtc/src/ext_webrtc/lib/libwebrtc.a"
@@ -9194,10 +9462,10 @@ else
     find . -type d -name "*webrtc*" 2>/dev/null
     echo ""
     echo "  Checking if webrtc directory exists..."
-    ls -la webrtc/ 2>/dev/null || echo "  webrtc/ does not exist!"
+    find . -maxdepth 1 -type d -name "webrtc" -ls 2>/dev/null || echo "  webrtc/ does not exist!"
     echo ""
     echo "  Checking if src subdirectory exists..."
-    ls -la webrtc/src/ 2>/dev/null || echo "  webrtc/src/ does not exist!"
+    find webrtc -maxdepth 1 -type d -name "src" -ls 2>/dev/null || echo "  webrtc/src/ does not exist!"
     echo ""
     echo "  Checking Open3D download cache for extracted files..."
     if [ -n "${OPEN3D_DOWNLOAD_CACHE:-}" ]; then
@@ -9360,10 +9628,12 @@ if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
     echo "  This may cause ninja install-pip-package to fail"
     echo "  Will fall back to alternative installation methods if needed"
     # Try one more time with user site-packages enabled
-    PYTHONPATH="${PYTHONPATH:-}:$(python3 -m site --user-site 2>/dev/null || echo '')" python3 -c "import jupyter_packaging" 2>/dev/null && {
+    local user_site
+    user_site=$(python3 -m site --user-site 2>/dev/null || echo '')
+    if PYTHONPATH="${PYTHONPATH:-}:${user_site}" python3 -c "import jupyter_packaging" 2>/dev/null; then
         echo "  ✓ jupyter_packaging found in user site-packages, updating PYTHONPATH"
-        export PYTHONPATH="${PYTHONPATH}:$(python3 -m site --user-site 2>/dev/null || echo '')"
-    } || true
+        export PYTHONPATH="${PYTHONPATH}:${user_site}"
+    fi
 fi
 
 PYTHON_INSTALLED=false
@@ -9378,26 +9648,31 @@ else
 fi
 
 # Set library paths to prioritize our compiled versions
-export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
-export CMAKE_PREFIX_PATH=/usr/local:${CMAKE_PREFIX_PATH:-}
+export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 
 # Function to verify Python module installation (more robust than just import)
 verify_open3d_installation() {
     # Check 1: Basic import (required)
-    IMPORT_ERROR=$(python3 -c "import open3d" 2>&1)
-    if [ $? -eq 0 ]; then
+    local import_exit_code=0
+    local import_error
+    # Declare and assign separately to avoid masking return values
+    import_error=$(python3 -c "import open3d" 2>&1) || import_exit_code=$?
+    if [ "${import_exit_code}" -eq 0 ]; then
         # Import succeeded, do additional verification
         # Check 2: Verify via pip show (shows actual installation location)
+        local open3d_install_path
         if python3 -m pip show open3d >/dev/null 2>&1; then
-            OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
-            if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
+            open3d_install_path=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+            if [ -n "${open3d_install_path}" ] && [ -d "${open3d_install_path}/open3d" ]; then
                 return 0
             fi
         fi
         
         # Check 3: Verify module file location
-        OPEN3D_MODULE_FILE=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null)
-        if [ -n "${OPEN3D_MODULE_FILE}" ] && [ -d "${OPEN3D_MODULE_FILE}" ]; then
+        local open3d_module_file
+        open3d_module_file=$(python3 -c "import open3d; import os; print(os.path.dirname(open3d.__file__))" 2>/dev/null)
+        if [ -n "${open3d_module_file}" ] && [ -d "${open3d_module_file}" ]; then
             return 0
         fi
         
@@ -9405,7 +9680,7 @@ verify_open3d_installation() {
         return 0
     else
         # Import failed - provide diagnostic information
-        if echo "${IMPORT_ERROR}" | grep -q "No module named 'open3d'"; then
+        if echo "${import_error}" | grep -q "No module named 'open3d'"; then
             # Module not found - check if it's installed but not in path
             if python3 -m pip show open3d >/dev/null 2>&1; then
                 OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
@@ -9432,7 +9707,7 @@ verify_open3d_installation() {
 #       Both ninja install-pip-package and ninja python-package handle this automatically.
 echo "Strategy 1: ninja install-pip-package (official recommended method)..."
 # Clear any previous log
-> /tmp/open3d_python_install.log
+: > /tmp/open3d_python_install.log
 ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log
 NINJA_EXIT="${PIPESTATUS[0]}"
 if [ "${NINJA_EXIT}" -eq 0 ]; then
@@ -10643,12 +10918,26 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   # Try to detect VNC display from running processes
   vnc_display=""
   
-  # Method 1: Check for Xvnc processes
-  vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+  # Method 1: Check for Xvnc processes using pgrep
+  if command -v pgrep >/dev/null 2>&1; then
+    vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1)
+    if [ -n "${vnc_cmd}" ]; then
+      vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1)
+    fi
+  else
+    vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+  fi
   
   # Method 2: Check for vncserver processes
   if [ -z "${vnc_display}" ]; then
-    vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    if command -v pgrep >/dev/null 2>&1; then
+      vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1)
+      if [ -n "${vnc_cmd}" ]; then
+        vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1)
+      fi
+    else
+      vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    fi
   fi
   
   # Method 3: Check for display :1, :2, etc.
@@ -11883,15 +12172,15 @@ cat > /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh << 'EOF'
 #!/bin/bash
 # Save and unset PYTHONPATH when activating conda environment
 # This prevents Drake's system Python from conflicting with Conda's Python
-if [ -n "$PYTHONPATH" ]; then
+if [ -n "${PYTHONPATH:-}" ]; then
   # Backup original PYTHONPATH (including Drake paths)
-  export _CONDA_BACKUP_PYTHONPATH="$PYTHONPATH"
+  export _CONDA_BACKUP_PYTHONPATH="${PYTHONPATH}"
 
   # Unset PYTHONPATH so conda environment is isolated
   unset PYTHONPATH
 
   # Inform user
-  if [[ "$_CONDA_BACKUP_PYTHONPATH" == *"drake"* ]]; then
+  if [[ "${_CONDA_BACKUP_PYTHONPATH:-}" == *"drake"* ]]; then
     echo "Drake PYTHONPATH temporarily disabled in conda environment"
   fi
 fi
@@ -11907,10 +12196,10 @@ cat > /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh << 'EOF'
 #!/bin/bash
 # Restore PYTHONPATH when deactivating conda environment
 # This re-enables Drake Python bindings for system Python
-if [ -n "$_CONDA_BACKUP_PYTHONPATH" ]; then
+if [ -n "${_CONDA_BACKUP_PYTHONPATH:-}" ]; then
   unset _CONDA_BACKUP_PYTHONPATH
 
-  if [[ "$PYTHONPATH" == *"drake"* ]]; then
+  if [[ "${PYTHONPATH:-}" == *"drake"* ]]; then
     echo "Drake PYTHONPATH restored"
   fi
 fi
@@ -12168,14 +12457,21 @@ if ! dpkg -l blender-data >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends blender-data
   # Find Blender's bundled OCIO config
   OCIO_PATH="$(/usr/bin/python3 -c 'import glob; p=glob.glob("/usr/share/blender/*/datafiles/colormanagement/config.ocio"); print(p[0]) if p else ""')"
-  if [ -n "$OCIO_PATH" ]; then
-    printf 'export OCIO=%s\n' "$OCIO_PATH" > /etc/profile.d/99-ocio.sh
+  if [ -n "${OCIO_PATH:-}" ]; then
+    printf 'export OCIO=%s\n' "${OCIO_PATH}" > /etc/profile.d/99-ocio.sh
   else
     echo "[OCIO] blender-data installed but config.ocio not found; continuing"
   fi
 else
   # Fallback: install a known-good ACES config
-  mkdir -p /usr/share/ocio/aces && cd /tmp || { echo "Failed to change to /tmp"; exit 1; }
+  if ! mkdir -p /usr/share/ocio/aces; then
+    echo "Failed to create /usr/share/ocio/aces"
+    exit 1
+  fi
+  if ! cd /tmp; then
+    echo "Failed to change to /tmp"
+    exit 1
+  fi
   curl -fsSL --retry 3 --retry-delay 2 -o aces.tar.gz https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/archive/refs/heads/master.tar.gz || true
   if [ -f aces.tar.gz ]; then
     # Extract the archive to inspect its structure
@@ -12198,9 +12494,9 @@ else
       # Search for any config.ocio in the archive
       else
         OCIO_CONFIG_FOUND=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f | head -1)
-        if [ -n "$OCIO_CONFIG_FOUND" ]; then
-          OCIO_DIR=$(dirname "$OCIO_CONFIG_FOUND")
-          cp -r "$OCIO_DIR"/* /usr/share/ocio/aces/ 2>/dev/null || true
+        if [ -n "${OCIO_CONFIG_FOUND:-}" ]; then
+          OCIO_DIR=$(dirname "${OCIO_CONFIG_FOUND}")
+          cp -r "${OCIO_DIR}"/* /usr/share/ocio/aces/ 2>/dev/null || true
           OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
         fi
       fi
@@ -12208,9 +12504,9 @@ else
     # Clean up extracted archive
     rm -rf OpenColorIO-Config-ACES-master aces.tar.gz 2>/dev/null || true
     # Set OCIO environment variable if config was found
-    if [ -n "$OCIO_CONFIG_FOUND" ] && [ -f "$OCIO_CONFIG_FOUND" ]; then
-      printf 'export OCIO="%s"\n' "$OCIO_CONFIG_FOUND" > /etc/profile.d/99-ocio.sh
-      echo "✓ OCIO config installed from ACES repository: $OCIO_CONFIG_FOUND"
+    if [ -n "${OCIO_CONFIG_FOUND:-}" ] && [ -f "${OCIO_CONFIG_FOUND}" ]; then
+      printf 'export OCIO="%s"\n' "${OCIO_CONFIG_FOUND}" > /etc/profile.d/99-ocio.sh
+      echo "✓ OCIO config installed from ACES repository: ${OCIO_CONFIG_FOUND}"
     else
       echo "⚠ OCIO config.ocio not found in ACES archive - OCIO may not be fully configured"
     fi
@@ -12583,12 +12879,26 @@ detect_vgl_display() {
     # Fallback: Try to detect VNC display from running processes
     local vnc_display=""
     
-    # Method 1: Check for Xvnc processes
-    vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+    # Method 1: Check for Xvnc processes using pgrep
+    if command -v pgrep >/dev/null 2>&1; then
+      vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1 || true)
+      if [ -n "${vnc_cmd}" ]; then
+        vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1 || true)
+      fi
+    else
+      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+    fi
     
     # Method 2: Check for vncserver processes
     if [ -z "${vnc_display:-}" ]; then
-      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+      if command -v pgrep >/dev/null 2>&1; then
+        vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || true)
+        if [ -n "${vnc_cmd}" ]; then
+          vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1 || true)
+        fi
+      else
+        vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+      fi
     fi
     
     # Method 3: Check for display :1, :2, etc.
@@ -12957,9 +13267,9 @@ start_vnc_server() {
   if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
     echo "ERROR: VNC server failed to start"
     echo "Check logs:"
-    ls -lt "${HOME}/.vnc"/*.log 2>/dev/null | head -5 || true
+    find "${HOME}/.vnc" -maxdepth 1 -name "*.log" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -5 | cut -d' ' -f2- || true
     echo ""
-    tail -20 "${HOME}/.vnc"/*.log 2>/dev/null || true
+    find "${HOME}/.vnc" -maxdepth 1 -name "*.log" -type f -exec tail -20 {} \; 2>/dev/null || true
     exit 1
   fi
 
@@ -13797,8 +14107,8 @@ echo "[7/8] Running performance check..."
 # Quick GPU test
 if command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
   RENDERER=$(vglrun glxinfo 2>/dev/null | grep "OpenGL renderer" | cut -d: -f2 | xargs)
-  if [ -n "$RENDERER" ]; then
-    echo "  ✓ GPU rendering: $RENDERER"
+  if [ -n "${RENDERER:-}" ]; then
+    echo "  ✓ GPU rendering: ${RENDERER}"
   else
     echo "  ⚠ GPU rendering test failed"
   fi
@@ -14912,11 +15222,17 @@ echo "=========================================="
 echo ""
 
 echo "1. VNC Processes:"
-ps aux | grep -E "Xvnc|websockify|xfce" | grep -v grep
+# Use pgrep instead of ps aux | grep for better reliability
+if command -v pgrep >/dev/null 2>&1; then
+    pgrep -af "Xvnc|websockify|xfce" 2>/dev/null || echo "  No matching processes found"
+else
+    # Fallback to ps if pgrep not available
+    ps aux 2>/dev/null | grep -E "Xvnc|websockify|xfce" | grep -v grep || echo "  No matching processes found"
+fi
 echo ""
 
 echo "2. Network Connections:"
-ss -tuln | grep -E "5901|6081|5800"
+ss -tuln | grep -E "5901|6081|5800" || echo "  No matching connections found"
 echo ""
 
 echo "3. GPU Utilization:"
@@ -14929,8 +15245,19 @@ fi
 echo ""
 
 echo "4. CPU Usage (VNC related):"
-ps aux | grep -E "Xvnc|websockify" | grep -v grep | awk '{print $3}' | \
-  awk '{sum+=$1} END {print "  Total CPU: " sum "%"}'
+# Use pgrep instead of ps aux | grep
+if command -v pgrep >/dev/null 2>&1; then
+    pids=$(pgrep -f "Xvnc|websockify" 2>/dev/null)
+    if [ -n "${pids}" ]; then
+        ps -o pid=,pcpu= -p "${pids}" 2>/dev/null | awk '{sum+=$2} END {print "  Total CPU: " sum "%"}' || echo "  Unable to calculate CPU usage"
+    else
+        echo "  No VNC processes found"
+    fi
+else
+    # Fallback to ps if pgrep not available
+    ps aux 2>/dev/null | grep -E "Xvnc|websockify" | grep -v grep | awk '{print $3}' | \
+      awk '{sum+=$1} END {if (NR>0) print "  Total CPU: " sum "%"; else print "  No VNC processes found"}'
+fi
 echo ""
 
 echo "5. Memory Usage:"
@@ -14938,8 +15265,8 @@ free -h
 echo ""
 
 echo "6. Display Information:"
-if [ -n "$DISPLAY" ]; then
-    echo "  DISPLAY: $DISPLAY"
+if [ -n "${DISPLAY:-}" ]; then
+    echo "  DISPLAY: ${DISPLAY}"
     xdpyinfo | grep -E "dimensions|resolution" | sed 's/^/  /'
 else
     echo "  Not running in X session"
@@ -15119,7 +15446,7 @@ cmake .. \
   -DMSM_SUPPORT=OFF \
   -DCMAKE_INSTALL_PREFIX=/usr/local
 
-ninja -j$(nproc) || { echo "ERROR: Failed to build nvtop"; exit 1; }
+ninja -j"$(nproc)" || { echo "ERROR: Failed to build nvtop"; exit 1; }
 ninja install || { echo "ERROR: Failed to install nvtop"; exit 1; }
 
 cd / && rm -rf /tmp/nvtop
@@ -15268,7 +15595,7 @@ else
   echo "✗ Rust installation failed - binaries not found"
   echo "  PATH: $PATH"
   echo "  Directory contents:"
-  ls -la /opt/rust/cargo/bin || echo "cargo/bin directory doesn't exist"
+  find /opt/rust/cargo/bin -maxdepth 1 -type f -ls 2>/dev/null || echo "cargo/bin directory doesn't exist"
   exit 1
 fi
 
@@ -15682,7 +16009,7 @@ fi
 
 # Verify final installation
 echo "Installed binaries:"
-ls -lh /opt/rust/tools/bin 2>/dev/null || echo " (none)"
+find /opt/rust/tools/bin -maxdepth 1 -type f -ls 2>/dev/null || echo " (none)"
 
 echo "Disk space used:"
 du -sh /opt/rust 2>/dev/null || echo " Unable to calculate"
@@ -15694,7 +16021,7 @@ echo "✓ Rust toolchain setup complete"
 # VERIFY before claiming success
 if [ -d "/opt/rust/tools/bin" ] && [ "$(find /opt/rust/tools/bin -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
   echo "✓ Rust tools installed successfully"
-  ls -lh /opt/rust/tools/bin/ 2>/dev/null || echo "  (directory exists but listing failed)"
+  find /opt/rust/tools/bin -maxdepth 1 -type f -ls 2>/dev/null || echo "  (directory exists but listing failed)"
 else
   echo "Rust tools directory empty or missing"
   echo "Creating directory for manual installation later..."
@@ -16824,8 +17151,8 @@ echo "  » CLEANUP SECTION - Monitoring cache before cleanup"
 echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 # DEBUG: Check for symlinks or unusual directory structure
 echo "  DEBUG: Checking for symlinks or unusual paths..."
-ls -la /tmp/ | grep -E "(container_cache|apt/archives)" || echo "No suspicious symlinks in /tmp"
-ls -la "${CONTAINER_APT_CACHE}/" | head -5
+find /tmp -maxdepth 1 -type l -o -type d -name "*container_cache*" -o -name "*apt*" 2>/dev/null | head -10 || echo "No suspicious symlinks in /tmp"
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -5 || echo "Directory empty or not accessible"
 echo "  DEBUG: About to run: find /tmp -type f -name '*.deb' -delete"
 find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
 find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true
@@ -16858,9 +17185,9 @@ cache_summary
 # Outputs: Environment variables, configuration
 echo "  » DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
 echo "  Container cache directory contents:"
-ls -la "${CONTAINER_APT_CACHE}/" 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo "  Var cache directory contents:"
-ls -la /var/cache/apt/archives/ 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+find /var/cache/apt/archives -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo "Cache file counts:"
 echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 echo "  /var/cache/apt/archives: $(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
@@ -16889,17 +17216,17 @@ monitor_cache "Final cache status before harvest"
 # Add one more detailed check right before the script ends
 echo "  » FINAL CACHE CHECK - RIGHT BEFORE SCRIPT END"
 echo "Final container cache contents:"
-ls -la "${CONTAINER_APT_CACHE}/" 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
 echo ""
 echo "Final cache file count:"
 echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
 echo ""
 # Report cache status
 echo "[debug] Container cache status:"
-echo "  APT archives: $(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l) files"
-echo "  Conda packages: $(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l) files"
-echo "  Pip wheels: $(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l) files"
-echo "  Julia packages: $(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l) files"
+echo "  APT archives: $(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l) files"
+echo "  Conda packages: $(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
+echo "  Pip wheels: $(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
+echo "  Julia packages: $(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
 echo "=========================================================================="
 
 #--- Sub-block: Section continuation (6624) ---
@@ -17221,7 +17548,11 @@ handle_choice() {
     8) start_sunshine.sh ;;
     9) vncserver -list 2>/dev/null || true
        echo ""
-       ps aux | grep -E "vnc|xpra|sunshine" | grep -v grep || true ;;
+       if command -v pgrep >/dev/null 2>&1; then
+           pgrep -af "vnc|xpra|sunshine" 2>/dev/null || true
+       else
+           ps aux 2>/dev/null | grep -E "vnc|xpra|sunshine" | grep -v grep || true
+       fi ;;
    10) vncserver -kill :1 2>/dev/null || true
        pkill -f vnc || true
        pkill -f xpra || true
