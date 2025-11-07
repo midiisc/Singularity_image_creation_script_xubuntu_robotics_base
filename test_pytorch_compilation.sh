@@ -3510,28 +3510,84 @@ export PIP_DISABLE_PIP_VERSION_CHECK=1
 export PIP_NO_WARN_SCRIPT_LOCATION=1
 
 # Check for existing PyTorch installations that might conflict
+# CRITICAL: Use pip to check for installed packages instead of importing
+# This avoids importing from the uncompiled source tree which causes OSError
 echo "  Checking for existing PyTorch installations and dependency conflicts..."
 python3 << 'CHECK_PYTORCH_EOF'
 import sys
+import subprocess
+import os
+
 warnings = []
-try:
-    import torch
-    torch_ver = torch.__version__
-    warnings.append(f"  ⚠ WARNING: torch {torch_ver} is already installed")
-    warnings.append("    This script compiles PyTorch from source and does not require pre-installed torch")
-    warnings.append("    If you see dependency conflicts, consider uninstalling existing torch:")
-    warnings.append("      pip uninstall -y torch torchvision torchaudio")
-except ImportError:
-    print("  ✓ No existing torch installation found (good for source compilation)")
 
-try:
-    import torchvision
-    tv_ver = torchvision.__version__
-    warnings.append(f"  ⚠ WARNING: torchvision {tv_ver} is already installed")
-except ImportError:
-    pass
+# Remove current directory from sys.path to avoid importing from source tree
+# This prevents OSError when trying to import from uncompiled PyTorch source
+current_dir = os.getcwd()
+if current_dir in sys.path:
+    sys.path.remove(current_dir)
+# Also remove empty string (current directory marker)
+if '' in sys.path:
+    sys.path.remove('')
 
-# Check for numpy/sympy version conflicts
+# Check for installed torch using pip (safer than importing)
+try:
+    result = subprocess.run(
+        [sys.executable, '-m', 'pip', 'show', 'torch'],
+        capture_output=True,
+        text=True,
+        timeout=10
+    )
+    if result.returncode == 0:
+        # Extract version from pip show output
+        for line in result.stdout.split('\n'):
+            if line.startswith('Version:'):
+                torch_ver = line.split(':', 1)[1].strip()
+                warnings.append(f"  ⚠ WARNING: torch {torch_ver} is already installed")
+                warnings.append("    This script compiles PyTorch from source and does not require pre-installed torch")
+                warnings.append("    If you see dependency conflicts, consider uninstalling existing torch:")
+                warnings.append("      pip uninstall -y torch torchvision torchaudio")
+                break
+    else:
+        print("  ✓ No existing torch installation found (good for source compilation)")
+except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+    # Fallback: Try importing but catch OSError (from uncompiled source) separately
+    try:
+        import torch
+        torch_ver = torch.__version__
+        warnings.append(f"  ⚠ WARNING: torch {torch_ver} is already installed")
+        warnings.append("    This script compiles PyTorch from source and does not require pre-installed torch")
+        warnings.append("    If you see dependency conflicts, consider uninstalling existing torch:")
+        warnings.append("      pip uninstall -y torch torchvision torchaudio")
+    except OSError as e:
+        # This happens when trying to import from uncompiled source tree
+        # It's expected and safe to ignore
+        print("  ✓ No installed torch found (source tree detected, will compile)")
+    except ImportError:
+        print("  ✓ No existing torch installation found (good for source compilation)")
+
+# Check for torchvision
+try:
+    result = subprocess.run(
+        [sys.executable, '-m', 'pip', 'show', 'torchvision'],
+        capture_output=True,
+        text=True,
+        timeout=10
+    )
+    if result.returncode == 0:
+        for line in result.stdout.split('\n'):
+            if line.startswith('Version:'):
+                tv_ver = line.split(':', 1)[1].strip()
+                warnings.append(f"  ⚠ WARNING: torchvision {tv_ver} is already installed")
+                break
+except (subprocess.TimeoutExpired, subprocess.SubprocessError, FileNotFoundError):
+    try:
+        import torchvision
+        tv_ver = torchvision.__version__
+        warnings.append(f"  ⚠ WARNING: torchvision {tv_ver} is already installed")
+    except (OSError, ImportError):
+        pass
+
+# Check for numpy/sympy version conflicts (these are safe to import)
 try:
     import numpy
     numpy_ver = numpy.__version__
