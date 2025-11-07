@@ -83,6 +83,10 @@ export G2O_VERSION="20241228_git"
 export GTSAM_VERSION="4.2.0"
 export OPENCV_VERSION="4.12.0"
 
+# Linear Algebra and Deep Learning
+export OPENBLAS_VERSION="v0.3.30"  # Latest stable version with DYNAMIC_ARCH support
+export PYTORCH_VERSION="v2.6.0"    # Compatible with CUDA 12.6 and Ubuntu 24.04
+
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"
 export OPEN3D_VERSION="0.19.0"

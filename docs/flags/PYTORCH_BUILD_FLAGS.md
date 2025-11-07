@@ -205,6 +205,23 @@ export USE_FBGEMM=0
 - Creates a wheel file (`.whl`) that can be installed later
 - Does NOT install PyTorch (build only, as requested)
 
+**Build directory structure:**
+The main build script uses the following directory structure (matching the test script pattern):
+```
+/tmp/pytorch_build/              (PYTORCH_BUILD_BASE_DIR)
+├── pytorch/                      (PYTORCH_SOURCE_DIR - source code)
+│   ├── setup.py
+│   ├── build/
+│   └── ...
+└── wheels/                       (WHEEL_DIR - wheel output location)
+    └── torch-*.whl
+```
+
+**Wheel location:**
+- **Build output**: Wheels are built into `${PYTORCH_BUILD_BASE_DIR}/wheels/` (e.g., `/tmp/pytorch_build/wheels/`)
+- **Storage location**: After successful build, wheels are copied to `/opt/pytorch_wheels/` for persistent storage
+- **Post-build summary**: The script displays wheel locations in the build summary after completion
+
 **Build time estimates:**
 - On moderate hardware: 1-3 hours depending on CPU cores and memory
 - The script uses conservative resource limits to prevent system freezes
@@ -215,6 +232,7 @@ export USE_FBGEMM=0
 - CUDA toolkit and cuDNN must be installed (the script verifies this)
 - Sufficient disk space needed (~10-20GB for source + build artifacts)
 - Memory: At least 8GB available RAM recommended (script warns if low)
+- Wheel files are preserved in both build directory and storage location for reuse
 
 ---
 

@@ -2166,6 +2166,478 @@ echo "✓ APT-aria wrapper and symlinks configured successfully"
 echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + caching"
 
 #===============================================================================
+# BLOCK 6.12B: OPENBLAS COMPILATION AND INSTALLATION
+#===============================================================================
+# Purpose: Compile and install OpenBLAS with DYNAMIC_ARCH=1 for maximum performance
+#          and CPU portability. Make it the default BLAS/LAPACK implementation via
+#          alternatives system. Execute BEFORE any other package installations.
+# Self-contained: Yes (complete with verification and error handling)
+# Dependencies: 
+#   - Block 6.12: APT configuration
+#   - Block 6.12A: apt-aria wrapper (for accelerated downloads)
+# Outputs: Compiled OpenBLAS library, alternatives configuration, library paths
+# Timing: CRITICAL - Must execute BEFORE PHASE 1 (any package installations)
+# Strategy: 
+#   1. Check base image for existing OpenBLAS (analysis shows none exists)
+#   2. Install build prerequisites (gcc, gfortran, libomp-dev, liblapack-dev)
+#   3. Compile OpenBLAS v0.3.30 with DYNAMIC_ARCH=1
+#   4. Install to /usr/local
+#   5. Update alternatives system (make OpenBLAS default)
+#   6. Configure library paths (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)
+#   7. Set up APT pinning (prevent system OpenBLAS installation)
+#   8. Verify installation and DYNAMIC_ARCH support
+# Safety: 
+#   - Base image has NO OpenBLAS (safe to install)
+#   - Uses alternatives system (can rollback if needed)
+#   - Packages use libblas.so.3 interface (compatible with OpenBLAS)
+#   - No recompilation needed (existing binaries will use OpenBLAS automatically)
+#-------------------------------------------------------------------------------
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}BLOCK 6.12B: OpenBLAS Compilation and Installation${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+#--- Sub-block 6.12B.1: Check base image for existing OpenBLAS ---
+# Purpose: Verify base image status (analysis shows no OpenBLAS exists)
+# Dependencies: None (foundational check)
+# Outputs: Status information
+echo -e "${YELLOW}[6.12B.1] Checking base image for existing OpenBLAS...${NC}"
+BASE_OPENBLAS_FOUND=false
+BASE_OPENBLAS_PKGS=$(dpkg -l 2>/dev/null | grep -iE "^ii.*openblas" || echo "")
+if [ -n "${BASE_OPENBLAS_PKGS}" ]; then
+    echo -e "${YELLOW}⚠ Found OpenBLAS packages in base image:${NC}"
+    echo "${BASE_OPENBLAS_PKGS}"
+    BASE_OPENBLAS_FOUND=true
+else
+    echo -e "${GREEN}✓ No OpenBLAS packages found in base image (expected)${NC}"
+fi
+
+# Check for OpenBLAS library files
+for lib_path in \
+    "/usr/lib/x86_64-linux-gnu/libopenblas.so" \
+    "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" \
+    "/usr/local/lib/libopenblas.so"; do
+    if [ -f "${lib_path}" ]; then
+        echo -e "${YELLOW}⚠ Found OpenBLAS library: ${lib_path}${NC}"
+        BASE_OPENBLAS_FOUND=true
+    fi
+done
+
+if [ "${BASE_OPENBLAS_FOUND}" = true ]; then
+    echo -e "${YELLOW}⚠ WARNING: OpenBLAS detected in base image${NC}"
+    echo -e "${YELLOW}  Strategy: Will compile our own OpenBLAS and make it default via alternatives${NC}"
+else
+    echo -e "${GREEN}✓ Base image uses reference BLAS (libblas3) - safe to install OpenBLAS${NC}"
+fi
+echo ""
+
+#--- Sub-block 6.12B.2: Install build prerequisites ---
+# Purpose: Install tools and libraries needed for OpenBLAS and PyTorch compilation
+# Dependencies: Block 6.12 (APT configuration), Block 6.12A (apt-aria wrapper)
+# Outputs: Installed packages
+# Note: Installing comprehensive prerequisites for both OpenBLAS and PyTorch compilation
+echo -e "${YELLOW}[6.12B.2] Installing build prerequisites for OpenBLAS and PyTorch...${NC}"
+apt-get update -o Acquire::Retries=3
+apt-get install -y --no-install-recommends \
+    build-essential \
+    gcc \
+    g++ \
+    gfortran \
+    make \
+    cmake \
+    ninja-build \
+    libomp-dev \
+    liblapack-dev \
+    liblapacke-dev \
+    libblas-dev \
+    libtbb-dev \
+    python3-dev \
+    python3-pip \
+    python3-setuptools \
+    python3-wheel \
+    perl \
+    git \
+    wget \
+    curl \
+    util-linux \
+    sysstat \
+    jq \
+    pkg-config
+
+echo -e "${GREEN}✓ Build prerequisites installed${NC}"
+echo ""
+
+#--- Sub-block 6.12B.3: Download OpenBLAS source ---
+# Purpose: Download OpenBLAS from official repository
+# Dependencies: Block 6.12B.2 (git, wget, curl), config.sh (OPENBLAS_VERSION)
+# Outputs: OpenBLAS source code
+# Note: OPENBLAS_VERSION is defined in config.sh (default: v0.3.30)
+echo -e "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
+# Use version from config.sh (with fallback if not set)
+OPENBLAS_VERSION="${OPENBLAS_VERSION:-v0.3.30}"
+OPENBLAS_REPO_URL="https://github.com/OpenMathLib/OpenBLAS.git"
+OPENBLAS_SOURCE_DIR="/tmp/openblas_build"
+OPENBLAS_INSTALL_PREFIX="/usr/local"
+TARBALL_NAME="OpenBLAS-${OPENBLAS_VERSION#v}.tar.gz"
+TARBALL_URL="https://github.com/OpenMathLib/OpenBLAS/releases/download/${OPENBLAS_VERSION}/${TARBALL_NAME}"
+
+# Clean up any previous build
+rm -rf "${OPENBLAS_SOURCE_DIR}"
+mkdir -p "${OPENBLAS_SOURCE_DIR}"
+cd "${OPENBLAS_SOURCE_DIR}" || exit 1
+
+DOWNLOAD_SUCCESS=false
+
+# Method 1: Try downloading release tarball (most reliable)
+echo "  Attempting to download release tarball: ${TARBALL_URL}"
+if command -v wget >/dev/null 2>&1; then
+    if wget -q --show-progress "${TARBALL_URL}" -O "${TARBALL_NAME}" 2>&1; then
+        if [ -f "${TARBALL_NAME}" ] && [ -s "${TARBALL_NAME}" ]; then
+            if tar -xzf "${TARBALL_NAME}" 2>/dev/null; then
+                cd "OpenBLAS-${OPENBLAS_VERSION#v}" || exit 1
+                echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                DOWNLOAD_SUCCESS=true
+            else
+                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                rm -f "${TARBALL_NAME}"
+            fi
+        fi
+    fi
+elif command -v curl >/dev/null 2>&1; then
+    if curl -L -f -s "${TARBALL_URL}" -o "${TARBALL_NAME}" 2>/dev/null; then
+        if [ -f "${TARBALL_NAME}" ] && [ -s "${TARBALL_NAME}" ]; then
+            if tar -xzf "${TARBALL_NAME}" 2>/dev/null; then
+                cd "OpenBLAS-${OPENBLAS_VERSION#v}" || exit 1
+                echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                DOWNLOAD_SUCCESS=true
+            else
+                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                rm -f "${TARBALL_NAME}"
+            fi
+        fi
+    fi
+fi
+
+# Method 2: Try git clone if tarball download failed
+if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
+    if command -v git >/dev/null 2>&1; then
+        echo "  Tarball download failed, attempting git clone..."
+        cd "${OPENBLAS_SOURCE_DIR}" || exit 1
+        rm -rf ./*
+        
+        # Try cloning with tag
+        if git clone --depth 1 --branch "${OPENBLAS_VERSION}" "${OPENBLAS_REPO_URL}" . 2>&1; then
+            echo -e "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION} from repository${NC}"
+            DOWNLOAD_SUCCESS=true
+        # Try cloning develop branch and checking out tag
+        elif git clone --depth 50 "${OPENBLAS_REPO_URL}" . 2>&1; then
+            if git checkout "${OPENBLAS_VERSION}" 2>&1; then
+                echo -e "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
+                DOWNLOAD_SUCCESS=true
+            fi
+        fi
+    fi
+fi
+
+# Final check
+if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
+    echo -e "  ${RED}✗ Failed to download OpenBLAS source${NC}"
+    echo "  Please verify:"
+    echo "    - Version ${OPENBLAS_VERSION} exists at https://github.com/OpenMathLib/OpenBLAS/releases"
+    echo "    - Internet connectivity is available"
+    exit 1
+fi
+
+# Verify Makefile exists
+if [ ! -f "Makefile" ]; then
+    echo -e "  ${RED}✗ Makefile not found${NC}"
+    exit 1
+fi
+
+echo -e "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
+echo ""
+
+#--- Sub-block 6.12B.4: Compile OpenBLAS ---
+# Purpose: Compile OpenBLAS with DYNAMIC_ARCH=1 for CPU portability
+# Dependencies: Block 6.12B.3 (OpenBLAS source)
+# Outputs: Compiled OpenBLAS library
+echo -e "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
+echo "  Build flags:"
+echo "    DYNAMIC_ARCH=1 (runtime CPU detection - supports multiple architectures)"
+echo "    USE_OPENMP=1 (OpenMP threading)"
+echo "    TARGET=GENERIC (safe base target)"
+echo "    NO_AFFINITY=1 (disable CPU affinity)"
+echo "    NUM_THREADS=64 (support for systems with up to 64 threads)"
+echo ""
+
+# Get number of CPU cores for parallel build
+BUILD_JOBS=$(nproc 2>/dev/null || echo "4")
+if [ "${BUILD_JOBS:-0}" -lt 1 ]; then
+    BUILD_JOBS=1
+fi
+echo "  Using ${BUILD_JOBS} parallel jobs"
+
+# Clean any previous build
+make clean >/dev/null 2>&1 || true
+
+# Compile OpenBLAS with optimal flags
+# Reference: http://www.openmathlib.org/OpenBLAS/docs/install/
+if make -j"${BUILD_JOBS}" \
+    DYNAMIC_ARCH=1 \
+    TARGET=GENERIC \
+    USE_OPENMP=1 \
+    NO_AFFINITY=1 \
+    NUM_THREADS=64 \
+    GEMM_MULTITHREAD_THRESHOLD=50 \
+    BUILD_LAPACK_DEPRECATED=1 \
+    NO_WARMUP=1 \
+    BINARY=64 \
+    CC=gcc \
+    FC=gfortran \
+    HOSTCC=gcc \
+    2>&1 | tee /tmp/openblas_build.log; then
+    echo ""
+    echo -e "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
+else
+    echo ""
+    echo -e "  ${RED}✗ OpenBLAS compilation failed${NC}"
+    echo "  Check log: /tmp/openblas_build.log"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 6.12B.5: Install OpenBLAS ---
+# Purpose: Install OpenBLAS to /usr/local
+# Dependencies: Block 6.12B.4 (compiled OpenBLAS)
+# Outputs: Installed OpenBLAS library and headers
+echo -e "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...${NC}"
+# Important: Pass all build flags to make install (per official documentation)
+if make install \
+    PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
+    DYNAMIC_ARCH=1 \
+    TARGET=GENERIC \
+    USE_OPENMP=1 \
+    NO_AFFINITY=1 \
+    NUM_THREADS=64 \
+    GEMM_MULTITHREAD_THRESHOLD=50 \
+    BUILD_LAPACK_DEPRECATED=1 \
+    NO_WARMUP=1 \
+    BINARY=64 \
+    CC=gcc \
+    FC=gfortran \
+    HOSTCC=gcc \
+    2>&1 | tee -a /tmp/openblas_build.log; then
+    echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
+else
+    echo -e "  ${RED}✗ OpenBLAS installation failed${NC}"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 6.12B.6: Verify OpenBLAS installation ---
+# Purpose: Verify OpenBLAS library exists and has DYNAMIC_ARCH support
+# Dependencies: Block 6.12B.5 (installed OpenBLAS)
+# Outputs: Verification status
+echo -e "${YELLOW}[6.12B.6] Verifying OpenBLAS installation...${NC}"
+OPENBLAS_LIB="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
+OPENBLAS_LIB_0="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0"
+
+if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
+    # Use the actual library file (may be .so or .so.0)
+    if [ -f "${OPENBLAS_LIB_0}" ]; then
+        OPENBLAS_LIB="${OPENBLAS_LIB_0}"
+    fi
+    
+    echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
+    
+    # Check library size
+    LIB_SIZE=$(du -h "${OPENBLAS_LIB}" | cut -f1)
+    echo "  Library size: ${LIB_SIZE}"
+    
+    # Check for DYNAMIC_ARCH support
+    echo "  Verifying DYNAMIC_ARCH support..."
+    if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qi "DYNAMIC_ARCH\|dynamic_arch\|DYNAMICARCH"; then
+        echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+    else
+        echo -e "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
+    fi
+    
+    # Check for architecture-specific kernels
+    ARCH_COUNT="0"
+    if ARCH_COUNT_RAW=$(strings "${OPENBLAS_LIB}" 2>/dev/null | grep -ciE "HASWELL|SANDYBRIDGE|NEHALEM|PENRYN|CORE2|SKYLAKEX|CASCADELAKE|COOPERLAKE|ICELAKE|SAPPHIRERAPIDS" 2>/dev/null || true); then
+        ARCH_COUNT="${ARCH_COUNT_RAW}"
+    fi
+    if [ "${ARCH_COUNT:-0}" -gt 0 ]; then
+        echo -e "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
+    fi
+else
+    echo -e "  ${RED}✗ OpenBLAS library not found at expected location${NC}"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 6.12B.7: Update alternatives system ---
+# Purpose: Make OpenBLAS the default BLAS/LAPACK implementation
+# Dependencies: Block 6.12B.6 (verified OpenBLAS installation)
+# Outputs: Updated alternatives configuration
+echo -e "${YELLOW}[6.12B.7] Updating alternatives system to make OpenBLAS default...${NC}"
+
+# Find the actual OpenBLAS library file
+OPENBLAS_LIB_FILE=""
+for lib_file in \
+    "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0" \
+    "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"; do
+    if [ -f "${lib_file}" ]; then
+        OPENBLAS_LIB_FILE="${lib_file}"
+        break
+    fi
+done
+
+if [ -z "${OPENBLAS_LIB_FILE}" ]; then
+    echo -e "  ${RED}✗ OpenBLAS library file not found${NC}"
+    exit 1
+fi
+
+# Update BLAS alternatives
+echo "  Setting OpenBLAS as default BLAS implementation..."
+update-alternatives --install /usr/lib/x86_64-linux-gnu/libblas.so.3 \
+    libblas.so.3-x86_64-linux-gnu \
+    "${OPENBLAS_LIB_FILE}" 100 || {
+    echo -e "  ${YELLOW}⚠ Failed to set BLAS alternative (may already be set)${NC}"
+}
+
+# Set OpenBLAS as the default (non-interactive)
+update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_LIB_FILE}" 2>/dev/null || true
+
+# Update LAPACK alternatives (OpenBLAS includes LAPACK)
+echo "  Setting OpenBLAS as default LAPACK implementation..."
+LAPACK_ALT_LIB=""
+for lapack_file in \
+    "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0" \
+    "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"; do
+    if [ -f "${lapack_file}" ]; then
+        LAPACK_ALT_LIB="${lapack_file}"
+        break
+    fi
+done
+
+if [ -n "${LAPACK_ALT_LIB}" ]; then
+    update-alternatives --install /usr/lib/x86_64-linux-gnu/liblapack.so.3 \
+        liblapack.so.3-x86_64-linux-gnu \
+        "${LAPACK_ALT_LIB}" 100 || {
+        echo -e "  ${YELLOW}⚠ Failed to set LAPACK alternative (may already be set)${NC}"
+    }
+    update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${LAPACK_ALT_LIB}" 2>/dev/null || true
+fi
+
+echo -e "  ${GREEN}✓ Alternatives system updated${NC}"
+echo ""
+
+#--- Sub-block 6.12B.8: Configure library paths ---
+# Purpose: Make OpenBLAS available system-wide via library paths
+# Dependencies: Block 6.12B.7 (alternatives updated)
+# Outputs: Updated ldconfig, environment variables, pkg-config
+echo -e "${YELLOW}[6.12B.8] Configuring library paths...${NC}"
+
+# Update ldconfig
+echo "  Updating ldconfig cache..."
+echo "${OPENBLAS_INSTALL_PREFIX}/lib" > /etc/ld.so.conf.d/openblas-custom.conf
+ldconfig
+
+# Set environment variables (for current session and future sessions)
+export LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+# Add to environment for future sessions
+cat >> /etc/environment <<EOF
+LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
+PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+EOF
+
+# Create pkg-config file for OpenBLAS
+mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig"
+cat > "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig/openblas.pc" <<EOF
+prefix=${OPENBLAS_INSTALL_PREFIX}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: OpenBLAS
+Description: OpenBLAS is an optimized BLAS library
+Version: ${OPENBLAS_VERSION#v}
+Libs: -L\${libdir} -lopenblas
+Cflags: -I\${includedir}
+EOF
+
+echo -e "  ${GREEN}✓ Library paths configured${NC}"
+echo ""
+
+#--- Sub-block 6.12B.9: Set up APT pinning ---
+# Purpose: Prevent APT from installing system OpenBLAS packages
+# Dependencies: None (APT configuration)
+# Outputs: APT preferences file
+echo -e "${YELLOW}[6.12B.9] Setting up APT pinning to protect OpenBLAS...${NC}"
+cat > /etc/apt/preferences.d/openblas-protect <<'EOF'
+# Prevent APT from installing system OpenBLAS packages
+# Our custom-compiled OpenBLAS should be used instead
+Package: libopenblas-dev libopenblas64-dev libopenblas0-pthread libopenblas0-serial libopenblas0
+Pin: release *
+Pin-Priority: -1
+EOF
+
+echo -e "  ${GREEN}✓ APT pinning configured${NC}"
+echo ""
+
+#--- Sub-block 6.12B.10: Final verification ---
+# Purpose: Verify OpenBLAS is properly configured and being used
+# Dependencies: Block 6.12B.8 (library paths configured)
+# Outputs: Verification status
+echo -e "${YELLOW}[6.12B.10] Final verification...${NC}"
+
+# Check alternatives
+echo "  Checking alternatives system:"
+if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "link currently points to.*openblas"; then
+    echo -e "    ${GREEN}✓ OpenBLAS is default BLAS implementation${NC}"
+else
+    CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
+    echo -e "    ${YELLOW}⚠ Current BLAS: ${CURRENT_BLAS}${NC}"
+fi
+
+# Check ldconfig
+echo "  Checking ldconfig:"
+if ldconfig -p 2>/dev/null | grep -q libopenblas; then
+    echo -e "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
+    ldconfig -p 2>/dev/null | grep libopenblas | head -3 | sed 's/^/      /'
+else
+    echo -e "    ${YELLOW}⚠ OpenBLAS not in ldconfig cache (may need manual update)${NC}"
+fi
+
+# Verify library file exists and is accessible
+if [ -f "${OPENBLAS_LIB_FILE}" ]; then
+    echo -e "    ${GREEN}✓ OpenBLAS library file exists: ${OPENBLAS_LIB_FILE}${NC}"
+else
+    echo -e "    ${RED}✗ OpenBLAS library file not found${NC}"
+fi
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}✓ OpenBLAS compilation and installation complete!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Summary:"
+echo "  - OpenBLAS ${OPENBLAS_VERSION} compiled with DYNAMIC_ARCH=1"
+echo "  - Installed to: ${OPENBLAS_INSTALL_PREFIX}"
+echo "  - Set as default BLAS/LAPACK via alternatives system"
+echo "  - Library paths configured (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)"
+echo "  - APT pinning configured (prevents system OpenBLAS installation)"
+echo "  - All existing packages will automatically use OpenBLAS"
+echo ""
+
+# Clean up build directory (keep installed files)
+cd / || true
+rm -rf "${OPENBLAS_SOURCE_DIR}" /tmp/openblas_build.log
+
+#===============================================================================
 # BLOCK 6.13: NVIDIA CUDA/cuDNN SETUP
 #===============================================================================
 # Purpose: Install NVIDIA CUDA toolkit and cuDNN libraries (~4GB)
@@ -3099,7 +3571,10 @@ PKGS_CORE_LIBS="libgl1 libglvnd0 libegl1 libgles2 libxext6 libxrender1 libsm6 li
 # Fonts and utilities
 PKGS_FONTS_UTILS="fontconfig fonts-dejavu fonts-liberation fonts-noto iproute2 iputils-ping net-tools lsof tmux screen htop p7zip-full python3-pip python3-venv whiptail"
 # Linear algebra libraries
-PKGS_LINALG="libeigen3-dev libopenblas-dev liblapack-dev liblapacke-dev libblas-dev gfortran"
+# NOTE: libopenblas-dev removed - we compile our own OpenBLAS in BLOCK 6.12B
+# NOTE: liblapack-dev and liblapacke-dev kept - needed for headers and pkg-config files
+#       Our compiled OpenBLAS will be used via alternatives system
+PKGS_LINALG="libeigen3-dev liblapack-dev liblapacke-dev libblas-dev gfortran"
 # CPU parallelism libraries
 PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
@@ -4602,16 +5077,16 @@ OPENCV_CMAKE_CMD="cmake -G Ninja \
   -D PYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include \
   -D TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
   -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
-  -D BLAS_LIBRARIES=/usr/lib/x86_64-linux-gnu/libopenblas.so* \
+  -D BLAS_LIBRARIES=/usr/local/lib/libopenblas.so \
   -D BLA_VENDOR=OpenBLAS \
-  -D LAPACK_LIBRARIES=\"/usr/lib/x86_64-linux-gnu/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3;/usr/lib/x86_64-linux-gnu/liblapack.so\" \
-  -D LAPACK_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapack.so \
+  -D LAPACK_LIBRARIES=\"/usr/local/lib/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3\" \
+  -D LAPACK_LIBRARY=/usr/local/lib/libopenblas.so \
   -D LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3 \
-  -D LAPACK_LIBRARY_DEBUG=/usr/lib/x86_64-linux-gnu/liblapack.so.3 \
-  -D LAPACK_CBLAS_H=/usr/include/x86_64-linux-gnu/cblas.h \
+  -D LAPACK_LIBRARY_DEBUG=/usr/local/lib/libopenblas.so \
+  -D LAPACK_CBLAS_H=/usr/local/include/cblas.h \
   -D LAPACK_LAPACKE_H=/usr/include/lapacke.h \
-  -D OpenBLAS_LIB=/usr/lib/x86_64-linux-gnu/libopenblas.so \
-  -D OpenBLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/ \
+  -D OpenBLAS_LIB=/usr/local/lib/libopenblas.so \
+  -D OpenBLAS_INCLUDE_DIR=/usr/local/include \
   -D CMAKE_INSTALL_RPATH=\"/usr/local/lib\" \
   -D CMAKE_C_STANDARD=17 \
   -D CMAKE_CXX_STANDARD=17 \
@@ -6644,6 +7119,691 @@ fi
 rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
 
 echo "✓ JAX CUDA installation complete"
+
+#===============================================================================
+# BLOCK 13C: PYTORCH COMPILATION WITH OPENBLAS
+#===============================================================================
+# Purpose: Compile PyTorch from source with OpenBLAS and CUDA support
+#          Uses optimal flags from test_pytorch_compilation.sh
+#          GCC 10 preferred for CUDA 12.6 compatibility (as per recommendation)
+# Self-contained: Yes (complete with verification and error handling)
+# Dependencies: 
+#   - Block 6.12B: OpenBLAS compilation (provides /usr/local/lib/libopenblas.so)
+#   - Block 6.13: NVIDIA CUDA/cuDNN setup
+#   - Block 13B: JAX installation (optional, for reference)
+# Outputs: Compiled PyTorch wheel, installed PyTorch
+# Timing: After JAX, after all core dependencies
+# Strategy:
+#   1. Verify OpenBLAS from Block 6.12B
+#   2. Check prerequisites (installed in Block 6.12B.2)
+#   3. Detect GCC version and install GCC 10 if needed (CUDA 12.6 compatibility)
+#   4. Detect CUDA version and compute architectures
+#   5. Configure PyTorch build with optimal flags
+#   6. Download PyTorch source (v2.6.0 - verified successful version)
+#   7. Build PyTorch wheel with resource management
+#   8. Install and verify PyTorch
+# Reference: 
+#   - Official: https://github.com/pytorch/pytorch#from-source
+#   - Test script: scripts/tests/test_pytorch_compilation.sh
+#   - GCC recommendation: GCC 10 preferred for CUDA 12.6 + PyTorch
+#-------------------------------------------------------------------------------
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}BLOCK 13C: PyTorch Compilation with OpenBLAS${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+#--- Sub-block 13C.1: Verify OpenBLAS installation ---
+# Purpose: Verify our compiled OpenBLAS is available and usable
+# Dependencies: Block 6.12B (OpenBLAS compilation)
+# Outputs: Verification status
+echo -e "${YELLOW}[13C.1] Verifying OpenBLAS installation from Block 6.12B...${NC}"
+OPENBLAS_VERIFIED=false
+OPENBLAS_LIB="/usr/local/lib/libopenblas.so"
+
+# Check for OpenBLAS library (our compiled version)
+if [ -f "/usr/local/lib/libopenblas.so.0" ]; then
+    OPENBLAS_LIB="/usr/local/lib/libopenblas.so.0"
+    OPENBLAS_VERIFIED=true
+elif [ -f "/usr/local/lib/libopenblas.so" ]; then
+    OPENBLAS_LIB="/usr/local/lib/libopenblas.so"
+    OPENBLAS_VERIFIED=true
+fi
+
+if [ "${OPENBLAS_VERIFIED}" = true ]; then
+    echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
+    
+    # Verify DYNAMIC_ARCH support
+    if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qi "DYNAMIC_ARCH\|dynamic_arch\|DYNAMICARCH"; then
+        echo -e "  ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+    fi
+    
+    # Check alternatives system
+    if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "openblas"; then
+        echo -e "  ${GREEN}✓ OpenBLAS is default BLAS implementation${NC}"
+    else
+        echo -e "  ${YELLOW}⚠ OpenBLAS may not be default BLAS (check alternatives)${NC}"
+    fi
+else
+    echo -e "  ${RED}✗ ERROR: OpenBLAS not found at /usr/local/lib${NC}"
+    echo "  Expected from Block 6.12B: /usr/local/lib/libopenblas.so"
+    echo "  Please ensure Block 6.12B completed successfully"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 13C.2: Verify prerequisites ---
+# Purpose: Verify all prerequisites are installed (from Block 6.12B.2)
+# Dependencies: Block 6.12B.2 (prerequisites installation)
+# Outputs: Verification status
+echo -e "${YELLOW}[13C.2] Verifying prerequisites...${NC}"
+MISSING_PREREQS=()
+
+# Check critical prerequisites
+for cmd in python3 pip3 cmake ninja git; do
+    if ! command -v "${cmd}" >/dev/null 2>&1; then
+        MISSING_PREREQS+=("${cmd}")
+    else
+        echo -e "  ${GREEN}✓ ${cmd} found${NC}"
+    fi
+done
+
+if [ ${#MISSING_PREREQS[@]} -gt 0 ]; then
+    echo -e "  ${RED}✗ Missing prerequisites: ${MISSING_PREREQS[*]}${NC}"
+    echo "  These should have been installed in Block 6.12B.2"
+    exit 1
+fi
+
+# Verify Python version (PyTorch 2.6.0 requires Python 3.8+)
+PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
+PYTHON_MAJOR=$(echo "${PYTHON_VERSION}" | cut -d. -f1)
+PYTHON_MINOR=$(echo "${PYTHON_VERSION}" | cut -d. -f2)
+if [ "${PYTHON_MAJOR}" -lt 3 ] || { [ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_MINOR}" -lt 8 ]; }; then
+    echo -e "  ${RED}✗ ERROR: PyTorch 2.6.0 requires Python 3.8 or later${NC}"
+    echo "  Current Python version: ${PYTHON_VERSION}"
+    exit 1
+fi
+echo -e "  ${GREEN}✓ Python ${PYTHON_VERSION} (compatible)${NC}"
+echo ""
+
+#--- Sub-block 13C.3: Detect GCC version and install GCC 10 if needed ---
+# Purpose: Install GCC 10 for better CUDA 12.6 compatibility (recommended)
+# Dependencies: Block 6.12B.2 (apt-get available)
+# Outputs: GCC compiler selection
+echo -e "${YELLOW}[13C.3] Detecting GCC version and configuring for CUDA 12.6...${NC}"
+
+# Detect current GCC version
+GCC_VERSION=""
+GCC_MAJOR=""
+if command -v gcc >/dev/null 2>&1; then
+    GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
+    if [ -n "${GCC_VERSION}" ]; then
+        GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1 || echo "")
+        echo "  Detected GCC version: ${GCC_VERSION}"
+    fi
+fi
+
+# Check for GCC 10 availability
+USE_GCC10=false
+GCC10_INSTALLED=false
+GCC10_PATH=""
+GXX10_PATH=""
+
+if command -v gcc-10 >/dev/null 2>&1; then
+    GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
+    GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+    if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
+        GCC10_INSTALLED=true
+        USE_GCC10=true
+        echo -e "  ${GREEN}✓ GCC 10 detected (recommended for CUDA 12.6)${NC}"
+    fi
+fi
+
+# If GCC 11+ detected and GCC 10 not installed, install GCC 10
+if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" = false ]; then
+    echo -e "  ${YELLOW}⚠ GCC ${GCC_VERSION} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
+    echo "  Installing GCC 10 for better compatibility..."
+    apt-get update -o Acquire::Retries=3 -qq
+    if apt-get install -y -qq gcc-10 g++-10 >/dev/null 2>&1; then
+        GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
+        GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+        if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
+            GCC10_INSTALLED=true
+            USE_GCC10=true
+            echo -e "  ${GREEN}✓ GCC 10 installed successfully${NC}"
+        fi
+    fi
+fi
+
+# Set compiler variables if GCC 10 is available
+if [ "${USE_GCC10}" = true ] && [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ]; then
+    export CC="${GCC10_PATH}"
+    export CXX="${GXX10_PATH}"
+    export CUDA_HOST_COMPILER="${GXX10_PATH}"
+    export CMAKE_C_COMPILER="${GCC10_PATH}"
+    export CMAKE_CXX_COMPILER="${GXX10_PATH}"
+    export CMAKE_CUDA_HOST_COMPILER="${GXX10_PATH}"
+    echo "  Using GCC 10 for PyTorch compilation"
+else
+    echo "  Using default GCC (${GCC_VERSION:-unknown})"
+fi
+echo ""
+
+#--- Sub-block 13C.4: Detect CUDA version and compute architectures ---
+# Purpose: Detect CUDA version and determine supported compute architectures
+# Dependencies: Block 6.13 (NVIDIA CUDA setup)
+# Outputs: CUDA version, compute architectures
+echo -e "${YELLOW}[13C.4] Detecting CUDA version and compute architectures...${NC}"
+
+# Detect CUDA version
+CUDA_VERSION=""
+CUDA_MAJOR=""
+CUDA_MINOR=""
+CUDA_HOME=""
+
+if command -v nvcc >/dev/null 2>&1; then
+    CUDA_VERSION=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+    if [ -n "${CUDA_VERSION}" ]; then
+        CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
+        CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)
+        CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")")
+        echo "  Detected CUDA version: ${CUDA_VERSION}"
+        echo "  CUDA_HOME: ${CUDA_HOME}"
+    fi
+elif [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
+    if [ -f "${CUDA_HOME}/bin/nvcc" ]; then
+        CUDA_VERSION=$("${CUDA_HOME}/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
+        if [ -n "${CUDA_VERSION}" ]; then
+            CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
+            CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)
+            echo "  Detected CUDA version: ${CUDA_VERSION}"
+        fi
+    fi
+fi
+
+if [ -z "${CUDA_VERSION}" ]; then
+    echo -e "  ${YELLOW}⚠ CUDA not detected - PyTorch will be built without CUDA support${NC}"
+    USE_CUDA=0
+else
+    USE_CUDA=1
+    echo -e "  ${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}"
+fi
+
+# Determine CUDA compute architectures based on CUDA version
+# CUDA 12.6 supports: 8.6, 8.9 (requires 12.0+), 9.0 (requires 12.4+)
+CUDA_ARCH_LIST=""
+CMAKE_CUDA_ARCHITECTURES=""
+
+if [ "${USE_CUDA}" = 1 ] && [ -n "${CUDA_MAJOR}" ]; then
+    if [ "${CUDA_MAJOR}" = 12 ]; then
+        # CUDA 12.x: Start with 8.6 (widely supported)
+        CUDA_ARCH_LIST="8.6"
+        CMAKE_CUDA_ARCHITECTURES="86"
+        
+        # Add 8.9 if CUDA 12.0+ (all 12.x support it)
+        CUDA_ARCH_LIST="${CUDA_ARCH_LIST};8.9"
+        CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES};89"
+        
+        # Add 9.0 if CUDA 12.4+ (config.sh specifies 12.6, so this is supported)
+        if [ -n "${CUDA_MINOR}" ] && [ "${CUDA_MINOR}" -ge 4 ] 2>/dev/null; then
+            CUDA_ARCH_LIST="${CUDA_ARCH_LIST};9.0"
+            CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES};90"
+        fi
+        
+        echo "  Selected CUDA architectures: ${CUDA_ARCH_LIST}"
+        echo "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
+    else
+        # For other CUDA versions, use 8.6 as safe default
+        CUDA_ARCH_LIST="8.6"
+        CMAKE_CUDA_ARCHITECTURES="86"
+        echo "  Using default architecture: 8.6"
+    fi
+fi
+echo ""
+
+#--- Sub-block 13C.5: Configure PyTorch build environment ---
+# Purpose: Set up all PyTorch build flags with optimal configuration
+# Dependencies: Block 13C.3 (GCC selection), Block 13C.4 (CUDA detection)
+# Outputs: Environment variables for PyTorch build
+echo -e "${YELLOW}[13C.5] Configuring PyTorch build environment...${NC}"
+
+# Disable MKL (use OpenBLAS instead)
+export USE_MKL=0
+export USE_MKLDNN=0
+export USE_STATIC_MKL=0
+
+# OpenBLAS configuration
+export BLAS=OpenBLAS
+export LAPACK=OpenBLAS
+
+# CUDA configuration
+if [ "${USE_CUDA}" = 1 ]; then
+    export USE_CUDA=1
+    export USE_CUDNN=1
+    if [ -n "${CUDA_ARCH_LIST}" ]; then
+        export TORCH_CUDA_ARCH_LIST="${CUDA_ARCH_LIST}"
+    fi
+    if [ -n "${CMAKE_CUDA_ARCHITECTURES}" ]; then
+        export CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES}"
+    fi
+    if [ -n "${CUDA_HOME}" ]; then
+        export CUDA_HOME="${CUDA_HOME}"
+        export PATH="${CUDA_HOME}/bin:${PATH}"
+        export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+    fi
+fi
+
+# Build configuration
+export BUILD_TEST=0  # Skip tests (faster build)
+export BUILD_SHARED_LIBS=ON
+export CMAKE_BUILD_TYPE=Release
+
+# Threading configuration (OpenMP for OpenBLAS compatibility)
+export USE_OPENMP=1
+export USE_TBB=0  # Explicitly disable TBB (conflicts with OpenMP)
+
+# Optional features (disable to speed up build)
+export USE_NNPACK=0
+export USE_DISTRIBUTED=0
+export USE_TENSORPIPE=0
+export USE_GLOO=0
+export USE_MPI=0
+
+# CPU Architecture Flags (x86-64-v3 for modern CPUs)
+CPU_ARCH_FLAGS="-march=x86-64-v3 -mtune=generic -O3 -mavx2 -mfma -msse4.2 -funroll-loops"
+export CMAKE_CXX_FLAGS="${CPU_ARCH_FLAGS}"
+export CMAKE_C_FLAGS="${CPU_ARCH_FLAGS}"
+export CXXFLAGS="${CPU_ARCH_FLAGS}"
+export CFLAGS="${CPU_ARCH_FLAGS}"
+
+# C++17 standard (required by ONNX)
+export CMAKE_CXX_STANDARD=17
+export CMAKE_CUDA_STANDARD=17
+
+# CUDA compiler flags based on GCC version
+if [ "${USE_CUDA}" = 1 ]; then
+    if [ "${USE_GCC10}" = true ]; then
+        # GCC 10: Minimal compatibility flags needed
+        export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds"
+        export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        echo "  GCC 10 compatibility flags (minimal workarounds)"
+    elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ]; then
+        # GCC 11: Enhanced workarounds for NVCC + C++17 compatibility
+        export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow -Xcompiler -fpermissive"
+        export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++17"
+        export CMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+        export CXXFLAGS="${CXXFLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
+        echo "  GCC 11 compatibility flags (enhanced workarounds)"
+    else
+        # Other GCC versions: Standard flags
+        export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
+        export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
+        echo "  Standard CUDA flags"
+    fi
+fi
+
+# Set library paths for OpenBLAS
+export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
+export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+# Calculate build jobs (use function from Block 2.5 if available, otherwise default)
+if command -v calculate_build_jobs >/dev/null 2>&1; then
+    MAX_JOBS=$(calculate_build_jobs)
+else
+    # Simple fallback: use 40% of CPU cores
+    CPU_CORES=$(nproc 2>/dev/null || echo "4")
+    MAX_JOBS=$((CPU_CORES * 2 / 5))
+    if [ "${MAX_JOBS}" -lt 1 ]; then
+        MAX_JOBS=1
+    fi
+fi
+export MAX_JOBS="${MAX_JOBS}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${MAX_JOBS}"
+
+echo "  Build configuration:"
+echo "    USE_MKL=0 (OpenBLAS instead)"
+echo "    USE_OPENMP=1 (OpenBLAS compatibility)"
+echo "    USE_TBB=0 (disabled, conflicts with OpenMP)"
+echo "    BLAS=OpenBLAS, LAPACK=OpenBLAS"
+if [ "${USE_CUDA}" = 1 ]; then
+    echo "    USE_CUDA=1, USE_CUDNN=1"
+    echo "    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
+fi
+echo "    MAX_JOBS=${MAX_JOBS}"
+echo "    CMAKE_CXX_STANDARD=17"
+echo "    CPU flags: ${CPU_ARCH_FLAGS}"
+echo ""
+
+#--- Sub-block 13C.6: Download PyTorch source ---
+# Purpose: Download PyTorch source code
+# Dependencies: Block 13C.2 (git available), config.sh (PYTORCH_VERSION)
+# Outputs: PyTorch source code
+# Note: PYTORCH_VERSION is defined in config.sh (default: v2.6.0)
+echo -e "${YELLOW}[13C.6] Downloading PyTorch source...${NC}"
+# Use version from config.sh (with fallback if not set)
+PYTORCH_VERSION="${PYTORCH_VERSION:-v2.6.0}"
+PYTORCH_REPO_URL="https://github.com/pytorch/pytorch.git"
+# Define build directory structure to match test script pattern:
+# BUILD_DIR contains both PyTorch source and wheels directory
+PYTORCH_BUILD_BASE_DIR="/tmp/pytorch_build"
+PYTORCH_SOURCE_DIR="${PYTORCH_BUILD_BASE_DIR}/pytorch"
+PYTORCH_BUILD_DIR="${PYTORCH_SOURCE_DIR}"
+
+# Clean up any previous build (preserve wheels directory if it exists)
+if ! mkdir -p "${PYTORCH_BUILD_BASE_DIR}"; then
+    echo -e "  ${RED}✗ Failed to create build base directory: ${PYTORCH_BUILD_BASE_DIR}${NC}"
+    exit 1
+fi
+rm -rf "${PYTORCH_SOURCE_DIR}"
+if ! mkdir -p "${PYTORCH_SOURCE_DIR}"; then
+    echo -e "  ${RED}✗ Failed to create source directory: ${PYTORCH_SOURCE_DIR}${NC}"
+    exit 1
+fi
+cd "${PYTORCH_SOURCE_DIR}" || exit 1
+
+# Clone PyTorch repository
+echo "  Cloning PyTorch ${PYTORCH_VERSION}..."
+if git clone --depth 1 --branch "${PYTORCH_VERSION}" --recursive "${PYTORCH_REPO_URL}" . 2>&1; then
+    echo -e "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} cloned successfully${NC}"
+elif git clone --depth 50 --recursive "${PYTORCH_REPO_URL}" . 2>&1; then
+    if git checkout "${PYTORCH_VERSION}" 2>&1; then
+        echo -e "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} checked out${NC}"
+        # Update submodules for the specific version
+        git submodule update --init --recursive 2>&1 || echo "  ⚠ Submodule update had issues (may continue)"
+    else
+        echo -e "  ${RED}✗ Failed to checkout PyTorch ${PYTORCH_VERSION}${NC}"
+        exit 1
+    fi
+else
+    echo -e "  ${RED}✗ Failed to clone PyTorch repository${NC}"
+    exit 1
+fi
+
+# Verify setup.py exists
+if [ ! -f "setup.py" ]; then
+    echo -e "  ${RED}✗ setup.py not found${NC}"
+    exit 1
+fi
+
+echo -e "  ${GREEN}✓ PyTorch source ready${NC}"
+echo ""
+
+#--- Sub-block 13C.7: Build PyTorch ---
+# Purpose: Build PyTorch wheel with OpenBLAS and CUDA support
+# Dependencies: Block 13C.5 (build environment configured), Block 13C.6 (source downloaded)
+# Outputs: PyTorch wheel file
+echo -e "${YELLOW}[13C.7] Building PyTorch wheel...${NC}"
+echo "  This may take 1-3 hours depending on CPU and memory..."
+echo "  Build jobs: ${MAX_JOBS}"
+echo ""
+
+# Install PyTorch build dependencies
+echo "  Installing PyTorch build dependencies..."
+pip3 install --no-cache-dir -q setuptools wheel pyyaml typing-extensions filelock || {
+    echo -e "  ${YELLOW}⚠ Some pip dependencies failed (may continue)${NC}"
+}
+
+# Build wheel (no installation yet)
+# Note: python setup.py bdist_wheel --dist-dir places the wheel in the specified directory
+# Use wheels directory in build base directory to match test script pattern:
+# This matches the test script where WHEEL_DIR="${BUILD_DIR}/wheels"
+WHEEL_DIR="${PYTORCH_BUILD_BASE_DIR}/wheels"
+if ! mkdir -p "${WHEEL_DIR}"; then
+    echo -e "  ${RED}✗ Failed to create wheel directory: ${WHEEL_DIR}${NC}"
+    exit 1
+fi
+
+echo "  Starting PyTorch build..."
+echo "  Wheel output directory: ${WHEEL_DIR}"
+if python3 setup.py bdist_wheel --dist-dir "${WHEEL_DIR}" 2>&1 | tee /tmp/pytorch_build.log; then
+    echo ""
+    echo -e "  ${GREEN}✓ PyTorch build successful${NC}"
+    
+    # Verify wheel was generated in expected location
+    if [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
+        WHEEL_COUNT=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | wc -l)
+        echo "  Wheel(s) found in ${WHEEL_DIR}: ${WHEEL_COUNT}"
+    else
+        echo -e "  ${YELLOW}⚠ Warning: Wheel not immediately found in ${WHEEL_DIR}${NC}"
+        echo "  This may be normal - will check again in next step"
+    fi
+else
+    echo ""
+    echo -e "  ${RED}✗ PyTorch build failed${NC}"
+    echo "  Check log: /tmp/pytorch_build.log"
+    echo "  Common issues:"
+    echo "    - Insufficient memory (reduce MAX_JOBS)"
+    echo "    - CUDA version mismatch"
+    echo "    - Missing dependencies"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 13C.7.1: Save wheel to known location ---
+# Purpose: Copy built wheel to a known persistent location for reuse and backup
+# Dependencies: Block 13C.7 (wheel built)
+# Outputs: Wheel file in known location
+echo -e "${YELLOW}[13C.7.1] Saving PyTorch wheel to known location...${NC}"
+
+# Find the built wheel
+WHEEL_FILE=$(find "${WHEEL_DIR}" -name "torch-*.whl" | head -1)
+if [ -z "${WHEEL_FILE}" ] || [ ! -f "${WHEEL_FILE}" ]; then
+    echo -e "  ${RED}✗ PyTorch wheel not found in build directory${NC}"
+    echo "  Searched: ${WHEEL_DIR}"
+    exit 1
+fi
+
+WHEEL_SIZE=$(du -h "${WHEEL_FILE}" | cut -f1)
+WHEEL_NAME=$(basename "${WHEEL_FILE}")
+echo "  Found wheel: ${WHEEL_NAME} (${WHEEL_SIZE})"
+
+# Create known wheel storage location
+PYTORCH_WHEEL_STORAGE="/opt/pytorch_wheels"
+mkdir -p "${PYTORCH_WHEEL_STORAGE}"
+
+# Copy wheel to known location
+WHEEL_STORAGE_PATH="${PYTORCH_WHEEL_STORAGE}/${WHEEL_NAME}"
+echo "  Copying wheel to: ${WHEEL_STORAGE_PATH}"
+if cp "${WHEEL_FILE}" "${WHEEL_STORAGE_PATH}" 2>&1; then
+    echo -e "  ${GREEN}✓ Wheel saved to known location${NC}"
+    echo "  Storage path: ${WHEEL_STORAGE_PATH}"
+    
+    # Verify the copy
+    if [ -f "${WHEEL_STORAGE_PATH}" ]; then
+        STORED_SIZE=$(du -h "${WHEEL_STORAGE_PATH}" | cut -f1)
+        echo "  Stored wheel size: ${STORED_SIZE}"
+        
+        # Verify file integrity (compare sizes)
+        ORIGINAL_SIZE_BYTES=$(stat -c%s "${WHEEL_FILE}" 2>/dev/null || echo "0")
+        STORED_SIZE_BYTES=$(stat -c%s "${WHEEL_STORAGE_PATH}" 2>/dev/null || echo "0")
+        if [ "${ORIGINAL_SIZE_BYTES}" -eq "${STORED_SIZE_BYTES}" ] && [ "${ORIGINAL_SIZE_BYTES}" -gt 0 ]; then
+            echo -e "  ${GREEN}✓ Wheel copy verified (size match)${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Size mismatch - original: ${ORIGINAL_SIZE_BYTES}, stored: ${STORED_SIZE_BYTES}${NC}"
+        fi
+    else
+        echo -e "  ${RED}✗ Wheel copy verification failed${NC}"
+        exit 1
+    fi
+else
+    echo -e "  ${RED}✗ Failed to copy wheel to storage location${NC}"
+    echo "  Will attempt installation from build directory"
+    WHEEL_STORAGE_PATH="${WHEEL_FILE}"
+fi
+echo ""
+
+#--- Sub-block 13C.8: Install PyTorch wheel ---
+# Purpose: Install the built PyTorch wheel from known location
+# Dependencies: Block 13C.7.1 (wheel saved to known location)
+# Outputs: Installed PyTorch
+echo -e "${YELLOW}[13C.8] Installing PyTorch wheel...${NC}"
+
+# Use the wheel from known location (fallback to build directory if needed)
+if [ -f "${WHEEL_STORAGE_PATH}" ]; then
+    INSTALL_WHEEL="${WHEEL_STORAGE_PATH}"
+    echo "  Installing from known location: ${WHEEL_STORAGE_PATH}"
+elif [ -f "${WHEEL_FILE}" ]; then
+    INSTALL_WHEEL="${WHEEL_FILE}"
+    echo "  Installing from build directory: ${WHEEL_FILE}"
+else
+    echo -e "  ${RED}✗ PyTorch wheel not found in any location${NC}"
+    echo "  Expected locations:"
+    echo "    - ${WHEEL_STORAGE_PATH}"
+    echo "    - ${WHEEL_FILE}"
+    exit 1
+fi
+
+# Install wheel
+echo "  Installing: $(basename "${INSTALL_WHEEL}")"
+if pip3 install --no-cache-dir "${INSTALL_WHEEL}" 2>&1; then
+    echo -e "  ${GREEN}✓ PyTorch installed successfully${NC}"
+    echo "  Wheel location: ${WHEEL_STORAGE_PATH}"
+    echo "  Note: Wheel preserved at ${PYTORCH_WHEEL_STORAGE} for potential reuse"
+else
+    echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+    echo "  Wheel is available at: ${WHEEL_STORAGE_PATH}"
+    echo "  You can manually install with: pip3 install ${WHEEL_STORAGE_PATH}"
+    exit 1
+fi
+echo ""
+
+#--- Sub-block 13C.9: Verify PyTorch installation ---
+# Purpose: Verify PyTorch installation and OpenBLAS linking
+# Dependencies: Block 13C.8 (PyTorch installed)
+# Outputs: Verification status
+echo -e "${YELLOW}[13C.9] Verifying PyTorch installation...${NC}"
+
+# Test PyTorch import and basic functionality
+python3 << 'PYTORCH_VERIFY_EOF'
+import sys
+import torch
+
+print(f"  PyTorch version: {torch.__version__}")
+print(f"  Python version: {sys.version}")
+
+# Check CUDA availability
+if torch.cuda.is_available():
+    print(f"  ✓ CUDA available: {torch.version.cuda}")
+    print(f"  ✓ GPU device: {torch.cuda.get_device_name(0)}")
+    print(f"  ✓ CUDA compute capability: {torch.cuda.get_device_capability(0)}")
+else:
+    print("  ⚠ CUDA not available (CPU-only build)")
+
+# Test basic tensor operations
+try:
+    x = torch.randn(3, 3)
+    y = torch.randn(3, 3)
+    z = torch.mm(x, y)
+    print("  ✓ Basic tensor operations working")
+except Exception as e:
+    print(f"  ✗ Tensor operations failed: {e}")
+    sys.exit(1)
+
+# Verify OpenBLAS linking (check if MKL is NOT used)
+if hasattr(torch, 'backends'):
+    if hasattr(torch.backends, 'mkl'):
+        if torch.backends.mkl.is_available():
+            print("  ⚠ WARNING: MKL is available (should use OpenBLAS)")
+        else:
+            print("  ✓ MKL not available (using OpenBLAS as expected)")
+    
+    # Check BLAS backend
+    if hasattr(torch.backends, 'openblas'):
+        print("  ✓ OpenBLAS backend available")
+
+print("  ✓ PyTorch verification complete")
+PYTORCH_VERIFY_EOF
+
+if [ $? -eq 0 ]; then
+    echo -e "  ${GREEN}✓ PyTorch verification successful${NC}"
+else
+    echo -e "  ${RED}✗ PyTorch verification failed${NC}"
+    exit 1
+fi
+
+#--- Sub-block 13C.10: Protect PyTorch from APT overwrites ---
+# Purpose: Prevent APT from installing system PyTorch packages (if any exist)
+# Dependencies: Block 13C.8 (PyTorch installed via pip)
+# Outputs: APT preferences file
+# Note: PyTorch is installed via pip, but we protect against any system packages
+echo -e "${YELLOW}[13C.10] Setting up APT pinning to protect PyTorch...${NC}"
+mkdir -p /etc/apt/preferences.d
+cat > /etc/apt/preferences.d/pytorch-protect <<'EOF'
+# Prevent APT from installing system PyTorch packages (if any exist)
+# Our custom-compiled PyTorch should be used instead (installed via pip)
+# This is a safety measure - PyTorch is typically not available via APT on Ubuntu
+Package: python3-torch python3-torchvision python3-torchaudio
+Pin: release *
+Pin-Priority: -1
+EOF
+
+echo -e "  ${GREEN}✓ APT pinning configured for PyTorch${NC}"
+echo "  Note: PyTorch is installed via pip, this is a safety measure"
+echo ""
+
+# Clean up build directory (wheel is saved to known location)
+cd / || true
+echo "  Cleaning up build directory..."
+# Clean up source directory, but preserve wheels directory (matches test script pattern)
+# Wheel has been copied to known storage location, but wheels dir kept for reference
+if [ -n "${PYTORCH_SOURCE_DIR:-}" ]; then
+    rm -rf "${PYTORCH_SOURCE_DIR}"
+fi
+rm -f /tmp/pytorch_build.log 2>/dev/null || true
+if [ -n "${WHEEL_STORAGE_PATH:-}" ] && [ -f "${WHEEL_STORAGE_PATH}" ]; then
+    echo "  Note: PyTorch wheel preserved at ${WHEEL_STORAGE_PATH}"
+    if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
+        echo "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+    fi
+else
+    if [ -n "${PYTORCH_WHEEL_STORAGE:-}" ]; then
+        echo "  Note: PyTorch wheel should be at ${PYTORCH_WHEEL_STORAGE}/"
+    fi
+    if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
+        echo "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+    fi
+fi
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}✓ PyTorch compilation and installation complete!${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "Summary:"
+echo "  - PyTorch ${PYTORCH_VERSION} compiled with OpenBLAS"
+if [ "${USE_CUDA}" = 1 ]; then
+    echo "  - CUDA ${CUDA_VERSION} support enabled"
+    echo "  - Compute architectures: ${CUDA_ARCH_LIST}"
+fi
+if [ "${USE_GCC10}" = true ]; then
+    echo "  - Compiled with GCC 10 (recommended for CUDA 12.6)"
+else
+    echo "  - Compiled with GCC ${GCC_VERSION:-default}"
+fi
+echo "  - OpenBLAS: ${OPENBLAS_LIB}"
+echo "  - Threading: OpenMP (USE_TBB=0)"
+echo "  - APT pinning: Configured (protects from system package overwrites)"
+if [ -n "${PYTORCH_SOURCE_DIR:-}" ] && [ -n "${WHEEL_DIR:-}" ]; then
+    echo "  - Build directory structure:"
+    echo "    * Source: ${PYTORCH_SOURCE_DIR}"
+    echo "    * Wheel output: ${WHEEL_DIR}"
+fi
+if [ -n "${WHEEL_STORAGE_PATH:-}" ] && [ -f "${WHEEL_STORAGE_PATH}" ]; then
+    echo "  - Wheel location: ${WHEEL_STORAGE_PATH}"
+    if [ -n "${PYTORCH_WHEEL_STORAGE:-}" ]; then
+        echo "  - Wheel preserved for reuse at: ${PYTORCH_WHEEL_STORAGE}"
+    fi
+    if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
+        echo "  - Wheel also available in build directory: ${WHEEL_DIR}"
+    fi
+elif [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
+    WHEEL_FILE=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1)
+    if [ -n "${WHEEL_FILE}" ]; then
+        echo "  - Wheel location: ${WHEEL_FILE}"
+        echo "  - Wheel directory: ${WHEEL_DIR}"
+    fi
+fi
+echo ""
 
 #--- Sub-block 13A.8: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
