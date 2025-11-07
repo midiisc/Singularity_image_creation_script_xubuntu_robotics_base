@@ -62,7 +62,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             # List all log files sorted by modification time (newest first)
             # Keep only N most recent files, remove the rest
             # Use ls -t for sorting by modification time (works on all systems)
-            local keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
+            keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
             ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*.log 2>/dev/null | grep -v "_errors.log$" | \
                 tail -n +$((keep_count + 1)) | \
                 while read -r old_log; do
@@ -75,7 +75,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         
         # Clean up error logs
         if [ "${EXISTING_ERROR_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
-            local keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
+            keep_count="${BUILD_LOG_KEEP_COUNT:-2}"
             ls -t "${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}"_*_errors.log 2>/dev/null | \
                 tail -n +$((keep_count + 1)) | \
                 while read -r old_error_log; do
@@ -366,6 +366,16 @@ calculate_build_jobs() {
     local mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
     local cpu_cores=$(nproc)
     
+    # Validate numeric values
+    if ! [ "${mem_gb:-0}" -ge 0 ] 2>/dev/null; then
+        echo "  ⚠ Warning: Invalid memory value '${mem_gb}', defaulting to 4GB" >&2
+        mem_gb=4
+    fi
+    if ! [ "${cpu_cores:-0}" -gt 0 ] 2>/dev/null; then
+        echo "  ⚠ Warning: Invalid CPU core count '${cpu_cores}', defaulting to 1" >&2
+        cpu_cores=1
+    fi
+    
     # Calculate jobs based on CPU (use half cores to prevent overload)
     local jobs_by_cpu=$((cpu_cores / 2))
     
@@ -387,8 +397,13 @@ calculate_build_jobs() {
     
     # Allow override via environment variable (for testing/debugging)
     if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        jobs="${BUILD_JOBS_OVERRIDE}"
-        echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
+        # Validate override is numeric and positive
+        if [ "${BUILD_JOBS_OVERRIDE}" -gt 0 ] 2>/dev/null; then
+            jobs="${BUILD_JOBS_OVERRIDE}"
+            echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
+        else
+            echo "  ⚠ Warning: Invalid BUILD_JOBS_OVERRIDE='${BUILD_JOBS_OVERRIDE}', ignoring" >&2
+        fi
     fi
     
     echo "${jobs}"
@@ -426,18 +441,18 @@ test_mirror() {
     CURL_EXIT_CODE=$?
 
     # If large file fails, try Release file as fallback
-    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
+    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
       CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
         CURL_EXIT_CODE=$?
       # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
-      if [[ $CURL_EXIT_CODE -eq 0 ]] && [[ -n "$CURL_OUTPUT" ]] && [[ "$CURL_OUTPUT" != "0.000000" ]]; then
+      if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "$CURL_OUTPUT" ]] && [[ "$CURL_OUTPUT" != "0.000000" ]]; then
         CURL_OUTPUT=$(printf "%.3f" "$(echo "$CURL_OUTPUT 10" | awk '{print $1 * $2}' 2>/dev/null || echo "$CURL_OUTPUT")")
       fi
     fi
     set -e
 
     # Write results (flock doesn't work reliably in xargs subshells, using simple append)
-    if [[ $CURL_EXIT_CODE -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
+    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "$CURL_OUTPUT" ]] || [[ "$CURL_OUTPUT" == "0.000000" ]]; then
       echo "999.9 ${URL}" >> "$PROBE_RESULTS"
     else
       echo "${CURL_OUTPUT} ${URL}" >> "$PROBE_RESULTS"
@@ -2071,7 +2086,7 @@ if is_install_command "$@"; then
         sed -E "s/^'([^']+)'.*$/\1/" | \
         sed "s/ //g" | \
         grep -E "^https?://.*\.deb$" | sort -u > "$URI_FILE" 2>/dev/null && [ -s "$URI_FILE" ]; then
-        echo "[apt-aria] URI collection successful ($(< "$URI_FILE" wc -l) packages)"
+        echo "[apt-aria] URI collection successful ($(wc -l < "$URI_FILE") packages)"
     else
         # No URIs found, but not an error - likely already cached or installed
         echo "[apt-aria] No URIs to download (packages may be cached or already installed)"
@@ -2083,7 +2098,7 @@ if is_install_command "$@"; then
     cat "$URI_FILE" || echo "[apt-aria] URI file is empty or unreadable"
 
     if [ -s "$URI_FILE" ]; then
-    echo "[apt-aria] Downloading $(< "$URI_FILE" wc -l) packages via aria2c..."
+    echo "[apt-aria] Downloading $(wc -l < "$URI_FILE") packages via aria2c..."
       echo "[apt-aria] Cache directory: ${CACHE}"
       echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
 
@@ -2102,6 +2117,7 @@ if is_install_command "$@"; then
       rm -f "$URI_FILE"
     else
       echo "[apt-aria] No URIs to download"
+      rm -f "$URI_FILE"
     fi
 
     # --- PROTECT CACHE ---
@@ -7986,7 +8002,7 @@ echo "Strategy 1: ninja install-pip-package (official recommended method)..."
 # Clear any previous log
 > /tmp/open3d_python_install.log
 ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log
-NINJA_EXIT=${PIPESTATUS[0]}
+NINJA_EXIT="${PIPESTATUS[0]}"
 if [ "${NINJA_EXIT}" -eq 0 ]; then
     # Give pip a moment to finalize installation
     sleep 1
@@ -8017,7 +8033,7 @@ fi
 # Wheel location varies: build/lib/, build/dist/, or pip cache
 # NOTE: When BUILD_JUPYTER_EXTENSION=ON, the Jupyter extension is included in the wheel
 #       This wheel contains both the Python module and Jupyter extension together.
-if [ "$PYTHON_INSTALLED" = false ]; then
+if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     echo ""
     echo "Strategy 2: Building Python wheel with ninja python-package..."
     # Ensure jupyter_packaging is available for wheel build (required for Jupyter extension)
@@ -8028,7 +8044,7 @@ if [ "$PYTHON_INSTALLED" = false ]; then
         }
     fi
     ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log
-    NINJA_PYTHON_EXIT=${PIPESTATUS[0]}
+    NINJA_PYTHON_EXIT="${PIPESTATUS[0]}"
     if [ "${NINJA_PYTHON_EXIT}" -eq 0 ]; then
             WHEEL_FILE=""
             
@@ -8273,9 +8289,9 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                 
                 echo "  Installing wheel without dependencies (preserving compiled libs)..."
                 # Install WITHOUT dependencies to avoid overwriting compiled libraries
-                if pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
-                    # Check exit status - tee doesn't preserve it
-                    if [ ${PIPESTATUS[0]} -eq 0 ]; then
+                pip3 install --no-deps "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
+                PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
+                if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
                         echo "  ✓ Wheel installation completed (pip exit code: 0)"
                         sleep 1  # Allow installation to finalize
                         if verify_open3d_installation; then
@@ -8292,10 +8308,11 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                             echo "⚠ Wheel installed but verification failed"
                         fi
                     else
-                        echo "⚠ pip3 install failed (exit code: ${PIPESTATUS[0]})"
+                        PIP_EXIT_CODE="${PIPESTATUS[0]}"
+                        echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
                     fi
                 else
-                    PIP_EXIT=${PIPESTATUS[0]:-$?}
+                    PIP_EXIT="${PIPESTATUS[0]:-$?}"
                     echo "⚠ pip3 install failed (exit code: ${PIP_EXIT})"
                 fi
             else
@@ -8315,14 +8332,14 @@ if [ "$PYTHON_INSTALLED" = false ]; then
         fi
     else
         # Capture exit status when if condition fails
-        NINJA_EXIT=${PIPESTATUS[0]:-$?}
+        NINJA_EXIT="${PIPESTATUS[0]:-$?}"
         echo "⚠ ninja python-package failed (exit code: ${NINJA_EXIT}) - check logs"
     fi  # Close: if ninja python-package
 fi
 
 # Strategy 3: Install directly from Python package directory WITHOUT dependencies
 # Fallback: Direct installation from build output directory
-if [ "$PYTHON_INSTALLED" = false ]; then
+if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     echo ""
     echo "Strategy 3: Direct installation from build package directory..."
     # Check multiple possible package locations
@@ -8333,9 +8350,9 @@ if [ "$PYTHON_INSTALLED" = false ]; then
         if [ -d "${PKG_DIR}" ] && { [ -f "${PKG_DIR}/setup.py" ] || [ -f "${PKG_DIR}/pyproject.toml" ]; }; then
             echo "  Found package directory: ${PKG_DIR}"
             # Install WITHOUT dependencies to protect compiled libraries
-            if pip3 install --no-deps "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log; then
-                # Check exit status - tee doesn't preserve it
-                if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            pip3 install --no-deps "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log
+            PIP_INSTALL_DIR_EXIT="${PIPESTATUS[0]}"
+            if [ "${PIP_INSTALL_DIR_EXIT}" -eq 0 ]; then
                     sleep 1
                     if verify_open3d_installation; then
                         echo "✓ Python module installed directly (no-deps, using compiled libs)"
@@ -8343,16 +8360,17 @@ if [ "$PYTHON_INSTALLED" = false ]; then
                         break
                     fi
                 else
-                    echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIPESTATUS[0]})"
+                    PIP_EXIT_CODE_DIR="${PIPESTATUS[0]}"
+                    echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
                 fi
             else
-                PIP_EXIT=${PIPESTATUS[0]:-$?}
+                PIP_EXIT="${PIPESTATUS[0]:-$?}"
                 echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT})"
             fi
         fi
     done
     
-    if [ "$PYTHON_INSTALLED" = false ]; then
+    if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
         echo "⚠ Direct package installation directories not found or installation failed"
         echo "  Checked locations:"
         echo "    - ${OPEN3D_BUILD_DIR}/lib/python_package"
@@ -8445,7 +8463,7 @@ if verify_open3d_installation; then
     echo ""
     echo "✓ Open3D Python module installation verified successfully"
     
-elif [ "$PYTHON_INSTALLED" = false ]; then
+elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     # Installation failed - provide comprehensive diagnostics
     echo "✗ Open3D Python module installation verification FAILED"
     echo ""
@@ -8708,7 +8726,7 @@ DISPLAY_NUM=${1:-:1}
 # Extract numeric part from display number (handle both :1 and 1 formats)
 DISPLAY_NUM_NUMERIC="${DISPLAY_NUM#:}"
 # Validate and default to 1 if empty or non-numeric
-if [ -z "${DISPLAY_NUM_NUMERIC}" ] || ! [ "${DISPLAY_NUM_NUMERIC}" -eq "${DISPLAY_NUM_NUMERIC}" ] 2>/dev/null; then
+if [ -z "${DISPLAY_NUM_NUMERIC}" ] || ! [ "${DISPLAY_NUM_NUMERIC}" -ge 0 ] 2>/dev/null; then
     DISPLAY_NUM_NUMERIC=1
 fi
 PORT=$((5900 + DISPLAY_NUM_NUMERIC))
@@ -8784,7 +8802,7 @@ cat > /usr/local/bin/vnc_clipboard_sync.sh << 'CLIPBD'
 #!/usr/bin/env bash
 # Synchronize clipboard between VNC and host
 
-if [ -z "$DISPLAY" ]; then
+if [ -z "${DISPLAY:-}" ]; then
     echo "ERROR: DISPLAY not set"
     exit 1
 fi
@@ -8943,27 +8961,32 @@ echo "✓ GPG key imported successfully."
 # We verify package integrity via dpkg instead (safer for build environment)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
+# Enable nullglob to handle case where no .deb files match the pattern
+shopt -s nullglob
 for deb_file in "${CONTAINER_DEB_CACHE}"/turbovnc_*.deb "${CONTAINER_DEB_CACHE}"/virtualgl_*.deb; do
-    if [ ! -f "$deb_file" ]; then
-    echo "[warn] Package not found in cache, skipping: $(basename "$deb_file")"
+    # deb_file is guaranteed to exist when nullglob is enabled (loop only runs if files match)
+    # This check is defensive programming for edge cases
+    if [ ! -f "${deb_file}" ]; then
+        echo "[warn] Package not found in cache, skipping: $(basename "${deb_file}")"
         continue
     fi
 
-  echo "Verifying package structure for $(basename "$deb_file")..."
-    if dpkg-deb -I "$deb_file" >/dev/null 2>&1; then
-    echo "✓ Package structure valid."
+    echo "Verifying package structure for $(basename "${deb_file}")..."
+    if dpkg-deb -I "${deb_file}" >/dev/null 2>&1; then
+        echo "✓ Package structure valid."
     else
-    echo "✗ ERROR: Package corrupted: $(basename "$deb_file")"
+        echo "✗ ERROR: Package corrupted: $(basename "${deb_file}")"
         exit 1
     fi
 
-  echo "Installing $(basename "$deb_file")..."
+    echo "Installing $(basename "${deb_file}")..."
     # Use dpkg directly to avoid downgrade issues
-    if ! dpkg -i "$deb_file" 2>&1 | tee /tmp/dpkg_install.log; then
+    if ! dpkg -i "${deb_file}" 2>&1 | tee /tmp/dpkg_install.log; then
         echo "⚠ dpkg failed, attempting with apt-get to resolve dependencies..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y -f
     fi
 done
+shopt -u nullglob
 # End package installation loop (for loop self-contained)
 
 #--- Sub-block 15.10: Create TurboVNC symlinks ---
@@ -9209,8 +9232,8 @@ vglrun --version 2>&1 | head -1
 
 echo ""
 echo "3. OpenGL Information (via VirtualGL):"
-if [ -n "${DISPLAY}" ]; then
-  echo "  Display: $DISPLAY"
+if [ -n "${DISPLAY:-}" ]; then
+  echo "  Display: ${DISPLAY}"
   vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)" | head -3
 else
 
@@ -9288,7 +9311,7 @@ echo "VirtualGL GPU Benchmark"
 echo "=========================================="
 echo ""
 
-if [ -z "${DISPLAY}" ]; then
+if [ -z "${DISPLAY:-}" ]; then
   echo "ERROR: DISPLAY not set"
   echo "Start VNC first: start_vnc_xfce.sh"
   exit 1
@@ -9392,7 +9415,7 @@ echo ""
 
 # OpenGL info (software rendering)
 echo "OpenGL (Software Rendering):"
-if [ -n "${DISPLAY}" ] && command -v glxinfo >/dev/null 2>&1; then
+if [ -n "${DISPLAY:-}" ] && command -v glxinfo >/dev/null 2>&1; then
   glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'
 else
   echo "  Cannot query (DISPLAY not set or glxinfo not found)"
@@ -9401,7 +9424,7 @@ echo ""
 
 # OpenGL info (with VirtualGL)
 echo "OpenGL (VirtualGL/GPU Rendering):"
-if [ -n "${DISPLAY}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
+if [ -n "${DISPLAY:-}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
   vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'
 else
   echo "  Cannot query (VirtualGL not available)"
@@ -9469,7 +9492,7 @@ fi
 # Add VirtualGL to PATH
 
 # Check DISPLAY
-if [ -z "${DISPLAY}" ]; then
+if [ -z "${DISPLAY:-}" ]; then
   echo "WARNING: DISPLAY not set, using :1"
   export DISPLAY=:1
 fi
@@ -9780,7 +9803,7 @@ echo "TurboVNC Performance Tuner"
 echo "=========================================="
 echo ""
 
-if [ -z "$DISPLAY" ]; then
+if [ -z "${DISPLAY:-}" ]; then
     echo "ERROR: Must be run from within VNC session"
     echo "Start VNC first, then run this from terminal inside VNC"
     exit 1
@@ -9925,7 +9948,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
   #--- Sub-block 16.4: Miniforge installation retry loop ---
   # Critical: Retry installation with cache cleanup between attempts
-  while [ $retry_count -lt $max_retries ]; do
+  while [ "${retry_count}" -lt "${max_retries}" ]; do
     echo "Miniforge installation attempt $((retry_count + 1))/${max_retries}..."
 
     # Clear any existing conda package cache to force fresh downloads
@@ -9970,21 +9993,23 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       corrupted_packages=()
 
       # Check all conda packages for integrity
-      find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -o -name "*.tar.bz2" | while read -r pkg_file; do
-        if ! verify_package_integrity "$pkg_file"; then
-          pkg_name=$(basename "$pkg_file")
-          echo "  Δ Found corrupted package: $pkg_name"
-          corrupted_packages+=("$pkg_name")
+      # Fix: Use proper find syntax with parentheses for OR condition
+      # Fix: Use process substitution instead of pipe to avoid subshell (preserves array)
+      while IFS= read -r pkg_file; do
+        if [ -n "${pkg_file}" ] && ! verify_package_integrity "${pkg_file}"; then
+          pkg_name=$(basename "${pkg_file}")
+          echo "  Δ Found corrupted package: ${pkg_name}"
+          corrupted_packages+=("${pkg_name}")
         fi
-      done
+      done < <(find "${CONTAINER_CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null)
 
       # Replace corrupted packages with fresh downloads
       if [ ${#corrupted_packages[@]} -gt 0 ]; then
         echo "  Replacing ${#corrupted_packages[@]} corrupted packages..."
         for pkg_name in "${corrupted_packages[@]}"; do
-          if acquire_package_lock "$pkg_name"; then
-            atomic_package_replace "$pkg_name"
-            release_package_lock "$pkg_name"
+          if acquire_package_lock "${pkg_name}"; then
+            atomic_package_replace "${pkg_name}"
+            release_package_lock "${pkg_name}"
           fi
         done
       fi
@@ -10029,7 +10054,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       else
         echo "[warn] Miniforge installation may have failed - conda binary not found"
         ((retry_count++))
-        if [ $retry_count -lt $max_retries ]; then
+        if [ "${retry_count}" -lt "${max_retries}" ]; then
           echo "Retrying Miniforge installation..."
           rm -rf "${MINIFORGE_HOME}"
         fi
@@ -10046,26 +10071,29 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
         if [ -n "${corrupted_pkgs}" ]; then
           echo "→ Removing corrupted packages:"
-          for pkg in ${corrupted_pkgs}; do
-            echo "  - ${pkg}"
-            rm -f "${CONTAINER_CONDA_CACHE}/${pkg}" 2>/dev/null || true
-            rm -f "${MINIFORGE_HOME}/pkgs/${pkg}" 2>/dev/null || true
-            rm -f "/root/.cache/conda/pkgs/${pkg}" 2>/dev/null || true
-          done
+          # Use array to properly handle package names with spaces
+          while IFS= read -r pkg; do
+            if [ -n "${pkg}" ]; then
+              echo "  - ${pkg}"
+              rm -f "${CONTAINER_CONDA_CACHE}/${pkg}" 2>/dev/null || true
+              rm -f "${MINIFORGE_HOME}/pkgs/${pkg}" 2>/dev/null || true
+              rm -f "/root/.cache/conda/pkgs/${pkg}" 2>/dev/null || true
+            fi
+          done <<< "${corrupted_pkgs}"
         fi
 
-          # Clear any remaining corrupted packages using integrity check
+        # Clear any remaining corrupted packages using integrity check
         echo "→ Performing integrity check on remaining packages..."
-          if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
-            find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -type f -exec sh -c '
-              for pkg; do
-                if ! unzip -t "$pkg" >/dev/null 2>&1; then
+        if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
+          find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -type f -exec sh -c '
+            for pkg; do
+              if ! unzip -t "$pkg" >/dev/null 2>&1; then
                 echo "Removing corrupted: $(basename "$pkg")"
-                  rm -f "$pkg"
-                fi
-              done
+                rm -f "$pkg"
+              fi
+            done
           ' sh {} +
-          fi
+        fi
         fi
       fi
 
@@ -10080,47 +10108,50 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
       ((retry_count++))
-      if [ $retry_count -lt $max_retries ]; then
+      if [ "${retry_count}" -lt "${max_retries}" ]; then
         echo "Retrying Miniforge installation..."
-        rm -rf ${MINIFORGE_HOME}
+        rm -rf "${MINIFORGE_HOME}"
     fi
   done
-  if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
+  if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
     # Clean up any corrupted conda packages that may have been downloaded during installation
     echo "Cleaning up any corrupted conda packages from installation..."
     if [ -d "${MINIFORGE_HOME}/pkgs" ]; then
       corrupted_count=0
-      for pkg_file in ${MINIFORGE_HOME}/pkgs/*.conda ${MINIFORGE_HOME}/pkgs/*.tar.bz2; do
-        if [ -f "$pkg_file" ]; then
+      # Enable nullglob to handle case where no packages match the pattern
+      shopt -s nullglob
+      for pkg_file in "${MINIFORGE_HOME}/pkgs"/*.conda "${MINIFORGE_HOME}/pkgs"/*.tar.bz2; do
+        if [ -f "${pkg_file}" ]; then
           # Check if file is corrupted by testing its integrity
           # First check file type, then test format-specific integrity
           is_corrupted=false
 
           # Use file command to detect file type
-          if ! file "$pkg_file" | grep -q "archive\|compressed\|data"; then
+          if ! file "${pkg_file}" | grep -q "archive\|compressed\|data"; then
             is_corrupted=true
           else
             # Additional format-specific integrity checks
-            if [[ "$pkg_file" == *.conda ]]; then
-              if ! unzip -t "$pkg_file" >/dev/null 2>&1; then
+            if [[ "${pkg_file}" == *.conda ]]; then
+              if ! unzip -t "${pkg_file}" >/dev/null 2>&1; then
                 is_corrupted=true
               fi
-            elif [[ "$pkg_file" == *.tar.bz2 ]]; then
-              if ! bzip2 -t "$pkg_file" >/dev/null 2>&1; then
+            elif [[ "${pkg_file}" == *.tar.bz2 ]]; then
+              if ! bzip2 -t "${pkg_file}" >/dev/null 2>&1; then
                 is_corrupted=true
               fi
             fi
           fi
 
-          if [ "$is_corrupted" = true ]; then
-            echo "  Δ Removing corrupted conda package: $(basename "$pkg_file")"
-            rm -f "$pkg_file"
+          if [ "${is_corrupted}" = "true" ]; then
+            echo "  Δ Removing corrupted conda package: $(basename "${pkg_file}")"
+            rm -f "${pkg_file}"
             ((corrupted_count++))
           fi
         fi
       done
-      if [ $corrupted_count -gt 0 ]; then
-        echo "✓ Removed $corrupted_count corrupted conda packages from installation"
+      shopt -u nullglob  # Restore default behavior
+      if [ "${corrupted_count}" -gt 0 ]; then
+        echo "✓ Removed ${corrupted_count} corrupted conda packages from installation"
       fi
     fi
 
@@ -10150,29 +10181,29 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     
     # Verify certificate file exists
-    if [ -f "$SSL_CERT_FILE" ]; then
-      echo "✓ SSL certificates configured: $SSL_CERT_FILE"
+    if [ -f "${SSL_CERT_FILE}" ]; then
+      echo "✓ SSL certificates configured: ${SSL_CERT_FILE}"
     else
       echo "[warn] SSL certificate file not found, conda operations may fail"
     fi
     
-    if ${MINIFORGE_HOME}/bin/conda --version >/dev/null 2>&1; then
+    if "${MINIFORGE_HOME}/bin/conda" --version >/dev/null 2>&1; then
       echo "✓ Conda binary is working correctly"
 
       # Update conda and related components to latest versions
       echo "Updating conda and related components to latest versions..."
       # Safely get version with fallback
-      CONDA_VERSION_BEFORE=$(${MINIFORGE_HOME}/bin/conda --version 2>/dev/null | head -1 || echo "unknown")
+      CONDA_VERSION_BEFORE=$("${MINIFORGE_HOME}/bin/conda" --version 2>/dev/null | head -1 || echo "unknown")
       echo "  Conda version before update: ${CONDA_VERSION_BEFORE}"
       
       # Update conda itself and core components (conda, conda-build, conda-env, conda-libmamba-solver, etc.)
       # Note: conda-libmamba-solver enables faster conda solving even when mamba is not available
       # Use explicit channel priority and ensure clean update
-      if ${MINIFORGE_HOME}/bin/conda update -y -n base -c conda-forge \
+      if "${MINIFORGE_HOME}/bin/conda" update -y -n base -c conda-forge \
           --override-channels \
           conda conda-build conda-env conda-libmamba-solver 2>&1 | tee /tmp/conda_update.log; then
         printf '\033[0m\n' # Reset terminal state after conda update
-        CONDA_VERSION_AFTER=$(${MINIFORGE_HOME}/bin/conda --version 2>/dev/null | head -1 || echo "unknown")
+        CONDA_VERSION_AFTER=$("${MINIFORGE_HOME}/bin/conda" --version 2>/dev/null | head -1 || echo "unknown")
         echo "✓ Conda and core components updated successfully"
         echo "  Conda version after update: ${CONDA_VERSION_AFTER}"
       else
@@ -10180,7 +10211,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         tail -20 /tmp/conda_update.log 2>/dev/null || true
         echo "[warn] Continuing with existing conda version (non-critical)"
         # Try a simpler update without override-channels
-        if ${MINIFORGE_HOME}/bin/conda update -y -n base conda >/tmp/conda_update_simple.log 2>&1; then
+        if "${MINIFORGE_HOME}/bin/conda" update -y -n base conda >/tmp/conda_update_simple.log 2>&1; then
           echo "✓ Conda updated successfully (simplified update)"
         else
           echo "[warn] Simplified conda update also failed - using existing version"
@@ -10194,25 +10225,25 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       MAMBA_AVAILABLE=0
       
       # Try mamba installation (corrupted packages already cleaned in Xsetup)
-      if ${MINIFORGE_HOME}/bin/conda install -y -c conda-forge mamba; then
+      if "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge mamba; then
         printf '\033[0m\n' # Reset terminal state after conda install
         echo "✓ Mamba installed successfully"
         
         # Verify mamba installation
-        if ${MINIFORGE_HOME}/bin/mamba --version >/dev/null 2>&1; then
+        if "${MINIFORGE_HOME}/bin/mamba" --version >/dev/null 2>&1; then
           echo "✓ Mamba binary is working correctly"
           
           # Update mamba to latest version (mamba includes its own solver)
           echo "Updating mamba to latest version..."
           # Safely get version with fallback
-          MAMBA_VERSION_BEFORE=$(${MINIFORGE_HOME}/bin/mamba --version 2>/dev/null | head -1 || echo "unknown")
+          MAMBA_VERSION_BEFORE=$("${MINIFORGE_HOME}/bin/mamba" --version 2>/dev/null | head -1 || echo "unknown")
           echo "  Mamba version before update: ${MAMBA_VERSION_BEFORE}"
           
           # Update mamba itself (includes libmamba solver)
           # Redirect both stdout and stderr to suppress output but preserve error detection
-          if ${MINIFORGE_HOME}/bin/mamba update -y -n base -c conda-forge mamba >/dev/null 2>&1; then
+          if "${MINIFORGE_HOME}/bin/mamba" update -y -n base -c conda-forge mamba >/dev/null 2>&1; then
             printf '\033[0m\n' # Reset terminal state after mamba update
-            MAMBA_VERSION_AFTER=$(${MINIFORGE_HOME}/bin/mamba --version 2>/dev/null | head -1 || echo "unknown")
+            MAMBA_VERSION_AFTER=$("${MINIFORGE_HOME}/bin/mamba" --version 2>/dev/null | head -1 || echo "unknown")
             echo "✓ Mamba updated successfully"
             echo "  Mamba version after update: ${MAMBA_VERSION_AFTER}"
           else
@@ -10228,7 +10259,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       fi
       
       # Set preferred solver (mamba if available, otherwise conda)
-      if [ $MAMBA_AVAILABLE -eq 1 ]; then
+      if [ "${MAMBA_AVAILABLE:-0}" -eq 1 ]; then
         echo "✓ Using MAMBA as primary solver (faster)"
         export PREFERRED_SOLVER="${MINIFORGE_HOME}/bin/mamba"
       else
@@ -10239,19 +10270,19 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       # Install modern environment management tools (try mamba first, fallback to conda)
       echo "Installing modern package management tools..."
       
-      if [ $MAMBA_AVAILABLE -eq 1 ]; then
+      if [ "${MAMBA_AVAILABLE:-0}" -eq 1 ]; then
         echo "  → Trying with mamba..."
-        if ${MINIFORGE_HOME}/bin/mamba install -y -c conda-forge \
+        if "${MINIFORGE_HOME}/bin/mamba" install -y -c conda-forge \
           conda-lock conda-tree anaconda-project; then
           echo "✓ Modern tools installed with mamba"
         else
           echo "[warn] Mamba failed, trying with conda..."
-          ${MINIFORGE_HOME}/bin/conda install -y -c conda-forge \
+          "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
             conda-lock conda-tree anaconda-project \
             || echo "[warn] Some optional tools failed (non-critical)"
         fi
       else
-        ${MINIFORGE_HOME}/bin/conda install -y -c conda-forge \
+        "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
           conda-lock conda-tree anaconda-project \
           || echo "[warn] Some optional tools failed (non-critical)"
       fi
@@ -10372,7 +10403,7 @@ echo "✓ Conda hooks configured for Drake compatibility"
 # Outputs: Python packages, conda environments
 echo "==> Micromamba (from embedded binary)"
 if [ -s "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
-    install -m 0755 ${CONTAINER_BIN_CACHE}/micromamba-linux-64 /opt/micromamba
+    install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba
     ln -sf /opt/micromamba /usr/local/bin/micromamba
 
     #--- Sub-block 16.11: Test micromamba binary with retry ---
@@ -10382,24 +10413,24 @@ if [ -s "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
         max_retries=3
         retry_count=0
 
-        while [ $retry_count -lt $max_retries ]; do
+        while [ "${retry_count}" -lt "${max_retries}" ]; do
             if /opt/micromamba --version >/dev/null 2>&1; then
                 echo "✓ Micromamba binary is working"
                 break
             else
         echo "Δ Micromamba binary test failed (attempt $((retry_count + 1))/${max_retries})"
                 ((retry_count++))
-                if [ $retry_count -lt $max_retries ]; then
+                if [ "${retry_count}" -lt "${max_retries}" ]; then
           echo "  Removing corrupted binary and reinstalling..."
           rm -f /usr/local/bin/micromamba /opt/micromamba
-                    install -m 0755 ${CONTAINER_BIN_CACHE}/micromamba-linux-64 /opt/micromamba
+                    install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba
                 fi
             fi
         done
         # End micromamba retry loop (while loop self-contained)
 
-        if [ $retry_count -ge $max_retries ]; then
-      echo "✗ Micromamba binary failed after $max_retries attempts - removing corrupted binary"
+        if [ "${retry_count}" -ge "${max_retries}" ]; then
+      echo "✗ Micromamba binary failed after ${max_retries} attempts - removing corrupted binary"
             rm -f /opt/micromamba /usr/local/bin/micromamba
     fi
     # End retry check (if self-contained)
@@ -10451,7 +10482,7 @@ fi
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 echo "Starting Conda base env setup"
-if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
+if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # Conda channel configuration is already set in .condarc.pre (strict conda-forge only)
   echo "Installing full Jupyter environment + additional libraries using mamba solver..."
 
@@ -10462,14 +10493,14 @@ if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
     # Setup staging area for robust package handling
     setup_conda_staging_area
     # Remove cache metadata that causes "modified by another program" warnings
-    rm -rf ${CONTAINER_CONDA_CACHE}/cache 2>/dev/null || true
+    rm -rf "${CONTAINER_CONDA_CACHE}/cache" 2>/dev/null || true
 
 #--- Sub-block: Desktop application installation ---
 # Critical: CAD and productivity software setup
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
     # Remove any partially extracted packages
-    find ${CONTAINER_CONDA_CACHE} -maxdepth 1 -type d -name "*-*" -exec rm -rf {} + 2>/dev/null || true
+    find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type d -name "*-*" -exec rm -rf {} + 2>/dev/null || true
     # Force filesystem sync to ensure all operations are flushed
     sync
     echo "✓ Enhanced conda cache management completed"
@@ -10498,7 +10529,7 @@ if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
   echo "    Full environments will be created in writable overlay"
   
   # Determine which solver to use (prefer mamba, fallback to conda)
-  if [ -x ${MINIFORGE_HOME}/bin/mamba ]; then
+  if [ -x "${MINIFORGE_HOME}/bin/mamba" ]; then
     echo "Installing minimal base packages with mamba (preferred)..."
     INSTALLER="${MINIFORGE_HOME}/bin/mamba"
     SOLVER_NAME="mamba"
@@ -10509,14 +10540,14 @@ if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
   fi
   
   # Install essential base packages for all environments
-  if ${INSTALLER} install -y -c conda-forge \
+  if "${INSTALLER}" install -y -c conda-forge \
       pip setuptools wheel ipykernel jupyter_client; then
     echo "✓ Minimal conda base configured with kernel support (using ${SOLVER_NAME})"
   else
     # If preferred solver fails, try the other one
     if [ "${SOLVER_NAME}" = "mamba" ]; then
       echo "[warn] Mamba failed, retrying with conda..."
-      ${MINIFORGE_HOME}/bin/conda install -y -c conda-forge \
+      "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
         pip setuptools wheel ipykernel jupyter_client \
         || exit 1
       echo "✓ Minimal conda base configured with kernel support (using conda fallback)"
@@ -10547,12 +10578,12 @@ if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
 # Outputs: Python packages, conda environments
   #--- Sub-block 16.18: Register Jupyter kernel ---
   # Purpose: Make conda base environment available in Jupyter
-  ${MINIFORGE_HOME}/bin/python -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" || true
+  "${MINIFORGE_HOME}/bin/python" -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" || true
 
   #--- Sub-block 16.19: Install additional pip packages ---
   # Purpose: Robotics and simulation packages not in conda
   # Note: openai-gym is deprecated, using gymnasium instead (already installed via conda)
-  ${MINIFORGE_HOME}/bin/pip install \
+  "${MINIFORGE_HOME}/bin/pip" install \
     robosuite \
     pyrender \
     trimesh \
@@ -10560,18 +10591,18 @@ if [ -x ${MINIFORGE_HOME}/bin/conda ]; then
 
   #--- Sub-block 16.20: Verify package installations ---
   # Purpose: Confirm critical packages installed correctly
-echo "Verifying critical package installations..."
-if [ -x ${MINIFORGE_HOME}/bin/jupyter ]; then
-  echo "✓ Jupyter installed successfully"
-else
-  echo "[warn] Jupyter installation may have failed"
-fi
-if [ -x ${MINIFORGE_HOME}/bin/python ]; then
-  echo "✓ Python installed successfully"
-else
-  echo "[warn] Python installation may have failed"
-fi
-# End verification (if-else blocks self-contained)
+  echo "Verifying critical package installations..."
+  if [ -x "${MINIFORGE_HOME}/bin/jupyter" ]; then
+    echo "✓ Jupyter installed successfully"
+  else
+    echo "[warn] Jupyter installation may have failed"
+  fi
+  if [ -x "${MINIFORGE_HOME}/bin/python" ]; then
+    echo "✓ Python installed successfully"
+  else
+    echo "[warn] Python installation may have failed"
+  fi
+  # End verification (if-else blocks self-contained)
 fi
 # End conda base environment setup (if block self-contained)
 debug_glibc "After conda environment setup"
@@ -10688,11 +10719,17 @@ apt-get -y --no-install-recommends install \
 echo "==> Installing FreeCAD version ${FREECAD_VERSION} via AppImage..." # Version from config.sh
 FREECAD_FILENAME="FreeCAD_${FREECAD_VERSION}-conda-Linux-x86_64-py311.AppImage"
 # Download, place in a system-wide location, and make executable
-if wget "https://github.com/FreeCAD/FreeCAD/releases/download/${FREECAD_VERSION}/${FREECAD_FILENAME}" -O /usr/local/bin/freecad.AppImage; then
-    chmod +x /usr/local/bin/freecad.AppImage
-    # Create a symlink for easy terminal access (run with 'freecad')
-    ln -s /usr/local/bin/freecad.AppImage /usr/local/bin/freecad
-    echo "✓ FreeCAD installed successfully"
+if wget "https://github.com/FreeCAD/FreeCAD/releases/download/${FREECAD_VERSION}/${FREECAD_FILENAME}" -O /usr/local/bin/freecad.AppImage 2>/dev/null; then
+    # Verify download succeeded and file is not empty
+    if [ -s /usr/local/bin/freecad.AppImage ]; then
+      chmod +x /usr/local/bin/freecad.AppImage
+      # Create a symlink for easy terminal access (run with 'freecad')
+      ln -sf /usr/local/bin/freecad.AppImage /usr/local/bin/freecad
+      echo "✓ FreeCAD installed successfully"
+    else
+      echo "⚠ FreeCAD download failed - file is empty (non-critical, continuing)"
+      rm -f /usr/local/bin/freecad.AppImage
+    fi
 else
     echo "⚠ Failed to download FreeCAD (non-critical, continuing)"
     rm -f /usr/local/bin/freecad.AppImage
@@ -10718,10 +10755,21 @@ echo "==> Installing OrcaSlicer version 2.3.1 via AppImage..."
 ORCA_TAG="v2.3.1"
 ORCA_FILENAME="OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.1.AppImage"
 # Download, place in a system-wide location, and make executable
-wget "https://github.com/SoftFever/OrcaSlicer/releases/download/${ORCA_TAG}/${ORCA_FILENAME}" -O /usr/local/bin/orcaslicer.AppImage
-chmod +x /usr/local/bin/orcaslicer.AppImage
-# Create symlink for easy terminal access (run with 'orcaslicer')
-ln -s /usr/local/bin/orcaslicer.AppImage /usr/local/bin/orcaslicer
+if wget "https://github.com/SoftFever/OrcaSlicer/releases/download/${ORCA_TAG}/${ORCA_FILENAME}" -O /usr/local/bin/orcaslicer.AppImage 2>/dev/null; then
+    # Verify download succeeded and file is not empty
+    if [ -s /usr/local/bin/orcaslicer.AppImage ]; then
+      chmod +x /usr/local/bin/orcaslicer.AppImage
+      # Create symlink for easy terminal access (run with 'orcaslicer')
+      ln -sf /usr/local/bin/orcaslicer.AppImage /usr/local/bin/orcaslicer
+      echo "✓ OrcaSlicer installed successfully"
+    else
+      echo "⚠ OrcaSlicer download failed - file is empty (non-critical, continuing)"
+      rm -f /usr/local/bin/orcaslicer.AppImage
+    fi
+else
+    echo "⚠ Failed to download OrcaSlicer (non-critical, continuing)"
+    rm -f /usr/local/bin/orcaslicer.AppImage
+fi
 
 # Create a desktop entry for the XFCE menu
 cat > /usr/share/applications/orcaslicer.desktop << 'EOF'
@@ -12269,7 +12317,7 @@ echo ""
 # Purpose: Continuing implementation
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
-if [ -n "${WSPID:-}" ] && kill -0 $WSPID 2>/dev/null; then
+if [ -n "${WSPID:-}" ] && kill -0 "${WSPID}" 2>/dev/null; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "METHOD 2: Web Browser (No Install Needed)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -17,10 +17,10 @@
 #   - Threading libraries: libomp-dev, libtbb-dev
 #
 # Resource Limiting Features (ALL DYNAMICALLY CALCULATED FROM HARDWARE):
-#   - CPU limiting: 25% of detected cores (adaptive based on system)
-#   - Memory limiting: Adaptive per job (4-8GB based on available memory)
+#   - CPU limiting: 40% of detected cores (balanced for shared cloud systems)
+#   - Memory limiting: Adaptive per job (3-4GB based on available memory, optimized for PyTorch)
 #   - I/O limiting: ionice idle class (prevents disk I/O saturation - CRITICAL)
-#   - Disk-aware: Different limits for SSD vs HDD (SSD: up to 6 jobs, HDD: up to 3 jobs)
+#   - Disk-aware: Different limits for SSD vs HDD (SSD: up to 8 jobs, HDD: up to 4 jobs)
 #   - CPU priority: nice 19 (lowest priority)
 #   - Comprehensive resource monitoring: Memory, swap, CPU load, disk I/O
 #   - Auto-stop: Automatically stops build if resources go critical (prevents system freeze)
@@ -191,6 +191,12 @@ while [[ $# -gt 0 ]]; do
             echo "  --reconfigure|--rebuild|--clean"
             echo "                         Force clean rebuild: remove CMake cache and build artifacts"
             echo "                         This will reconfigure and recompile from scratch"
+            echo ""
+            echo "Resume Behavior:"
+            echo "  By default, the script automatically detects and resumes interrupted builds"
+            echo "  Just run the script again without flags - it will continue from where it stopped"
+            echo "  Use --reconfigure/--clean/--rebuild only if you want to start completely fresh"
+            echo ""
             echo "  --help, -h             Show this help message"
             echo ""
             echo "Examples:"
@@ -403,14 +409,15 @@ detect_system_resources() {
     export SYS_DISK_TYPE="${disk_type}"
     
     # Calculate memory per job based on available memory
-    # Use 25% of available memory per job, minimum 4GB, maximum 8GB
+    # Optimized for PyTorch: 3-4GB per job (PyTorch compiles are less memory-intensive per job)
+    # This allows more parallel jobs while staying safe
     local mem_per_job_gb
     if [ "${mem_available_gb}" -lt 16 ]; then
-        mem_per_job_gb=4  # Conservative for low-memory systems
+        mem_per_job_gb=3  # Optimized for low-memory systems (allows more jobs)
     elif [ "${mem_available_gb}" -lt 32 ]; then
-        mem_per_job_gb=6  # Moderate for medium-memory systems
+        mem_per_job_gb=3  # Optimized for medium-memory systems
     else
-        mem_per_job_gb=8  # More per job for high-memory systems
+        mem_per_job_gb=4  # Optimized for high-memory systems (allows maximum parallelism)
     fi
     export SYS_MEM_PER_JOB_GB="${mem_per_job_gb}"
 }
@@ -425,17 +432,19 @@ calculate_build_jobs() {
     local disk_type="${SYS_DISK_TYPE:-unknown}"
     
     # Calculate jobs based on CPU
-    # Use 20% of cores (more conservative) to prevent overload and system freezes
+    # Use 40% of cores (balanced for shared systems - leaves 60% for other jobs)
+    # This is faster than conservative 20% but considerate of other users on shared systems
     local jobs_by_cpu
-    jobs_by_cpu=$((cpu_cores / 5))
+    jobs_by_cpu=$((cpu_cores * 2 / 5))  # 40% of cores
     if [ "${jobs_by_cpu:-0}" -lt 1 ]; then
         jobs_by_cpu=1
     fi
     
     # Calculate jobs based on available memory (use detected mem_per_job)
-    # Reserve 30% of available memory for system (more conservative for safety)
+    # Reserve 25% of available memory for system and other jobs (use 75% for build)
+    # More considerate for shared cloud systems
     local mem_for_build
-    mem_for_build=$((mem_available_gb * 70 / 100))
+    mem_for_build=$((mem_available_gb * 75 / 100))
     local jobs_by_mem
     # Safety check: ensure mem_per_job_gb is at least 1 to prevent division by zero
     if [ "${mem_per_job_gb:-0}" -lt 1 ]; then
@@ -447,25 +456,25 @@ calculate_build_jobs() {
     fi
     
     # Calculate jobs based on disk I/O capabilities
-    # HDDs can handle fewer parallel jobs than SSDs
+    # Balanced limits for shared systems: SSDs can handle more, HDDs need caution
     local jobs_by_io
     if [ "${disk_type}" = "SSD" ]; then
-        # SSDs can handle more parallel I/O
-        jobs_by_io=$((cpu_cores / 3))  # More aggressive for SSDs
-        if [ "${jobs_by_io:-0}" -gt 6 ]; then
-            jobs_by_io=6  # Cap at 6 for SSDs
+        # SSDs: use 40% of cores, cap at 8 (balanced for shared systems)
+        jobs_by_io=$((cpu_cores * 2 / 5))  # 40% of cores for SSDs
+        if [ "${jobs_by_io:-0}" -gt 8 ]; then
+            jobs_by_io=8  # Cap at 8 for SSDs (balanced for shared systems)
         fi
     elif [ "${disk_type}" = "HDD" ]; then
-        # HDDs need more conservative limits
-        jobs_by_io=$((cpu_cores / 5))  # More conservative for HDDs
-        if [ "${jobs_by_io:-0}" -gt 3 ]; then
-            jobs_by_io=3  # Cap at 3 for HDDs
+        # HDDs: use 30% of cores, cap at 4 (considerate for shared systems)
+        jobs_by_io=$((cpu_cores * 3 / 10))  # 30% of cores for HDDs
+        if [ "${jobs_by_io:-0}" -gt 4 ]; then
+            jobs_by_io=4  # Cap at 4 for HDDs (balanced for shared systems)
         fi
     else
-        # Unknown disk type - be conservative
-        jobs_by_io=$((cpu_cores / 4))
-        if [ "${jobs_by_io:-0}" -gt 4 ]; then
-            jobs_by_io=4
+        # Unknown disk type - use moderate settings
+        jobs_by_io=$((cpu_cores * 2 / 5))  # 40% of cores
+        if [ "${jobs_by_io:-0}" -gt 6 ]; then
+            jobs_by_io=6  # Cap at 6 for unknown disk types
         fi
     fi
     if [ "${jobs_by_io:-0}" -lt 1 ]; then
@@ -668,12 +677,12 @@ echo "  Swap: ${SYS_SWAP_TOTAL_GB}GB total, ${SYS_SWAP_USED_GB}GB used"
 echo "  Disk: ${SYS_DISK_AVAILABLE_GB}GB available (Type: ${SYS_DISK_TYPE})"
 echo ""
 
-echo -e "${YELLOW}Dynamic Resource Limits (Calculated from Hardware - Conservative Settings):${NC}"
-echo "  Build Jobs: ${CALCULATED_JOBS} (CPU: ${SYS_CPU_CORES}/5=20%, Memory: ${SYS_MEM_AVAILABLE_GB}GB/${SYS_MEM_PER_JOB_GB}GB per job, I/O: ${SYS_DISK_TYPE} optimized)"
-echo "  Memory per job: ${SYS_MEM_PER_JOB_GB}GB (adaptive based on available memory)"
-echo "  Memory budget: ~$((CALCULATED_JOBS * SYS_MEM_PER_JOB_GB))GB total (30% reserved for system safety)"
+echo -e "${YELLOW}Dynamic Resource Limits (Calculated from Hardware - Balanced for Shared Systems):${NC}"
+echo "  Build Jobs: ${CALCULATED_JOBS} (CPU: ${SYS_CPU_CORES}*2/5=40%, Memory: ${SYS_MEM_AVAILABLE_GB}GB*75%/${SYS_MEM_PER_JOB_GB}GB per job, I/O: ${SYS_DISK_TYPE} balanced)"
+echo "  Memory per job: ${SYS_MEM_PER_JOB_GB}GB (optimized for PyTorch compilation)"
+echo "  Memory budget: ~$((CALCULATED_JOBS * SYS_MEM_PER_JOB_GB))GB total (25% reserved for system and other jobs)"
 if [ "${SYS_CPU_CORES}" -gt 0 ]; then
-    echo "  CPU usage: ~${CALCULATED_JOBS}/${SYS_CPU_CORES} cores ($((CALCULATED_JOBS * 100 / SYS_CPU_CORES))%) - Conservative 20% limit"
+    echo "  CPU usage: ~${CALCULATED_JOBS}/${SYS_CPU_CORES} cores ($((CALCULATED_JOBS * 100 / SYS_CPU_CORES))%) - Balanced 40% limit (leaves 60% for other jobs)"
 else
     echo "  CPU usage: ~${CALCULATED_JOBS} jobs"
 fi
@@ -2440,49 +2449,53 @@ export BUILD_SHARED_LIBS=ON
 export CMAKE_BUILD_TYPE=Release
 
 #===============================================================================
-# CUDA Compiler Compatibility Workarounds - Hybrid C++ Standard Approach
+# CUDA Compiler Compatibility Workarounds - C++17 Required for ONNX
 #===============================================================================
-# Strategy: Default to C++14 for maximum compatibility, upgrade to C++17 for GCC 12+
-# This avoids GCC 11 + NVCC + C++17 parameter pack expansion errors while still
-# benefiting from C++17 features on newer compilers where it's safe.
+# Strategy: Use C++17 by default (required by ONNX for std::string_view and std::filesystem)
+# Apply enhanced workarounds for GCC 11 + NVCC + C++17 compatibility issues.
 #
-# Known issue: GCC 11 + NVCC + C++17 causes "parameter packs not expanded with '...'"
+# Known issue: GCC 11 + NVCC + C++17 can cause "parameter packs not expanded with '...'"
 # error in std_function.h. This is a known bug: https://github.com/pytorch/pytorch/issues/51026
+# We work around this with -fpermissive and enhanced compiler flags.
 #
-# Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D).
-# This is used as a safety net in addition to C++14/C++17 standard selection, which fixes the root cause.
+# CRITICAL: ONNX requires C++17 features (std::string_view, std::filesystem), so we must
+# use C++17 even with GCC 11. The -fpermissive flag helps with template instantiation
+# robustness (consistent with COLMAP, OpenCV, Open3D).
 
 GCC_VERSION=""
 GCC_MAJOR=""
 if command -v gcc &>/dev/null; then
-    GCC_VERSION=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # Extract GCC version safely (handles errors gracefully)
+    GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
     if [ -n "${GCC_VERSION}" ]; then
-        GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1)
-        echo "  Detected GCC version: ${GCC_VERSION}"
+        # Extract major version and validate it's numeric
+        GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1 || echo "")
+        # Validate GCC_MAJOR is numeric before using in arithmetic comparisons
+        if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null; then
+            echo "  Detected GCC version: ${GCC_VERSION}"
+        else
+            # Invalid or non-numeric major version - reset to empty
+            GCC_MAJOR=""
+            echo "  Warning: Could not extract valid GCC major version from: ${GCC_VERSION:-unknown}"
+        fi
     fi
 fi
 
-# Hybrid approach: Default to C++14, upgrade to C++17 for GCC 12+
+# C++17 is required for ONNX (std::string_view, std::filesystem)
+# Use C++17 for all builds, with enhanced workarounds for GCC 11
 if [ "${USE_CUDA:-0}" = "1" ]; then
-    # Default: Use C++14 for maximum compatibility (works with all GCC versions)
-    export CMAKE_CXX_STANDARD=14
-    export CMAKE_CUDA_STANDARD=14
-    
-    # Upgrade to C++17 if GCC 12+ is detected (GCC 12+ works fine with NVCC + C++17)
-    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge "12" ]; then
-        export CMAKE_CXX_STANDARD=17
-        export CMAKE_CUDA_STANDARD=17
-        echo -e "  ${GREEN}✓ GCC 12+ detected - using C++17 (compatible with NVCC)${NC}"
-    else
-        echo -e "  ${GREEN}✓ Using C++14 for maximum compatibility (works with all GCC versions)${NC}"
-    fi
+    # Default: Use C++17 (required by ONNX)
+    export CMAKE_CXX_STANDARD=17
+    export CMAKE_CUDA_STANDARD=17
+    echo -e "  ${GREEN}✓ Using C++17 (required by ONNX for std::string_view and std::filesystem)${NC}"
     
     # Set CUDA compiler flags based on GCC version
-    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ]; then
-        # GCC 11: More aggressive workarounds needed
-        echo -e "  ${YELLOW}⚠ GCC 11 detected - applying enhanced compatibility flags${NC}"
-        # Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D)
-        # This is a safety net in addition to C++14, which fixes the root cause
+    # Validate GCC_MAJOR is numeric before arithmetic comparison
+    if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null && [ "${GCC_MAJOR}" = "11" ]; then
+        # GCC 11: Enhanced workarounds for C++17 + NVCC compatibility
+        echo -e "  ${YELLOW}⚠ GCC 11 detected - applying enhanced C++17 compatibility flags${NC}"
+        # Note: -fpermissive is critical for GCC 11 + NVCC + C++17 template instantiation issues
+        # This works around the "parameter packs not expanded" error in std_function.h
         if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
             export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow -Xcompiler -fpermissive"
         else
@@ -2490,21 +2503,23 @@ if [ "${USE_CUDA:-0}" = "1" ]; then
         fi
         
         if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
-            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++14"
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++17"
         else
-            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++14"
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++17"
         fi
         
         # Set host compiler explicitly to help NVCC
         if [ -z "${CUDA_HOST_COMPILER:-}" ] && command -v g++ &>/dev/null; then
-            export CUDA_HOST_COMPILER="$(command -v g++)"
-            echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
+            CUDA_HOST_COMPILER_PATH="$(command -v g++)"
+            if [ -n "${CUDA_HOST_COMPILER_PATH}" ] && [ -x "${CUDA_HOST_COMPILER_PATH}" ]; then
+                export CUDA_HOST_COMPILER="${CUDA_HOST_COMPILER_PATH}"
+                echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
+            fi
         fi
         
-        echo -e "  ${GREEN}✓ GCC 11 compatibility flags applied (C++14 mode)${NC}"
-    elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge "12" ]; then
-        # GCC 12+: Basic flags + fpermissive for template robustness (consistent with other libraries)
-        # C++17 is safe with GCC 12+, but -fpermissive adds robustness for complex templates
+        echo -e "  ${GREEN}✓ GCC 11 compatibility flags applied (C++17 mode with enhanced workarounds)${NC}"
+    elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -eq "${GCC_MAJOR}" ] 2>/dev/null && [ "${GCC_MAJOR}" -ge "12" ]; then
+        # GCC 12+: C++17 works well, basic flags + fpermissive for template robustness
         if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
             export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
         else
@@ -2519,7 +2534,7 @@ if [ "${USE_CUDA:-0}" = "1" ]; then
         
         echo -e "  ${GREEN}✓ GCC 12+ standard flags applied (C++17 mode)${NC}"
     else
-        # Unknown or older GCC: Use C++14 with basic flags + fpermissive for template robustness
+        # Unknown or older GCC: Use C++17 with basic flags + fpermissive for template robustness
         if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
             export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
         else
@@ -2527,20 +2542,25 @@ if [ "${USE_CUDA:-0}" = "1" ]; then
         fi
         
         if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
-            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++14"
+            export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
         else
-            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -std=c++14"
+            export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
         fi
         
-        echo -e "  ${GREEN}✓ Using C++14 with standard CUDA flags${NC}"
+        echo -e "  ${GREEN}✓ Using C++17 with standard CUDA flags${NC}"
     fi
     
-    # Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D)
-    # This is used as a safety net in addition to the C++14/C++17 standard selection, which fixes the root cause.
+    # Note: -fpermissive is added for template instantiation robustness (consistent with COLMAP, OpenCV, Open3D).
+    # This is critical for GCC 11 + NVCC + C++17 compatibility and provides robustness for complex templates.
     # The combination provides:
-    #   1. Primary fix: C++14 (GCC 11) or C++17 (GCC 12+) avoids the problematic code path
-    #   2. Safety net: -fpermissive provides robustness for complex template instantiations
+    #   1. C++17 is required by ONNX (std::string_view, std::filesystem)
+    #   2. -fpermissive works around GCC 11 + NVCC + C++17 parameter pack expansion issues
+    #   3. Enhanced flags for GCC 11 provide additional compatibility
     # This approach is consistent with other template-heavy libraries in the codebase that compile successfully.
+else
+    # Non-CUDA build: Still need C++17 for ONNX
+    export CMAKE_CXX_STANDARD=17
+    echo -e "  ${GREEN}✓ Using C++17 (required by ONNX for std::string_view and std::filesystem)${NC}"
 fi
 
 # Optional: Disable features we don't need (faster build)
@@ -2914,7 +2934,7 @@ clean_build_artifacts() {
     local build_dir="${BUILD_DIR}"
     local cleaned_items=0
     
-    echo -e "${YELLOW}⚠ --reconfigure flag detected - cleaning build artifacts...${NC}"
+    echo -e "${YELLOW}⚠ --reconfigure flag detected - cleaning ALL build artifacts...${NC}"
     
     # Find PyTorch source directory
     local pytorch_source=""
@@ -2924,21 +2944,54 @@ clean_build_artifacts() {
         pytorch_source=$(find "${build_dir}" -maxdepth 1 -type d -name "pytorch-*" 2>/dev/null | head -1)
     fi
     
-    # Remove CMake cache and build artifacts
+    # Remove ONLY build artifacts from PyTorch source directory
+    # PRESERVED: Git repository (.git/), source code, third-party dependencies, downloaded assets
     if [ -n "${pytorch_source}" ] && [ -d "${pytorch_source}" ]; then
-        # Remove CMake cache files
+        echo "  Cleaning build artifacts from: ${pytorch_source}"
+        echo "    ℹ Preserving: Git repository, source code, and downloaded dependencies"
+        
+        # Remove entire build directory (CMake + Python build artifacts)
+        # This is safe - build/ is regenerated during compilation
         if [ -d "${pytorch_source}/build" ]; then
-            echo "  Removing CMake cache and build artifacts from ${pytorch_source}/build..."
-            rm -rf "${pytorch_source}/build"/* 2>/dev/null || true
-            find "${pytorch_source}/build" -name "CMakeCache.txt" -delete 2>/dev/null || true
-            find "${pytorch_source}/build" -name "CMakeFiles" -type d -exec rm -rf {} + 2>/dev/null || true
+            echo "    Removing build/ directory (CMake + Python artifacts)..."
+            rm -rf "${pytorch_source}/build" 2>/dev/null || true
             cleaned_items=$((cleaned_items + 1))
         fi
         
-        # Remove any other CMake artifacts in source directory
-        find "${pytorch_source}" -maxdepth 2 -name "CMakeCache.txt" -delete 2>/dev/null || true
-        find "${pytorch_source}" -maxdepth 2 -type d -name "CMakeFiles" -exec rm -rf {} + 2>/dev/null || true
-        find "${pytorch_source}" -maxdepth 2 -name "*.cmake" -type f -delete 2>/dev/null || true
+        # Remove Python dist/ directory (wheels built by setup.py)
+        # This is safe - dist/ is regenerated during wheel building
+        if [ -d "${pytorch_source}/dist" ]; then
+            echo "    Removing Python dist/ directory..."
+            rm -rf "${pytorch_source}/dist" 2>/dev/null || true
+            cleaned_items=$((cleaned_items + 1))
+        fi
+        
+        # Remove Python egg-info and similar directories (build metadata only)
+        # These are regenerated during setup.py execution
+        find "${pytorch_source}" -maxdepth 2 -type d -name "*.egg-info" -exec rm -rf {} + 2>/dev/null || true
+        find "${pytorch_source}" -maxdepth 2 -type d -name "*.egg" -exec rm -rf {} + 2>/dev/null || true
+        
+        # Remove Python cache files (regenerated automatically)
+        find "${pytorch_source}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+        find "${pytorch_source}" -type f -name "*.pyc" -delete 2>/dev/null || true
+        find "${pytorch_source}" -type f -name "*.pyo" -delete 2>/dev/null || true
+        
+        # Remove CMake cache files (regenerated during CMake configuration)
+        # Exclude .git directory to preserve git repository
+        find "${pytorch_source}" -name "CMakeCache.txt" ! -path "*/.git/*" -delete 2>/dev/null || true
+        find "${pytorch_source}" -type d -name "CMakeFiles" ! -path "*/.git/*" -exec rm -rf {} + 2>/dev/null || true
+        find "${pytorch_source}" -name "*.cmake" -type f ! -path "*/.git/*" ! -path "*/third_party/*" -delete 2>/dev/null || true
+        
+        # Remove any .setuptools-cache or other Python build caches
+        if [ -d "${pytorch_source}/.setuptools-cache" ]; then
+            rm -rf "${pytorch_source}/.setuptools-cache" 2>/dev/null || true
+        fi
+        
+        # Remove any ninja build files (regenerated during build)
+        find "${pytorch_source}" -name "build.ninja" ! -path "*/.git/*" -delete 2>/dev/null || true
+        find "${pytorch_source}" -name "rules.ninja" ! -path "*/.git/*" -delete 2>/dev/null || true
+        
+        echo "    ✓ Build artifacts cleaned (source code and git repository preserved)"
     fi
     
     # Remove wheel files
@@ -2952,17 +3005,22 @@ clean_build_artifacts() {
         fi
     fi
     
-    # Remove build state file
+    # Remove build state file (CRITICAL: must be removed to prevent resume)
     if [ -f "${BUILD_STATE_FILE}" ]; then
         echo "  Removing build state file..."
         rm -f "${BUILD_STATE_FILE}" 2>/dev/null || true
         cleaned_items=$((cleaned_items + 1))
     fi
     
-    # Remove any temporary build files
+    # Remove any temporary build files and state indicators
     find "${build_dir}" -name ".build_*" -type f -delete 2>/dev/null || true
     find "${build_dir}" -name ".log_*" -type f -delete 2>/dev/null || true
     find "${build_dir}" -name ".pipeline_*" -type f -delete 2>/dev/null || true
+    find "${build_dir}" -name ".build_stop_flag" -type f -delete 2>/dev/null || true
+    
+    # Force reset: After cleaning, the build state should be "not_started"
+    # This ensures a fresh build will start even if check_build_state finds source files
+    echo "  Build state reset to 'not_started' - will start fresh build"
     
     if [ "${cleaned_items}" -gt 0 ]; then
         echo -e "  ${GREEN}✓ Cleaned ${cleaned_items} item(s) - ready for fresh rebuild${NC}"
@@ -2978,8 +3036,10 @@ BUILD_STATE=$(check_build_state)
 # Handle --reconfigure flag
 if [ "${FORCE_RECONFIGURE}" = "true" ]; then
     clean_build_artifacts
-    # Re-check build state after cleanup
-    BUILD_STATE=$(check_build_state)
+    # Force build state to "not_started" after cleaning (ignore any remaining artifacts)
+    # This ensures a fresh build starts even if source directory still exists
+    BUILD_STATE="not_started"
+    echo -e "  ${GREEN}✓ Build state forced to 'not_started' - fresh build will start${NC}"
 fi
 
 echo -e "${GREEN}✓ Build directory ready: ${BUILD_DIR}${NC}"
@@ -3349,18 +3409,32 @@ else
     
     cd "${PYTORCH_SOURCE_DIR}" || exit 1
     
-    # Check if this is a resume (partial build exists)
-    # Re-check build state now that PYTORCH_SOURCE_DIR is set
-    BUILD_STATE=$(check_build_state)
+    # If --reconfigure/--clean/--rebuild was used, force fresh build (don't re-check state)
+    # This ensures we don't resume even if some artifacts weren't fully cleaned
     if [ "${FORCE_RECONFIGURE}" = "true" ]; then
+        # Double-check: Ensure build directory is completely removed
+        if [ -d "${PYTORCH_SOURCE_DIR}/build" ]; then
+            echo -e "  ${YELLOW}⚠ Force removing build/ directory (--reconfigure mode)...${NC}"
+            rm -rf "${PYTORCH_SOURCE_DIR}/build" 2>/dev/null || true
+            # Also remove any CMake cache files that might remain
+            find "${PYTORCH_SOURCE_DIR}" -maxdepth 3 -name "CMakeCache.txt" -delete 2>/dev/null || true
+            find "${PYTORCH_SOURCE_DIR}" -maxdepth 3 -type d -name "CMakeFiles" -exec rm -rf {} + 2>/dev/null || true
+        fi
+        # Force build state to not_started (ignore any remaining artifacts)
+        BUILD_STATE="not_started"
         echo -e "  ${GREEN}✓ Clean rebuild mode - starting fresh build from scratch${NC}"
         echo "  All CMake cache and build artifacts have been removed"
-    elif [ "${BUILD_STATE}" = "in_progress" ]; then
-        echo -e "  ${YELLOW}⚠ Resuming from previous build (incremental build)${NC}"
-        echo "  PyTorch setup.py will automatically continue from where it left off"
-        echo "  Build artifacts preserved for incremental compilation"
+        echo "  Build state forced to 'not_started' - will not resume"
     else
-        echo "  Starting fresh build..."
+        # Only check build state if NOT using --reconfigure
+        BUILD_STATE=$(check_build_state)
+        if [ "${BUILD_STATE}" = "in_progress" ]; then
+            echo -e "  ${YELLOW}⚠ Resuming from previous build (incremental build)${NC}"
+            echo "  PyTorch setup.py will automatically continue from where it left off"
+            echo "  Build artifacts preserved for incremental compilation"
+        else
+            echo "  Starting fresh build..."
+        fi
     fi
     
     # Build wheel only (no installation)
