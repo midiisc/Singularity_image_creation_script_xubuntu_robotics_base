@@ -3500,13 +3500,13 @@ PHASE1_ALL_SUCCESS=true
 install_and_verify_group() {
   local group_name="$1"
   shift
-  local packages_to_install="$@"
+  local packages_to_install=("$@")
   local group_success=true
 
   echo -e "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
   # Run the install command, redirecting verbose output on success to a log
-  # Note: packages_to_install is intentionally unquoted to allow word splitting for apt-get
-  if ! apt-get install -y --no-install-recommends ${packages_to_install} > "/tmp/apt_install_${group_name}.log" 2>&1; then
+  # Note: packages_to_install is an array, use [@] to expand properly
+  if ! apt-get install -y --no-install-recommends "${packages_to_install[@]}" > "/tmp/apt_install_${group_name}.log" 2>&1; then
     echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: 'apt-get install' command returned an error. See details below:${NC}"
     cat "/tmp/apt_install_${group_name}.log"
     PHASE1_ALL_SUCCESS=false
@@ -4258,7 +4258,14 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   cd /tmp/g2o || { echo "ERROR: Failed to access g2o directory"; exit 1; }
   # Remove existing build directory if it exists (critical for Singularity rebuilds)
   rm -rf build
-  mkdir -p build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
+  if ! mkdir -p build; then
+    echo "ERROR: Failed to create build dir"
+    exit 1
+  fi
+  if ! cd build; then
+    echo "ERROR: Failed to access build dir"
+    exit 1
+  fi
 
   #--- Sub-block 8.7: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
@@ -4354,7 +4361,14 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   cd /tmp/gtsam || { echo "ERROR: Failed to access gtsam directory"; exit 1; }
   # Remove existing build directory if it exists (critical for Singularity rebuilds)
   rm -rf build
-  mkdir -p build && cd build || { echo "ERROR: Failed to create/access build dir"; exit 1; }
+  if ! mkdir -p build; then
+    echo "ERROR: Failed to create build dir"
+    exit 1
+  fi
+  if ! cd build; then
+    echo "ERROR: Failed to access build dir"
+    exit 1
+  fi
 
   #--- Sub-block 8.11: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
@@ -9485,7 +9499,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log
     NINJA_PYTHON_EXIT="${PIPESTATUS[0]}"
     if [ "${NINJA_PYTHON_EXIT}" -eq 0 ]; then
-            WHEEL_FILE=""
+        WHEEL_FILE=""
             
             # Comprehensive wheel search - check multiple locations:
             # 1. build/lib/ (most common per Open3D CMake setup.py)
@@ -9674,7 +9688,6 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                     echo "  ⚠ Module not importable yet - will try Strategy 3"
                 fi
             fi
-        fi
     else
         # Capture exit status when if condition fails
         NINJA_EXIT="${PIPESTATUS[0]:-$?}"
