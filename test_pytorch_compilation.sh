@@ -1124,7 +1124,7 @@ if [ "${NEED_UPGRADE}" = "true" ]; then
     if [ -n "${pip_flags:-}" ]; then
         # Note: pip_flags is intentionally unquoted to allow multiple flags if needed
         # It's typically a single flag like "--break-system-packages"
-        python3 -m pip install --upgrade --no-cache-dir ${pip_flags} cmake 2>&1 | filter_pip_output || true
+        python3 -m pip install --upgrade --no-cache-dir "${pip_flags}" cmake 2>&1 | filter_pip_output || true
     else
         python3 -m pip install --upgrade --no-cache-dir cmake 2>&1 | filter_pip_output || true
     fi
@@ -1252,7 +1252,7 @@ if [ "${NEED_UPGRADE}" = "true" ]; then
                         echo "  Missing: ${MISSING_BUILD_DEPS}"
                         exit 1
                     else
-                        ${APT_CMD} install -y -qq ${MISSING_BUILD_DEPS} || {
+                        ${APT_CMD} install -y -qq "${MISSING_BUILD_DEPS}" || {
                             echo -e "${RED}✗ ERROR: Failed to install CMake build dependencies${NC}"
                             echo "  Missing: ${MISSING_BUILD_DEPS}"
                             echo "  Please install manually: ${APT_CMD} install -y ${MISSING_BUILD_DEPS}"
@@ -1612,9 +1612,11 @@ else
     fi
 fi
 
-# Verify OpenBLAS installation
+# Verify OpenBLAS installation and check for DYNAMIC_ARCH support
 OPENBLAS_FOUND=false
 OPENBLAS_LIB=""
+OPENBLAS_HAS_DYNAMIC_ARCH=false
+OPENBLAS_NEEDS_RECOMPILE=false
 
 if ldconfig -p 2>/dev/null | grep -q libopenblas; then
     echo -e "${GREEN}✓ OpenBLAS found in system libraries${NC}"
@@ -1630,6 +1632,26 @@ for lib_path in \
         OPENBLAS_LIB="${lib_path}"
         echo -e "${GREEN}✓ Found OpenBLAS: ${OPENBLAS_LIB}${NC}"
         OPENBLAS_FOUND=true
+        
+        # Check if OpenBLAS was compiled with DYNAMIC_ARCH=1
+        # DYNAMIC_ARCH allows OpenBLAS to detect CPU at runtime and use optimal kernels
+        # This is critical for portability across different CPU architectures
+        echo "  Checking if OpenBLAS has DYNAMIC_ARCH support..."
+        if strings "${lib_path}" 2>/dev/null | grep -qi "DYNAMIC_ARCH\|dynamic_arch\|DYNAMICARCH"; then
+            OPENBLAS_HAS_DYNAMIC_ARCH=true
+            echo -e "  ${GREEN}✓ OpenBLAS has DYNAMIC_ARCH support (good for portability)${NC}"
+        else
+            # Check for architecture-specific strings (indicates static architecture)
+            if strings "${lib_path}" 2>/dev/null | grep -qiE "HASWELL|SANDYBRIDGE|NEHALEM|PENRYN|CORE2|ATOM"; then
+                echo -e "  ${YELLOW}⚠ OpenBLAS appears to be compiled for specific CPU architecture${NC}"
+                echo -e "  ${YELLOW}  DYNAMIC_ARCH=1 not detected - will compile from source with DYNAMIC_ARCH=1${NC}"
+                OPENBLAS_NEEDS_RECOMPILE=true
+            else
+                # Can't determine - assume it needs DYNAMIC_ARCH for safety
+                echo -e "  ${YELLOW}⚠ Cannot verify DYNAMIC_ARCH support - will compile from source with DYNAMIC_ARCH=1${NC}"
+                OPENBLAS_NEEDS_RECOMPILE=true
+            fi
+        fi
         break
     fi
 done
@@ -1644,6 +1666,232 @@ if [ -f "/usr/include/x86_64-linux-gnu/cblas.h" ] || [ -f "/usr/include/cblas.h"
     echo -e "${GREEN}✓ OpenBLAS headers found${NC}"
 else
     echo -e "${YELLOW}⚠ OpenBLAS headers not found${NC}"
+fi
+
+# Compile OpenBLAS from source with DYNAMIC_ARCH=1 if needed
+if [ "${OPENBLAS_NEEDS_RECOMPILE}" = true ]; then
+    echo ""
+    echo -e "${BLUE}Compiling OpenBLAS from source with DYNAMIC_ARCH=1 for CPU portability...${NC}"
+    
+    # Check for gfortran (required for OpenBLAS compilation)
+    if ! command -v gfortran >/dev/null 2>&1; then
+        echo "  Installing gfortran (required for OpenBLAS compilation)..."
+        if [ "${EUID:-0}" -eq 0 ]; then
+            apt-get install -y -qq gfortran >/dev/null 2>&1 || {
+                echo -e "  ${YELLOW}⚠ Failed to install gfortran, skipping OpenBLAS compilation${NC}"
+                OPENBLAS_NEEDS_RECOMPILE=false
+            }
+        elif command -v sudo >/dev/null 2>&1; then
+            sudo apt-get install -y -qq gfortran >/dev/null 2>&1 || {
+                echo -e "  ${YELLOW}⚠ Failed to install gfortran, skipping OpenBLAS compilation${NC}"
+                OPENBLAS_NEEDS_RECOMPILE=false
+            }
+        else
+            echo -e "  ${YELLOW}⚠ gfortran not found and no sudo available, skipping OpenBLAS compilation${NC}"
+            OPENBLAS_NEEDS_RECOMPILE=false
+        fi
+    fi
+    
+    if [ "${OPENBLAS_NEEDS_RECOMPILE}" = true ]; then
+        OPENBLAS_SOURCE_DIR="/tmp/openblas_build"
+        OPENBLAS_INSTALL_PREFIX="/usr/local"
+        
+        # Clean up any previous build
+        rm -rf "${OPENBLAS_SOURCE_DIR}"
+        mkdir -p "${OPENBLAS_SOURCE_DIR}"
+    
+    # Download OpenBLAS from official repository (latest stable release)
+    # Latest: v0.3.30 (released Jun 19, 2025) - https://github.com/OpenMathLib/OpenBLAS/releases
+    OPENBLAS_VERSION="v0.3.30"
+    OPENBLAS_REPO_URL="https://github.com/OpenMathLib/OpenBLAS.git"
+    TARBALL_NAME="OpenBLAS-${OPENBLAS_VERSION#v}.tar.gz"
+    TARBALL_URL="https://github.com/OpenMathLib/OpenBLAS/releases/download/${OPENBLAS_VERSION}/${TARBALL_NAME}"
+    
+    echo "  Downloading OpenBLAS ${OPENBLAS_VERSION} from official repository..."
+    cd "${OPENBLAS_SOURCE_DIR}" || exit 1
+    
+    DOWNLOAD_SUCCESS=false
+    
+    # Method 1: Try downloading release tarball (most reliable)
+    if command -v wget >/dev/null 2>&1; then
+        if wget -q --show-progress "${TARBALL_URL}" -O "${TARBALL_NAME}" 2>/dev/null; then
+            if [ -f "${TARBALL_NAME}" ] && [ -s "${TARBALL_NAME}" ]; then
+                if tar -xzf "${TARBALL_NAME}" 2>/dev/null; then
+                    cd "OpenBLAS-${OPENBLAS_VERSION#v}" || exit 1
+                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    DOWNLOAD_SUCCESS=true
+                else
+                    echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                    rm -f "${TARBALL_NAME}"
+                fi
+            fi
+        fi
+    elif command -v curl >/dev/null 2>&1; then
+        if curl -L -f -s "${TARBALL_URL}" -o "${TARBALL_NAME}" 2>/dev/null; then
+            if [ -f "${TARBALL_NAME}" ] && [ -s "${TARBALL_NAME}" ]; then
+                if tar -xzf "${TARBALL_NAME}" 2>/dev/null; then
+                    cd "OpenBLAS-${OPENBLAS_VERSION#v}" || exit 1
+                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    DOWNLOAD_SUCCESS=true
+                else
+                    echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                    rm -f "${TARBALL_NAME}"
+                fi
+            fi
+        fi
+    fi
+    
+    # Method 2: Try git clone if tarball download failed
+    if [ "${DOWNLOAD_SUCCESS}" != "true" ] && command -v git >/dev/null 2>&1; then
+        echo -e "  ${YELLOW}⚠ Tarball download failed, trying git clone...${NC}"
+        # Save current directory before going up
+        CURRENT_DIR="${PWD}"
+        if [ "${CURRENT_DIR}" != "/" ] && [ -d "${CURRENT_DIR}/.." ]; then
+            cd .. || exit 1
+        fi
+        rm -rf "${OPENBLAS_SOURCE_DIR}"
+        mkdir -p "${OPENBLAS_SOURCE_DIR}"
+        cd "${OPENBLAS_SOURCE_DIR}" || exit 1
+        
+        if git clone --depth 1 --branch "${OPENBLAS_VERSION}" "${OPENBLAS_REPO_URL}" . 2>/dev/null; then
+            echo -e "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION}${NC}"
+            DOWNLOAD_SUCCESS=true
+        elif git clone --depth 50 "${OPENBLAS_REPO_URL}" . 2>/dev/null; then
+            if git checkout "${OPENBLAS_VERSION}" 2>/dev/null; then
+                echo -e "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
+                DOWNLOAD_SUCCESS=true
+            fi
+        fi
+    fi
+    
+    if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
+        echo -e "  ${RED}✗ Failed to download OpenBLAS source${NC}"
+        echo -e "  ${YELLOW}  Continuing with system OpenBLAS (may not have DYNAMIC_ARCH)${NC}"
+        OPENBLAS_NEEDS_RECOMPILE=false
+        # Return to original directory if possible
+        if [ -n "${OLDPWD:-}" ] && [ -d "${OLDPWD}" ]; then
+            cd "${OLDPWD}" >/dev/null || true
+        fi
+    fi
+    
+    if [ "${OPENBLAS_NEEDS_RECOMPILE}" = true ]; then
+        if [ -f "Makefile" ] || [ -f "CMakeLists.txt" ]; then
+            echo "  Building OpenBLAS with DYNAMIC_ARCH=1..."
+        
+        # Determine number of build jobs (use same logic as PyTorch build)
+        BUILD_JOBS_OPENBLAS="${BUILD_JOBS:-$(nproc)}"
+        if [ "${BUILD_JOBS_OPENBLAS:-0}" -lt 1 ]; then
+            BUILD_JOBS_OPENBLAS=1
+        fi
+        
+        # Build OpenBLAS with optimal flags for maximum portability and performance
+        # Based on OpenBLAS 0.3.30 documentation - see OpenBLAS_Compilation_Flags.md
+        # Flags optimized for deep learning workloads (PyTorch)
+        if [ -f "Makefile" ]; then
+            # Use Makefile build system
+            make clean 2>/dev/null || true
+            echo "  Building with optimized flags:"
+            echo "    DYNAMIC_ARCH=1 (runtime CPU detection)"
+            echo "    TARGET=GENERIC (safe base target)"
+            echo "    USE_OPENMP=1 (best multi-threading performance)"
+            echo "    NO_AFFINITY=1 (prevent threading conflicts)"
+            echo "    NUM_THREADS=64 (support up to 64 threads)"
+            echo "    GEMM_MULTITHREAD_THRESHOLD=50 (optimal for DL workloads)"
+            # Build OpenBLAS following official documentation recommendations
+            # Reference: http://www.openmathlib.org/OpenBLAS/docs/install/
+            # Reference: http://www.openmathlib.org/OpenBLAS/docs/build_system/
+            make -j"${BUILD_JOBS_OPENBLAS}" \
+                DYNAMIC_ARCH=1 \
+                TARGET=GENERIC \
+                USE_OPENMP=1 \
+                NO_AFFINITY=1 \
+                NUM_THREADS=64 \
+                GEMM_MULTITHREAD_THRESHOLD=50 \
+                BUILD_LAPACK_DEPRECATED=1 \
+                NO_WARMUP=1 \
+                BINARY=64 \
+                CC=gcc \
+                FC=gfortran \
+                HOSTCC=gcc \
+                2>&1 | tee /tmp/openblas_build.log || {
+                echo -e "  ${YELLOW}⚠ OpenBLAS compilation failed, using system OpenBLAS${NC}"
+                OPENBLAS_NEEDS_RECOMPILE=false
+            }
+            
+            if [ "${OPENBLAS_NEEDS_RECOMPILE}" = true ]; then
+                echo "  Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}..."
+                echo "    Using same build flags for installation (required per official docs)..."
+                # Important: Pass all build flags to make install (per official documentation)
+                # Reference: http://www.openmathlib.org/OpenBLAS/docs/install/
+                if [ "${EUID:-0}" -eq 0 ]; then
+                    make install \
+                        PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
+                        DYNAMIC_ARCH=1 \
+                        TARGET=GENERIC \
+                        USE_OPENMP=1 \
+                        NO_AFFINITY=1 \
+                        NUM_THREADS=64 \
+                        GEMM_MULTITHREAD_THRESHOLD=50 \
+                        BUILD_LAPACK_DEPRECATED=1 \
+                        NO_WARMUP=1 \
+                        BINARY=64 \
+                        CC=gcc \
+                        FC=gfortran \
+                        HOSTCC=gcc \
+                        2>&1 | tee -a /tmp/openblas_build.log || {
+                        echo -e "  ${YELLOW}⚠ OpenBLAS installation failed, using system OpenBLAS${NC}"
+                        OPENBLAS_NEEDS_RECOMPILE=false
+                    }
+                elif command -v sudo >/dev/null 2>&1; then
+                    sudo make install \
+                        PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
+                        DYNAMIC_ARCH=1 \
+                        TARGET=GENERIC \
+                        USE_OPENMP=1 \
+                        NO_AFFINITY=1 \
+                        NUM_THREADS=64 \
+                        GEMM_MULTITHREAD_THRESHOLD=50 \
+                        BUILD_LAPACK_DEPRECATED=1 \
+                        NO_WARMUP=1 \
+                        BINARY=64 \
+                        CC=gcc \
+                        FC=gfortran \
+                        HOSTCC=gcc \
+                        2>&1 | tee -a /tmp/openblas_build.log || {
+                        echo -e "  ${YELLOW}⚠ OpenBLAS installation failed, using system OpenBLAS${NC}"
+                        OPENBLAS_NEEDS_RECOMPILE=false
+                    }
+                else
+                    echo -e "  ${YELLOW}⚠ No sudo available, cannot install OpenBLAS${NC}"
+                    OPENBLAS_NEEDS_RECOMPILE=false
+                fi
+                
+                if [ "${OPENBLAS_NEEDS_RECOMPILE}" = true ]; then
+                    # Update library cache
+                    ldconfig 2>/dev/null || true
+                    
+                    # Update OpenBLAS_LIB to point to newly compiled version
+                    if [ -f "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so" ]; then
+                        OPENBLAS_LIB="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
+                        echo -e "  ${GREEN}✓ OpenBLAS compiled and installed with DYNAMIC_ARCH=1${NC}"
+                        echo "    Library: ${OPENBLAS_LIB}"
+                        OPENBLAS_HAS_DYNAMIC_ARCH=true
+                    fi
+                fi
+            fi
+        else
+            echo -e "  ${YELLOW}⚠ Makefile not found, checking for CMakeLists.txt...${NC}"
+            # Could add CMakeLists.txt handling here if needed
+            OPENBLAS_NEEDS_RECOMPILE=false
+        fi
+    else
+        echo -e "  ${YELLOW}⚠ OpenBLAS source not found (Makefile or CMakeLists.txt missing), using system OpenBLAS${NC}"
+        OPENBLAS_NEEDS_RECOMPILE=false
+    fi
+    
+    cd - >/dev/null || true
+    rm -rf "${OPENBLAS_SOURCE_DIR}" 2>/dev/null || true
+    fi
 fi
 
 # Verify and install OpenMP if missing
@@ -2448,6 +2696,54 @@ export BUILD_TEST=0  # Skip tests (faster build)
 export BUILD_SHARED_LIBS=ON
 export CMAKE_BUILD_TYPE=Release
 
+# CPU Architecture Flags for PyTorch compilation
+# Use x86-64-v3 (AVX2, BMI1, BMI2, FMA) for modern CPUs (2015+)
+# This provides good performance while maintaining compatibility with most modern systems
+# Alternative: -march=native for maximum performance on build machine (less portable)
+# Note: OpenBLAS with DYNAMIC_ARCH=1 handles CPU-specific optimizations at runtime
+CPU_ARCH_FLAGS="-march=x86-64-v3 -mtune=generic -O3 -mavx2 -mfma -msse4.2 -funroll-loops"
+
+# Add CPU architecture flags to CMAKE build flags if not already set
+if [ -z "${CMAKE_CXX_FLAGS:-}" ]; then
+    export CMAKE_CXX_FLAGS="${CPU_ARCH_FLAGS}"
+else
+    # Check if CPU architecture flags are already present
+    if ! echo "${CMAKE_CXX_FLAGS}" | grep -qE "\-march=|\-mtune="; then
+        export CMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} ${CPU_ARCH_FLAGS}"
+    fi
+fi
+
+if [ -z "${CMAKE_C_FLAGS:-}" ]; then
+    export CMAKE_C_FLAGS="${CPU_ARCH_FLAGS}"
+else
+    # Check if CPU architecture flags are already present
+    if ! echo "${CMAKE_C_FLAGS}" | grep -qE "\-march=|\-mtune="; then
+        export CMAKE_C_FLAGS="${CMAKE_C_FLAGS} ${CPU_ARCH_FLAGS}"
+    fi
+fi
+
+# Also set CXXFLAGS and CFLAGS environment variables (some build systems respect these)
+if [ -z "${CXXFLAGS:-}" ]; then
+    export CXXFLAGS="${CPU_ARCH_FLAGS}"
+else
+    if ! echo "${CXXFLAGS}" | grep -qE "\-march=|\-mtune="; then
+        export CXXFLAGS="${CXXFLAGS} ${CPU_ARCH_FLAGS}"
+    fi
+fi
+
+if [ -z "${CFLAGS:-}" ]; then
+    export CFLAGS="${CPU_ARCH_FLAGS}"
+else
+    if ! echo "${CFLAGS}" | grep -qE "\-march=|\-mtune="; then
+        export CFLAGS="${CFLAGS} ${CPU_ARCH_FLAGS}"
+    fi
+fi
+
+echo "  CPU Architecture Flags: ${CPU_ARCH_FLAGS}"
+echo "    -march=x86-64-v3: AVX2, BMI1, BMI2, FMA support (2015+ CPUs)"
+echo "    -mtune=generic: Optimize for generic modern CPUs"
+echo "    Note: OpenBLAS uses DYNAMIC_ARCH=1 for runtime CPU detection"
+
 #===============================================================================
 # CUDA Compiler Compatibility Workarounds - C++17 Required for ONNX
 #===============================================================================
@@ -3015,6 +3311,14 @@ echo "    USE_OPENMP=1 (OpenMP enabled - required for OpenBLAS)"
 echo "    USE_TBB=0 (TBB disabled - conflicts with OpenMP, will be ignored if set)"
 echo "    USE_NCCL=0 (NCCL disabled - not needed for non-distributed builds)"
 echo "    USE_DISTRIBUTED=0 (Distributed training disabled)"
+if [ "${OPENBLAS_HAS_DYNAMIC_ARCH:-false}" = "true" ]; then
+    echo "    OpenBLAS: DYNAMIC_ARCH=1 enabled (runtime CPU detection for optimal performance)"
+else
+    echo "    OpenBLAS: Using system OpenBLAS (DYNAMIC_ARCH status unknown)"
+fi
+if [ -n "${CMAKE_CXX_FLAGS:-}" ] && echo "${CMAKE_CXX_FLAGS}" | grep -qE "\-march=|\-mtune="; then
+    echo "    CPU Architecture Flags: Enabled (${CMAKE_CXX_FLAGS})"
+fi
 if [ "${TBB_FOUND:-false}" = "true" ]; then
     echo "      Note: TBB is available but disabled due to OpenMP conflict"
 fi
@@ -4575,6 +4879,7 @@ else
     echo -e "${RED}✗ Wheel file not found${NC}"
     echo "  Searched in: ${WHEEL_DIR}"
     exit 1
+fi
 fi
 
 #===============================================================================

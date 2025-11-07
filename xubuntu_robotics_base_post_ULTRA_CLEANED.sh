@@ -2448,6 +2448,17 @@ early_verify_cached_files() {
       if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
         echo "✓ Miniforge re-downloaded and verified"
       else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  DOWNLOAD FAILED: Miniforge re-download failed"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: ${MINIFORGE_SH}"
+        echo "  Expected location: ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
+        echo "  Source URL: ${MINIFORGE_URL}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ Miniforge re-download also failed - aborting build"
                 exit 1
             fi
@@ -2466,6 +2477,17 @@ early_verify_cached_files() {
       if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
         echo "✓ Micromamba re-downloaded and verified"
       else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  DOWNLOAD FAILED: Micromamba re-download failed"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: micromamba-linux-64"
+        echo "  Expected location: ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
+        echo "  Source URL: ${MICROMAMBA_URL}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ Micromamba re-download also failed - aborting build"
                 exit 1
             fi
@@ -2489,6 +2511,17 @@ early_verify_cached_files() {
       if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
         echo "✓ yq re-downloaded and verified"
       else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  DOWNLOAD FAILED: yq re-download failed"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: yq_linux_amd64"
+        echo "  Expected location: ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
+        echo "  Source URL: ${YQ_URL}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ yq re-download also failed - aborting build"
                 exit 1
             fi
@@ -2517,6 +2550,17 @@ early_verify_cached_files() {
       if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
         echo "✓ Julia re-downloaded and SHA256 verified"
       else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  DOWNLOAD FAILED: Julia re-download failed"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: $(basename "${julia_file}")"
+        echo "  Expected location: ${julia_file}"
+        echo "  Source URL: ${julia_url}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${julia_file}"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ Julia re-download also failed - aborting build"
                 exit 1
             fi
@@ -2532,6 +2576,17 @@ early_verify_cached_files() {
       if gzip -t "${julia_file}" 2>/dev/null; then
         echo "✓ Julia re-downloaded and gzip integrity verified"
       else
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  DOWNLOAD FAILED: Julia re-download failed (gzip integrity)"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: $(basename "${julia_file}")"
+        echo "  Expected location: ${julia_file}"
+        echo "  Source URL: ${julia_url}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${julia_file}"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ Julia re-download also failed - aborting build"
                 exit 1
             fi
@@ -4227,94 +4282,116 @@ SDK_ZIP_FILENAME="Video_Codec_SDK_${SDK_VERSION}.zip"
 SDK_ZIP_CACHE_PATH="${CONTAINER_BIN_CACHE}/${SDK_ZIP_FILENAME}"
 
 #--- Sub-block 9.2: Check for cached SDK file ---
-# Critical: SDK must be manually cached due to NVIDIA EULA
+# Critical: SDK is optional - if not present, skip installation (don't fail build)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+NVIDIA_VIDEO_SDK_INSTALLED=false
 if [ -f "${SDK_ZIP_CACHE_PATH}" ]; then
   echo "--> Found cached NVIDIA Video Codec SDK. Using it."
+  NVIDIA_VIDEO_SDK_INSTALLED=true
   cp "${SDK_ZIP_CACHE_PATH}" "/tmp/${SDK_ZIP_FILENAME}"
 else
-  echo -e "\n${RED}FATAL ERROR: NVIDIA Video Codec SDK not found in cache.${NC}"
-  echo -e "${YELLOW}Please manually download '${SDK_ZIP_FILENAME}' from the NVIDIA Developer website:${NC}"
-  echo -e "https://developer.nvidia.com/nvidia-video-codec-sdk/download"
-  echo -e "${YELLOW}Then, place the downloaded .zip file into your 'container_cache/binaries/' directory and re-run the build.${NC}\n"
-  exit 1
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  WARNING: NVIDIA Video Codec SDK not found in cache (OPTIONAL)"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  File name: ${SDK_ZIP_FILENAME}"
+  echo "  Expected location: ${SDK_ZIP_CACHE_PATH}"
+  echo "  Download URL: https://developer.nvidia.com/nvidia-video-codec-sdk/download"
+  echo ""
+  echo "  This is an OPTIONAL component. The build will continue without it."
+  echo "  If you need the SDK, manually download '${SDK_ZIP_FILENAME}' from the URL above"
+  echo "  and place it at:"
+  echo "    ${SDK_ZIP_CACHE_PATH}"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  → Skipping NVIDIA Video Codec SDK installation (optional component)"
+  NVIDIA_VIDEO_SDK_INSTALLED=false
 fi
 # End SDK cache check (if-else self-contained)
 
-#--- Sub-block 9.3: Extract NVIDIA SDK ---
-# Purpose: Unzip SDK to /tmp
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
-if ! unzip -q "${SDK_ZIP_FILENAME}"; then
-  echo "ERROR: Failed to extract NVIDIA Video Codec SDK"
-  exit 1
-fi
+# Only proceed with SDK installation if it was found
+if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
+  echo "  → Proceeding with NVIDIA Video Codec SDK installation"
+  
+  #--- Sub-block 9.3: Extract NVIDIA SDK ---
+  # Purpose: Unzip SDK to /tmp
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
+  if ! unzip -q "${SDK_ZIP_FILENAME}"; then
+    echo "ERROR: Failed to extract NVIDIA Video Codec SDK"
+    exit 1
+  fi
 
-#--- Sub-block 9.4: Move SDK to /opt ---
-# Purpose: Install SDK to system location
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-SDK_FOLDER="Video_Codec_SDK_${SDK_VERSION}"
-echo "Moving ${SDK_FOLDER} to /opt/${SDK_FOLDER}"
-if [ "$(id -u)" -eq 0 ]; then
-  # Running as root, no sudo needed
-  mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
-  mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+  #--- Sub-block 9.4: Move SDK to /opt ---
+  # Purpose: Install SDK to system location
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  SDK_FOLDER="Video_Codec_SDK_${SDK_VERSION}"
+  echo "Moving ${SDK_FOLDER} to /opt/${SDK_FOLDER}"
+  if [ "$(id -u)" -eq 0 ]; then
+    # Running as root, no sudo needed
+    mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
+    mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+  else
+    # Not root, use sudo if available
+    sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
+    sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+  fi
+
+  #--- Sub-block 9.5: Set SDK ownership and permissions ---
+  # Purpose: Ensure SDK is accessible without sudo
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  if [ "$(id -u)" -eq 0 ]; then
+    # Running as root, set ownership to root or preserve current
+    CURRENT_USER="${SUDO_USER:-root}"
+    CURRENT_GROUP="${SUDO_GID:-0}"
+    chown -R "${CURRENT_USER}:${CURRENT_GROUP}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+  else
+    # Not root, use sudo if available
+    sudo chown -R "${USER}:${USER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+  fi
+  echo "SDK successfully moved to /opt/Video_Codec_SDK"
+
+  #--- Sub-block 9.6: Copy SDK headers to system locations ---
+  # Critical: Make headers available for FFmpeg/OpenCV compilation
+  # Dependencies: Block 6.13 (NVIDIA CUDA)
+  # Outputs: GPU libraries, CUDA toolkit
+  if ! cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include 2>/dev/null; then
+    echo "WARNING: Failed to copy SDK headers to /usr/local/include (may not exist)"
+  fi
+  if ! cp "/opt/Video_Codec_SDK/Interface/"*.h "/usr/local/cuda-${CUDA_VERSION}/include" 2>/dev/null; then
+    echo "WARNING: Failed to copy SDK headers to CUDA include directory"
+  fi
+
+  #--- Sub-block 9.7: Verify SDK header installation ---
+  # Critical: Ensure required headers are in place
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
+    echo "✓ Video Codec SDK headers verified at /usr/local/include/"
+    ls -la /usr/local/include/nvc*
+  else
+    echo "Δ Video Codec SDK headers may be incomplete"
+    ls -la /usr/local/include/ | grep -i nv || echo "No NVIDIA headers found"
+  fi
+  # End SDK header verification (if-else self-contained)
+
+  #--- Sub-block 9.8: Cleanup temporary SDK files ---
+  # Purpose: Remove temporary extraction files
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  rm -rf "/tmp/${SDK_FOLDER}" "${SDK_ZIP_FILENAME}"
+  cd /
+
+  echo "✓ NVIDIA Video Codec SDK headers installed successfully."
 else
-  # Not root, use sudo if available
-  sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
-  sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+  echo "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
+  echo "  → Continuing build without NVIDIA Video Codec SDK"
+  echo "  → OpenCV will be compiled without NVIDIA Video Codec SDK support"
 fi
-
-#--- Sub-block 9.5: Set SDK ownership and permissions ---
-# Purpose: Ensure SDK is accessible without sudo
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-if [ "$(id -u)" -eq 0 ]; then
-  # Running as root, set ownership to root or preserve current
-  CURRENT_USER="${SUDO_USER:-root}"
-  CURRENT_GROUP="${SUDO_GID:-0}"
-  chown -R "${CURRENT_USER}:${CURRENT_GROUP}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
-else
-  # Not root, use sudo if available
-  sudo chown -R "${USER}:${USER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
-fi
-echo "SDK successfully moved to /opt/Video_Codec_SDK"
-
-#--- Sub-block 9.6: Copy SDK headers to system locations ---
-# Critical: Make headers available for FFmpeg/OpenCV compilation
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-if ! cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include 2>/dev/null; then
-  echo "WARNING: Failed to copy SDK headers to /usr/local/include (may not exist)"
-fi
-if ! cp "/opt/Video_Codec_SDK/Interface/"*.h "/usr/local/cuda-${CUDA_VERSION}/include" 2>/dev/null; then
-  echo "WARNING: Failed to copy SDK headers to CUDA include directory"
-fi
-
-#--- Sub-block 9.7: Verify SDK header installation ---
-# Critical: Ensure required headers are in place
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
-  echo "✓ Video Codec SDK headers verified at /usr/local/include/"
-  ls -la /usr/local/include/nvc*
-else
-  echo "Δ Video Codec SDK headers may be incomplete"
-  ls -la /usr/local/include/ | grep -i nv || echo "No NVIDIA headers found"
-fi
-# End SDK header verification (if-else self-contained)
-
-#--- Sub-block 9.8: Cleanup temporary SDK files ---
-# Purpose: Remove temporary extraction files
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-rm -rf "/tmp/${SDK_FOLDER}" "${SDK_ZIP_FILENAME}"
-cd /
-
-echo "✓ NVIDIA Video Codec SDK headers installed successfully."
+# End NVIDIA Video SDK installation (conditional based on file presence)
 
 #===============================================================================
 # BLOCK 10: PHASE 4 - OPENCV COMPILATION
@@ -4455,14 +4532,15 @@ if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
     fi
 fi
 
-cmake -G Ninja \
+# Build OpenCV CMake command (base configuration)
+OPENCV_CMAKE_CMD="cmake -G Ninja \
   -D CPU_BASELINE=AVX2 \
   -D CPU_DISPATCH=AVX2,FP16,AVX512_SKX \
   -D CMAKE_BUILD_TYPE=Release \
   -D CMAKE_C_COMPILER=/usr/bin/gcc-12 \
   -D CMAKE_CXX_COMPILER=/usr/bin/g++-12 \
   -D CUDA_HOST_COMPILER=/usr/bin/g++-12 \
-  -D CMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
+  -D CMAKE_INSTALL_PREFIX=\"${INSTALL_PREFIX}\" \
   -D CMAKE_POLICY_DEFAULT_CMP0146=OLD \
   -D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv_contrib/modules \
   -D BUILD_SHARED_LIBS=ON \
@@ -4471,13 +4549,13 @@ cmake -G Ninja \
   -D OPENCV_GENERATE_PKGCONFIG=ON \
   -D CMAKE_C_COMPILER_WORKS=TRUE \
   -D CMAKE_CXX_COMPILER_WORKS=TRUE \
-  -D CUDA_NVCC_FLAGS="${OPENCV_CUDA_NVCC_FLAGS}" \
-  -D CMAKE_CUDA_FLAGS="${OPENCV_CUDA_FLAGS}" \
+  -D CUDA_NVCC_FLAGS=\"${OPENCV_CUDA_NVCC_FLAGS}\" \
+  -D CMAKE_CUDA_FLAGS=\"${OPENCV_CUDA_FLAGS}\" \
   -D WITH_CUDA=ON \
   -D WITH_CUDNN=ON \
   -D WITH_OPENBLAS=ON \
-  -D CUDA_ARCH_BIN="${CUDA_ARCH}" \
-  -D CUDA_ARCH_PTX="${CUDA_ARCH}" \
+  -D CUDA_ARCH_BIN=\"${CUDA_ARCH}\" \
+  -D CUDA_ARCH_PTX=\"${CUDA_ARCH}\" \
   -D OPENCV_DNN_CUDA=ON \
   -D OPENCV_DNN_CUDA_VERSION=${CUDA_VERSION} \
   -D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-${CUDA_VERSION} \
@@ -4493,7 +4571,7 @@ cmake -G Ninja \
   -D WITH_LAPACK=ON \
   -D WITH_TIFF=ON \
   -D WITH_OPENMP=ON \
-  -D JlCxx_DIR="${JULIA_HOME}/CxxWrap/deps/build/JlCxx/" \
+  -D JlCxx_DIR=\"${JULIA_HOME}/CxxWrap/deps/build/JlCxx/\" \
   -D LAPACK_ENABLE_LAPACKE=ON \
   -D WITH_VTK=ON \
   -D VTK_DIR=/usr/lib/x86_64-linux-gnu/cmake/vtk-9.3 \
@@ -4526,7 +4604,7 @@ cmake -G Ninja \
   -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
   -D BLAS_LIBRARIES=/usr/lib/x86_64-linux-gnu/libopenblas.so* \
   -D BLA_VENDOR=OpenBLAS \
-  -D LAPACK_LIBRARIES="/usr/lib/x86_64-linux-gnu/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3;/usr/lib/x86_64-linux-gnu/liblapack.so" \
+  -D LAPACK_LIBRARIES=\"/usr/lib/x86_64-linux-gnu/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3;/usr/lib/x86_64-linux-gnu/liblapack.so\" \
   -D LAPACK_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapack.so \
   -D LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3 \
   -D LAPACK_LIBRARY_DEBUG=/usr/lib/x86_64-linux-gnu/liblapack.so.3 \
@@ -4534,33 +4612,49 @@ cmake -G Ninja \
   -D LAPACK_LAPACKE_H=/usr/include/lapacke.h \
   -D OpenBLAS_LIB=/usr/lib/x86_64-linux-gnu/libopenblas.so \
   -D OpenBLAS_INCLUDE_DIR=/usr/include/x86_64-linux-gnu/ \
-  -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
+  -D CMAKE_INSTALL_RPATH=\"/usr/local/lib\" \
   -D CMAKE_C_STANDARD=17 \
   -D CMAKE_CXX_STANDARD=17 \
   -D CMAKE_CUDA_STANDARD=17 \
   -D CMAKE_C_STANDARD_REQUIRED=ON \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
   -D CMAKE_CUDA_STANDARD_REQUIRED=ON \
-  -D CMAKE_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include" \
-  -D CMAKE_CXX_FLAGS="-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp" \
-  -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp" \
-  -D CMAKE_EXE_LINKER_FLAGS="-flto -fopenmp" \
-  -D CMAKE_MODULE_LINKER_FLAGS="-flto -fopenmp" \
-  -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
+  -D CMAKE_INCLUDE_PATH=\"/usr/include/x86_64-linux-gnu;/usr/include\" \
+  -D CMAKE_CXX_FLAGS=\"-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp\" \
+  -D CMAKE_C_FLAGS=\"-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp\" \
+  -D CMAKE_EXE_LINKER_FLAGS=\"-flto -fopenmp\" \
+  -D CMAKE_MODULE_LINKER_FLAGS=\"-flto -fopenmp\" \
+  -D CMAKE_SHARED_LINKER_FLAGS=\"-flto -fopenmp\" \
   -D ENABLE_PRECOMPILED_HEADERS=ON \
   -D CV_ENABLE_INTRINSICS=ON \
   -D PARALLEL_ENABLE_PLUGINS=ON \
-  -D VIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK \
-  -D Julia_EXECUTABLE="${JULIA_HOME}/bin/julia" \
-  -D Julia_INCLUDE_DIRS="${JULIA_HOME}/include/julia" \
-  -D Julia_LIBRARIES="${JULIA_HOME}/lib/libjulia.so" \
-  -D JlCxx_DIR="/opt/libcxxwrap-julia/lib/cmake/JlCxx" \
-  -D CMAKE_PREFIX_PATH="/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}" \
-  -D CMAKE_IGNORE_PATH="/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl" \
-  -D WITH_NVCUVID=OFF \
-  -D WITH_NVCUVENC=OFF \
-  -D NVCUVID_HEADER_DIR=/usr/local/include/ \
-  ..
+  -D Julia_EXECUTABLE=\"${JULIA_HOME}/bin/julia\" \
+  -D Julia_INCLUDE_DIRS=\"${JULIA_HOME}/include/julia\" \
+  -D Julia_LIBRARIES=\"${JULIA_HOME}/lib/libjulia.so\" \
+  -D JlCxx_DIR=\"/opt/libcxxwrap-julia/lib/cmake/JlCxx\" \
+  -D CMAKE_PREFIX_PATH=\"/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}\" \
+  -D CMAKE_IGNORE_PATH=\"/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl\"
+"
+
+# Add NVIDIA Video Codec SDK support to OpenCV if SDK is installed
+if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
+  echo "  → Adding NVIDIA Video Codec SDK support to OpenCV configuration"
+  OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} \\
+  -D VIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK \\
+  -D WITH_NVCUVID=ON \\
+  -D WITH_NVCUVENC=ON \\
+  -D NVCUVID_HEADER_DIR=/usr/local/include/"
+else
+  echo "  → OpenCV will be built without NVIDIA Video Codec SDK support (SDK not installed)"
+  OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} \\
+  -D WITH_NVCUVID=OFF \\
+  -D WITH_NVCUVENC=OFF"
+fi
+
+OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} .."
+
+# Execute the CMake command
+eval "${OPENCV_CMAKE_CMD}"
 
 #--- Sub-block 10.9: Verify OpenCV CMake configuration ---
 # Critical: Check that key dependencies were detected and verify TBB is from system (not MKL)
@@ -6079,13 +6173,14 @@ echo "  Set threading environment: OMP_NUM_THREADS=${num_cores}"
 echo "Installing JAX with CUDA support (using pre-built wheels)..."
 
 # Handle externally-managed Python environments
-pip_output=$(python3 -m pip install --upgrade pip setuptools wheel --quiet 2>&1) || true
+# Use --ignore-installed to avoid errors when uninstalling Debian-installed packages (wheel, etc.)
+pip_output=$(python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1) || true
 if echo "${pip_output}" | grep -q "externally-managed-environment"; then
     echo "  Using --break-system-packages flag (for Singularity/container environments)"
-    python3 -m pip install --upgrade pip setuptools wheel --break-system-packages --quiet || true
+    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
 else
-    python3 -m pip install --upgrade pip setuptools wheel --quiet 2>/dev/null || \
-        python3 -m pip install --upgrade pip setuptools wheel --break-system-packages --quiet || true
+    python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || \
+        python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
 fi
 
 # Determine if we need --break-system-packages flag
@@ -6113,26 +6208,68 @@ fi
 # Install JAX with CUDA support
 echo "  Installing JAX[${CUDA_FOR_JAX}_local] from Google releases..."
 echo "  Note: Using --ignore-installed to handle Debian-installed packages (numpy, wheel, etc.)"
+echo "  Note: Dependency conflicts (matplotlib/types-seaborn) are non-fatal and will be resolved post-install"
+
+# Install JAX - capture all output but don't fail on warnings
 pip_cmd=("${pip_cmd_base[@]}")
 pip_cmd+=("jax[${CUDA_FOR_JAX}_local]")
 pip_cmd+=(-f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html")
 
-if ! "${pip_cmd[@]}" 2>&1 | tee /tmp/jax_install.log; then
+# Run installation and capture output (warnings are expected and non-fatal)
+"${pip_cmd[@]}" 2>&1 | tee /tmp/jax_install.log || true
+
+# Check if installation actually succeeded by trying to import JAX
+if python3 -c "import jax; import jaxlib" 2>/dev/null; then
+    echo "  ✓ JAX installed successfully"
+else
     echo "  ⚠ Primary installation method failed, trying alternative..."
     pip_cmd=("${pip_cmd_base[@]}")
     pip_cmd+=("jax[${CUDA_FOR_JAX}]")
-    if ! "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log; then
+    "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log || true
+    
+    # Check again if alternative method worked
+    if python3 -c "import jax; import jaxlib" 2>/dev/null; then
+        echo "  ✓ JAX installed via alternative method"
+    else
         echo "  ⚠ JAX installation failed (non-fatal)"
         echo "  Installation logs: /tmp/jax_install.log"
-    else
-        echo "  ✓ JAX installed via alternative method"
     fi
-else
-    echo "  ✓ JAX installed successfully"
+fi
+
+# Resolve dependency conflicts (non-critical but good to fix)
+echo "  Resolving dependency conflicts (matplotlib/types-seaborn)..."
+if python3 -c "import matplotlib" 2>/dev/null; then
+    MATPLOTLIB_VER=$(python3 -c "import matplotlib; print(matplotlib.__version__)" 2>/dev/null || echo "")
+    if [ -n "${MATPLOTLIB_VER}" ]; then
+        # Check if matplotlib version is < 3.8 (required by types-seaborn)
+        MATPLOTLIB_MAJOR=$(echo "${MATPLOTLIB_VER}" | cut -d. -f1 2>/dev/null || echo "")
+        MATPLOTLIB_MINOR=$(echo "${MATPLOTLIB_VER}" | cut -d. -f2 2>/dev/null || echo "")
+        # Fix logic: need parentheses for proper evaluation
+        if [ -n "${MATPLOTLIB_MAJOR}" ] && [ -n "${MATPLOTLIB_MINOR}" ] && \
+           ([ "${MATPLOTLIB_MAJOR}" -lt 3 ] || ([ "${MATPLOTLIB_MAJOR}" -eq 3 ] && [ "${MATPLOTLIB_MINOR}" -lt 8 ])); then
+            echo "    Upgrading matplotlib from ${MATPLOTLIB_VER} to >=3.8..."
+            pip_cmd_upgrade=("${pip_cmd_base[@]}")
+            pip_cmd_upgrade+=("matplotlib>=3.8")
+            "${pip_cmd_upgrade[@]}" --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
+        fi
+    fi
+fi
+
+# Install pandas-stubs if types-seaborn requires it (non-critical, just type stubs)
+if python3 -c "import types_seaborn" 2>/dev/null && ! python3 -c "import pandas_stubs" 2>/dev/null; then
+    echo "    Installing pandas-stubs (required by types-seaborn)..."
+    pip_cmd_stubs=("${pip_cmd_base[@]}")
+    pip_cmd_stubs+=("pandas-stubs")
+    "${pip_cmd_stubs[@]}" --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
 fi
 
 # Verify installation and version alignment
 # Critical: jax and jaxlib versions must match (based on JAX installation best practices)
+# Wait a moment for package installation to fully complete
+sleep 1
+
+# Try importing JAX with better error reporting
+echo "  Verifying JAX installation..."
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
     JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || echo "unknown")
     JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || echo "unknown")
@@ -6188,7 +6325,12 @@ if python3 -c "import jax; import jaxlib" 2>/dev/null; then
         echo "  ✓ JAX and jaxlib installed (version verification unavailable)"
     fi
 else
+    # Try to get more information about why import failed
     echo "  ⚠ JAX installation verification failed (non-fatal)"
+    echo "  Attempting to diagnose import issue..."
+    python3 -c "import jax" 2>&1 | head -3 || true
+    python3 -c "import jaxlib" 2>&1 | head -3 || true
+    echo "  Note: JAX may still be functional - comprehensive verification will continue"
 fi
 
 #--- Sub-block 13B.4: Comprehensive JAX verification ---
@@ -7196,11 +7338,25 @@ else
             echo "✓ WebRTC binaries pre-copied from host cache"
             ls -lh "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" 2>/dev/null | cat || true
         else
-            echo "⚠ WARNING: Failed to copy WebRTC binaries (will download during build)"
+            echo ""
+            echo "═══════════════════════════════════════════════════════════════"
+            echo "  WARNING: Failed to copy WebRTC binaries from host cache"
+            echo "═══════════════════════════════════════════════════════════════"
+            echo "  File name: ${OPEN3D_WEBRTC_FILE}"
+            echo "  Expected location in host cache: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+            echo "  Target location in container: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+            echo ""
+            echo "  WebRTC will be downloaded during build if not found."
+            echo "  If download fails, you may manually download this file and place it at:"
+            echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+            echo "═══════════════════════════════════════════════════════════════"
         fi
     else
         echo "ℹ WebRTC binaries not found in host cache, will download during build"
         echo "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        echo ""
+        echo "  If download fails during build, you may manually download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
     fi
 fi
 echo ""
@@ -7667,12 +7823,44 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
     # Extract tar.gz and handle the webrtc_release subdirectory
     WEBRTC_ARCHIVE="${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
     if [ ! -f "${WEBRTC_ARCHIVE}" ]; then
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  ERROR: WebRTC archive not found"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
+        echo "  Expected location: ${WEBRTC_ARCHIVE}"
+        echo "  Source URL: ${OPEN3D_WEBRTC_URL:-unknown}"
+        echo ""
+        echo "  You may manually download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        echo "  Or in the container at:"
+        echo "    ${WEBRTC_ARCHIVE}"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ ERROR: WebRTC archive not found: ${WEBRTC_ARCHIVE}"
     elif [ ! -r "${WEBRTC_ARCHIVE}" ]; then
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  ERROR: WebRTC archive is not readable"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
+        echo "  Location: ${WEBRTC_ARCHIVE}"
+        echo ""
+        echo "  Please check file permissions and try again."
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ ERROR: WebRTC archive is not readable: ${WEBRTC_ARCHIVE}"
     elif ! tar -xzf "${WEBRTC_ARCHIVE}" 2>/dev/null; then
+        echo ""
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  ERROR: WebRTC archive extraction failed"
+        echo "═══════════════════════════════════════════════════════════════"
+        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
+        echo "  Location: ${WEBRTC_ARCHIVE}"
+        echo ""
+        echo "  Archive may be corrupted or incomplete."
+        echo "  You may need to re-download this file and place it at:"
+        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        echo "═══════════════════════════════════════════════════════════════"
         echo "✗ ERROR: Manual extraction failed for ${WEBRTC_ARCHIVE}"
-        echo "  Archive may be corrupted or incomplete"
     else
         # Check if extraction created webrtc_release subdirectory
         if [ -d "webrtc_release" ]; then
@@ -8253,97 +8441,6 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 fi
             fi
             
-            # 8. Check ephemeral pip cache directories (created during build process)
-            # Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
-            # Also handles: /tmp/cuda_build/pip-ephem-wheel-cache-* (user-reported location)
-            # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
-            # Note: pip may also create pip-ephem-whee-cache-* (truncated), so we search for both patterns
-            if [ -z "${WHEEL_FILE}" ]; then
-                echo "  Searching ephemeral pip cache directories..."
-                # First check specific known locations with glob patterns
-                # Use nullglob and failglob safety - check if glob expands before using
-                for pattern in "/tmp/cuda_build/pip-ephem-wheel-cache-"* \
-                              "/tmp/cuda_build/pip-ephem-whee-cache-"* \
-                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"* \
-                              "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-"*; do
-                    # Check if pattern expanded to actual directories (not literal pattern)
-                    if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
-                       [ "${pattern}" != "/tmp/cuda_build/pip-ephem-whee-cache-*" ] && \
-                       [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
-                       [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-*" ] && \
-                       [ -d "${pattern}" ]; then
-                        echo "    Checking ephemeral cache: ${pattern}"
-                        # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
-                        # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-                        # Try with maxdepth first for efficiency, then full recursive
-                        WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                        if [ -z "${WHEEL_FILE}" ]; then
-                            # Try fewer nesting levels
-                            WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                        fi
-                        if [ -z "${WHEEL_FILE}" ]; then
-                            # Also try without the nested pattern (sometimes fewer levels)
-                            WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-                        fi
-                        if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                            echo "  ✓ Found wheel in ephemeral cache: ${WHEEL_FILE}"
-                            break
-                        fi
-                    fi
-                done
-                
-                # If still not found, search using find command (more robust for dynamic directories)
-                if [ -z "${WHEEL_FILE}" ]; then
-                    while IFS= read -r cache_dir; do
-                        if [ -n "${cache_dir}" ] && [ -d "${cache_dir}" ]; then
-                            # Try the specific nested pattern first
-                            WHEEL_FILE=$(find "${cache_dir}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                            if [ -z "${WHEEL_FILE}" ]; then
-                                # Fallback to general search
-                                WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
-                            fi
-                            if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                                echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
-                                break
-                            fi
-                        fi
-                    done < <(find /tmp -maxdepth 3 -type d \( -name "pip-ephem-wheel-cache-*" -o -name "pip-ephem-whee-cache-*" \) 2>/dev/null | head -10)
-                fi
-            fi
-            
-            # 9. Comprehensive recursive search in /tmp for any pip cache directories and wheels
-            # This is the most thorough search - checks all nested wheel locations
-            # Handles both pip-ephem-wheel-cache-* and pip-ephem-whee-cache-* patterns
-            if [ -z "${WHEEL_FILE}" ]; then
-                echo "  Performing comprehensive recursive search in /tmp..."
-                # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
-                # Also try pip-ephem-whee-cache-* (truncated variant)
-                for cache_pattern in "pip-ephem-wheel-cache-*" "pip-ephem-whee-cache-*"; do
-                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
-                    if [ -n "${WHEEL_FILE}" ]; then
-                        break
-                    fi
-                    # Try with fewer nesting levels
-                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
-                    if [ -n "${WHEEL_FILE}" ]; then
-                        break
-                    fi
-                    # General search in any wheels directory
-                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/open3d*.whl" 2>/dev/null | head -1)
-                    if [ -n "${WHEEL_FILE}" ]; then
-                        break
-                    fi
-                    # Final fallback - any open3d wheel in pip cache directories
-                    WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/*/open3d*.whl" 2>/dev/null | head -1)
-                    if [ -n "${WHEEL_FILE}" ]; then
-                        break
-                    fi
-                done
-                if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                    echo "  ✓ Found wheel via comprehensive recursive search: ${WHEEL_FILE}"
-                fi
-            fi
-            
             if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
                 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 echo "Found wheel: ${WHEEL_FILE}"
@@ -8384,28 +8481,24 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 python3 -m pip install --no-deps --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
                 PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
                 if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
-                        echo "  ✓ Wheel installation completed (pip exit code: 0)"
-                        sleep 1  # Allow installation to finalize
-                        if verify_open3d_installation; then
-                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                            echo "✓✓✓ Python module installed via wheel (no-deps, using compiled libs)"
-                            echo "  Installation verified: Open3D module is importable"
-                            # Only show cached wheel path if variable is set and file exists
-                            if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
-                                echo "  Cached wheel: ${CACHED_WHEEL}"
-                            fi
-                            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                            PYTHON_INSTALLED=true
-                        else
-                            echo "⚠ Wheel installed but verification failed"
+                    echo "  ✓ Wheel installation completed (pip exit code: 0)"
+                    sleep 1  # Allow installation to finalize
+                    if verify_open3d_installation; then
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        echo "✓✓✓ Python module installed via wheel (no-deps, using compiled libs)"
+                        echo "  Installation verified: Open3D module is importable"
+                        # Only show cached wheel path if variable is set and file exists
+                        if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
+                            echo "  Cached wheel: ${CACHED_WHEEL}"
                         fi
+                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        PYTHON_INSTALLED=true
                     else
-                        PIP_EXIT_CODE="${PIPESTATUS[0]}"
-                        echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
+                        echo "⚠ Wheel installed but verification failed"
                     fi
                 else
-                    PIP_EXIT="${PIPESTATUS[0]:-$?}"
-                    echo "⚠ pip3 install failed (exit code: ${PIP_EXIT})"
+                    PIP_EXIT_CODE="${PIPESTATUS[0]}"
+                    echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
                 fi
             else
                 # Wheel not found - but python-package may have installed directly
@@ -8445,19 +8538,15 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
             pip3 install --no-deps "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log
             PIP_INSTALL_DIR_EXIT="${PIPESTATUS[0]}"
             if [ "${PIP_INSTALL_DIR_EXIT}" -eq 0 ]; then
-                    sleep 1
-                    if verify_open3d_installation; then
-                        echo "✓ Python module installed directly (no-deps, using compiled libs)"
-                        PYTHON_INSTALLED=true
-                        break
-                    fi
-                else
-                    PIP_EXIT_CODE_DIR="${PIPESTATUS[0]}"
-                    echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
+                sleep 1
+                if verify_open3d_installation; then
+                    echo "✓ Python module installed directly (no-deps, using compiled libs)"
+                    PYTHON_INSTALLED=true
+                    break
                 fi
             else
-                PIP_EXIT="${PIPESTATUS[0]:-$?}"
-                echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT})"
+                PIP_EXIT_CODE_DIR="${PIPESTATUS[0]}"
+                echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
             fi
         fi
     done
@@ -8468,6 +8557,165 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
         echo "    - ${OPEN3D_BUILD_DIR}/lib/python_package"
         echo "    - ${OPEN3D_BUILD_DIR}/python_package"
         echo "    - ${OPEN3D_SOURCE_DIR}/python_package"
+    fi
+fi
+
+# Strategy 3.5: Check ephemeral pip cache directories AFTER Strategy 3 completes
+# This searches for wheels that may have been created during Strategy 3's pip install
+# Common locations: /tmp/*/pip-ephem-wheel-cache-*/wheels/*/*/*/*/...
+# Also handles: /tmp/cuda_build/pip-ephem-wheel-cache-* (user-reported location)
+# Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
+# Note: pip may also create pip-ephem-whee-cache-* (truncated), so we search for both patterns
+if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
+    echo ""
+    echo "Strategy 3.5: Searching ephemeral pip cache directories for wheel created during Strategy 3..."
+    WHEEL_FILE=""
+    
+    # First check specific known locations with glob patterns
+    # Use nullglob and failglob safety - check if glob expands before using
+    for pattern in "/tmp/cuda_build/pip-ephem-wheel-cache-"* \
+                  "/tmp/cuda_build/pip-ephem-whee-cache-"* \
+                  "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-"* \
+                  "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-"*; do
+        # Check if pattern expanded to actual directories (not literal pattern)
+        if [ "${pattern}" != "/tmp/cuda_build/pip-ephem-wheel-cache-*" ] && \
+           [ "${pattern}" != "/tmp/cuda_build/pip-ephem-whee-cache-*" ] && \
+           [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
+           [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-*" ] && \
+           [ -d "${pattern}" ]; then
+            echo "    Checking ephemeral cache: ${pattern}"
+            # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
+            # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+            # Try with maxdepth first for efficiency, then full recursive
+            WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -z "${WHEEL_FILE}" ]; then
+                # Try fewer nesting levels
+                WHEEL_FILE=$(find "${pattern}" -maxdepth 10 -type f -path "*/wheels/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            fi
+            if [ -z "${WHEEL_FILE}" ]; then
+                # Also try without the nested pattern (sometimes fewer levels)
+                WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+            fi
+            if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+                echo "  ✓ Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                break
+            fi
+        fi
+    done
+    
+    # If still not found, search using find command (more robust for dynamic directories)
+    if [ -z "${WHEEL_FILE}" ]; then
+        while IFS= read -r cache_dir; do
+            if [ -n "${cache_dir}" ] && [ -d "${cache_dir}" ]; then
+                # Try the specific nested pattern first
+                WHEEL_FILE=$(find "${cache_dir}" -type f -path "*/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+                if [ -z "${WHEEL_FILE}" ]; then
+                    # Fallback to general search
+                    WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
+                fi
+                if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+                    echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                    break
+                fi
+            fi
+        done < <(find /tmp -maxdepth 3 -type d \( -name "pip-ephem-wheel-cache-*" -o -name "pip-ephem-whee-cache-*" \) 2>/dev/null | head -10)
+    fi
+    
+    # Comprehensive recursive search in /tmp for any pip cache directories and wheels
+    # This is the most thorough search - checks all nested wheel locations
+    # Handles both pip-ephem-wheel-cache-* and pip-ephem-whee-cache-* patterns
+    if [ -z "${WHEEL_FILE}" ]; then
+        echo "  Performing comprehensive recursive search in /tmp..."
+        # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
+        # Also try pip-ephem-whee-cache-* (truncated variant)
+        for cache_pattern in "pip-ephem-wheel-cache-*" "pip-ephem-whee-cache-*"; do
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -n "${WHEEL_FILE}" ]; then
+                break
+            fi
+            # Try with fewer nesting levels
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -n "${WHEEL_FILE}" ]; then
+                break
+            fi
+            # General search in any wheels directory
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -n "${WHEEL_FILE}" ]; then
+                break
+            fi
+            # Final fallback - any open3d wheel in pip cache directories
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/*/open3d*.whl" 2>/dev/null | head -1)
+            if [ -n "${WHEEL_FILE}" ]; then
+                break
+            fi
+        done
+        if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+            echo "  ✓ Found wheel via comprehensive recursive search: ${WHEEL_FILE}"
+        fi
+    fi
+    
+    # If wheel found, install it
+    if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo "Found wheel in ephemeral cache: ${WHEEL_FILE}"
+        # Safely get wheel size with error handling
+        WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
+        echo "  Wheel size: ${WHEEL_SIZE}"
+        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        
+        # CRITICAL: Copy wheel to persistent cache for later use
+        # Verify CACHE_ROOT is set, fallback to default if not
+        if [ -z "${CACHE_ROOT:-}" ]; then
+            CACHE_ROOT="/container_cache"
+            echo "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
+        fi
+        OPEN3D_WHEEL_CACHE="${CACHE_ROOT}/wheels/open3d"
+        
+        # Create cache directory with error handling
+        if mkdir -p "${OPEN3D_WHEEL_CACHE}" 2>/dev/null; then
+            WHEEL_BASENAME=$(basename "${WHEEL_FILE}")
+            CACHED_WHEEL="${OPEN3D_WHEEL_CACHE}/${WHEEL_BASENAME}"
+            
+            echo "  Copying wheel to persistent cache for later reuse..."
+            if cp "${WHEEL_FILE}" "${CACHED_WHEEL}" 2>/dev/null && [ -f "${CACHED_WHEEL}" ]; then
+                # Verify copy succeeded by checking file exists and getting size
+                CACHED_SIZE=$(du -h "${CACHED_WHEEL}" 2>/dev/null | cut -f1 || echo "unknown")
+                echo "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
+                echo "    This wheel will be available in writable overlays and conda environments"
+            else
+                echo "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)"
+            fi
+        else
+            echo "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)"
+        fi
+        
+        echo "  Installing wheel without dependencies (preserving compiled libs)..."
+        # Install WITHOUT dependencies to avoid overwriting compiled libraries
+        # Use --break-system-packages for externally-managed environments
+        python3 -m pip install --no-deps --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
+        PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
+        if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
+            echo "  ✓ Wheel installation completed (pip exit code: 0)"
+            sleep 1  # Allow installation to finalize
+            if verify_open3d_installation; then
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                echo "✓✓✓ Python module installed via wheel from ephemeral cache (no-deps, using compiled libs)"
+                echo "  Installation verified: Open3D module is importable"
+                # Only show cached wheel path if variable is set and file exists
+                if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
+                    echo "  Cached wheel: ${CACHED_WHEEL}"
+                fi
+                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                PYTHON_INSTALLED=true
+            else
+                echo "⚠ Wheel installed but verification failed"
+            fi
+        else
+            PIP_EXIT_CODE="${PIPESTATUS[0]}"
+            echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
+        fi
+    else
+        echo "  No wheel found in ephemeral pip cache directories"
     fi
 fi
 
@@ -9012,6 +9260,17 @@ echo "==> Installing TurboVNC and VirtualGL with official GPG signature verifica
 echo "Downloading the debsig-import helper script..."
 DEBSIG_IMPORT_URL="https://gist.githubusercontent.com/dcommander/2960e99d4a4f6998e249ec7cfec89b85/raw/debsig-import"
 if ! curl -fsSL -o /usr/local/bin/debsig-import "${DEBSIG_IMPORT_URL}"; then
+  echo ""
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  DOWNLOAD FAILED: debsig-import script"
+  echo "═══════════════════════════════════════════════════════════════"
+  echo "  File name: debsig-import"
+  echo "  Expected location: /usr/local/bin/debsig-import"
+  echo "  Source URL: ${DEBSIG_IMPORT_URL}"
+  echo ""
+  echo "  You may manually download this file and place it at:"
+  echo "    /usr/local/bin/debsig-import"
+  echo "═══════════════════════════════════════════════════════════════"
   echo "✗ ERROR: Failed to download the debsig-import script. Aborting."
     exit 1
 fi

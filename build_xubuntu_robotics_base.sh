@@ -30,9 +30,9 @@
 # Critical: Ensure script runs in bash (not sh/dash) for array and advanced features
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-if [ -z "$BASH_VERSION" ]; then
+if [ -z "${BASH_VERSION:-}" ]; then
     echo "ERROR: This script requires bash. Please run with: /bin/bash"
-    echo "Current shell: $0"
+    echo "Current shell: ${0}"
     exit 1
 fi
 # End if-fi block (self-contained)
@@ -153,11 +153,11 @@ echo "  Log directory: ${PWD}/build_logs"
 LOG_RETENTION_COUNT="${LOG_RETENTION_COUNT:-1}"
 
 # Safety check: Warn if retention count is misconfigured
-if [ "$LOG_RETENTION_COUNT" -le 0 ]; then
+if [ "${LOG_RETENTION_COUNT:-1}" -le 0 ]; then
     echo "  ⚠ WARNING: LOG_RETENTION_COUNT=${LOG_RETENTION_COUNT} (should be >= 1)"
     echo "  ⚠ Log cleanup is DISABLED - old logs will accumulate!"
     echo "  ⚠ Set LOG_RETENTION_COUNT=2 in config.sh (recommended)"
-elif [ "$LOG_RETENTION_COUNT" -gt 10 ]; then
+elif [ "${LOG_RETENTION_COUNT:-1}" -gt 10 ]; then
     echo "  ⚠ WARNING: LOG_RETENTION_COUNT=${LOG_RETENTION_COUNT} (unusually high)"
     echo "  ⚠ This will keep many old logs - consider reducing to 2-5"
 else
@@ -170,7 +170,7 @@ mkdir -p "${LOG_DIR}"
 # Now clean up old logs if directory exists and retention count is positive
 # CRITICAL: Cleanup runs BEFORE new log creation, so we keep (LOG_RETENTION_COUNT - 1) old logs
 # to account for the new log that will be created. This ensures total = LOG_RETENTION_COUNT
-if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
+if [ -d "${LOG_DIR}" ] && [ "${LOG_RETENTION_COUNT:-1}" -gt 0 ]; then
     # Count existing log files (match actual pattern: build-*.log and errors-*.log with hyphen)
     BUILD_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "build-*.log" -type f 2>/dev/null | wc -l)
     ERROR_LOGS=$(find "${LOG_DIR}" -maxdepth 1 -name "errors-*.log" -type f 2>/dev/null | wc -l)
@@ -178,26 +178,26 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     echo "  Found: ${BUILD_LOGS} build log(s), ${ERROR_LOGS} error log(s)"
     
     # Calculate how many old logs to keep (accounting for new log about to be created)
-    KEEP_OLD_LOGS=$((LOG_RETENTION_COUNT - 1))
-    if [ "$KEEP_OLD_LOGS" -lt 0 ]; then
+    KEEP_OLD_LOGS=$((${LOG_RETENTION_COUNT:-1} - 1))
+    if [ "${KEEP_OLD_LOGS}" -lt 0 ]; then
         KEEP_OLD_LOGS=0
     fi
     
     # Clean build logs if we have more than we want to keep
     # Use ls -t for sorting by modification time (newest first) - more portable than find -printf
-    if [ "$BUILD_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
+    if [ "${BUILD_LOGS:-0}" -gt "${KEEP_OLD_LOGS}" ]; then
         echo "Cleaning old build logs (found ${BUILD_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         DELETED_COUNT=0
         # Use while read loop instead of xargs to handle spaces/special chars better
         # CRITICAL: Use hyphen pattern to match actual log file names
         if ls -t "${LOG_DIR}/build-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
-                if [ -f "$old_log" ]; then
-                    if rm -f "$old_log"; then
-                        echo "  Removed: $(basename "$old_log")"
+                if [ -f "${old_log}" ]; then
+                    if rm -f "${old_log}"; then
+                        echo "  Removed: $(basename "${old_log}")"
                         DELETED_COUNT=$((DELETED_COUNT + 1))
                     else
-                        echo "  ⚠ Failed to remove: $(basename "$old_log")"
+                        echo "  ⚠ Failed to remove: $(basename "${old_log}")"
                     fi
                 fi
             done; then
@@ -208,16 +208,16 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
     fi
     
     # Clean error logs if we have more than we want to keep
-    if [ "$ERROR_LOGS" -gt "$KEEP_OLD_LOGS" ]; then
+    if [ "${ERROR_LOGS:-0}" -gt "${KEEP_OLD_LOGS}" ]; then
         echo "Cleaning old error logs (found ${ERROR_LOGS}, keeping ${KEEP_OLD_LOGS} old + 1 new = ${LOG_RETENTION_COUNT} total)..."
         # CRITICAL: Use hyphen pattern to match actual log file names
         if ls -t "${LOG_DIR}/errors-"*.log 2>/dev/null | tail -n +$((KEEP_OLD_LOGS + 1)) | \
             while read -r old_log; do
-                if [ -f "$old_log" ]; then
-                    if rm -f "$old_log"; then
-                        echo "  Removed: $(basename "$old_log")"
+                if [ -f "${old_log}" ]; then
+                    if rm -f "${old_log}"; then
+                        echo "  Removed: $(basename "${old_log}")"
                     else
-                        echo "  ⚠ Failed to remove: $(basename "$old_log")"
+                        echo "  ⚠ Failed to remove: $(basename "${old_log}")"
                     fi
                 fi
             done; then
@@ -227,7 +227,7 @@ if [ -d "$LOG_DIR" ] && [ "$LOG_RETENTION_COUNT" -gt 0 ]; then
         fi
     fi
     
-    if [ "$BUILD_LOGS" -le "$KEEP_OLD_LOGS" ] && [ "$ERROR_LOGS" -le "$KEEP_OLD_LOGS" ]; then
+    if [ "${BUILD_LOGS:-0}" -le "${KEEP_OLD_LOGS}" ] && [ "${ERROR_LOGS:-0}" -le "${KEEP_OLD_LOGS}" ]; then
         echo "✓ No log cleanup needed (found ${BUILD_LOGS} build logs, ${ERROR_LOGS} error logs, will have ${LOG_RETENTION_COUNT} total after this run)"
     fi
 fi
@@ -265,7 +265,7 @@ NC='\033[0m'          # No Color (reset)
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
 OUR_TMP_DIR="/tmp/singularity_builds"      # Temp builds in /tmp
-OUR_HOME_DIR="$HOME/singularity_builds"    # Fallback builds in home
+OUR_HOME_DIR="${HOME}/singularity_builds"    # Fallback builds in home
 
 #===============================================================================
 # BLOCK 8: LOGGING FUNCTIONS
@@ -280,9 +280,9 @@ OUR_HOME_DIR="$HOME/singularity_builds"    # Fallback builds in home
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_with_timestamp() {
-    local message="[$(date +'%H:%M:%S')] $1"
-    if [ -f "$LOG_FILE" ]; then
-    echo -e "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
+    local message="[$(date +'%H:%M:%S')] ${1:-}"
+    if [ -f "${LOG_FILE:-}" ]; then
+        echo -e "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
     else
         echo -e "${BLUE}${message}${NC}"
     fi
@@ -292,9 +292,9 @@ log_with_timestamp() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_error() {
-    local message="[$(date +'%H:%M:%S')] ERROR: $1"
-    if [ -f "${ERROR_LOG}" ] && [ -f "${LOG_FILE}" ]; then
-    echo -e "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
+    local message="[$(date +'%H:%M:%S')] ERROR: ${1:-}"
+    if [ -f "${ERROR_LOG:-}" ] && [ -f "${LOG_FILE:-}" ]; then
+        echo -e "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
     else
         echo -e "${RED}${message}${NC}"
     fi
@@ -304,9 +304,9 @@ log_error() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_warning() {
-    local message="[$(date +'%H:%M:%S')] WARNING: $1"
-    if [ -f "$LOG_FILE" ]; then
-    echo -e "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
+    local message="[$(date +'%H:%M:%S')] WARNING: ${1:-}"
+    if [ -f "${LOG_FILE:-}" ]; then
+        echo -e "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
     else
         echo -e "${YELLOW}${message}${NC}"
     fi
@@ -320,26 +320,26 @@ log_warning() {
 filter_errors_and_warnings() {
     # Ensure ERROR_LOG is available (should be set before this function is called)
     local error_log="${ERROR_LOG:-}"
-    if [ -z "$error_log" ]; then
+    if [ -z "${error_log}" ]; then
         # If ERROR_LOG not set, just pass through without filtering
-        while IFS= read -r line; do
-            echo "$line"
+        while IFS= read -r line || [ -n "${line}" ]; do
+            echo "${line}"
         done
         return
     fi
     
     local line
-    while IFS= read -r line; do
+    while IFS= read -r line || [ -n "${line}" ]; do
         # Write all output to terminal and main log (already handled by tee)
-        echo "$line"
+        echo "${line}"
         
         # Comprehensive error/warning pattern matching (case-insensitive)
         # This pattern catches: errors, warnings, debug messages, diagnostic output, 
         # wheel paths, build failures, compilation issues, and all problematic output
-        if echo "$line" | grep -qiE \
+        if echo "${line}" | grep -qiE \
             '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
             # Write matching line to error log with timestamp
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')] $line" >> "${error_log}" 2>/dev/null || true
+            echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
         fi
     done
 }
@@ -348,9 +348,9 @@ filter_errors_and_warnings() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_success() {
-    local message="[$(date +'%H:%M:%S')] SUCCESS: $1"
-    if [ -f "$LOG_FILE" ]; then
-    echo -e "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
+    local message="[$(date +'%H:%M:%S')] SUCCESS: ${1:-}"
+    if [ -f "${LOG_FILE:-}" ]; then
+        echo -e "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
     else
         echo -e "${GREEN}${message}${NC}"
     fi
@@ -393,8 +393,9 @@ start_time() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 elapsed_time() {
-    local start="$1"
-    local end=$(date +%s)
+    local start="${1:-0}"
+    local end
+    end=$(date +%s)
     local elapsed=$((end - start))
     # Format as HH:MM:SS
     printf "%02d:%02d:%02d" $((elapsed/3600)) $(((elapsed%3600)/60)) $((elapsed%60))
@@ -429,13 +430,13 @@ detect_container_system() {
 # Outputs: Configured system components
 CONTAINER_CMD=$(detect_container_system)
 
-if [ "$CONTAINER_CMD" = "none" ]; then
+if [ "${CONTAINER_CMD}" = "none" ]; then
     log "ERROR: Neither singularity nor apptainer found in system"
     exit 1
 fi
 # End if-fi block (self-contained)
 
-log "Detected container system: $CONTAINER_CMD"
+log "Detected container system: ${CONTAINER_CMD}"
 
 #===============================================================================
 # BLOCK 11: CLEANUP FUNCTIONS
@@ -454,45 +455,54 @@ log "Detected container system: $CONTAINER_CMD"
 # Returns: 0 on success, 1 on failure
 # Critical: Uses sudo with kill, unmount, and rm - ensures all remnants are removed
 strict_cleanup_our_dirs() {
-    local parent_dir="$1"
+    local parent_dir="${1:-}"
     local max_attempts=3
 
+    # Validate input parameter
+    if [ -z "${parent_dir}" ]; then
+        echo "  ⚠ ERROR: strict_cleanup_our_dirs called without directory argument"
+        return 1
+    fi
+
     # Early return if directory doesn't exist
-    if [ ! -d "$parent_dir" ]; then
-        echo " ✓ Directory does not exist: $parent_dir"
-        return
+    if [ ! -d "${parent_dir}" ]; then
+        echo " ✓ Directory does not exist: ${parent_dir}"
+        return 0
     fi
     # End if-fi block
 
-    echo "Cleaning... $parent_dir"
+    echo "Cleaning... ${parent_dir}"
 
     # Find all temporary build directories matching known patterns
-    local target_dirs=$(find "$parent_dir" -maxdepth 1 -type d \( \
+    local target_dirs
+    target_dirs=$(find "${parent_dir}" -maxdepth 1 -type d \( \
         -name "build-temp-*" \
         -o -name "bundle-temp-*" \
         -o -name "sbuild-*" \
-    \) 2>/dev/null)
+    \) 2>/dev/null || true)
 
-    if [ -z "$target_dirs" ]; then
+    if [ -z "${target_dirs}" ]; then
         echo " ✓ No temp directories found"
-        return
+        return 0
     fi
     # End if-fi block
 
-    local count=$(echo "$target_dirs" | wc -l)
-    echo "Found $count directories"
+    local count
+    count=$(echo "${target_dirs}" | wc -l)
+    echo "Found ${count} directories"
 
     # Critical: Try up to 3 times with escalating force
-    for attempt in $(seq 1 $max_attempts); do
+    for attempt in $(seq 1 "${max_attempts}"); do
         # Step 1: Kill all processes using these directories
-        echo "$target_dirs" | while read dir; do
-            [ ! -d "$dir" ] && continue
+        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+            [ ! -d "${dir}" ] && continue
             # Find all PIDs with open files in this directory
-            sudo lsof +D "$dir" 2>/dev/null | tail -n +2 | awk '{print $2}' | sort -u | while read pid; do
-                local user=$(ps -p "$pid" -o user= 2>/dev/null)
+            sudo lsof +D "${dir}" 2>/dev/null | tail -n +2 | awk '{print $2}' | sort -u | while IFS= read -r pid || [ -n "${pid}" ]; do
+                local user
+                user=$(ps -p "${pid}" -o user= 2>/dev/null || echo "")
                 # Critical: Only kill processes owned by current user (safety check)
-                if [ "$user" = "$USER" ]; then
-                    sudo kill -9 "$pid" 2>/dev/null || true
+                if [ -n "${user}" ] && [ "${user}" = "${USER}" ]; then
+                    sudo kill -9 "${pid}" 2>/dev/null || true
                 fi
             done
         done
@@ -510,32 +520,33 @@ strict_cleanup_our_dirs() {
         sleep 1
 
         # Step 2: Unmount any mount points within these directories
-        echo "$target_dirs" | while read dir; do
-            [ ! -d "$dir" ] && continue
+        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+            [ ! -d "${dir}" ] && continue
             # Find and unmount all mount points under this directory
-            mount 2>/dev/null | grep "$dir" | awk '{print $3}' | while read mpoint; do
-                sudo umount -l "$mpoint" 2>/dev/null || true  # Lazy unmount
+            mount 2>/dev/null | grep -F "${dir}" | awk '{print $3}' | while IFS= read -r mpoint || [ -n "${mpoint}" ]; do
+                sudo umount -l "${mpoint}" 2>/dev/null || true  # Lazy unmount
             done
         done
 
         sleep 1
 
         # Step 3: Remove with escalating force (chmod, chattr, rm)
-        echo "$target_dirs" | while read dir; do
-            [ ! -d "$dir" ] && continue
-            sudo chmod -R 777 "$dir" 2>/dev/null        # Make all writable
-            sudo chattr -i -R "$dir" 2>/dev/null        # Remove immutable flags
-            sudo rm -rf "$dir" 2>/dev/null || true      # Force remove
+        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+            [ ! -d "${dir}" ] && continue
+            sudo chmod -R 777 "${dir}" 2>/dev/null        # Make all writable
+            sudo chattr -i -R "${dir}" 2>/dev/null        # Remove immutable flags
+            sudo rm -rf "${dir}" 2>/dev/null || true      # Force remove
         done
 
         # Check if cleanup was successful
-        local remaining=$(find "$parent_dir" -maxdepth 1 -type d \( \
+        local remaining
+        remaining=$(find "${parent_dir}" -maxdepth 1 -type d \( \
             -name "build-temp-*" \
             -o -name "bundle-temp-*" \
             -o -name "sbuild-*" \
         \) 2>/dev/null | wc -l)
 
-        if [ "$remaining" -eq 0 ]; then
+        if [ "${remaining:-0}" -eq 0 ]; then
             echo " ✓ All directories removed"
             return 0
         fi
@@ -574,12 +585,13 @@ comprehensive_cleanup() {
     echo ""
     echo "1. Killing OUR ${CONTAINER_CMD} processes..."
     # Critical: Find all singularity/apptainer processes owned by current user
-    ps aux | grep -E "singularity|apptainer" | grep "$USER" | grep -v grep | awk '{print $2}' | while read pid; do
+    ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | awk '{print $2}' | while IFS= read -r pid || [ -n "${pid}" ]; do
         # Verify it's actually our process before killing
-        local cmd=$(ps -p "$pid" -o cmd= 2>/dev/null)
-        if [ -n "$cmd" ]; then
-            echo " > Killing PID $pid: $(echo $cmd | cut -c1-60)"
-            sudo kill -9 "$pid" 2>/dev/null || true
+        local cmd
+        cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
+        if [ -n "${cmd}" ]; then
+            echo " > Killing PID ${pid}: $(echo "${cmd}" | cut -c1-60)"
+            sudo kill -9 "${pid}" 2>/dev/null || true
         fi
     done
     # End while loop (self-contained)
@@ -598,10 +610,10 @@ comprehensive_cleanup() {
 
     # Determine cache locations based on container system detected earlier
     local cache_base=""
-    if [ "$CONTAINER_CMD" = "singularity" ]; then
-        cache_base="$HOME/.singularity"
+    if [ "${CONTAINER_CMD}" = "singularity" ]; then
+        cache_base="${HOME}/.singularity"
     else
-        cache_base="$HOME/.apptainer"
+        cache_base="${HOME}/.apptainer"
     fi
     # End if-else block (self-contained)
 
@@ -616,30 +628,33 @@ comprehensive_cleanup() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
     # Clean temporary cache, NOT the actual image cache (preserve for future builds)
-    if [ -d "$cache_base" ]; then
-        echo "   Cleaning $cache_base/cache/tmp..."
-        if [ -d "$cache_base/cache/tmp" ]; then
-            local tmp_count=$(find "$cache_base/cache/tmp" -type f 2>/dev/null | wc -l)
-            echo "   Found $tmp_count temporary files"
-            sudo rm -rf "$cache_base/cache/tmp"/* 2>/dev/null || true
+    if [ -d "${cache_base}" ]; then
+        echo "   Cleaning ${cache_base}/cache/tmp..."
+        if [ -d "${cache_base}/cache/tmp" ]; then
+            local tmp_count
+            tmp_count=$(find "${cache_base}/cache/tmp" -type f 2>/dev/null | wc -l)
+            echo "   Found ${tmp_count} temporary files"
+            sudo rm -rf "${cache_base}/cache/tmp"/* 2>/dev/null || true
         fi
         # End nested if-fi block
 
         # Clean any .lock files (stale locks from failed builds)
         echo "   Cleaning stale lock files..."
-        local lock_count=$(find "$cache_base" -name "*.lock" 2>/dev/null | wc -l)
-        if [ "$lock_count" -gt 0 ]; then
-            echo "   Found $lock_count lock files"
-            find "$cache_base" -name "*.lock" -exec rm -f {} + 2>/dev/null || true
+        local lock_count
+        lock_count=$(find "${cache_base}" -name "*.lock" 2>/dev/null | wc -l)
+        if [ "${lock_count:-0}" -gt 0 ]; then
+            echo "   Found ${lock_count} lock files"
+            find "${cache_base}" -name "*.lock" -exec rm -f {} + 2>/dev/null || true
         fi
         # End nested if-fi block
 
         # Clean incomplete/partial downloads
-        if [ -d "$cache_base/cache/oci-tmp" ]; then
+        if [ -d "${cache_base}/cache/oci-tmp" ]; then
             echo "   Cleaning partial downloads..."
-            local partial_count=$(find "$cache_base/cache/oci-tmp" -type d 2>/dev/null | wc -l)
-            echo "   Found $partial_count partial OCI downloads"
-            sudo rm -rf "$cache_base/cache/oci-tmp"/* 2>/dev/null || true
+            local partial_count
+            partial_count=$(find "${cache_base}/cache/oci-tmp" -type d 2>/dev/null | wc -l)
+            echo "   Found ${partial_count} partial OCI downloads"
+            sudo rm -rf "${cache_base}/cache/oci-tmp"/* 2>/dev/null || true
         fi
         # End nested if-fi block
 
@@ -651,9 +666,9 @@ comprehensive_cleanup() {
     echo "4. Identifying orphaned/incomplete containers..."
 
     # Critical: Check for incomplete .sif files in build directories
-    for dir in "$OUR_TMP_DIR" "$OUR_HOME_DIR"; do
-        if [ -d "$dir" ]; then
-            echo "   Checking $dir..."
+    for dir in "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
+        if [ -d "${dir}" ]; then
+            echo "   Checking ${dir}..."
 
 #--- Sub-block: Section continuation (464) ---
 # Purpose: Implementation details
@@ -661,9 +676,11 @@ comprehensive_cleanup() {
 # Outputs: Environment variables, configuration
 
             # Find .sif files that are incomplete (being written, locked, or 0 bytes)
-            find "$dir" -maxdepth 2 -name "*.sif" 2>/dev/null | while read sif_file; do
-                local sif_name=$(basename "$sif_file")
-                local sif_size=$(stat -c%s "$sif_file" 2>/dev/null || echo "0")
+            find "${dir}" -maxdepth 2 -name "*.sif" 2>/dev/null | while IFS= read -r sif_file || [ -n "${sif_file}" ]; do
+                local sif_name
+                sif_name=$(basename "${sif_file}")
+                local sif_size
+                sif_size=$(stat -c%s "${sif_file}" 2>/dev/null || echo "0")
 
 
 #--- Sub-block: Code section 463 ---
@@ -679,23 +696,24 @@ comprehensive_cleanup() {
                 local is_orphaned=0
 
                 # Check 1: Zero size (failed build)
-                if [ "$sif_size" -eq 0 ]; then
-                    echo "      ✗ Orphaned (0 bytes): $sif_name"
+                if [ "${sif_size:-0}" -eq 0 ]; then
+                    echo "      ✗ Orphaned (0 bytes): ${sif_name}"
                     is_orphaned=1
                 fi
 
                 # Check 2: File locked by a dead process
-                if sudo lsof "$sif_file" 2>/dev/null | grep -q .; then
-                    local pid=$(sudo lsof "$sif_file" 2>/dev/null | tail -n +2 | awk '{print $2}' | head -1)
-                    if ! ps -p "$pid" > /dev/null 2>&1; then
-                        echo "      ✗ Orphaned (locked by dead PID $pid): $sif_name"
+                if sudo lsof "${sif_file}" 2>/dev/null | grep -q .; then
+                    local pid
+                    pid=$(sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 | awk '{print $2}' | head -1 || echo "")
+                    if [ -n "${pid}" ] && ! ps -p "${pid}" > /dev/null 2>&1; then
+                        echo "      ✗ Orphaned (locked by dead PID ${pid}): ${sif_name}"
                         is_orphaned=1
                     fi
                 fi
 
                 # Check 3: Partial .sif file (has .partial extension or temp naming)
-                if [[ "$sif_name" == *.partial ]] || [[ "$sif_name" == tmp_* ]] || [[ "$sif_name" == .tmp* ]]; then
-                    echo "      ✗ Orphaned (partial/temp name): $sif_name"
+                if [[ "${sif_name}" == *.partial ]] || [[ "${sif_name}" == tmp_* ]] || [[ "${sif_name}" == .tmp* ]]; then
+                    echo "      ✗ Orphaned (partial/temp name): ${sif_name}"
                     is_orphaned=1
                 fi
 
@@ -710,24 +728,24 @@ comprehensive_cleanup() {
 # Outputs: Environment variables, configuration
 
                 # Check 4: Very small size (< 10MB - likely incomplete)
-                if [ "$sif_size" -lt 10485760 ] && [ "$sif_size" -gt 0 ]; then
-                    echo "      ✗ Orphaned (suspiciously small $sif_size bytes): $sif_name"
+                if [ "${sif_size:-0}" -lt 10485760 ] && [ "${sif_size:-0}" -gt 0 ]; then
+                    echo "      ✗ Orphaned (suspiciously small ${sif_size} bytes): ${sif_name}"
                     is_orphaned=1
                 fi
 
                 # Remove if orphaned
-                if [ $is_orphaned -eq 1 ]; then
-                    echo "        Removing orphaned container: $sif_file"
-                    sudo rm -f "$sif_file" 2>/dev/null || {
+                if [ "${is_orphaned}" -eq 1 ]; then
+                    echo "        Removing orphaned container: ${sif_file}"
+                    sudo rm -f "${sif_file}" 2>/dev/null || {
                         echo "        → Failed to remove, trying force..."
-                        sudo lsof "$sif_file" 2>/dev/null | tail -n +2 | awk '{print $2}' | while read lock_pid; do
-                            sudo kill -9 "$lock_pid" 2>/dev/null || true
+                        sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 | awk '{print $2}' | while IFS= read -r lock_pid || [ -n "${lock_pid}" ]; do
+                            sudo kill -9 "${lock_pid}" 2>/dev/null || true
                         done
                         sleep 1
-                        sudo rm -f "$sif_file" 2>/dev/null || echo "        → Still locked!"
+                        sudo rm -f "${sif_file}" 2>/dev/null || echo "        → Still locked!"
                     }
                 else
-                    echo "      ✓ Valid container ($(numfmt --to=iec-i --suffix=B $sif_size)): $sif_name"
+                    echo "      ✓ Valid container ($(numfmt --to=iec-i --suffix=B "${sif_size}")): ${sif_name}"
                 fi
                 # End nested if-else block
             done
@@ -756,12 +774,12 @@ comprehensive_cleanup() {
     echo ""
     echo "5. Cleaning session directories..."
     # Critical: Singularity/Apptainer creates session dirs in /tmp
-    find /tmp -maxdepth 1 -type d -user "$USER" \( \
+    find /tmp -maxdepth 1 -type d -user "${USER}" \( \
         -name "${CONTAINER_CMD}-*" -o \
         -name "${CONTAINER_CMD}-*" \
-    \) 2>/dev/null | while read session_dir; do
-        echo "   Removing session: $(basename "$session_dir")"
-        sudo rm -rf "$session_dir" 2>/dev/null || true
+    \) 2>/dev/null | while IFS= read -r session_dir || [ -n "${session_dir}" ]; do
+        echo "   Removing session: $(basename "${session_dir}")"
+        sudo rm -rf "${session_dir}" 2>/dev/null || true
     done
     # End while loop (self-contained)
 
@@ -769,10 +787,10 @@ comprehensive_cleanup() {
     echo ""
     echo "6. Cleaning mount point remnants..."
     # Critical: Check for orphaned overlay/underlay mounts
-    mount 2>/dev/null | grep -E "singularity|apptainer" | grep "$USER" | awk '{print $3}' | while read mpoint; do
-        echo "   Unmounting: $mpoint"
-        sudo umount -l "$mpoint" 2>/dev/null || true  # Lazy unmount
-        sudo umount -f "$mpoint" 2>/dev/null || true  # Force unmount
+    mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | awk '{print $3}' | while IFS= read -r mpoint || [ -n "${mpoint}" ]; do
+        echo "   Unmounting: ${mpoint}"
+        sudo umount -l "${mpoint}" 2>/dev/null || true  # Lazy unmount
+        sudo umount -f "${mpoint}" 2>/dev/null || true  # Force unmount
     done
     # End while loop (self-contained)
 
@@ -780,19 +798,20 @@ comprehensive_cleanup() {
     echo ""
     echo "7. Cleaning stale PID files..."
     # Critical: Remove PID files for dead processes
-    find /tmp -maxdepth 1 -type f -user "$USER" -name "*.pid" 2>/dev/null | while read pid_file; do
-        if [[ "$(basename "$pid_file")" == "singularity"* ]] || [[ "$(basename "$pid_file")" == "apptainer"* ]]; then
-            local pid=$(cat "$pid_file" 2>/dev/null)
-            if [ -n "$pid" ]; then
+    find /tmp -maxdepth 1 -type f -user "${USER}" -name "*.pid" 2>/dev/null | while IFS= read -r pid_file || [ -n "${pid_file}" ]; do
+        if [[ "$(basename "${pid_file}")" == "singularity"* ]] || [[ "$(basename "${pid_file}")" == "apptainer"* ]]; then
+            local pid
+            pid=$(cat "${pid_file}" 2>/dev/null || echo "")
+            if [ -n "${pid}" ]; then
                 # Check if process is still running
-                if ! ps -p "$pid" > /dev/null 2>&1; then
-                    echo "   Removing stale PID file (process $pid dead): $(basename "$pid_file")"
-                    rm -f "$pid_file" 2>/dev/null || true
+                if ! ps -p "${pid}" > /dev/null 2>&1; then
+                    echo "   Removing stale PID file (process ${pid} dead): $(basename "${pid_file}")"
+                    rm -f "${pid_file}" 2>/dev/null || true
                 fi
                 # End nested if-fi block
             else
-                echo "   Removing empty PID file: $(basename "$pid_file")"
-                rm -f "$pid_file" 2>/dev/null || true
+                echo "   Removing empty PID file: $(basename "${pid_file}")"
+                rm -f "${pid_file}" 2>/dev/null || true
             fi
             # End if-else block
 
@@ -819,15 +838,15 @@ comprehensive_cleanup() {
     echo ""
     echo "8. Cleaning temporary overlay files..."
     # Critical: Remove unused overlay/squashfs/ext3 files in /tmp
-    find /tmp -maxdepth 1 -type f -user "$USER" \( \
+    find /tmp -maxdepth 1 -type f -user "${USER}" \( \
         -name "*overlay*" -o \
         -name "*.sqfs" -o \
         -name "*.ext3" \
-    \) 2>/dev/null | while read overlay_file; do
+    \) 2>/dev/null | while IFS= read -r overlay_file || [ -n "${overlay_file}" ]; do
         # Check if file is being used by any process
-        if ! sudo lsof "$overlay_file" 2>/dev/null | grep -q .; then
-            echo "   Removing unused overlay: $(basename "$overlay_file")"
-            sudo rm -f "$overlay_file" 2>/dev/null || true
+        if ! sudo lsof "${overlay_file}" 2>/dev/null | grep -q .; then
+            echo "   Removing unused overlay: $(basename "${overlay_file}")"
+            sudo rm -f "${overlay_file}" 2>/dev/null || true
 
 #--- Sub-block: Comprehensive cleanup ---
 # Critical: Ensure clean build environment
@@ -849,14 +868,15 @@ comprehensive_cleanup() {
     local issues=0
 
     # Check 1: Remaining build-temp directories
-    local remaining_temps=$(find "$OUR_TMP_DIR" "$OUR_HOME_DIR" -maxdepth 1 -type d \( \
+    local remaining_temps
+    remaining_temps=$(find "${OUR_TMP_DIR}" "${OUR_HOME_DIR}" -maxdepth 1 -type d \( \
         -name "build-temp-*" \
         -o -name "bundle-temp-*" \
         -o -name "sbuild-*" \
     \) 2>/dev/null | wc -l)
 
-    if [ "$remaining_temps" -gt 0 ]; then
-        echo "  ✗ Still have $remaining_temps temp directories"
+    if [ "${remaining_temps:-0}" -gt 0 ]; then
+        echo "  ✗ Still have ${remaining_temps} temp directories"
         issues=$((issues + remaining_temps))
     else
         echo "  ✓ No temp directories remaining"
@@ -869,11 +889,12 @@ comprehensive_cleanup() {
 # Purpose: Continued implementation
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
-    local remaining_procs=$(ps aux | grep -E "singularity|apptainer" | grep "$USER" | grep -v grep | wc -l)
-    if [ "$remaining_procs" -gt 0 ]; then
-        echo "  ✗ Still have $remaining_procs container processes running"
-        ps aux | grep -E "singularity|apptainer" | grep "$USER" | grep -v grep | while read line; do
-            echo "    - $(echo $line | awk '{print $2, $11}')"
+    local remaining_procs
+    remaining_procs=$(ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | wc -l)
+    if [ "${remaining_procs:-0}" -gt 0 ]; then
+        echo "  ✗ Still have ${remaining_procs} container processes running"
+        ps aux | grep -E "singularity|apptainer" | grep "${USER}" | grep -v grep | while IFS= read -r line || [ -n "${line}" ]; do
+            echo "    - $(echo "${line}" | awk '{print $2, $11}')"
         done
         issues=$((issues + remaining_procs))
     else
@@ -892,9 +913,10 @@ comprehensive_cleanup() {
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
     # Check 3: Orphaned mounts
-    local remaining_mounts=$(mount 2>/dev/null | grep -E "singularity|apptainer" | grep "$USER" | wc -l)
-    if [ "$remaining_mounts" -gt 0 ]; then
-        echo "  ✗ Still have $remaining_mounts orphaned mounts"
+    local remaining_mounts
+    remaining_mounts=$(mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | wc -l)
+    if [ "${remaining_mounts:-0}" -gt 0 ]; then
+        echo "  ✗ Still have ${remaining_mounts} orphaned mounts"
         issues=$((issues + remaining_mounts))
     else
         echo "  ✓ No orphaned mounts remaining"
@@ -903,11 +925,11 @@ comprehensive_cleanup() {
 
     # Final status report
     echo ""
-    if [ "$issues" -eq 0 ]; then
+    if [ "${issues:-0}" -eq 0 ]; then
         echo "CLEANUP COMPLETE - No issues found"
         return 0
     else
-        echo "!!! CLEANUP INCOMPLETE - $issues issues remain"
+        echo "!!! CLEANUP INCOMPLETE - ${issues} issues remain"
         return 1
     fi
     # End if-else block (self-contained)
@@ -977,7 +999,7 @@ cleanup_on_exit() {
 
     echo ""
     echo "=========================================="
-    echo "POST-BUILD CLEANUP (exit code: $exit_code)"
+    echo "POST-BUILD CLEANUP (exit code: ${exit_code})"
     echo "=========================================="
     
     # Analyze build log for errors/warnings with context before cleanup
@@ -985,7 +1007,7 @@ cleanup_on_exit() {
     
     comprehensive_cleanup || true  # Run cleanup, ignore failures at exit
 
-    exit $exit_code  # Exit with original code
+    exit "${exit_code}"  # Exit with original code
 }
 # End function (self-contained)
 
@@ -1020,13 +1042,23 @@ log_with_timestamp "Error log: ${ERROR_LOG}"
 if [ -z "${ERROR_LOG}" ] || [ ! -f "${ERROR_LOG}" ]; then
     touch "${ERROR_LOG}" 2>/dev/null || true
 fi
-echo "========================================" >> "${ERROR_LOG}"
-echo "Error Log Started: $(date)" >> "${ERROR_LOG}"
-echo "Build Log: ${LOG_FILE}" >> "${ERROR_LOG}"
-echo "========================================" >> "${ERROR_LOG}"
+# Validate ERROR_LOG is writable before appending
+if [ -n "${ERROR_LOG}" ] && [ -w "${ERROR_LOG}" ] 2>/dev/null || touch "${ERROR_LOG}" 2>/dev/null; then
+    {
+        echo "========================================"
+        echo "Error Log Started: $(date)"
+        echo "Build Log: ${LOG_FILE}"
+        echo "========================================"
+    } >> "${ERROR_LOG}" 2>/dev/null || true
+fi
 
 # Set up filtered output redirection
 # stdout goes to main log and terminal, stderr goes to both and is also filtered for errors
+# Validate LOG_FILE is set and writable before redirection
+if [ -z "${LOG_FILE}" ] || [ ! -w "$(dirname "${LOG_FILE}")" ] 2>/dev/null; then
+    log_error "LOG_FILE not set or directory not writable: ${LOG_FILE}"
+    exit 1
+fi
 exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings)
 
 # Log script start with detailed information
@@ -1056,7 +1088,18 @@ BUILD_TMP_DIR=""
 # Critical: Determine where to place temporary build files
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-ROOT_AVAIL_GB=$(df -BG / | awk 'NR==2 {print substr($4, 1, length($4)-1)}')
+ROOT_AVAIL_GB=$(df -BG / 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
+# Validate numeric value
+if ! [[ "${ROOT_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
+    log_error "Failed to determine available disk space in /"
+    ROOT_AVAIL_GB=0
+fi
+
+# Validate DISK_SPACE_REQUIRED_GB is numeric
+if ! [[ "${DISK_SPACE_REQUIRED_GB:-0}" =~ ^[0-9]+$ ]]; then
+    log_error "DISK_SPACE_REQUIRED_GB is not a valid number: ${DISK_SPACE_REQUIRED_GB:-}"
+    exit 1
+fi
 
 if (( ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
     # Use /tmp if sufficient space (faster, typically tmpfs)
@@ -1067,7 +1110,12 @@ else
     log_warning "Insufficient space (${ROOT_AVAIL_GB}GB) in /tmp. Checking home directory..."
 
     # Check home directory space
-    HOME_AVAIL_GB=$(df -BG "$HOME" | awk 'NR==2 {print substr($4, 1, length($4)-1)}')
+    HOME_AVAIL_GB=$(df -BG "${HOME}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
+    # Validate numeric value
+    if ! [[ "${HOME_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
+        log_error "Failed to determine available disk space in ${HOME}"
+        HOME_AVAIL_GB=0
+    fi
 
     if (( HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
         # Use home directory if sufficient space
@@ -1086,8 +1134,18 @@ fi
 # Critical: Create the selected directory and set permissions
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
-mkdir -p "${BUILD_TMP_DIR}"
-chmod 777 "${BUILD_TMP_DIR}"  # Wide permissions for container access
+if [ -z "${BUILD_TMP_DIR}" ]; then
+    log_error "BUILD_TMP_DIR is not set"
+    exit 1
+fi
+mkdir -p "${BUILD_TMP_DIR}" || {
+    log_error "Failed to create temporary directory: ${BUILD_TMP_DIR}"
+    exit 1
+}
+# Use 755 instead of 777 for security (container runtime should handle access)
+chmod 755 "${BUILD_TMP_DIR}" || {
+    log_warning "Failed to set permissions on ${BUILD_TMP_DIR}, continuing..."
+}
 
 # Critical: Export temp dir for both singularity and apptainer
 export SINGULARITY_TMPDIR="${BUILD_TMP_DIR}"
@@ -1222,10 +1280,25 @@ fi
 # Parameters: $1=URL, $2=destination path
 # Returns: 0 on success, exits on failure
 fetch() {
-    local url="$1" dst="$2"
+    local url="$1"
+    local dst="$2"
+
+    # Validate parameters
+    if [ -z "${url}" ] || [ -z "${dst}" ]; then
+        err "fetch() called with empty URL or destination: url='${url}', dst='${dst}'"
+    fi
+
+    # Validate destination directory exists or can be created
+    local dst_dir
+    dst_dir="$(dirname "${dst}")"
+    if [ ! -d "${dst_dir}" ]; then
+        mkdir -p "${dst_dir}" || {
+            err "Failed to create destination directory: ${dst_dir}"
+        }
+    fi
 
     # Check if file already exists in cache
-    if [ ! -s "$dst" ]; then
+    if [ ! -s "${dst}" ]; then
         log "Fetching ${dst##*/}"
     else
         log "Using cached: $(basename "$dst")"
@@ -1236,30 +1309,46 @@ fetch() {
     # Attempt 1: aria2c (fastest, supports parallel downloads)
     if command -v aria2c >/dev/null 2>&1; then
         # Critical: Adaptive connection count based on file size
-        local file_size_mb=$(curl -sSLI "$url" | grep -i content-length | awk '{print int($2/1024/1024)}' 2>/dev/null || echo "0")
+        local file_size_mb=0
+        local content_length
+        content_length=$(curl -sSLI "${url}" 2>/dev/null | grep -i "content-length:" | awk '{print $2}' | head -1)
+        if [ -n "${content_length}" ] && [[ "${content_length}" =~ ^[0-9]+$ ]]; then
+            file_size_mb=$((content_length / 1024 / 1024))
+        fi
         local connections=4
-        if [[ $file_size_mb -gt 100 ]]; then
+        if [[ ${file_size_mb} -gt 100 ]]; then
             connections=8  # Large files: more connections
-        elif [[ $file_size_mb -gt 50 ]]; then
+        elif [[ ${file_size_mb} -gt 50 ]]; then
             connections=6  # Medium files: moderate connections
         fi
         # End if-elif-fi block
 
-        aria2c --check-certificate=true --max-connection-per-server=$connections --split=$connections \
-            --retry-wait=2 --timeout=30 --continue=true -o "$(basename "$dst")" \
-            -d "$(dirname "$dst")" --console-log-level=error "$url" 2>/dev/null || warn "aria2c failed for $url; trying curl"
+        if aria2c --check-certificate=true --max-connection-per-server=${connections} --split=${connections} \
+            --retry-wait=2 --timeout=30 --continue=true -o "$(basename "${dst}")" \
+            -d "$(dirname "${dst}")" --console-log-level=error "${url}" 2>/dev/null; then
+            # Verify download succeeded
+            if [ ! -s "${dst}" ]; then
+                warn "aria2c completed but file is empty or missing: ${dst}"
+            fi
+        else
+            warn "aria2c failed for ${url}; trying curl"
+        fi
     fi
     # End outer if-fi block
 
     # Attempt 2: curl (fallback, widely available)
-    if [ ! -s "$dst" ]; then
-        curl -fL --retry 5 --retry-delay 2 -o "$dst" "$url" || warn "curl failed for $url; trying wget"
+    if [ ! -s "${dst}" ]; then
+        if ! curl -fL --retry 5 --retry-delay 2 -o "${dst}" "${url}" 2>/dev/null; then
+            warn "curl failed for ${url}; trying wget"
+        fi
     fi
     # End if-fi block
 
     # Attempt 3: wget (most compatible fallback)
-    if [ ! -s "$dst" ] && command -v wget >/dev/null 2>&1; then
-        wget --tries=5 --waitretry=2 -O "$dst" "$url"
+    if [ ! -s "${dst}" ] && command -v wget >/dev/null 2>&1; then
+        if ! wget --tries=5 --waitretry=2 -O "${dst}" "${url}" 2>/dev/null; then
+            warn "wget failed for ${url}"
+        fi
     fi
     # End if-fi block
 
@@ -1274,10 +1363,10 @@ fetch() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
     # Final verification: ensure file was downloaded
-    if [ ! -s "$dst" ]; then
-        err "All download methods (aria2c, curl, wget) failed for '$url'"
+    if [ ! -s "${dst}" ]; then
+        err "All download methods (aria2c, curl, wget) failed for '${url}'"
     else
-        log "Cached $(basename "$dst")"
+        log "Cached $(basename "${dst}")"
     fi
     # End if-else block
 }
@@ -1356,12 +1445,15 @@ for pkg in "${BASES[@]}"; do
 # Outputs: Environment variables, configuration
     if (( ${#TO_REMOVE[@]} > 0 )); then
         if [[ -n "$APPLY" ]]; then
-            printf '%s\n' "${TO_REMOVE[@]}" | xargs -0r rm -f
-      (( removed_total += ${#TO_REMOVE[@]} ))
-    else
-      printf '[apt-prune] Would remove %s\n' "${TO_REMOVE[@]}"
+            # Remove files directly from array (more portable than xargs)
+            for file in "${TO_REMOVE[@]}"; do
+                rm -f "${file}" 2>/dev/null || true
+            done
+            (( removed_total += ${#TO_REMOVE[@]} ))
+        else
+            printf '[apt-prune] Would remove %s\n' "${TO_REMOVE[@]}"
+        fi
     fi
-  fi
 done
 
 if [[ -n "$APPLY" ]] && (( removed_total > 0 )); then echo "[apt-prune] Removed ${removed_total} file(s)"; else echo "[apt-prune] Dry-run complete"; fi
@@ -1435,12 +1527,15 @@ for base in "${BASES[@]}"; do
 # Outputs: Environment variables, configuration
     if (( ${#TO_REMOVE[@]} > 0 )); then
         if [[ -n "$APPLY" ]]; then
-            printf '%s\n' "${TO_REMOVE[@]}" | xargs -0r rm -f
-      (( removed_total += ${#TO_REMOVE[@]} ))
-    else
-      printf '[conda-prune] Would remove %s\n' "${TO_REMOVE[@]}"
+            # Remove files directly from array (more portable than xargs)
+            for file in "${TO_REMOVE[@]}"; do
+                rm -f "${file}" 2>/dev/null || true
+            done
+            (( removed_total += ${#TO_REMOVE[@]} ))
+        else
+            printf '[conda-prune] Would remove %s\n' "${TO_REMOVE[@]}"
+        fi
     fi
-  fi
 done
 
 if [[ -n "$APPLY" ]] && (( removed_total > 0 )); then echo "[conda-prune] Removed ${removed_total} file(s)"; else echo "[conda-prune] Dry-run complete"; fi
@@ -1506,33 +1601,35 @@ check_cache_complete() {
 # Cache integrity check and repair function
 check_cache_integrity() {
     echo "===> Checking cache integrity..."
-    issues=0
+    local issues=0
     # Check for corrupted files
     for cache_dir in "${BIN_CACHE}" "${DEB_CACHE}" "${APT_ARCHIVE_CACHE}" "${CONDA_CACHE}" "${WHEELS_CACHE}" "${JULIA_CACHE}"; do
-        if [ -d "$cache_dir" ]; then
+        if [ -d "${cache_dir}" ]; then
             # Check for zero-byte files (likely corrupted downloads)
-            zero_files=$(find "$cache_dir" -type f -size 0 2>/dev/null)
-            if [ -n "$zero_files" ]; then
-                echo "  ✗ Found zero-byte files in $(basename "$cache_dir")"
-                find "$cache_dir" -type f -size 0 -delete 2>/dev/null || true
+            local zero_count
+            zero_count=$(find "${cache_dir}" -type f -size 0 2>/dev/null | wc -l | tr -d '[:space:]')
+            if [[ "${zero_count:-0}" -gt 0 ]]; then
+                echo "  ✗ Found ${zero_count} zero-byte file(s) in $(basename "${cache_dir}")"
+                find "${cache_dir}" -type f -size 0 -delete 2>/dev/null || true
                 echo "    ✓ Removed zero-byte files"
                 issues=$((issues + 1))
             fi
 
             # Check for incomplete downloads (files ending with .part, .tmp, etc.)
-            incomplete_files=$(find "$cache_dir" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l)
-            if [[ "$incomplete_files" -gt 0 ]]; then
-                echo "  ✗ Found $incomplete_files incomplete downloads in $(basename "$cache_dir")"
-                find "$cache_dir" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
+            local incomplete_count
+            incomplete_count=$(find "${cache_dir}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l | tr -d '[:space:]')
+            if [[ "${incomplete_count:-0}" -gt 0 ]]; then
+                echo "  ✗ Found ${incomplete_count} incomplete download(s) in $(basename "${cache_dir}")"
+                find "${cache_dir}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
                 echo "    ✓ Removed incomplete downloads"
                 issues=$((issues + 1))
             fi
         fi
     done
-    if [[ "$issues" -eq 0 ]]; then
+    if [[ "${issues:-0}" -eq 0 ]]; then
         echo "  ✓ Cache integrity check passed"
     else
-        echo "  ✓ Cache integrity issues repaired: $issues problems fixed"
+        echo "  ✓ Cache integrity issues repaired: ${issues} problem(s) fixed"
     fi
     return 0 # Always return success after repair
 }
@@ -1554,14 +1651,310 @@ find "${CACHE_DIR}" -type f -size 0 -delete 2>/dev/null || true
 
 check_cache_integrity
 
-# Skip downloads if all artifacts are cached
+#===============================================================================
+# BLOCK 7.5: COMPREHENSIVE CACHE CHECK AND DOWNLOAD
+#===============================================================================
+# Purpose: Check all required files in cache at build start, download missing compulsory files
+# Self-contained: Yes (complete cache validation and download system)
+# Dependencies: config.sh (for URLs and versions)
+# Outputs: All required files in cache, downloaded files
+#-------------------------------------------------------------------------------
+
+# Define all required files with download URLs, validation methods, and optional flags
+# Format: ["filename"]="validation_method|download_url|param1|param2|param3|optional"
+# optional: "optional" if file is optional (NVIDIA Video SDK), empty if compulsory
+declare -A required_files=(
+    ["micromamba-linux-64"]="binary|${MICROMAMBA_URL}|${MICROMAMBA_SHA256}|||"
+    ["yq_linux_amd64"]="binary|${YQ_URL}|${YQ_SHA256}|||"
+    ["${MINIFORGE_SH}"]="binary|${MINIFORGE_URL}|${MINIFORGE_SHA256}|||"
+    ["${JULIA_TARBALL}"]="archive_with_asc_sha256|${JULIA_URL}||||"
+    ["${JULIA_TARBALL}.asc"]="asc|${JULIA_ASC_URL}||||"
+    ["drake.asc"]="asc|${DRAKE_ASC_URL}||||"
+    ["julia_key.asc"]="local|gpg||||"
+    ["${TURBOVNC_DEB}"]="deb_with_gpg|${TURBOVNC_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}||"
+    ["${VIRTUALGL_DEB}"]="deb_with_gpg|${VIRTUALGL_URL}|${VIRTUALGL_TURBOVNC_GPG_KEY_ID}|${VIRTUALGL_TURBOVNC_GPG_KEY_URL}||"
+    ["${OPEN3D_WEBRTC_FILE}"]="archive|${OPEN3D_WEBRTC_URL}|${OPEN3D_WEBRTC_SHA256}|||"
+    ["${NVIDIA_KEYRING_DEB}"]="deb|${NVIDIA_KEYRING_URL}||||"
+    ["Video_Codec_SDK_${NVIDIA_VIDEO_SDK_VERSION}.zip"]="zip|optional_manual|||optional"
+)
+
+# Function to check and download required files
+check_and_download_required_files() {
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  COMPREHENSIVE CACHE CHECK AND DOWNLOAD"
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+    
+    local missing_compulsory=()
+    local missing_optional=()
+    local found_files=()
+    local optional_files=()
+    
+    # Ensure cache directories exist
+    mkdir -p "${BIN_CACHE}" "${DEB_CACHE}" "${APT_ARCHIVE_CACHE}" "${CONDA_CACHE}" "${WHEELS_CACHE}" "${JULIA_CACHE}"
+    
+    echo "Phase 1: Checking all required files in cache..."
+    echo ""
+    
+    # Check each required file
+    for file_name in "${!required_files[@]}"; do
+        # Extract file info
+        file_info="${required_files[${file_name}]}"
+        # Save and restore IFS to avoid affecting other commands
+        OLD_IFS="${IFS}"
+        IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
+        IFS="${OLD_IFS}"
+        
+        # Determine cache directory based on file type
+        if [[ "${file_name}" == *.deb ]]; then
+            file_path="${DEB_CACHE}/${file_name}"
+        elif [[ "${file_name}" == "drake.asc" ]]; then
+            file_path="${BIN_CACHE}/${file_name}"
+        elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
+            file_path="${BIN_CACHE}/${file_name}"
+        elif [[ "${file_name}" == "julia-"*.tar.gz*".asc" ]]; then
+            file_path="${BIN_CACHE}/${file_name}"
+        else
+            file_path="${BIN_CACHE}/${file_name}"
+        fi
+        
+        # Check if file exists and is not empty
+        if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
+            echo "  ✓ Found: ${file_name}"
+            found_files+=("${file_name}")
+        else
+            if [[ "${optional_flag}" == "optional" ]]; then
+                echo "  ⊙ Missing (optional): ${file_name}"
+                missing_optional+=("${file_name}")
+                optional_files+=("${file_name}")
+            else
+                echo "  ✗ Missing (compulsory): ${file_name}"
+                missing_compulsory+=("${file_name}")
+            fi
+        fi
+    done
+    
+    echo ""
+    echo "Summary:"
+    echo "  Found: ${#found_files[@]} file(s)"
+    echo "  Missing (compulsory): ${#missing_compulsory[@]} file(s)"
+    echo "  Missing (optional): ${#missing_optional[@]} file(s)"
+    echo ""
+    
+    # Download missing compulsory files
+    if [ ${#missing_compulsory[@]} -gt 0 ]; then
+        echo "Phase 2: Downloading ${#missing_compulsory[@]} missing compulsory file(s)..."
+        echo ""
+        
+        for file_name in "${missing_compulsory[@]}"; do
+            file_info="${required_files[${file_name}]}"
+            # Save and restore IFS to avoid affecting other commands
+            OLD_IFS="${IFS}"
+            IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
+            IFS="${OLD_IFS}"
+            
+            # Skip local files - they're generated/fetched elsewhere
+            if [[ "$validation_method" == "local" ]]; then
+                echo "  ⊙ Skipping $file_name (local file, handled separately)"
+                continue
+            fi
+            
+            # Skip optional manual downloads (NVIDIA Video SDK)
+            if [[ "$file_url" == "optional_manual" ]]; then
+                echo "  ⊙ Skipping $file_name (requires manual download)"
+                continue
+            fi
+            
+            echo "  → Downloading: $file_name"
+            
+            # Determine destination directory
+            if [[ "$file_name" == *.deb ]]; then
+                dest_path="${DEB_CACHE}/${file_name}"
+            elif [[ "$file_name" == "drake.asc" ]]; then
+                dest_path="${BIN_CACHE}/${file_name}"
+            elif [[ "$file_name" == "julia-"*.tar.gz* ]]; then
+                dest_path="${BIN_CACHE}/${file_name}"
+            else
+                dest_path="${BIN_CACHE}/${file_name}"
+            fi
+            
+            # Create parent directory if it doesn't exist
+            mkdir -p "$(dirname "${dest_path}")"
+            
+            # Download file with retry logic
+            local download_success=false
+            for attempt in 1 2 3; do
+                if curl -fSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}.tmp" 2>/dev/null; then
+                    if [ -f "${dest_path}.tmp" ] && [ -s "${dest_path}.tmp" ]; then
+                        mv "${dest_path}.tmp" "${dest_path}"
+                        download_success=true
+                        echo "    ✓ Downloaded: ${file_name}"
+                        break
+                    else
+                        echo "    ⚠ Download attempt ${attempt} produced empty file, retrying..."
+                        rm -f "${dest_path}.tmp" 2>/dev/null || true
+                    fi
+                else
+                    echo "    ⚠ Download attempt ${attempt} failed, retrying..."
+                    rm -f "${dest_path}.tmp" 2>/dev/null || true
+                fi
+                sleep 2
+            done
+            
+            if [ "${download_success}" != "true" ]; then
+                echo ""
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  FATAL ERROR: Failed to download compulsory file"
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  File name: ${file_name}"
+                echo "  Expected location: ${dest_path}"
+                echo "  Source URL: ${file_url}"
+                echo ""
+                echo "  This is a compulsory file. The build cannot continue without it."
+                echo "  You may manually download this file and place it at:"
+                echo "    ${dest_path}"
+                echo "═══════════════════════════════════════════════════════════════"
+                exit 1
+            fi
+        done
+        echo ""
+    fi
+    
+    # Attempt to download missing optional files (but don't fail if download fails)
+    if [ ${#missing_optional[@]} -gt 0 ]; then
+        echo "Phase 3: Attempting to download ${#missing_optional[@]} missing optional file(s)..."
+        echo ""
+        
+        for file_name in "${missing_optional[@]}"; do
+            file_info="${required_files[${file_name}]}"
+            # Save and restore IFS to avoid affecting other commands
+            OLD_IFS="${IFS}"
+            IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
+            IFS="${OLD_IFS}"
+            
+            # Skip optional manual downloads (NVIDIA Video SDK)
+            if [[ "$file_url" == "optional_manual" ]]; then
+                echo "  ⊙ Skipping $file_name (requires manual download from NVIDIA Developer website)"
+                echo "    This file is optional. If needed, download it manually from:"
+                echo "    https://developer.nvidia.com/nvidia-video-codec-sdk/download"
+                echo "    Place it in: ${BIN_CACHE}/${file_name}"
+                continue
+            fi
+            
+            echo "  → Attempting download: $file_name"
+            
+            # Determine destination directory
+            if [[ "$file_name" == *.deb ]]; then
+                dest_path="${DEB_CACHE}/${file_name}"
+            else
+                dest_path="${BIN_CACHE}/${file_name}"
+            fi
+            
+            # Create parent directory if it doesn't exist
+            mkdir -p "$(dirname "${dest_path}")"
+            
+            # Attempt download (non-fatal)
+            if curl -fSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}.tmp" 2>/dev/null; then
+                if [ -f "${dest_path}.tmp" ] && [ -s "${dest_path}.tmp" ]; then
+                    mv "${dest_path}.tmp" "${dest_path}"
+                    echo "    ✓ Downloaded: ${file_name}"
+                else
+                    echo "    ⚠ Download produced empty file (optional file, continuing): ${file_name}"
+                    rm -f "${dest_path}.tmp" 2>/dev/null || true
+                fi
+            else
+                echo ""
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  WARNING: Failed to download optional file (non-fatal)"
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  File name: ${file_name}"
+                echo "  Expected location: ${dest_path}"
+                echo "  Source URL: ${file_url}"
+                echo ""
+                echo "  This is an optional file. The build will continue without it."
+                echo "  If needed, you may manually download this file and place it at:"
+                echo "    ${dest_path}"
+                echo "═══════════════════════════════════════════════════════════════"
+                rm -f "${dest_path}.tmp" 2>/dev/null || true
+            fi
+        done
+        echo ""
+    fi
+    
+    # Final summary
+    echo "═══════════════════════════════════════════════════════════════"
+    echo "  CACHE CHECK COMPLETE"
+    echo "═══════════════════════════════════════════════════════════════"
+    
+    # Re-check all files after downloads
+    local final_missing_compulsory=()
+    local final_missing_optional=()
+    
+    for file_name in "${!required_files[@]}"; do
+        file_info="${required_files[${file_name}]}"
+        # Save and restore IFS to avoid affecting other commands
+        OLD_IFS="${IFS}"
+        IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
+        IFS="${OLD_IFS}"
+        
+        if [[ "${file_name}" == *.deb ]]; then
+            file_path="${DEB_CACHE}/${file_name}"
+        elif [[ "${file_name}" == "drake.asc" ]]; then
+            file_path="${BIN_CACHE}/${file_name}"
+        elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
+            file_path="${BIN_CACHE}/${file_name}"
+        else
+            file_path="${BIN_CACHE}/${file_name}"
+        fi
+        
+        if [ ! -f "${file_path}" ] || [ ! -s "${file_path}" ]; then
+            if [[ "${optional_flag}" == "optional" ]] || [[ "${file_url}" == "optional_manual" ]]; then
+                final_missing_optional+=("${file_name}")
+            else
+                final_missing_compulsory+=("${file_name}")
+            fi
+        fi
+    done
+    
+    if [ ${#final_missing_compulsory[@]} -gt 0 ]; then
+        echo ""
+        echo "  ✗ ERROR: ${#final_missing_compulsory[@]} compulsory file(s) still missing:"
+        for file in "${final_missing_compulsory[@]}"; do
+            echo "    - ${file}"
+        done
+        echo ""
+        echo "  Build cannot continue. Please check network connection and try again."
+        exit 1
+    fi
+    
+    if [ ${#final_missing_optional[@]} -gt 0 ]; then
+        echo ""
+        echo "  ⚠ WARNING: ${#final_missing_optional[@]} optional file(s) missing:"
+        for file in "${final_missing_optional[@]}"; do
+            echo "    - ${file}"
+        done
+        echo ""
+        echo "  Build will continue, but features requiring these files will be disabled."
+    else
+        echo ""
+        echo "  ✓ All required files present in cache"
+    fi
+    
+    echo "═══════════════════════════════════════════════════════════════"
+    echo ""
+}
+
+# Run comprehensive cache check and download
+check_and_download_required_files
+
+# Skip downloads if all artifacts are cached (legacy check - kept for compatibility)
 if [[ $(check_cache_complete) -eq 0 ]]; then
-    log "All artifacts already cached, skipping downloads"
+    log "All artifacts already cached, skipping legacy download phase"
 else
     # Export functions for parallel execution
     export -f fetch fetch_binary log log_with_timestamp log_success log_warning log_error warn err
 
-    # Define download tasks
+    # Define download tasks (legacy - most files should already be downloaded above)
 
 #--- Sub-block: Section 1200 ---
 # Purpose: Continued implementation
@@ -1584,15 +1977,28 @@ NVIDIA_KEYRING|${NVIDIA_KEYRING_URL}|${DEB_CACHE}/${NVIDIA_KEYRING_DEB}|deb
 OPEN3D_WEBRTC|${OPEN3D_WEBRTC_URL}|${BIN_CACHE}/${OPEN3D_WEBRTC_FILE}|file
 EOF
 
-    # Execute downloads in parallel (max 4 concurrent)
-    log "Downloading artifacts in parallel..."
-    # The `bash -c` is needed to call our exported shell functions within xargs
-    cat /tmp/download_tasks | xargs -P 4 -I '{}' bash -c '
-        IFS="|" read -r name url dst type <<< "{}"
-        echo "Starting download: $name"
-        if [[ "$type" == "binary" ]]; then fetch_binary "$url" "$dst"; else fetch "$url" "$dst"; fi;
-        echo "Completed download: $name"
-    '
+    # Execute downloads in parallel (max 4 concurrent) - only for files not already downloaded
+    log "Downloading any remaining artifacts in parallel..."
+    # Process downloads sequentially for safety (parallel execution removed due to complexity with exported functions)
+    # Note: This is safer than xargs with bash -c which has quoting/injection risks
+    if [ -f /tmp/download_tasks ]; then
+        while IFS='|' read -r name url dst type || [ -n "${name}" ]; do
+            # Skip empty lines
+            [ -z "${name}" ] && continue
+            # Skip if file already exists and is not empty
+            if [ -f "${dst}" ] && [ -s "${dst}" ]; then
+                echo "Skipping (already cached): ${name}"
+            else
+                echo "Starting download: ${name}"
+                if [[ "${type}" == "binary" ]]; then
+                    fetch_binary "${url}" "${dst}"
+                else
+                    fetch "${url}" "${dst}"
+                fi
+                echo "Completed download: ${name}"
+            fi
+        done < /tmp/download_tasks
+    fi
     rm -f /tmp/download_tasks
 fi
 
@@ -1615,7 +2021,7 @@ if [ ! -s "${JULIA_KEY_FILE}" ]; then
     fi
     
     # Method 2: Fallback to keyservers if direct download fails
-    if [ "$GPG_FETCH_SUCCESS" = false ]; then
+    if [[ "${GPG_FETCH_SUCCESS}" == "false" ]]; then
         log "  Direct download failed. Trying keyservers..."
         for attempt in 1 2; do
             if gpg --keyserver https://keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" 2>/dev/null || \
@@ -1628,11 +2034,11 @@ if [ ! -s "${JULIA_KEY_FILE}" ]; then
                     break
                 fi
             fi
-            [ $attempt -lt 2 ] && sleep 2
+            [ ${attempt} -lt 2 ] && sleep 2
         done
     fi
     
-    if [ "$GPG_FETCH_SUCCESS" = false ]; then
+    if [[ "${GPG_FETCH_SUCCESS}" == "false" ]]; then
         log_warning "Failed to fetch Julia GPG key from all sources (URL and keyservers)."
         log_warning "GPG signature verification will be skipped. SHA256 verification will still be performed."
         # Clean up any failed/empty download (curl may create empty file on failure)
@@ -1665,7 +2071,11 @@ log "Prefetching complete."
 # --- Singularity Definition File Generation ---
 log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Always remove any stale def file from previous runs
-[ -f "${DEF_NAME}" ] && rm -f "${DEF_NAME}"
+if [ -f "${DEF_NAME}" ]; then
+    rm -f "${DEF_NAME}" || {
+        log_warning "Failed to remove existing definition file: ${DEF_NAME}"
+    }
+fi
 
     # Define all required files with their download URLs and validation methods
     # Format: ["filename"]="validation_method|download_url|param1|param2|param3"
@@ -1690,7 +2100,7 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 
     # Phase 1: Ensure all required files are present in cache
     echo "Phase 1: Ensuring all required files are present in cache..."
-    missing_files=()
+    local missing_files=()
     for file_name in "${!required_files[@]}"; do
         # Determine cache directory based on file type
     if [[ "${file_name}" == *.deb ]]; then
@@ -1708,29 +2118,31 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Purpose: Checking all required files
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-        if [ ! -f "$file_path" ]; then
-        echo "  ✗ Missing File: $file_name"
-            missing_files+=("$file_name")
+        if [ ! -f "${file_path}" ]; then
+            echo "  ✗ Missing File: ${file_name}"
+            missing_files+=("${file_name}")
         else
-            echo "  ✓ Found: $file_name"
+            echo "  ✓ Found: ${file_name}"
         fi
     done
 
     # Download missing files
     if [ ${#missing_files[@]} -gt 0 ]; then
-    echo "→ Downloading ${#missing_files[@]} missing files..."
+        echo "→ Downloading ${#missing_files[@]} missing files..."
         for file_name in "${missing_files[@]}"; do
             # Extract file type and URL from the file definition
-            file_info="${required_files[$file_name]}"
-            IFS='|' read -r validation_method file_url param1 param2 param3 <<< "$file_info"
+            file_info="${required_files[${file_name}]}"
+            local OLD_IFS="${IFS}"
+            IFS='|' read -r validation_method file_url param1 param2 param3 <<< "${file_info}"
+            IFS="${OLD_IFS}"
             
             # Skip local files - they're generated/fetched elsewhere (not downloaded)
-            if [[ "$validation_method" == "local" ]]; then
-                echo "  ⊙ Skipping $file_name (local file, handled separately)"
+            if [[ "${validation_method}" == "local" ]]; then
+                echo "  ⊙ Skipping ${file_name} (local file, handled separately)"
                 continue
             fi
             
-        echo "  Downloading $file_name..."
+            echo "  Downloading ${file_name}..."
 
             # Determine destination directory
             if [[ "$file_name" == *.deb ]]; then
@@ -1743,10 +2155,33 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
                 dest_path="${BIN_CACHE}/${file_name}"
             fi
 
-        if curl -fSSL "$file_url" -o "$dest_path"; then
-                echo "    ✓ Downloaded: $file_name"
+            # Create parent directory if needed
+            mkdir -p "$(dirname "${dest_path}")" || {
+                echo "  ✗ Failed to create destination directory for ${file_name}"
+                exit 1
+            }
+            
+            if curl -fSSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}" 2>/dev/null; then
+                # Verify file was downloaded and is not empty
+                if [ -f "${dest_path}" ] && [ -s "${dest_path}" ]; then
+                    echo "    ✓ Downloaded: ${file_name}"
+                else
+                    echo "    ✗ Download produced empty file: ${file_name}"
+                    rm -f "${dest_path}" 2>/dev/null || true
+                    exit 1
+                fi
             else
-            echo "    ✗ Failed to download: $file_name"
+                echo ""
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  DOWNLOAD FAILED"
+                echo "═══════════════════════════════════════════════════════════════"
+                echo "  File name: ${file_name}"
+                echo "  Expected location: ${dest_path}"
+                echo "  Source URL: ${file_url}"
+                echo ""
+                echo "  You may manually download this file and place it at:"
+                echo "    ${dest_path}"
+                echo "═══════════════════════════════════════════════════════════════"
                 exit 1
             fi
         done
@@ -1761,7 +2196,7 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 
     # Phase 2: Validate all files for corruption
     echo "Phase 2: Validating all files for corruption..."
-    corrupted_files=()
+    local corrupted_files=()
     for file_name in "${!required_files[@]}"; do
         # Determine file path and validation method
     if [[ "${file_name}" == *.deb ]]; then
@@ -1779,47 +2214,57 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Purpose: Continuing implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-        echo "  Validating $file_name..."
+        echo "  Validating ${file_name}..."
 
         # Extract validation method and additional parameters from file definition
-        file_info="${required_files[$file_name]}"
-        IFS='|' read -r validation_method file_url param1 param2 param3 <<< "$file_info"
+        file_info="${required_files[${file_name}]}"
+        local OLD_IFS="${IFS}"
+        IFS='|' read -r validation_method file_url param1 param2 param3 <<< "${file_info}"
+        IFS="${OLD_IFS}"
 
-        case "$validation_method" in
+        case "${validation_method}" in
             "binary")
                 # Check if binary is executable and not corrupted
-            if ! file "$file_path" | grep -q "executable"; then
-                echo "    ✗ Corrupted binary detected: $file_name"
-                    corrupted_files+=("$file_name")
-                    rm -f "$file_path"
+                if [ ! -f "${file_path}" ]; then
+                    echo "    ✗ File not found: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                elif ! file "${file_path}" 2>/dev/null | grep -q "executable\|ELF"; then
+                    echo "    ✗ Corrupted binary detected: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                    rm -f "${file_path}" 2>/dev/null || true
                 else
-                # If sha256 is provided, validate it
-                    if [ -n "$param1" ]; then
-                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                        if [ "$actual_sha256" = "$param1" ]; then
-                            echo "    ✓ Valid binary with correct SHA256: $file_name"
+                    # If sha256 is provided, validate it
+                    if [ -n "${param1}" ]; then
+                        local actual_sha256
+                        actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                        if [ "${actual_sha256}" = "${param1}" ]; then
+                            echo "    ✓ Valid binary with correct SHA256: ${file_name}"
                         else
-                        echo "    ✗ SHA256 mismatch for $file_name (expected: $param1, got: $actual_sha256)"
-                            corrupted_files+=("$file_name")
-                            rm -f "$file_path"
+                            echo "    ✗ SHA256 mismatch for ${file_name} (expected: ${param1}, got: ${actual_sha256})"
+                            corrupted_files+=("${file_name}")
+                            rm -f "${file_path}" 2>/dev/null || true
                         fi
-                else
-                    echo "    ✓ Valid binary: $file_name"
+                    else
+                        echo "    ✓ Valid binary: ${file_name}"
                     fi
                 fi
                 ;;
             "archive_with_asc_sha256")
                 # Check if archive is valid (tar.gz) and validate with ASC signature and SHA256
-                if ! tar -tzf "$file_path" >/dev/null 2>&1; then
-                echo "    ✗ Corrupted archive detected: $file_name"
-                    corrupted_files+=("$file_name")
-                    rm -f "$file_path"
+                if [ ! -f "${file_path}" ]; then
+                    echo "    ✗ File not found: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                elif ! tar -tzf "${file_path}" >/dev/null 2>&1; then
+                    echo "    ✗ Corrupted archive detected: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                    rm -f "${file_path}" 2>/dev/null || true
                 else
                     # Validate SHA256
-                expected_sha256="${JULIA_SHA256}"
-                    actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                    if [ "$actual_sha256" = "$expected_sha256" ]; then
-                        echo "    ✓ Valid archive with correct SHA256: $file_name"
+                    local expected_sha256="${JULIA_SHA256}"
+                    local actual_sha256
+                    actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                    if [ "${actual_sha256}" = "${expected_sha256}" ]; then
+                        echo "    ✓ Valid archive with correct SHA256: ${file_name}"
 
 #--- Sub-block: Section continuation (1351) ---
 # Purpose: Implementation details
@@ -1827,107 +2272,104 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Outputs: Environment variables, configuration
 
                         # Validate ASC signature if available
-                        asc_file="${file_path}.asc"
-                        if [ -f "$asc_file" ]; then
-                        # Import Julia GPG key for signature verification (skip if cached key is empty)
-                        CACHED_KEY="${BIN_CACHE}/julia_key.asc"
-                        if [ -s "${CACHED_KEY}" ]; then
-                            echo "    -- Importing Julia GPG key from cache..."
-                            if gpg --batch --import "${CACHED_KEY}" >/dev/null 2>&1; then
-                                echo "    -- Successfully imported GPG key from cache"
+                        local asc_file="${file_path}.asc"
+                        if [ -f "${asc_file}" ]; then
+                            # Import Julia GPG key for signature verification (skip if cached key is empty)
+                            local CACHED_KEY="${BIN_CACHE}/julia_key.asc"
+                            if [ -s "${CACHED_KEY}" ]; then
+                                echo "    -- Importing Julia GPG key from cache..."
+                                if gpg --batch --import "${CACHED_KEY}" >/dev/null 2>&1; then
+                                    echo "    -- Successfully imported GPG key from cache"
+                                else
+                                    echo "    -- Failed to import from cache, trying keyservers..."
+                                    gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
+                                    gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
+                                fi
                             else
-                                echo "    -- Failed to import from cache, trying keyservers..."
+                                echo "    -- Julia GPG key not cached, attempting keyserver fetch..."
                                 gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
                                 gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
                             fi
-                        else
-                            echo "    -- Julia GPG key not cached, attempting keyserver fetch..."
-                            gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
-                            gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
-                        fi
 
-
-#--- Sub-block: Code section 1323 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
                             # GPG signature verification (non-fatal - build continues regardless)
-                            if gpg --batch --verify "$asc_file" "$file_path" 2>/dev/null; then
-                                echo "    ✓ Valid GPG signature: $file_name"
+                            if gpg --batch --verify "${asc_file}" "${file_path}" >/dev/null 2>&1; then
+                                echo "    ✓ Valid GPG signature: ${file_name}"
                             else
                                 echo "    ✗ GPG signature verification failed, but SHA256 is correct - continuing"
                                 # Don't mark as corrupted if SHA256 is correct (GPG is non-fatal)
                             fi || true
                         else
-                        echo "    ✗ ASC signature file not found for: $file_name"
-                        corrupted_files+=("$file_name")
-
-#--- Sub-block: Definition components ---
-# Purpose: Container definition sections
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-                        rm -f "$file_path"
+                            echo "    ✗ ASC signature file not found for: ${file_name}"
+                            corrupted_files+=("${file_name}")
+                            rm -f "${file_path}" 2>/dev/null || true
                         fi
                     else
-                    echo "    ✗ SHA256 mismatch for $file_name (expected: $expected_sha256, got: $actual_sha256)"
-                        corrupted_files+=("$file_name")
-                        rm -f "$file_path"
+                        echo "    ✗ SHA256 mismatch for ${file_name} (expected: ${expected_sha256}, got: ${actual_sha256})"
+                        corrupted_files+=("${file_name}")
+                        rm -f "${file_path}" 2>/dev/null || true
                     fi
                 fi
                 ;;
             "asc")
                 # ASC files can be signatures OR public keys - check for either (non-fatal)
-                if [ -f "$file_path" ] && [ -s "$file_path" ]; then
-                    if grep -q "BEGIN PGP" "$file_path" && grep -q "END PGP" "$file_path"; then
-                        echo "    ✓ Valid ASC/GPG file: $file_name"
+                if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
+                    if grep -q "BEGIN PGP" "${file_path}" && grep -q "END PGP" "${file_path}"; then
+                        echo "    ✓ Valid ASC/GPG file: ${file_name}"
                     else
-                        echo "    ⚠️  ASC file format unclear: $file_name (continuing)"
+                        echo "    ⚠️  ASC file format unclear: ${file_name} (continuing)"
                     fi
                 else
-                    echo "    ⚠️  ASC file missing: $file_name (non-fatal, will try to fetch)"
+                    echo "    ⚠️  ASC file missing: ${file_name} (non-fatal, will try to fetch)"
                 fi
-            ;;
-        "local")
-            # Local files (like GPG keys) are generated/fetched elsewhere - just verify they exist
-            if [ -f "$file_path" ] && [ -s "$file_path" ]; then
-                echo "    ✓ Valid local file: $file_name"
-            else
-                echo "    ✗ Local file missing or empty: $file_name (will be regenerated if needed)"
-                # Don't mark as corrupted - local files are regenerated by prefetch logic
-            fi
-            ;;
+                ;;
+            "local")
+                # Local files (like GPG keys) are generated/fetched elsewhere - just verify they exist
+                if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
+                    echo "    ✓ Valid local file: ${file_name}"
+                else
+                    echo "    ✗ Local file missing or empty: ${file_name} (will be regenerated if needed)"
+                    # Don't mark as corrupted - local files are regenerated by prefetch logic
+                fi
+                ;;
             "deb_with_gpg")
                 # Check if .deb package is valid (structure integrity)
                 # GPG signature verification deferred to installation phase using debsig-verify
                 # Official method: https://virtualgl.org/Downloads/DigitalSignatures
-                if ! dpkg-deb -I "$file_path" >/dev/null 2>&1; then
-                echo "    ✗ Corrupted .deb package detected: $file_name"
-                    corrupted_files+=("$file_name")
-                    rm -f "$file_path"
+                if [ ! -f "${file_path}" ]; then
+                    echo "    ✗ File not found: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                elif ! dpkg-deb -I "${file_path}" >/dev/null 2>&1; then
+                    echo "    ✗ Corrupted .deb package detected: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                    rm -f "${file_path}" 2>/dev/null || true
                 else
-                    echo "    ✓ Valid .deb package structure: $file_name"
+                    echo "    ✓ Valid .deb package structure: ${file_name}"
                     echo "      (GPG signature verification via debsig-verify during installation)"
                 fi
                 ;;
             "archive")
                 # Check if archive is valid (tar.gz) and validate SHA256 if provided
-                if ! tar -tzf "$file_path" >/dev/null 2>&1; then
-                echo "    ✗ Corrupted archive detected: $file_name"
-                    corrupted_files+=("$file_name")
-                    rm -f "$file_path"
+                if [ ! -f "${file_path}" ]; then
+                    echo "    ✗ File not found: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                elif ! tar -tzf "${file_path}" >/dev/null 2>&1; then
+                    echo "    ✗ Corrupted archive detected: ${file_name}"
+                    corrupted_files+=("${file_name}")
+                    rm -f "${file_path}" 2>/dev/null || true
                 else
                     # If sha256 is provided, validate it
-                    if [ -n "$param1" ]; then
-                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                        if [ "$actual_sha256" = "$param1" ]; then
-                            echo "    ✓ Valid archive with correct SHA256: $file_name"
+                    if [ -n "${param1}" ]; then
+                        local actual_sha256
+                        actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                        if [ "${actual_sha256}" = "${param1}" ]; then
+                            echo "    ✓ Valid archive with correct SHA256: ${file_name}"
                         else
-                        echo "    ✗ SHA256 mismatch for $file_name (expected: $param1, got: $actual_sha256)"
-                            corrupted_files+=("$file_name")
-                            rm -f "$file_path"
+                            echo "    ✗ SHA256 mismatch for ${file_name} (expected: ${param1}, got: ${actual_sha256})"
+                            corrupted_files+=("${file_name}")
+                            rm -f "${file_path}" 2>/dev/null || true
                         fi
-                else
-                    echo "    ✓ Valid archive: $file_name"
+                    else
+                        echo "    ✓ Valid archive: ${file_name}"
                     fi
                 fi
                 ;;
@@ -1948,33 +2390,48 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
     if [ ${#corrupted_files[@]} -gt 0 ]; then
         echo "Phase 3: Re-downloading ${#corrupted_files[@]} corrupted files..."
         for file_name in "${corrupted_files[@]}"; do
-        # Extract URL from file definition
-            file_info="${required_files[$file_name]}"
-        IFS='|' read -r validation_method file_url param1 param2 <<< "$file_info"
-        
+            # Extract URL from file definition
+            file_info="${required_files[${file_name}]}"
+            local OLD_IFS="${IFS}"
+            IFS='|' read -r validation_method file_url param1 param2 <<< "${file_info}"
+            IFS="${OLD_IFS}"
+            
             # Skip local files - they're generated/fetched elsewhere (not downloaded)
-            if [[ "$validation_method" == "local" ]]; then
-                echo "  ⊙ Skipping $file_name (local file, regenerate separately if needed)"
+            if [[ "${validation_method}" == "local" ]]; then
+                echo "  ⊙ Skipping ${file_name} (local file, regenerate separately if needed)"
                 continue
             fi
-        
-            echo "  Re-downloading $file_name..."
+            
+            echo "  Re-downloading ${file_name}..."
 
             # Determine destination directory
-        if [[ "${file_name}" == *.deb ]]; then
+            if [[ "${file_name}" == *.deb ]]; then
                 dest_path="${DEB_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "drake.asc" ]]; then
+            elif [[ "${file_name}" == "drake.asc" ]]; then
                 dest_path="${BIN_CACHE}/${file_name}"
-        elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
+            elif [[ "${file_name}" == "julia-"*.tar.gz* ]]; then
                 dest_path="${BIN_CACHE}/${file_name}"
             else
                 dest_path="${BIN_CACHE}/${file_name}"
             fi
 
-        if curl -fSSL "$file_url" -o "$dest_path"; then
-            echo "    ✓ Re-downloaded: $file_name"
+            # Create parent directory if needed
+            mkdir -p "$(dirname "${dest_path}")" || {
+                echo "    ✗ Failed to create destination directory for ${file_name}"
+                exit 1
+            }
+
+            if curl -fSSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}" 2>/dev/null; then
+                # Verify file was downloaded and is not empty
+                if [ -f "${dest_path}" ] && [ -s "${dest_path}" ]; then
+                    echo "    ✓ Re-downloaded: ${file_name}"
+                else
+                    echo "    ✗ Re-download produced empty file: ${file_name}"
+                    rm -f "${dest_path}" 2>/dev/null || true
+                    exit 1
+                fi
             else
-            echo "    ✗ Failed to re-download: $file_name"
+                echo "    ✗ Failed to re-download: ${file_name}"
                 exit 1
             fi
         done
@@ -1984,7 +2441,7 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 
     # Phase 4: Final verification
     echo "Phase 4: Final verification of all files..."
-    all_valid=true
+    local all_valid=true
     for file_name in "${!required_files[@]}"; do
 
 #--- Sub-block: Section 1500 ---
@@ -2013,167 +2470,147 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
         fi
 
         # Extract validation method and additional parameters
-        file_info="${required_files[$file_name]}"
-        IFS='|' read -r validation_method file_url param1 param2 param3 <<< "$file_info"
+        file_info="${required_files[${file_name}]}"
+        local OLD_IFS="${IFS}"
+        IFS='|' read -r validation_method file_url param1 param2 param3 <<< "${file_info}"
+        IFS="${OLD_IFS}"
 
-        case "$validation_method" in
+        case "${validation_method}" in
             "binary")
-                if [ -f "$file_path" ] && file "$file_path" | grep -q "executable\|ELF"; then
-                    if [ -n "$param1" ]; then
-                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                    if [ "$actual_sha256" == "$param1" ]; then
-                            echo "  ✓ Verified binary with correct SHA256: $file_name"
+                if [ -f "${file_path}" ] && file "${file_path}" 2>/dev/null | grep -q "executable\|ELF"; then
+                    if [ -n "${param1}" ]; then
+                        local actual_sha256
+                        actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                        if [ "${actual_sha256}" = "${param1}" ]; then
+                            echo "  ✓ Verified binary with correct SHA256: ${file_name}"
                         else
-                        echo "  ✗ SHA256 verification failed for $file_name (expected: $param1, got: $actual_sha256)"
+                            echo "  ✗ SHA256 verification failed for ${file_name} (expected: ${param1}, got: ${actual_sha256})"
                             all_valid=false
                         fi
                     else
-                    echo "  ✓ Verified binary: $file_name"
+                        echo "  ✓ Verified binary: ${file_name}"
                     fi
                 else
-                echo "  ✗ Binary verification failed: $file_name"
+                    echo "  ✗ Binary verification failed: ${file_name}"
                     all_valid=false
                 fi
                 ;;
             "archive_with_asc_sha256")
-                if [ -f "$file_path" ] && tar -tzf "$file_path" >/dev/null 2>&1; then
+                if [ -f "${file_path}" ] && tar -tzf "${file_path}" >/dev/null 2>&1; then
                     # Validate SHA256
-                expected_sha256="${JULIA_SHA256}"
-                    actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                if [ "$actual_sha256" == "$expected_sha256" ]; then
-                        echo "  ✓ Verified archive with correct SHA256: $file_name"
+                    local expected_sha256="${JULIA_SHA256}"
+                    local actual_sha256
+                    actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                    if [ "${actual_sha256}" = "${expected_sha256}" ]; then
+                        echo "  ✓ Verified archive with correct SHA256: ${file_name}"
 
                         # Validate ASC signature if available
-                        asc_file="${file_path}.asc"
-
-#--- Sub-block: Section 1550 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-                        if [ -f "$asc_file" ]; then
+                        local asc_file="${file_path}.asc"
+                        if [ -f "${asc_file}" ]; then
                             # Import Julia GPG key first (skip if cached key is empty)
-                        CACHED_KEY="${BIN_CACHE}/julia_key.asc"
-                        if [ -s "${CACHED_KEY}" ]; then
-                            echo "    -- Importing Julia GPG key from cache..."
-                            if gpg --batch --import "${CACHED_KEY}" >/dev/null 2>&1; then
-                                echo "    -- Successfully imported GPG key from cache"
+                            local CACHED_KEY="${BIN_CACHE}/julia_key.asc"
+                            if [ -s "${CACHED_KEY}" ]; then
+                                echo "    -- Importing Julia GPG key from cache..."
+                                if gpg --batch --import "${CACHED_KEY}" >/dev/null 2>&1; then
+                                    echo "    -- Successfully imported GPG key from cache"
+                                else
+                                    echo "    -- Failed to import from cache, trying keyservers..."
+                                    gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
+                                    gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
+                                fi
                             else
-                                echo "    -- Failed to import from cache, trying keyservers..."
+                                echo "    -- Julia GPG key not cached, attempting keyserver fetch..."
                                 gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
                                 gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
                             fi
+
+                            # GPG signature verification (non-fatal - build continues regardless)
+                            if gpg --batch --verify "${asc_file}" "${file_path}" >/dev/null 2>&1; then
+                                echo "    ✓ Verified GPG signature: ${file_name}"
+                            else
+                                echo "    ✗ GPG signature verification failed, but SHA256 is correct - continuing"
+                                # Don't mark as invalid if SHA256 is correct (GPG is non-fatal)
+                            fi || true
                         else
-                            echo "    -- Julia GPG key not cached, attempting keyserver fetch..."
-                            gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || \
-                            gpg --batch --keyserver keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" >/dev/null 2>&1 || true
-                        fi
-
-#--- Sub-block: Section continuation (1507) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 1465 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-                        # GPG signature verification (non-fatal - build continues regardless)
-                        if gpg --batch --verify "$asc_file" "$file_path" >/dev/null 2>&1; then
-                            echo "    ✓ Verified GPG signature: $file_name"
-                        else
-                            echo "    ✗ GPG signature verification failed, but SHA256 is correct - continuing"
-                            # Don't mark as invalid if SHA256 is correct (GPG is non-fatal)
-                        fi || true
-                        else
-
-#--- Sub-block: Build specification ---
-# Purpose: Build configuration details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-                        echo "    ✗ ASC signature file not found for: $file_name"
-                        all_valid=false
+                            echo "    ✗ ASC signature file not found for: ${file_name}"
+                            all_valid=false
                         fi
                     else
-                    echo "  ✗ SHA256 verification failed for $file_name (expected: $expected_sha256, got: $actual_sha256)"
+                        echo "  ✗ SHA256 verification failed for ${file_name} (expected: ${expected_sha256}, got: ${actual_sha256})"
                         all_valid=false
                     fi
                 else
-                echo "  ✗ Archive verification failed: $file_name"
+                    echo "  ✗ Archive verification failed: ${file_name}"
                     all_valid=false
                 fi
                 ;;
             "asc")
                 # ASC files can be signatures OR public keys - check for either (non-fatal)
-                if [ -f "$file_path" ] && [ -s "$file_path" ]; then
-                    if grep -q "BEGIN PGP" "$file_path" && grep -q "END PGP" "$file_path"; then
-                        echo "  ✓ Verified ASC/GPG file: $file_name"
+                if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
+                    if grep -q "BEGIN PGP" "${file_path}" && grep -q "END PGP" "${file_path}"; then
+                        echo "  ✓ Verified ASC/GPG file: ${file_name}"
                     else
-                        echo "  ⚠️  ASC file format unclear: $file_name (continuing)"
+                        echo "  ⚠️  ASC file format unclear: ${file_name} (continuing)"
                     fi
                 else
-                    echo "  ⚠️  ASC file missing: $file_name (non-fatal, continuing)"
+                    echo "  ⚠️  ASC file missing: ${file_name} (non-fatal, continuing)"
                     # Don't set all_valid=false - ASC/GPG checks are non-fatal
                 fi
-
-#--- Sub-block: Definition file content ---
-# Purpose: Singularity definition sections
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
                 ;;
             "local")
                 # Local files (e.g., GPG keys fetched from keyserver, not downloaded)
-                if [ -f "$file_path" ] && [ -s "$file_path" ]; then
-                    echo "  ✓ Verified local file: $file_name"
+                if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
+                    echo "  ✓ Verified local file: ${file_name}"
                 else
-                    echo "  ⚠️  Local file not found (will be generated): $file_name"
+                    echo "  ⚠️  Local file not found (will be generated): ${file_name}"
                     # Don't mark as invalid - local files are generated by other processes
                 fi
                 ;;
             "deb_with_gpg")
                 # Verify .deb structure (GPG verification happens during installation)
                 # Official verification: debsig-verify per https://virtualgl.org/Downloads/DigitalSignatures
-                if [ -f "$file_path" ] && dpkg-deb -I "$file_path" >/dev/null 2>&1; then
-                    echo "  ✓ Verified .deb package structure: $file_name"
+                if [ -f "${file_path}" ] && dpkg-deb -I "${file_path}" >/dev/null 2>&1; then
+                    echo "  ✓ Verified .deb package structure: ${file_name}"
                     echo "    → GPG signature will be verified using debsig-verify during installation"
                 else
-                    echo "  ✗ .deb package structure invalid: $file_name"
+                    echo "  ✗ .deb package structure invalid: ${file_name}"
                     all_valid=false
                 fi
                 ;;
             "archive")
-                if [ -f "$file_path" ] && tar -tzf "$file_path" >/dev/null 2>&1; then
+                if [ -f "${file_path}" ] && tar -tzf "${file_path}" >/dev/null 2>&1; then
                     # If sha256 is provided, validate it
-                    if [ -n "$param1" ]; then
-                        actual_sha256=$(sha256sum "$file_path" | cut -d' ' -f1)
-                        if [ "$actual_sha256" == "$param1" ]; then
-                            echo "  ✓ Verified archive with correct SHA256: $file_name"
+                    if [ -n "${param1}" ]; then
+                        local actual_sha256
+                        actual_sha256=$(sha256sum "${file_path}" 2>/dev/null | cut -d' ' -f1)
+                        if [ "${actual_sha256}" = "${param1}" ]; then
+                            echo "  ✓ Verified archive with correct SHA256: ${file_name}"
                         else
-                        echo "  ✗ SHA256 verification failed for $file_name (expected: $param1, got: $actual_sha256)"
+                            echo "  ✗ SHA256 verification failed for ${file_name} (expected: ${param1}, got: ${actual_sha256})"
                             all_valid=false
                         fi
-                else
-                    echo "  ✓ Verified archive: $file_name"
+                    else
+                        echo "  ✓ Verified archive: ${file_name}"
                     fi
                 else
-                echo "  ✗ Archive verification failed: $file_name"
+                    echo "  ✗ Archive verification failed: ${file_name}"
                     all_valid=false
                 fi
                 ;;
             "gpg")
                 # GPG key verification (non-fatal)
-                if [ -f "$file_path" ] && [ -s "$file_path" ] && grep -q "BEGIN PGP" "$file_path" && grep -q "END PGP" "$file_path"; then
-                    echo "  ✓ Verified GPG key: $file_name"
+                if [ -f "${file_path}" ] && [ -s "${file_path}" ] && grep -q "BEGIN PGP" "${file_path}" && grep -q "END PGP" "${file_path}"; then
+                    echo "  ✓ Verified GPG key: ${file_name}"
                 else
-                    echo "  ⚠️  GPG key verification failed: $file_name (non-fatal, continuing)"
+                    echo "  ⚠️  GPG key verification failed: ${file_name} (non-fatal, continuing)"
                     # Don't set all_valid=false - GPG checks are non-fatal
                 fi
                 ;;
             "deb")
-                if [ -f "$file_path" ] && dpkg-deb -I "$file_path" >/dev/null 2>&1; then
-                    echo "  ✓ Verified .deb package: $file_name"
+                if [ -f "${file_path}" ] && dpkg-deb -I "${file_path}" >/dev/null 2>&1; then
+                    echo "  ✓ Verified .deb package: ${file_name}"
                 else
-                echo "  ✗ .deb package verification failed: $file_name"
+                    echo "  ✗ .deb package verification failed: ${file_name}"
                     all_valid=false
                 fi
                 ;;
@@ -2190,10 +2627,10 @@ log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Purpose: Continuing implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-    if [ "$all_valid" = true ]; then
-    echo "✓ All files verified and ready for build"
+    if [[ "${all_valid}" == "true" ]]; then
+        echo "✓ All files verified and ready for build"
     else
-    echo "✗ File verification failed - aborting build"
+        echo "✗ File verification failed - aborting build"
         exit 1
     fi
 # End if-else block (self-contained)
@@ -2431,7 +2868,7 @@ From: ${BASE_IMAGE}
     export TMPDIR=/tmp/cuda_build
     rm -rf "\$TMPDIR"
     mkdir -p "\$TMPDIR"
-    chmod 777 "\$TMPDIR"
+    chmod 755 "\$TMPDIR"
 
 
 #--- Sub-block: Code section 1771 ---
@@ -2445,8 +2882,12 @@ From: ${BASE_IMAGE}
         export CUDA_HOME="/usr/local/cuda-${CUDA_MAJOR}"
     else
         # Fallback to auto-detection of versioned directory
-        DETECTED_CUDA=\$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1)
-        export CUDA_HOME="\${DETECTED_CUDA:-/usr/local/cuda}"
+        DETECTED_CUDA=\$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 || echo "")
+        if [ -n "\${DETECTED_CUDA}" ] && [ -d "\${DETECTED_CUDA}" ]; then
+            export CUDA_HOME="\${DETECTED_CUDA}"
+        else
+            export CUDA_HOME="/usr/local/cuda"
+        fi
     fi
     export PATH="\${CUDA_HOME}/bin:\${PATH}"
     export LD_LIBRARY_PATH="\${CUDA_HOME}/lib64:\${LD_LIBRARY_PATH}"
@@ -2556,15 +2997,22 @@ log "================ Image building completed successfully ================"
 # Generate timestamp in format: DD-MM-YYYY-DAY-HHMMSSAM/PM
 # Example: 03-01-2025-Friday-143022PM
 # Format: %d-%m-%Y-%A-%I%M%S%p where %A is full weekday name, %p is AM/PM
-BUILD_TIMESTAMP=$(date +%d-%m-%Y-%A-%I%M%S%p)
+BUILD_TIMESTAMP=$(date +%d-%m-%Y-%A-%I%M%S%p 2>/dev/null || echo "unknown-timestamp")
+if [ -z "${BUILD_TIMESTAMP}" ] || [ "${BUILD_TIMESTAMP}" = "unknown-timestamp" ]; then
+    log_warning "Failed to generate build timestamp, using fallback"
+    BUILD_TIMESTAMP="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo "unknown")"
+fi
 IMAGE_NAME_BASE="${SIF_NAME%.sif}"  # Remove .sif extension
 BUILD_OUTPUT_DIR="${OUT_DIR}/${IMAGE_NAME_BASE}_${BUILD_TIMESTAMP}"
 
 log_with_timestamp "Creating build output directory: ${BUILD_OUTPUT_DIR}"
-mkdir -p "${BUILD_OUTPUT_DIR}"
+if ! mkdir -p "${BUILD_OUTPUT_DIR}" 2>/dev/null; then
+    log_error "Failed to create build output directory: ${BUILD_OUTPUT_DIR}"
+    exit 1
+fi
 
 if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
-    log_error "Failed to create build output directory: ${BUILD_OUTPUT_DIR}"
+    log_error "Build output directory does not exist after creation: ${BUILD_OUTPUT_DIR}"
     exit 1
 fi
 
@@ -2578,19 +3026,23 @@ FINAL_IMAGE_PATH="${BUILD_OUTPUT_DIR}/${SIF_NAME}"
 
 if [ -f "${ORIGINAL_IMAGE_PATH}" ]; then
     log_with_timestamp "Moving image file to output directory..."
-    mv "${ORIGINAL_IMAGE_PATH}" "${FINAL_IMAGE_PATH}"
-    if [ -f "${FINAL_IMAGE_PATH}" ]; then
-        log_success "Image moved to: ${FINAL_IMAGE_PATH}"
-        # Update SIF_PATH for later use
-        SIF_PATH="${FINAL_IMAGE_PATH}"
+    if mv "${ORIGINAL_IMAGE_PATH}" "${FINAL_IMAGE_PATH}" 2>/dev/null; then
+        if [ -f "${FINAL_IMAGE_PATH}" ]; then
+            log_success "Image moved to: ${FINAL_IMAGE_PATH}"
+            # Update SIF_PATH for later use
+            SIF_PATH="${FINAL_IMAGE_PATH}"
+        else
+            log_warning "Move command succeeded but destination file not found, keeping original location"
+            SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+        fi
     else
         log_warning "Failed to move image file, keeping original location"
         SIF_PATH="${ORIGINAL_IMAGE_PATH}"
     fi
-    else
-        log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
-        SIF_PATH="${ORIGINAL_IMAGE_PATH}"
-    fi
+else
+    log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
+    SIF_PATH="${ORIGINAL_IMAGE_PATH}"
+fi
 
 #--- Sub-block 22.5.2.1: Move definition file to output directory ---
 # Dependencies: DEF_NAME exists, BUILD_OUTPUT_DIR exists
@@ -2641,8 +3093,20 @@ else
 fi
 
 # Ensure basename variables are set even if files weren't moved
-BUILD_LOG_BASENAME="${BUILD_LOG_BASENAME:-$(basename "${LOG_FILE:-unknown.log}" 2>/dev/null || echo "unknown.log")}"
-ERROR_LOG_BASENAME="${ERROR_LOG_BASENAME:-$(basename "${ERROR_LOG:-unknown.log}" 2>/dev/null || echo "unknown.log")}"
+if [ -z "${BUILD_LOG_BASENAME:-}" ]; then
+    if [ -n "${LOG_FILE:-}" ]; then
+        BUILD_LOG_BASENAME=$(basename "${LOG_FILE}" 2>/dev/null || echo "unknown.log")
+    else
+        BUILD_LOG_BASENAME="unknown.log"
+    fi
+fi
+if [ -z "${ERROR_LOG_BASENAME:-}" ]; then
+    if [ -n "${ERROR_LOG:-}" ]; then
+        ERROR_LOG_BASENAME=$(basename "${ERROR_LOG}" 2>/dev/null || echo "unknown.log")
+    else
+        ERROR_LOG_BASENAME="unknown.log"
+    fi
+fi
 
 #--- Sub-block 22.5.4: Generate BUILD_ARCHITECTURE.md ---
 # Dependencies: config.sh variables, BUILD_OUTPUT_DIR exists
@@ -2662,11 +3126,20 @@ ARCH_EOF
 
 BUILD_DATE_STR=$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo "unknown")
 BUILD_END_TIME_NOW=$(date +%s 2>/dev/null || echo "0")
-if [ -n "${BUILD_START_TIME:-}" ] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
+# Validate BUILD_END_TIME_NOW is numeric
+if ! [[ "${BUILD_END_TIME_NOW}" =~ ^[0-9]+$ ]]; then
+    BUILD_END_TIME_NOW=0
+fi
+if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
     BUILD_DURATION_NOW=$((BUILD_END_TIME_NOW - BUILD_START_TIME))
+    # Ensure duration is non-negative
+    if [ "${BUILD_DURATION_NOW}" -lt 0 ]; then
+        BUILD_DURATION_NOW=0
+        log_warning "Build duration calculation resulted in negative value, using 0"
+    fi
 else
     BUILD_DURATION_NOW=0
-    log_warning "BUILD_START_TIME not set, duration calculation skipped"
+    log_warning "BUILD_START_TIME not set or invalid, duration calculation skipped"
 fi
 BUILD_HOURS_NOW=$((BUILD_DURATION_NOW / 3600))
 BUILD_MINUTES_NOW=$(( (BUILD_DURATION_NOW % 3600) / 60))
@@ -2676,10 +3149,13 @@ BUILD_SECONDS_NOW=$((BUILD_DURATION_NOW % 60))
 IMAGE_SIZE_STR="unknown"
 if [ -f "${SIF_PATH:-}" ]; then
     IMAGE_SIZE_STR=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
 elif [ -f "${FINAL_IMAGE_PATH:-}" ]; then
     IMAGE_SIZE_STR=$(du -sh "${FINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
 elif [ -f "${ORIGINAL_IMAGE_PATH:-}" ]; then
     IMAGE_SIZE_STR=$(du -sh "${ORIGINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
 fi
 
 # Ensure basename variables are set (already set above if logs were moved)
@@ -2692,14 +3168,38 @@ fi
 
 # Calculate cache statistics early for use in BUILD_ARCHITECTURE.md
 # These may be recalculated later, but we need them now for documentation
-CACHE_TOTAL_SIZE="${CACHE_TOTAL_SIZE:-$(du -sh "${CACHE_DIR:-}" 2>/dev/null | cut -f1 || echo "0B")}"
-APT_CACHE_SIZE="${APT_CACHE_SIZE:-$(du -sh "${APT_ARCHIVE_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
-CONDA_CACHE_SIZE="${CONDA_CACHE_SIZE:-$(du -sh "${CONDA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
-WHEELS_CACHE_SIZE="${WHEELS_CACHE_SIZE:-$(du -sh "${WHEELS_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
-JULIA_CACHE_SIZE="${JULIA_CACHE_SIZE:-$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")}"
-APT_CACHE_COUNT="${APT_CACHE_COUNT:-$(find "${APT_ARCHIVE_CACHE:-}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
-CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT:-$(find "${CONDA_CACHE:-}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
-WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT:-$(find "${WHEELS_CACHE:-}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")}"
+if [ -z "${CACHE_TOTAL_SIZE:-}" ]; then
+    CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR:-}" 2>/dev/null | cut -f1 || echo "0B")
+    [ -z "${CACHE_TOTAL_SIZE}" ] && CACHE_TOTAL_SIZE="0B"
+fi
+if [ -z "${APT_CACHE_SIZE:-}" ]; then
+    APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
+    [ -z "${APT_CACHE_SIZE}" ] && APT_CACHE_SIZE="0B"
+fi
+if [ -z "${CONDA_CACHE_SIZE:-}" ]; then
+    CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
+    [ -z "${CONDA_CACHE_SIZE}" ] && CONDA_CACHE_SIZE="0B"
+fi
+if [ -z "${WHEELS_CACHE_SIZE:-}" ]; then
+    WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
+    [ -z "${WHEELS_CACHE_SIZE}" ] && WHEELS_CACHE_SIZE="0B"
+fi
+if [ -z "${JULIA_CACHE_SIZE:-}" ]; then
+    JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
+    [ -z "${JULIA_CACHE_SIZE}" ] && JULIA_CACHE_SIZE="0B"
+fi
+if [ -z "${APT_CACHE_COUNT:-}" ]; then
+    APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE:-}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+    [ -z "${APT_CACHE_COUNT}" ] && APT_CACHE_COUNT="0"
+fi
+if [ -z "${CONDA_CACHE_COUNT:-}" ]; then
+    CONDA_CACHE_COUNT=$(find "${CONDA_CACHE:-}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+    [ -z "${CONDA_CACHE_COUNT}" ] && CONDA_CACHE_COUNT="0"
+fi
+if [ -z "${WHEELS_CACHE_COUNT:-}" ]; then
+    WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE:-}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+    [ -z "${WHEELS_CACHE_COUNT}" ] && WHEELS_CACHE_COUNT="0"
+fi
 
 cat >> "${ARCHITECTURE_FILE}" << ARCH_INFO_EOF
 - **Build Date**: ${BUILD_DATE_STR}
@@ -3454,8 +3954,16 @@ fi
 log "Detailed build information"
 echo "Build Phase: Cache Harvesting"
 echo "Build completed at: $(date)"
-echo "Image size: $(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")"
-echo "Image location: ${SIF_PATH}"
+# Validate SIF_PATH exists before calculating size
+if [ -f "${SIF_PATH:-}" ]; then
+    image_size_display=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
+    [ -z "${image_size_display}" ] && image_size_display="unknown"
+    echo "Image size: ${image_size_display}"
+    echo "Image location: ${SIF_PATH}"
+else
+    echo "Image size: unknown (SIF file not found)"
+    echo "Image location: ${SIF_PATH:-<not set>}"
+fi
 echo "======================================================================"
 
 #===============================================================================
@@ -3476,34 +3984,47 @@ if [ -z "${SIF_PATH:-}" ]; then
     SIF_PATH="${OUT_DIR}/${SIF_NAME}"
 fi
 HOST_CACHE="${PWD}/container_cache"
-mkdir -p "$HOST_CACHE"
+if ! mkdir -p "${HOST_CACHE}" 2>/dev/null; then
+    log_error "Failed to create host cache directory: ${HOST_CACHE}"
+    exit 1
+fi
 
 # Check if apptainer is available, otherwise try singularity
 # Use full paths to avoid PATH issues
 if [ -x /usr/bin/apptainer ]; then
     log_with_timestamp "Using Apptainer for cache harvest..."
-    if /usr/bin/apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/'; then
+    # Validate SIF_PATH exists before attempting harvest
+    if [ ! -f "${SIF_PATH}" ]; then
+        log_error "SIF file not found for cache harvest: ${SIF_PATH}"
+    elif /usr/bin/apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
+        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/' 2>/dev/null; then
         log_success "Cache harvest completed successfully"
     else
         log_warning "Cache harvest failed, but continuing..."
     fi
 
     log_with_timestamp "--------- Verify Harvest ---------"
-    /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -l /container_cache | wc -l | awk "{print \"[info] cache dirs inside image:\", \$1}"'
-    /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
+    if [ -f "${SIF_PATH}" ]; then
+        /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -l /container_cache 2>/dev/null | wc -l | awk '\''{print "[info] cache dirs inside image:", $1}'\''' 2>/dev/null || true
+        /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"' 2>/dev/null || true
+    fi
 elif [ -x /usr/bin/singularity ]; then
     log_with_timestamp "Using Singularity for cache harvest..."
-    if /usr/bin/singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/'; then
+    # Validate SIF_PATH exists before attempting harvest
+    if [ ! -f "${SIF_PATH}" ]; then
+        log_error "SIF file not found for cache harvest: ${SIF_PATH}"
+    elif /usr/bin/singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
+        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/' 2>/dev/null; then
         log_success "Cache harvest completed successfully"
     else
         log_warning "Cache harvest failed, but continuing..."
     fi
 
     log_with_timestamp "--------- Verify Harvest ---------"
-    /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -l /container_cache | wc -l | awk "{print \"[info] cache dirs inside image:\", \$1}"'
-    /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"'
+    if [ -f "${SIF_PATH}" ]; then
+        /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -l /container_cache 2>/dev/null | wc -l | awk '\''{print "[info] cache dirs inside image:", $1}'\''' 2>/dev/null || true
+        /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"' 2>/dev/null || true
+    fi
 else
     log_warning "Neither apptainer nor singularity found, skipping cache harvest."
 fi
@@ -3514,28 +4035,14 @@ log_with_timestamp "========= Validating Harvested Cache =========="
 echo "=> Validating harvested cache..."
 issues=0
 
-#--- Sub-block: Section continuation (1981) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
 # Check APT cache
 if [ -d "${HOST_CACHE}/apt/archives" ]; then
-    apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l)
-    if [ "$apt_count" -gt 0 ]; then
-        echo "  ✓ APT cache: $apt_count .deb files harvested"
+    apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
+    apt_count="${apt_count:-0}"
+    if [[ "${apt_count}" -gt 0 ]]; then
+        echo "  ✓ APT cache: ${apt_count} .deb file(s) harvested"
     else
-
-#--- Sub-block 18.1.1: Cache harvest in progress ---
-# Purpose: Extracting packages from container
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
         echo "  ✗ APT cache: No .deb files found"
-
-#--- Sub-block: Cache harvest ---
-# Purpose: Extract cache from container
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
         issues=$((issues + 1))
     fi
 else
@@ -3545,17 +4052,13 @@ fi
 
 # Check Conda cache
 if [ -d "${HOST_CACHE}/conda_pkgs" ]; then
-    conda_count=$(find "${HOST_CACHE}/conda_pkgs" -name "*.conda" -o -name "*.tar.bz2" 2>/dev/null | wc -l)
-    if [ "$conda_count" -gt 0 ]; then
-        echo "  ✓ Conda cache: $conda_count packages harvested"
+    conda_count=$(find "${HOST_CACHE}/conda_pkgs" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    conda_count="${conda_count:-0}"
+    if [[ "${conda_count}" -gt 0 ]]; then
+        echo "  ✓ Conda cache: ${conda_count} package(s) harvested"
     else
         echo "  ✗ Conda cache: No packages found"
     fi
-
-#--- Sub-block: Cache extraction ---
-# Purpose: Harvest packages from container
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 else
     echo "  ✗ Conda cache: Directory not found"
     issues=$((issues + 1))
@@ -3563,9 +4066,10 @@ fi
 
 # Check Pip wheels
 if [ -d "${HOST_CACHE}/wheels" ]; then
-    wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l)
-    if [ "$wheel_count" -gt 0 ]; then
-        echo "  ✓ Pip wheels: $wheel_count wheels harvested"
+    wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
+    wheel_count="${wheel_count:-0}"
+    if [[ "${wheel_count}" -gt 0 ]]; then
+        echo "  ✓ Pip wheels: ${wheel_count} wheel(s) harvested"
     else
         echo "  ✗ Pip wheels: No wheels found"
     fi
@@ -3576,37 +4080,24 @@ fi
 # Check Julia cache
 if [ -d "${HOST_CACHE}/julia_pkgs" ]; then
     julia_size=$(du -sh "${HOST_CACHE}/julia_pkgs" 2>/dev/null | cut -f1 || echo "0B")
-    if [[ "$julia_size" != "0B" ]]; then
-        echo "  ✓ Julia cache: $julia_size harvested"
+    if [ -z "${julia_size}" ]; then
+        julia_size="0B"
+    fi
+    if [[ "${julia_size}" != "0B" ]] && [[ "${julia_size}" != "unknown" ]]; then
+        echo "  ✓ Julia cache: ${julia_size} harvested"
     else
         echo "  ✗ Julia cache: No packages found"
     fi
 else
     echo "  ✗ Julia cache: Directory not found"
 fi
-if [ "$issues" -eq 0 ]; then
+issues="${issues:-0}"
+if [[ "${issues}" -eq 0 ]]; then
     echo "✓ Cache harvest validation passed"
 else
-    echo "✗ Cache harvest validation found $issues issues"
+    echo "✗ Cache harvest validation found ${issues} issue(s)"
 fi
 
-#--- Sub-block: Section continuation (2040) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 1977 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-log_success "============== Harvest Complete =============="
-
-
-#--- Sub-block: Harvest completion ---
-# Purpose: Finalize cache extraction
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # --- Prune Host Caches ---
 # NOTE: The original script assumes these pruning scripts exist at /usr/local/bin
 # on the HOST. This is unlikely. A robust implementation would define them
@@ -3623,11 +4114,6 @@ else
     log_warning "./prune_conda_cache.sh not found or not executable. Skipping Conda cache pruning."
 fi
 
-
-#--- Sub-block: Harvest finalization ---
-# Purpose: Complete cache extraction process
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
 # Clean up prune scripts after use
 log_with_timestamp "Cleaning up temporary prune scripts..."
 rm -f ./prune_apt_cache.sh ./prune_conda_cache.sh 2>/dev/null || true
@@ -3662,16 +4148,6 @@ echo -e "${YELLOW}> you must modify the package names in 'xubuntu_robotics_base_
 echo -e "${YELLOW}> and rebuild the container.${NC}"
 echo -e "${YELLOW}======================================================================${NC}"
 
-#--- Sub-block: Section continuation (2095) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 2029 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge), Block 15 (VirtualGL)
-# Outputs: Python packages, conda environments
 echo "Built image: ${SIF_PATH}"
 if [ -n "${BUILD_OUTPUT_DIR:-}" ]; then
     echo "Build output directory: ${BUILD_OUTPUT_DIR}"
@@ -3687,7 +4163,9 @@ echo "- Graphics: VNC, VirtualGL, Blender, CAD tools"
 echo "- Documentation: TeX Live, LibreOffice"
 echo "- Caching: Comprehensive package caching system"
 log_with_timestamp "Host cache disk usage:"
-du -sh "${BIN_CACHE}" "${DEB_CACHE}" "${APT_CACHE}" "${CONDA_CACHE}" "${JULIA_CACHE}" "${WHEELS_CACHE}" 2>/dev/null || true
+if [ -n "${BIN_CACHE:-}" ] && [ -n "${DEB_CACHE:-}" ] && [ -n "${APT_CACHE:-}" ] && [ -n "${CONDA_CACHE:-}" ] && [ -n "${JULIA_CACHE:-}" ] && [ -n "${WHEELS_CACHE:-}" ]; then
+    du -sh "${BIN_CACHE}" "${DEB_CACHE}" "${APT_CACHE}" "${CONDA_CACHE}" "${JULIA_CACHE}" "${WHEELS_CACHE}" 2>/dev/null || true
+fi
 
 #===============================================================================
 # BLOCK 25: BUILD COMPLETION AND USAGE NOTES
@@ -3699,8 +4177,6 @@ du -sh "${BIN_CACHE}" "${DEB_CACHE}" "${APT_CACHE}" "${CONDA_CACHE}" "${JULIA_CA
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 25.1: Display usage notes ---
-# Dependencies: Block 17 (Conda/Miniforge), Block 6.13 (NVIDIA CUDA), System (Container runtime)
-# Outputs: GPU libraries, CUDA toolkit
 echo "[note] To start a tuned VNC session inside the container:"
 echo "apptainer exec --nv \"${SIF_PATH}\" start_vnc_xfce.sh"
 echo "(Tunnel: ssh -L 5901:localhost:5901 <user>@<host>) -> VNC viewer to localhost:5901"
@@ -3735,30 +4211,42 @@ echo "- micromamba available as separate fast alternative"
 echo "- Fallback to conda if mamba unavailable"
 
 #--- Sub-block 25.2: Calculate build statistics ---
-# Critical: Calculate total build time and cache sizes
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 BUILD_END_TIME=$(date +%s)
-BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
-BUILD_HOURS=$((BUILD_DURATION / 3600))
-BUILD_MINUTES=$(( (BUILD_DURATION % 3600) / 60))
-BUILD_SECONDS=$((BUILD_DURATION % 60))
+if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
+    BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
+    BUILD_HOURS=$((BUILD_DURATION / 3600))
+    BUILD_MINUTES=$(( (BUILD_DURATION % 3600) / 60))
+    BUILD_SECONDS=$((BUILD_DURATION % 60))
+else
+    BUILD_DURATION=0
+    BUILD_HOURS=0
+    BUILD_MINUTES=0
+    BUILD_SECONDS=0
+    log_warning "BUILD_START_TIME not set or invalid, duration calculation skipped"
+fi
 
 # Cache statistics
-CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR}" 2>/dev/null | cut -f1 || echo "0B")
-APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
-CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
-WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
-JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
+APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
+CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
+WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
+JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
 
-APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE}" -name "*.deb" 2>/dev/null | wc -l)
-CONDA_CACHE_COUNT=$(find "${CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l)
-WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE}" -name "*.whl" 2>/dev/null | wc -l)
+APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE:-/tmp}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
+APT_CACHE_COUNT="${APT_CACHE_COUNT:-0}"
+CONDA_CACHE_COUNT=$(find "${CONDA_CACHE:-/tmp}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT:-0}"
+WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE:-/tmp}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
+WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT:-0}"
 
 echo ""
 echo "=============== BUILD SUMMARY ==============="
 echo "Container: ${SIF_PATH}"
-echo "Size: $(du -sh "${SIF_PATH}" | cut -f1)"
+if [ -f "${SIF_PATH}" ]; then
+    echo "Size: $(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")"
+else
+    echo "Size: unknown (file not found)"
+fi
 echo "Build time: ${BUILD_HOURS}h ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
 echo "Build completed: $(date)"
 echo ""
@@ -3770,27 +4258,30 @@ echo "Pip wheels: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)"
 echo "Julia cache: ${JULIA_CACHE_SIZE}"
 echo ""
 echo "=============== DETAILED CACHE ANALYSIS ==============="
-echo "APT cache directory: ${APT_ARCHIVE_CACHE}"
-echo "Conda cache directory: ${CONDA_CACHE}"
-echo "Pip wheels directory: ${WHEELS_CACHE}"
-echo "Julia cache directory: ${JULIA_CACHE}"
+echo "APT cache directory: ${APT_ARCHIVE_CACHE:-not set}"
+echo "Conda cache directory: ${CONDA_CACHE:-not set}"
+echo "Pip wheels directory: ${WHEELS_CACHE:-not set}"
+echo "Julia cache directory: ${JULIA_CACHE:-not set}"
 
 # Check for Open3D wheel specifically
 # Use tr to remove whitespace from wc -l output for robust numeric comparison
-OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
-if [ -n "${OPEN3D_WHEELS}" ] && [ "${OPEN3D_WHEELS}" -gt 0 ] 2>/dev/null; then
-    echo ""
-    echo "=============== OPEN3D WHEEL INFORMATION ==============="
-    # Safely get directory size, handle case where directory might not exist
-    if [ -d "${WHEELS_CACHE}/open3d" ]; then
-        OPEN3D_WHEEL_SIZE=$(du -sh "${WHEELS_CACHE}/open3d" 2>/dev/null | cut -f1 || echo "unknown")
-    else
-        OPEN3D_WHEEL_SIZE="unknown"
+if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}/open3d" ]; then
+    OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    OPEN3D_WHEELS="${OPEN3D_WHEELS:-0}"
+    if [ "${OPEN3D_WHEELS}" -gt 0 ] 2>/dev/null; then
+        echo ""
+        echo "=============== OPEN3D WHEEL INFORMATION ==============="
+        # Safely get directory size, handle case where directory might not exist
+        if [ -d "${WHEELS_CACHE}/open3d" ]; then
+            OPEN3D_WHEEL_SIZE=$(du -sh "${WHEELS_CACHE}/open3d" 2>/dev/null | cut -f1 || echo "unknown")
+        else
+            OPEN3D_WHEEL_SIZE="unknown"
+        fi
+        echo "✓ Open3D CUDA wheel cached for reuse: ${OPEN3D_WHEELS} wheel(s) (${OPEN3D_WHEEL_SIZE})"
+        echo "  Location: ${WHEELS_CACHE}/open3d/"
+        echo "  This wheel can be used to install Open3D in conda environments and writable overlays"
+        # Note: * is literal here for documentation purposes
+        echo "  Usage in conda environment: pip install --no-deps \"${WHEELS_CACHE}/open3d/open3d*.whl\""
+        echo "========================================================="
     fi
-    echo "✓ Open3D CUDA wheel cached for reuse: ${OPEN3D_WHEELS} wheel(s) (${OPEN3D_WHEEL_SIZE})"
-    echo "  Location: ${WHEELS_CACHE}/open3d/"
-    echo "  This wheel can be used to install Open3D in conda environments and writable overlays"
-    # Note: * is literal here for documentation purposes
-    echo "  Usage in conda environment: pip install --no-deps \"${WHEELS_CACHE}/open3d/open3d*.whl\""
-    echo "========================================================="
 fi
