@@ -978,32 +978,33 @@ monitor_cache() {
   local container_apt var_apt conda_pkgs wheels julia_pkgs
   
   # Safely count files with error handling
+  # Use find instead of ls to avoid glob expansion issues
   if [ -d "${CONTAINER_APT_CACHE:-}" ]; then
-    container_apt=$(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l || echo "0")
+    container_apt=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
   else
     container_apt="0"
   fi
   
   if [ -d /var/cache/apt/archives ]; then
-    var_apt=$(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l || echo "0")
+    var_apt=$(find /var/cache/apt/archives -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
   else
     var_apt="0"
   fi
   
   if [ -d "${CONTAINER_CONDA_CACHE:-}" ]; then
-    conda_pkgs=$(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+    conda_pkgs=$(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
   else
     conda_pkgs="0"
   fi
   
   if [ -d "${CONTAINER_WHEELS_CACHE:-}" ]; then
-    wheels=$(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+    wheels=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
   else
     wheels="0"
   fi
   
   if [ -d "${CONTAINER_JULIA_CACHE:-}" ]; then
-    julia_pkgs=$(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l || echo "0")
+    julia_pkgs=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
   else
     julia_pkgs="0"
   fi
@@ -1043,7 +1044,7 @@ display_cache_monitoring_summary() {
       # Format the output with proper alignment
       printf "%-30s | %-13s | %-7s | %-5s | %-6s | %-5s\n" \
         "${stage:-unknown}" "${container_apt:-0}" "${var_apt:-0}" "${conda_pkgs:-0}" "${wheels:-0}" "${julia_pkgs:-0}"
-    done < "${CACHE_MONITOR_DATA}"
+    done < "${CACHE_MONITOR_DATA}" || true
   else
     echo "No cache monitoring data available"
   fi
@@ -1062,29 +1063,29 @@ cache_summary() {
   echo "=========================================================="
   echo "APT Archives:"
   if [ -d "${CONTAINER_APT_CACHE:-}" ]; then
-    echo " ${CONTAINER_APT_CACHE}: $(ls "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null | wc -l || echo "0") .deb files"
+    echo " ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0") .deb files"
   else
     echo " ${CONTAINER_APT_CACHE:-/unknown}: 0 .deb files (directory not found)"
   fi
   if [ -d /var/cache/apt/archives ]; then
-    echo " /var/cache/apt/archives: $(ls /var/cache/apt/archives/*.deb 2>/dev/null | wc -l || echo "0") .deb files"
+    echo " /var/cache/apt/archives: $(find /var/cache/apt/archives -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0") .deb files"
   else
     echo " /var/cache/apt/archives: 0 .deb files (directory not found)"
   fi
   echo "---"
   echo "Other Caches:"
   if [ -d "${CONTAINER_CONDA_CACHE:-}" ]; then
-    echo " ${CONTAINER_CONDA_CACHE}: $(ls "${CONTAINER_CONDA_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+    echo " ${CONTAINER_CONDA_CACHE}: $(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0") files"
   else
     echo " ${CONTAINER_CONDA_CACHE:-/unknown}: 0 files (directory not found)"
   fi
   if [ -d "${CONTAINER_WHEELS_CACHE:-}" ]; then
-    echo " ${CONTAINER_WHEELS_CACHE}: $(ls "${CONTAINER_WHEELS_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+    echo " ${CONTAINER_WHEELS_CACHE}: $(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0") files"
   else
     echo " ${CONTAINER_WHEELS_CACHE:-/unknown}: 0 files (directory not found)"
   fi
   if [ -d "${CONTAINER_JULIA_CACHE:-}" ]; then
-    echo " ${CONTAINER_JULIA_CACHE}: $(ls "${CONTAINER_JULIA_CACHE}"/* 2>/dev/null | wc -l || echo "0") files"
+    echo " ${CONTAINER_JULIA_CACHE}: $(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0") files"
   else
     echo " ${CONTAINER_JULIA_CACHE:-/unknown}: 0 files (directory not found)"
   fi
@@ -1160,10 +1161,10 @@ export JULIA_DEPOT_PATH="${CACHE_ROOT}/julia_pkgs:/usr/local/share/julia"  # Jul
 # Outputs: Python packages, conda environments
 setup_conda_staging_area() {
     local staging_dir="/tmp/conda-staging"
-    echo "Setting up conda staging area at $staging_dir..."
+    echo "Setting up conda staging area at ${staging_dir}..."
     # Create staging directory with proper permissions
-    mkdir -p "$staging_dir"
-    chmod 755 "$staging_dir"
+    mkdir -p "${staging_dir}"
+    chmod 755 "${staging_dir}"
     # Note: Do not modify CONDA_PKGS_DIRS here to avoid interfering with normal conda operations
     # The staging area will be used manually for specific cleanup operations
     echo "✓ Conda staging area configured (manual mode)"
@@ -1176,51 +1177,60 @@ setup_conda_staging_area() {
 # Outputs: Python packages, conda environments
 # Parameters: $1 = package name
 atomic_package_replace() {
-    local pkg_name="$1"
-    local cache_dir="${CONTAINER_CONDA_CACHE}"
+    local pkg_name="${1:-}"
+    local cache_dir="${CONTAINER_CONDA_CACHE:-}"
     local max_retries=3
     local retry_count=0
 
-    while [ $retry_count -lt $max_retries ]; do
-    echo "Attempting to replace corrupted package: $pkg_name (attempt $((retry_count + 1))/${max_retries})"
+    # Validate inputs
+    if [ -z "${pkg_name}" ]; then
+        echo "✗ Error: Package name not provided"
+        return 1
+    fi
+    if [ -z "${cache_dir}" ]; then
+        echo "✗ Error: CONTAINER_CONDA_CACHE not set"
+        return 1
+    fi
+    if [ -z "${MINIFORGE_HOME:-}" ] || [ ! -x "${MINIFORGE_HOME}/bin/mamba" ]; then
+        echo "✗ Error: MINIFORGE_HOME not set or mamba not available"
+        return 1
+    fi
+
+    while [ "${retry_count}" -lt "${max_retries}" ]; do
+        echo "Attempting to replace corrupted package: ${pkg_name} (attempt $((retry_count + 1))/${max_retries})"
         # Create temporary file for atomic replacement
         local temp_file="${cache_dir}/${pkg_name}.tmp"
         local final_file="${cache_dir}/${pkg_name}"
 
         # Remove corrupted package
-    rm -f "${final_file}" 2>/dev/null || true
+        rm -f "${final_file}" 2>/dev/null || true
 
         # Download fresh copy to temporary location
-        if ${MINIFORGE_HOME}/bin/mamba download --no-deps -c conda-forge -p "$cache_dir" "$pkg_name" --output-filename "$temp_file" 2>/dev/null; then
+        if "${MINIFORGE_HOME}/bin/mamba" download --no-deps -c conda-forge -p "${cache_dir}" "${pkg_name}" --output-filename "${temp_file}" 2>/dev/null; then
             # Atomic move to final location
-            if mv "$temp_file" "$final_file" 2>/dev/null; then
+            if mv "${temp_file}" "${final_file}" 2>/dev/null; then
                 # Verify the new package
-                if verify_package_integrity "$final_file"; then
-          echo "✓ Successfully replaced and verified: $pkg_name"
+                if verify_package_integrity "${final_file}"; then
+                    echo "✓ Successfully replaced and verified: ${pkg_name}"
                     return 0
                 else
-          echo "Δ Downloaded package failed verification, retrying..."
-                    rm -f "$final_file" 2>/dev/null || true
+                    echo "Δ Downloaded package failed verification, retrying..."
+                    rm -f "${final_file}" 2>/dev/null || true
                 fi
             else
-        echo "Δ Atomic move failed, retrying..."
-                rm -f "$temp_file" 2>/dev/null || true
+                echo "Δ Atomic move failed, retrying..."
+                rm -f "${temp_file}" 2>/dev/null || true
             fi
         else
-      echo "Δ Download failed, retrying..."
+            echo "Δ Download failed, retrying..."
         fi
 
         retry_count=$((retry_count + 1))
-    sleep $((retry_count ** 2)) # Exponential backoff
+        sleep $((retry_count ** 2)) # Exponential backoff
     done
-  # End while loop (self-contained)
+    # End while loop (self-contained)
 
-#--- Sub-block: Section continuation (321) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-  echo "✗ Failed to replace package after $max_retries attempts: $pkg_name"
+    echo "✗ Failed to replace package after ${max_retries} attempts: ${pkg_name}"
     return 1
 }
 # End function (self-contained)
@@ -1236,41 +1246,48 @@ atomic_package_replace() {
 # Outputs: Environment variables, configuration
 # Parameters: $1 = package file path
 verify_package_integrity() {
-    local pkg_file="$1"
+    local pkg_file="${1:-}"
 
-    if [ ! -f "$pkg_file" ]; then
+    if [ -z "${pkg_file}" ]; then
+        echo "✗ Error: Package file path not provided"
+        return 1
+    fi
+
+    if [ ! -f "${pkg_file}" ]; then
+        echo "✗ Error: Package file not found: ${pkg_file}"
         return 1
     fi
 
     # Check file type and verify accordingly
-    local file_type=$(file -b "$pkg_file" 2>/dev/null || echo "unknown")
-    case "$file_type" in
-    *"bzip2 compressed"*)
-            if bzip2 -t "$pkg_file" >/dev/null 2>&1; then
+    local file_type
+    file_type=$(file -b "${pkg_file}" 2>/dev/null || echo "unknown")
+    case "${file_type}" in
+        *"bzip2 compressed"*)
+            if bzip2 -t "${pkg_file}" >/dev/null 2>&1; then
                 return 0
             else
-        echo "✗ bzip2 integrity check failed"
+                echo "✗ bzip2 integrity check failed"
                 return 1
             fi
             ;;
-    *"Zip archive"*)
-            if unzip -t "$pkg_file" >/dev/null 2>&1; then
+        *"Zip archive"*)
+            if unzip -t "${pkg_file}" >/dev/null 2>&1; then
                 return 0
             else
-        echo "✗ ZIP integrity check failed"
+                echo "✗ ZIP integrity check failed"
                 return 1
             fi
             ;;
-    *) # For unknown types, try both checks
-            if bzip2 -t "$pkg_file" >/dev/null 2>&1 || unzip -t "$pkg_file" >/dev/null 2>&1; then
+        *) # For unknown types, try both checks
+            if bzip2 -t "${pkg_file}" >/dev/null 2>&1 || unzip -t "${pkg_file}" >/dev/null 2>&1; then
                 return 0
             else
-        echo "✗ Package integrity check failed"
+                echo "✗ Package integrity check failed"
                 return 1
             fi
             ;;
     esac
-  # End case statement (self-contained)
+    # End case statement (self-contained)
 }
 # End function (self-contained)
 
@@ -1285,28 +1302,41 @@ verify_package_integrity() {
 # Outputs: Environment variables, configuration
 # Parameters: $1 = package name
 acquire_package_lock() {
-    local pkg_name="$1"
+    local pkg_name="${1:-}"
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
     local max_wait=30
     local wait_count=0
+    local current_time lock_time lock_age
 
-    while [ $wait_count -lt $max_wait ]; do
-    if [set -C; echo $$ > "$lock_file"] 2>/dev/null; then
-      # lock acquired
+    if [ -z "${pkg_name}" ]; then
+        echo "✗ Error: Package name not provided"
+        return 1
+    fi
+
+    while [ "${wait_count}" -lt "${max_wait}" ]; do
+        # Use subshell with set -C for atomic lock creation
+        if (set -C; echo $$ > "${lock_file}") 2>/dev/null; then
+            # lock acquired
             return 0
         fi
         # Check if lock is stale (older than 5 minutes)
-    if [ -f "$lock_file" ] && [ $(date +%s) -ge $(( $(stat -c %Y "$lock_file" 2>/dev/null || echo 0) + 300 )) ]; then
-            rm -f "$lock_file" 2>/dev/null || true
-            continue
+        if [ -f "${lock_file}" ]; then
+            current_time=$(date +%s 2>/dev/null || echo "0")
+            lock_time=$(stat -c %Y "${lock_file}" 2>/dev/null || echo "0")
+            lock_age=$((current_time - lock_time))
+            if [ "${lock_age}" -ge 300 ]; then
+                # Lock is stale, remove it
+                rm -f "${lock_file}" 2>/dev/null || true
+                continue
+            fi
         fi
 
-    sleep $((wait_count + 2))
+        sleep $((wait_count + 2))
         wait_count=$((wait_count + 1))
     done
-  # End while loop (self-contained)
+    # End while loop (self-contained)
 
-  echo "▲ Could not acquire lock for $pkg_name after ${max_wait}s"
+    echo "▲ Could not acquire lock for ${pkg_name} after ${max_wait}s"
     return 1
 }
 # End function (self-contained)
@@ -1317,9 +1347,15 @@ acquire_package_lock() {
 # Outputs: Environment variables, configuration
 # Parameters: $1 = package name
 release_package_lock() {
-    local pkg_name="$1"
+    local pkg_name="${1:-}"
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
-    rm -f "$lock_file" 2>/dev/null || true
+    
+    if [ -z "${pkg_name}" ]; then
+        echo "✗ Error: Package name not provided"
+        return 1
+    fi
+    
+    rm -f "${lock_file}" 2>/dev/null || true
 }
 # End function (self-contained)
 
@@ -1342,12 +1378,12 @@ debug_glibc "START - Before any apt operations"
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 echo "=> Creating all cache directories at the start of container build..."
-mkdir -p ${CONTAINER_APT_CACHE}
-mkdir -p ${CONTAINER_BIN_CACHE}
-mkdir -p ${CONTAINER_CONDA_CACHE}
-mkdir -p ${CONTAINER_DEB_CACHE}
-mkdir -p ${CONTAINER_WHEELS_CACHE}
-mkdir -p ${CONTAINER_JULIA_CACHE}
+mkdir -p "${CONTAINER_APT_CACHE:-/container_cache/apt}"
+mkdir -p "${CONTAINER_BIN_CACHE:-/container_cache/bin}"
+mkdir -p "${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}"
+mkdir -p "${CONTAINER_DEB_CACHE:-/container_cache/deb}"
+mkdir -p "${CONTAINER_WHEELS_CACHE:-/container_cache/wheels}"
+mkdir -p "${CONTAINER_JULIA_CACHE:-/container_cache/julia_pkgs}"
 mkdir -p /var/cache/apt/archives/partial
 mkdir -p /root/.cache/pip
 # Note: ${MINIFORGE_HOME} will be created by Miniforge installer
@@ -1366,7 +1402,11 @@ mkdir -p /root/.local/share/julia
 # Critical: Ensure all cache directories are writable
 # Dependencies: Block 17 (Conda/Miniforge), Block 8.5 (Julia installation)
 # Outputs: Python packages, conda environments
-chmod -R 755 /container_cache /root/.cache /var/cache/opt ${MINIFORGE_HOME} /usr/local/share/julia /root/.local 2>/dev/null || true
+chmod -R 755 /container_cache /root/.cache /var/cache/opt /usr/local/share/julia /root/.local 2>/dev/null || true
+# Only chmod MINIFORGE_HOME if it exists
+if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
+    chmod -R 755 "${MINIFORGE_HOME}" 2>/dev/null || true
+fi
 echo "✓ All cache directories created successfully"
 
 #--- Sub-block 6.9.5: Cache validation and repair function ---
@@ -1377,26 +1417,29 @@ validate_and_repair_cache() {
     echo "==> Validating and repairing cache directories..."
     # Ensure all cache directories exist with proper permissions
     local cache_dirs=(
-        "${CONTAINER_APT_CACHE}"
-        "${CONTAINER_WHEELS_CACHE}"
-        "${CONTAINER_CONDA_CACHE}"
-        "${CONTAINER_JULIA_CACHE}"
+        "${CONTAINER_APT_CACHE:-/container_cache/apt}"
+        "${CONTAINER_WHEELS_CACHE:-/container_cache/wheels}"
+        "${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}"
+        "${CONTAINER_JULIA_CACHE:-/container_cache/julia_pkgs}"
         "/var/cache/apt/archives"
         "/root/.cache/pip"
         "/usr/local/share/julia"
     )
 
     # Only add ${MINIFORGE_HOME}/pkgs if conda is already installed
-    if [ -d "${MINIFORGE_HOME}" ]; then
+    if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
         cache_dirs+=("${MINIFORGE_HOME}/pkgs")
     fi
 
     for dir in "${cache_dirs[@]}"; do
-        mkdir -p "$dir"
-        chown -R root:root "$dir" 2>/dev/null || true
-        chmod -R 755 "$dir" 2>/dev/null || true
-    echo "✓ Validated: $dir"
-  done
+        if [ -z "${dir:-}" ]; then
+            continue  # Skip empty entries
+        fi
+        mkdir -p "${dir}" 2>/dev/null || true
+        chown -R root:root "${dir}" 2>/dev/null || true
+        chmod -R 755 "${dir}" 2>/dev/null || true
+        echo "✓ Validated: ${dir}"
+    done
 }
 # End validate_and_repair_cache function
 
@@ -1406,12 +1449,12 @@ validate_and_repair_cache() {
 # Outputs: Environment variables, configuration
 # Conda package integrity validation is done via Xsetup for efficiency
 test_file="/root/.cache/write_test"
-    if touch "$test_file" 2>/dev/null; then
-        rm -f "$test_file"
-  echo "✓ Write permissions verified"
-    else
-  echo "WARNING: Write permissions issue detected"
-    fi
+if touch "${test_file}" 2>/dev/null; then
+    rm -f "${test_file}" 2>/dev/null || true
+    echo "✓ Write permissions verified"
+else
+    echo "WARNING: Write permissions issue detected"
+fi
 # End write permission test (if-else self-contained)
 
 #--- Sub-block 6.9.7: GPG verification functions ---
@@ -1500,11 +1543,14 @@ echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirr
 # Outputs: Installed packages
 echo -e "\n\033[1;34m===> Enabling the 'universe' repository for additional packages...\033[0m"
 # The 'software-properties-common' package provides add-apt-repository command
-    /usr/bin/apt-get update
-    /usr/bin/apt-get install -y --no-install-recommends software-properties-common
-add-apt-repository -y universe
-add-apt-repository -y ppa:mozillateam/ppa
-add-apt-repository -y ppa:agornostal/ulauncher
+/usr/bin/apt-get update -o Acquire::Retries=3 || echo "⚠ apt-get update had issues"
+/usr/bin/apt-get install -y --no-install-recommends software-properties-common || {
+    echo "✗ Failed to install software-properties-common"
+    exit 1
+}
+add-apt-repository -y universe || echo "⚠ Failed to add universe repository (may already exist)"
+add-apt-repository -y ppa:mozillateam/ppa || echo "⚠ Failed to add Mozilla PPA (may already exist)"
+add-apt-repository -y ppa:agornostal/ulauncher || echo "⚠ Failed to add ulauncher PPA (may already exist)"
 
 echo ""
 echo "==> Re-applying fastest mirror after add-apt-repository (which uses default URLs)..."
@@ -1519,10 +1565,10 @@ echo "✓ Additional repositories enabled and verified"
 # Outputs: Installed packages
 echo -e "\n${BLUE}===> Synchronizing base image with latest package versions...${NC}"
 # Using dist-upgrade handles dependency changes intelligently
-apt-get update
+apt-get update -o Acquire::Retries=3 || echo "⚠ apt-get update had issues"
 # DEBIAN_FRONTEND=noninteractive apt-get dist-upgrade -y
-apt-get install -f -y
-dpkg --configure -a
+apt-get install -f -y || echo "⚠ apt-get install -f had issues"
+dpkg --configure -a || echo "⚠ dpkg --configure had issues"
 echo -e "${GREEN}✓ Base image synchronized.${NC}"
 
 #===============================================================================
@@ -1538,78 +1584,105 @@ echo -e "${GREEN}✓ Base image synchronized.${NC}"
 # Critical: dpkg-sig for .deb package verification (optional - not available in all Ubuntu versions)
 # Dependencies: Block 6 (APT configuration), Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: Installed packages
-    echo "Installing dpkg-sig for .deb package verification (if available)..."
-    /usr/bin/apt-get install -y --no-install-recommends dpkg-sig 2>/dev/null || echo "⚠️  dpkg-sig not available, using alternative verification"
+echo "Installing dpkg-sig for .deb package verification (if available)..."
+/usr/bin/apt-get install -y --no-install-recommends dpkg-sig 2>/dev/null || echo "⚠️  dpkg-sig not available, using alternative verification"
 
-    # Import VirtualGL/TurboVNC GPG key for APT repositories
-    echo "Importing VirtualGL/TurboVNC GPG key for APT..."
-    # Using key URL from config.sh
-    if curl -fsSL "$VIRTUALGL_TURBOVNC_GPG_KEY_URL" | gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg; then
+# Import VirtualGL/TurboVNC GPG key for APT repositories
+echo "Importing VirtualGL/TurboVNC GPG key for APT..."
+# Using key URL from config.sh
+if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
+    if curl -fsSL "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" | gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg 2>/dev/null; then
         echo "✓ VirtualGL/TurboVNC GPG key imported successfully for APT"
     else
-  echo "✗ Failed to import VirtualGL/TurboVNC GPG key (non-fatal, will retry during installation)"
+        echo "✗ Failed to import VirtualGL/TurboVNC GPG key (non-fatal, will retry during installation)"
         # Don't exit - this is for APT repos which might not be in use
     fi
+else
+    echo "⚠ VIRTUALGL_TURBOVNC_GPG_KEY_URL not set - skipping GPG key import"
+fi
 
 #--- Sub-block 6.12.2: Import Drake GPG key ---
 # Critical: Import Drake robotics framework GPG key from cache
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-    echo "Importing Drake GPG key..."
-    if [ -f "${CONTAINER_BIN_CACHE}/drake.asc" ]; then
-        if gpg --dearmor -o /usr/share/keyrings/drake.gpg "${CONTAINER_BIN_CACHE}/drake.asc"; then
-            echo "✓ Drake GPG key imported successfully"
-        else
-    echo "✗ Failed to import Drake GPG key"
-            exit 1
-        fi
+echo "Importing Drake GPG key..."
+if [ -z "${CONTAINER_BIN_CACHE:-}" ]; then
+    echo "✗ CONTAINER_BIN_CACHE not set - cannot import Drake GPG key"
+    exit 1
+fi
+
+if [ -f "${CONTAINER_BIN_CACHE}/drake.asc" ]; then
+    if gpg --dearmor -o /usr/share/keyrings/drake.gpg "${CONTAINER_BIN_CACHE}/drake.asc" 2>/dev/null; then
+        echo "✓ Drake GPG key imported successfully"
     else
-  echo "✗ Drake GPG key file not found"
+        echo "✗ Failed to import Drake GPG key"
         exit 1
     fi
+else
+    echo "✗ Drake GPG key file not found at ${CONTAINER_BIN_CACHE}/drake.asc"
+    exit 1
+fi
 # End Drake GPG import (if-else self-contained)
 
 #--- Sub-block 6.12.3: .deb package verification function ---
 # Purpose: Verify .deb packages using GPG signatures
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-    verify_deb_package() {
-        local deb_file="$1"
-        local gpg_key_id="$2"
+verify_deb_package() {
+    local deb_file="${1:-}"
+    local gpg_key_id="${2:-}"
+    local basename_file
 
-        echo "Verifying .deb package: $(basename "$deb_file")"
+    # Validate inputs
+    if [ -z "${deb_file}" ]; then
+        echo "✗ Error: Package file not provided"
+        return 1
+    fi
+    
+    if [ -z "${gpg_key_id}" ]; then
+        echo "✗ Error: GPG key ID not provided"
+        return 1
+    fi
+    
+    if [ ! -f "${deb_file}" ]; then
+        echo "✗ Error: Package file not found: ${deb_file}"
+        return 1
+    fi
+    
+    basename_file=$(basename "${deb_file}")
+    echo "Verifying .deb package: ${basename_file}"
 
-        # First, verify package structure
-        if ! dpkg-deb -I "$deb_file" >/dev/null 2>&1; then
-    echo "✗ Package structure is invalid: $(basename "$deb_file")"
-            exit 1
-        fi
+    # First, verify package structure
+    if ! dpkg-deb -I "${deb_file}" >/dev/null 2>&1; then
+        echo "✗ Package structure is invalid: ${basename_file}"
+        return 1
+    fi
 
-        # Import the GPG key for verification
-  echo "Importing GPG key for verification..."
-  if ! gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "$gpg_key_id" >/dev/null; then
-    echo "Δ Failed to import GPG key, trying alternative keyserver..."
-    gpg --batch --keyserver keys.openpgp.org --recv-keys "$gpg_key_id" 2>/dev/null || true
-        fi
+    # Import the GPG key for verification
+    echo "Importing GPG key for verification..."
+    if ! gpg --batch --keyserver keyserver.ubuntu.com --recv-keys "${gpg_key_id}" >/dev/null 2>&1; then
+        echo "Δ Failed to import GPG key, trying alternative keyserver..."
+        gpg --batch --keyserver keys.openpgp.org --recv-keys "${gpg_key_id}" 2>/dev/null || true
+    fi
 
-        # Try dpkg-sig verification first
-        if dpkg-sig --verify "$deb_file" 2>/dev/null; then
-            echo "✓ GPG signature verified with dpkg-sig for $(basename "$deb_file")"
-            return 0
-  fi
+    # Try dpkg-sig verification first
+    if command -v dpkg-sig >/dev/null 2>&1 && dpkg-sig --verify "${deb_file}" >/dev/null 2>&1; then
+        echo "✓ GPG signature verified with dpkg-sig for ${basename_file}"
+        return 0
+    fi
 
-  echo "Δ dpkg-sig verification failed, trying alternative verification..."
+    echo "Δ dpkg-sig verification failed, trying alternative verification..."
 
-            # Alternative: Check if the package has a valid signature using gpg directly
-            # Extract signature and verify
-  if dpkg-sig -list "$deb_file" 2>/dev/null | grep -q "signature"; then
-                echo "✓ Package has valid signature structure for $(basename "$deb_file")"
-    return 0 # Loosening constraint to allow install
-  else
-    echo "✗ No valid signature found for $(basename "$deb_file")"
-    echo "Δ Continuing with installation despite signature verification failure..."
-    return 0 # Allow installation to continue
-  fi
+    # Alternative: Check if the package has a valid signature using gpg directly
+    # Extract signature and verify
+    if command -v dpkg-sig >/dev/null 2>&1 && dpkg-sig -list "${deb_file}" 2>/dev/null | grep -q "signature"; then
+        echo "✓ Package has valid signature structure for ${basename_file}"
+        return 0  # Loosening constraint to allow install
+    else
+        echo "✗ No valid signature found for ${basename_file}"
+        echo "Δ Continuing with installation despite signature verification failure..."
+        return 0  # Allow installation to continue
+    fi
 }
 
 #--- Sub-block: Section continuation (595) ---
@@ -1641,14 +1714,17 @@ mkdir -p /root/.config/pip
 
   # 3. Prepare Conda Caching with Staging Area Strategy
     # This config file will be used when Miniforge is installed later
-  cat > ${MINIFORGE_HOME}/.condarc.pre <<-'EOF'
+    # Note: Use double quotes heredoc to allow variable expansion
+    if [ -n "${MINIFORGE_HOME:-}" ]; then
+        mkdir -p "${MINIFORGE_HOME}" 2>/dev/null || true
+        cat > "${MINIFORGE_HOME}/.condarc.pre" <<EOF
 channels:
   - conda-forge
 channel_priority: strict
 # Explicitly disable defaults/anaconda repos (community repos only)
 default_channels: []
 pkgs_dirs:
-  - ${CONTAINER_CONDA_CACHE}
+  - ${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}
 
 # --- Robustness settings for tricky filesystems ---
 use_only_tar_bz2: true # Force older, more robust package format
@@ -1665,6 +1741,9 @@ use_hard_links: true # Use hard links when possible for efficiency
 always_copy: false # Use hard links for efficiency
 always_softlink: false # Prefer hard links over soft links
 EOF
+    else
+        echo "⚠ WARNING: MINIFORGE_HOME not set - skipping conda cache configuration"
+    fi
 
 #--- Sub-block: Section continuation (640) ---
 # Purpose: Implementation details
@@ -1710,11 +1789,20 @@ setup_unified_cache
 echo "==> Applying immutable flag to protect pre-seeded APT cache..."
 # The "e2fsprogs" package, which provides chattr, is part of the base image
 # We suppress errors in case no .deb files were pre-seeded
-if command -v chattr >/dev/null; then
-  chattr +i ${CONTAINER_APT_CACHE}/*.deb 2>/dev/null || true
-  echo "✓ Pre-seeded cache files are now protected."
+if command -v chattr >/dev/null 2>&1 && [ -d "${CONTAINER_APT_CACHE:-/container_cache/apt}" ]; then
+    # Use find to safely handle glob expansion and avoid errors when no files exist
+    find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} \; 2>/dev/null || true
+    # Count protected files for confirmation
+    protected_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
+    if [ "${protected_count}" -gt 0 ]; then
+        echo "✓ Pre-seeded cache files are now protected (${protected_count} files)."
+    else
+        echo "ℹ No pre-seeded cache files found to protect."
+    fi
 else
-  echo "WARNING: 'chattr' command not found. Pre-seeded cache is not protected."
+    if ! command -v chattr >/dev/null 2>&1; then
+        echo "WARNING: 'chattr' command not found. Pre-seeded cache is not protected."
+    fi
 fi
 # End cache protection (if-else self-contained)
 
@@ -1913,6 +2001,10 @@ cat > /usr/local/bin/apt-aria <<'EOF'
 set -euo pipefail
 
 # Centralized APT cache configuration - All APT tools use this location
+if [ -z "${CONTAINER_APT_CACHE:-}" ]; then
+    echo "[apt-aria] ERROR: CONTAINER_APT_CACHE is not set"
+    exit 1
+fi
 CACHE="${CONTAINER_APT_CACHE}"
 mkdir -p "/var/cache/apt/archives"
 
@@ -1950,12 +2042,18 @@ if is_install_command "$@"; then
     echo "[apt-aria] Using aria2c for accelerated downloads..."
 
     # Collect all http/https URLs (incl. dependencies) that would be downloaded
-  URI_FILE=$(mktemp)
-  echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
+    URI_FILE=$(mktemp) || {
+        echo "[apt-aria] ERROR: Failed to create temporary file"
+        exit 1
+    }
+    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
 
     # Use a more robust approach to collect URIs
     # First, check if there are actually packages to download
-    APT_OUTPUT=$(/usr/bin/apt-get $APT_CACHE_OPTS --print-uris -y "$@" 2>&1)
+    # Split APT_CACHE_OPTS properly to handle multiple arguments
+    # Note: This requires proper handling of spaces in APT_CACHE_OPTS
+    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
+    APT_OUTPUT=$(/usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y "$@" 2>&1)
     APT_EXIT_CODE=$?
     
     # Check if packages are already installed or nothing to download (benign case)
@@ -1963,8 +2061,8 @@ if is_install_command "$@"; then
         echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
         touch "$URI_FILE"
     # Check if there's an actual error (not just "no URIs")
-    elif [ $APT_EXIT_CODE -ne 0 ] && ! echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
-        echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: $APT_EXIT_CODE)"
+    elif [ "${APT_EXIT_CODE}" -ne 0 ] && ! echo "$APT_OUTPUT" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
+        echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
         echo "[apt-aria] Error output: $(echo "$APT_OUTPUT" | head -3)"
         echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
         touch "$URI_FILE"
@@ -1986,8 +2084,8 @@ if is_install_command "$@"; then
 
     if [ -s "$URI_FILE" ]; then
     echo "[apt-aria] Downloading $(< "$URI_FILE" wc -l) packages via aria2c..."
-      echo "[apt-aria] Cache directory: $CACHE"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d $CACHE -i $URI_FILE"
+      echo "[apt-aria] Cache directory: ${CACHE}"
+      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
 
       # Try multi-connection first with error suppression
       if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "$CACHE" -i "$URI_FILE" 2>/dev/null; then
@@ -2010,19 +2108,22 @@ if is_install_command "$@"; then
     # Make all .deb files in the cache immutable to prevent deletion
     echo "[apt-aria] Making downloaded packages immutable to protect cache..."
     if command -v chattr >/dev/null 2>&1; then
-    chattr +i "${CACHE}/"*.deb 2>/dev/null
+        # Use find to safely handle glob expansion
+        find "${CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} + 2>/dev/null || true
         echo "[apt-aria] chattr command executed successfully"
     else
         echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
     fi
 
     # Install from cache using apt-get (reliable and standard)
+    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
     echo "[apt-aria] Installing packages from cache..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS -y "$@"
+    exec /usr/bin/apt-get ${APT_CACHE_OPTS} -y "$@"
 else
     # Use regular apt-get with cache configuration for non-install commands
+    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
     echo "[apt-aria] Using apt-get with cache configuration..."
-    exec /usr/bin/apt-get $APT_CACHE_OPTS "$@"
+    exec /usr/bin/apt-get ${APT_CACHE_OPTS} "$@"
 fi
 EOF
 chmod 0755 /usr/local/bin/apt-aria
@@ -2126,7 +2227,7 @@ CUDNN_INSTALLED=false
 if [ "$CUDNN_VERSION_AVAILABLE" = "true" ]; then
     echo "Installing cuDNN version ${CUDNN_VER}..."
     if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee /tmp/cudnn_install.log; then
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        if [ "${PIPESTATUS[0]}" -eq 0 ]; then
             CUDNN_INSTALLED=true
             echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
         fi
@@ -2138,7 +2239,7 @@ if [ "$CUDNN_INSTALLED" = "false" ]; then
     echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
     echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
     if apt-get install -y --no-install-recommends libcudnn9-cuda-${CUDA_MAJOR} libcudnn9-dev-cuda-${CUDA_MAJOR} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee -a /tmp/cudnn_install.log; then
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        if [ "${PIPESTATUS[0]}" -eq 0 ]; then
             CUDNN_INSTALLED=true
             # Detect installed version
             INSTALLED_CUDNN_VER=$(dpkg -l | grep -E "^ii\s+libcudnn9" | awk '{print $3}' | head -1)
@@ -2204,7 +2305,8 @@ fi
 # Outputs: GPU libraries, CUDA toolkit
 echo "==> Sourcing CUDA environment to make it available for the rest of this build..."
 source /etc/profile.d/cuda.sh
-sudo ldconfig
+# Note: ldconfig should be run without sudo in container context (already root)
+ldconfig
 
 #--- Sub-block 6.13.5: Verify CUDA installation ---
 # Critical: Validate nvcc and cuDNN are properly installed
@@ -2298,9 +2400,10 @@ echo "==> Continuing with rest of build process..."
 # Outputs: Installed packages
 echo "Testing unified APT cache functionality..."
 if /usr/local/bin/apt-get --download-only install -y curl 2>/dev/null; then
-  if [ -f "${CONTAINER_APT_CACHE}/curl"*.deb ]; then
+  # Use find to safely check for curl packages instead of glob in test
+  if find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "curl*.deb" -type f | grep -q .; then
         echo "✓ Unified APT cache test successful - curl package cached"
-        rm -f ${CONTAINER_APT_CACHE}/curl*.deb 2>/dev/null || true
+        find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "curl*.deb" -type f -delete 2>/dev/null || true
     else
     echo "Δ Unified APT cache test - package downloaded but not found in cache"
     fi
@@ -2859,16 +2962,16 @@ install_and_verify_group() {
 
   echo -e "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
   # Run the install command, redirecting verbose output on success to a log
-  # FIX: Add double quotes around the log filename to handle any special characters.
+  # Note: packages_to_install is intentionally unquoted to allow word splitting for apt-get
   if ! apt-get install -y --no-install-recommends ${packages_to_install} > "/tmp/apt_install_${group_name}.log" 2>&1; then
     echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: 'apt-get install' command returned an error. See details below:${NC}"
-    # FIX: Also quote the filename here for the cat command.
     cat "/tmp/apt_install_${group_name}.log"
     PHASE1_ALL_SUCCESS=false
     return 1
   fi
 
   echo -e "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
+  # Note: packages_to_install is intentionally unquoted to allow word splitting in for loop
   for pkg in ${packages_to_install}; do
     if dpkg -s "$pkg" 2>/dev/null | grep -q "Status: install ok installed"; then
       echo -e "  - ${pkg}: ${GREEN}OK${NC}"
@@ -3680,6 +3783,13 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 8.11: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
+  # IMPORTANT: TBB (Threading Building Blocks) is a SEPARATE library from OpenBLAS
+  # - TBB: Intel's threading library for parallel algorithms (separate from OpenBLAS)
+  # - OpenBLAS: Linear algebra library (BLAS/LAPACK implementation)
+  # - They work together but are independent libraries
+  # - "OpenBLAS TBB" means system TBB (compatible with OpenBLAS), NOT MKL TBB
+  # - TBB does NOT point to openblas.so - they are separate libraries
+  # TBB_DIR and TBB_LIBRARIES point to system TBB from libtbb-dev package (not MKL TBB)
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -3687,6 +3797,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_POLICY_DEFAULT_CMP0069=NEW \
     -D BUILD_SHARED_LIBS=ON \
     -D GTSAM_WITH_TBB=ON \
+    -D TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
+    -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
     -D GTSAM_USE_SYSTEM_EIGEN=ON \
     -D GTSAM_BUILD_TESTS=OFF \
     -D GTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
@@ -3703,7 +3815,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D GTSAM_BUILD_WITH_MARCH_NATIVE=OFF \
     -D CMAKE_CXX_STANDARD=17 \
     -D CMAKE_CXX_STANDARD_REQUIRED=ON \
-    -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
+    -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+    -D CMAKE_IGNORE_PATH="/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl"
 
   #--- Sub-block 8.12: Build and install GTSAM ---
   # Critical: Compile with ninja using half CPU cores
@@ -4211,7 +4324,49 @@ export LIBRARY_PATH="${LIBRARY_PATH}:/usr/lib/x86_64-linux-gnu"
 # Critical: Comprehensive CMake configuration with all features enabled
 # Dependencies: PHASE 1 (Build tools), PHASE 1 (Compilers), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
+# IMPORTANT: TBB (Threading Building Blocks) is a SEPARATE library from OpenBLAS
+# - TBB: Intel's threading library for parallel algorithms (separate from OpenBLAS)
+# - OpenBLAS: Linear algebra library (BLAS/LAPACK implementation)
+# - They work together but are independent libraries
+# - "OpenBLAS TBB" means system TBB (compatible with OpenBLAS), NOT MKL TBB
+# - TBB does NOT point to openblas.so - they are separate libraries
+# - TBB_DIR and TBB_LIBRARIES point to system TBB from libtbb-dev package (not MKL TBB)
+# - BLAS_LIBRARIES and BLA_VENDOR point to OpenBLAS (separate from TBB)
 echo -e "${YELLOW}[Phase 4 | OpenCV] Configuring with Cmake...${NC}"
+
+#===============================================================================
+# CUDA Compiler Compatibility Workarounds for OpenCV
+#===============================================================================
+# Check GCC version and apply workarounds for known NVCC compatibility issues
+# GCC 11 has known issues with NVCC and C++17 parameter pack expansion
+OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
+OPENCV_CUDA_FLAGS="-Xcompiler=-Wno-deprecated-declarations"
+
+GCC_VERSION_FOR_OPENCV=""
+GCC_MAJOR_FOR_OPENCV=""
+if command -v gcc-12 &>/dev/null; then
+    # Use gcc-12 if specified, otherwise check default gcc
+    GCC_VERSION_FOR_OPENCV=$(gcc-12 --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+elif command -v gcc &>/dev/null; then
+    GCC_VERSION_FOR_OPENCV=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+fi
+
+if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
+    GCC_MAJOR_FOR_OPENCV=$(echo "${GCC_VERSION_FOR_OPENCV}" | cut -d. -f1)
+    echo "  Detected GCC version for OpenCV: ${GCC_VERSION_FOR_OPENCV}"
+    
+    # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
+    # Error: parameter packs not expanded with '...' in std_function.h
+    if [ "${GCC_MAJOR_FOR_OPENCV}" = "11" ]; then
+        echo -e "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
+        OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
+        OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
+    elif [ "${GCC_MAJOR_FOR_OPENCV}" -gt "11" ]; then
+        # GCC 12+ generally works better, but keep basic compatibility flags
+        OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
+        OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
+    fi
+fi
 
 cmake -G Ninja \
   -D CPU_BASELINE=AVX2 \
@@ -4220,7 +4375,7 @@ cmake -G Ninja \
   -D CMAKE_C_COMPILER=/usr/bin/gcc-12 \
   -D CMAKE_CXX_COMPILER=/usr/bin/g++-12 \
   -D CUDA_HOST_COMPILER=/usr/bin/g++-12 \
-  -D CMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
+  -D CMAKE_INSTALL_PREFIX="${INSTALL_PREFIX}" \
   -D CMAKE_POLICY_DEFAULT_CMP0146=OLD \
   -D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv_contrib/modules \
   -D BUILD_SHARED_LIBS=ON \
@@ -4229,8 +4384,8 @@ cmake -G Ninja \
   -D OPENCV_GENERATE_PKGCONFIG=ON \
   -D CMAKE_C_COMPILER_WORKS=TRUE \
   -D CMAKE_CXX_COMPILER_WORKS=TRUE \
-  -D CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17" \
-  -D CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations" \
+  -D CUDA_NVCC_FLAGS="${OPENCV_CUDA_NVCC_FLAGS}" \
+  -D CMAKE_CUDA_FLAGS="${OPENCV_CUDA_FLAGS}" \
   -D WITH_CUDA=ON \
   -D WITH_CUDNN=ON \
   -D WITH_OPENBLAS=ON \
@@ -4314,23 +4469,42 @@ cmake -G Ninja \
   -D Julia_LIBRARIES=${JULIA_HOME}/lib/libjulia.so \
   -D JlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx \
   -D CMAKE_PREFIX_PATH="/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH}" \
-  -D CMAKE_IGNORE_PATH="/root/.julia" \
+  -D CMAKE_IGNORE_PATH="/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl" \
   -D WITH_NVCUVID=OFF \
   -D WITH_NVCUVENC=OFF \
   -D NVCUVID_HEADER_DIR=/usr/local/include/ \
   ..
 
 #--- Sub-block 10.9: Verify OpenCV CMake configuration ---
-# Critical: Check that key dependencies were detected
+# Critical: Check that key dependencies were detected and verify TBB is from system (not MKL)
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-echo "Verifying Cmake configuration..."
+echo "Verifying CMake configuration..."
 if ! grep -q "LAPACK.*YES" CMakeCache.txt; then
   echo "WARNING: LAPACK not detected"
 fi
 if ! grep -q "TBB.*YES" CMakeCache.txt; then
   echo "WARNING: TBB not detected"
 fi
+
+# Verify TBB is from system paths (not MKL TBB)
+echo "Verifying TBB source (must be system TBB, not MKL TBB)..."
+TBB_LIB_PATH=$(grep "^TBB_LIBRARIES:" CMakeCache.txt 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo "")
+if [ -n "${TBB_LIB_PATH:-}" ]; then
+  if echo "${TBB_LIB_PATH}" | grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)"; then
+    echo -e "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
+    echo "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
+    echo "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
+    exit 1
+  elif echo "${TBB_LIB_PATH}" | grep -qE "/usr/lib/x86_64-linux-gnu/libtbb"; then
+    echo -e "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
+  else
+    echo -e "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
+  fi
+else
+  echo -e "  ${YELLOW}⚠ WARNING: Could not verify TBB library path${NC}"
+fi
+
 echo "Configuration summary:"
 grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 
@@ -5046,6 +5220,30 @@ rm -rf build CMakeCache.txt CMakeFiles
 mkdir -p build && cd build
 echo "✓ Clean build directory created"
 
+#===============================================================================
+# CUDA Compiler Compatibility Workarounds for COLMAP
+#===============================================================================
+# Check GCC version and apply workarounds for known NVCC compatibility issues
+COLMAP_CUDA_FLAGS="-Xcompiler -fopenmp"
+GCC_VERSION_FOR_COLMAP=""
+GCC_MAJOR_FOR_COLMAP=""
+if command -v gcc &>/dev/null; then
+    GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [ -n "${GCC_VERSION_FOR_COLMAP}" ]; then
+        GCC_MAJOR_FOR_COLMAP=$(echo "${GCC_VERSION_FOR_COLMAP}" | cut -d. -f1)
+        echo "  Detected GCC version for COLMAP: ${GCC_VERSION_FOR_COLMAP}"
+        
+        # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
+        if [ "${GCC_MAJOR_FOR_COLMAP}" = "11" ]; then
+            echo -e "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
+            COLMAP_CUDA_FLAGS="-allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
+        elif [ "${GCC_MAJOR_FOR_COLMAP}" -gt "11" ]; then
+            # GCC 12+ generally works better, but keep basic compatibility flags
+            COLMAP_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
+        fi
+    fi
+fi
+
 # CMake configuration with Ninja generator
 echo ""
 echo "⚙️ Running CMake configuration (this may take a few minutes)..."
@@ -5064,7 +5262,7 @@ cmake .. \
     -DPROFILING_ENABLED=OFF \
     -DCMAKE_CXX_STANDARD=17 \
     -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-    -DCMAKE_CUDA_FLAGS="-Xcompiler -fopenmp" \
+    -DCMAKE_CUDA_FLAGS="${COLMAP_CUDA_FLAGS}" \
     -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive" \
     -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops" \
     -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
@@ -5454,8 +5652,10 @@ if python3 -c "import traitlets" 2>/dev/null; then
   if [ "${TRAITLETS_VER}" = "5.5.0" ]; then
     echo "  Debian traitlets 5.5.0 detected - installing compatible versions..."
     # Install compatible versions that work with traitlets 5.5.0
+    # traitlets 5.5.0 is only compatible with jupyter 1.x, not 6.x
+    # Use jupyter<2.0.0 to get the latest 1.x version compatible with traitlets 5.5.0
     pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
-      "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
+      "jupyter>=1.0.0,<2.0.0" "jupyterlab>=3.0.0,<4.0.0" "ipywidgets>=7.0.0,<8.0.0" || \
       echo "⚠ Jupyter installation with traitlets 5.5.0 failed"
   else
     # Upgrade traitlets if it's not the Debian version
@@ -5688,11 +5888,24 @@ else
     echo "  ✓ NumPy ${NUMPY_VER} found"
 fi
 
-# Check cuDNN library availability
+# Check cuDNN library availability and version
+# JAX supports: CUDA 12.3 with cuDNN 8.9, or CUDA 11.8 with cuDNN 8.6
 if ldconfig -p 2>/dev/null | grep -q libcudnn; then
-    echo "  ✓ cuDNN library found in system"
+    CUDNN_LIB=$(ldconfig -p 2>/dev/null | grep libcudnn | head -1 | awk '{print $4}' || echo "")
+    if [ -n "${CUDNN_LIB:-}" ] && [ -f "${CUDNN_LIB}" ]; then
+        # Try to extract cuDNN version from library
+        CUDNN_VERSION=$(strings "${CUDNN_LIB}" 2>/dev/null | grep -i "cudnn" | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1 || echo "unknown")
+        if [ "${CUDNN_VERSION}" != "unknown" ]; then
+            echo "  ✓ cuDNN library found (version: ${CUDNN_VERSION})"
+        else
+            echo "  ✓ cuDNN library found in system"
+        fi
+    else
+        echo "  ✓ cuDNN library found in system"
+    fi
 else
     echo "  ⚠ WARNING: cuDNN library not found in ldconfig - may affect GPU acceleration"
+    echo "    JAX requires cuDNN 8.6 (for CUDA 11.8) or cuDNN 8.9+ (for CUDA 12.3+)"
 fi
 
 # Check for OpenBLAS (NumPy/SciPy should use it, but verify)
@@ -5745,7 +5958,9 @@ if echo "${test_output}" | grep -q "externally-managed-environment"; then
 fi
 
 # Build pip command array to properly handle flags with spaces
-pip_cmd_base=(python3 -m pip install --upgrade --no-cache-dir)
+# Use --ignore-installed to skip uninstalling Debian-installed packages (numpy, wheel, etc.)
+# that don't have RECORD files and can't be uninstalled via pip
+pip_cmd_base=(python3 -m pip install --upgrade --no-cache-dir --ignore-installed)
 
 # Add optimization flags properly
 if [ -n "${pip_flags:-}" ]; then
@@ -5756,6 +5971,7 @@ fi
 
 # Install JAX with CUDA support
 echo "  Installing JAX[${CUDA_FOR_JAX}_local] from Google releases..."
+echo "  Note: Using --ignore-installed to handle Debian-installed packages (numpy, wheel, etc.)"
 pip_cmd=("${pip_cmd_base[@]}")
 pip_cmd+=("jax[${CUDA_FOR_JAX}_local]")
 pip_cmd+=(-f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html")
@@ -5774,11 +5990,33 @@ else
     echo "  ✓ JAX installed successfully"
 fi
 
-# Verify installation
+# Verify installation and version alignment
+# Critical: jax and jaxlib versions must match (based on JAX installation best practices)
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
     JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || echo "unknown")
     JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || echo "unknown")
-    echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} verified"
+    
+    # Extract base version (without CUDA variant suffix) for comparison
+    JAX_BASE_VER=$(echo "${JAX_VER}" | sed 's/[^0-9.]*$//' | sed 's/\.[0-9]*$//' | head -c 10)
+    JAXLIB_BASE_VER=$(echo "${JAXLIB_VER}" | sed 's/+.*$//' | sed 's/\.[0-9]*$//' | head -c 10)
+    
+    echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
+    
+    # Check if base versions align (allowing for CUDA variant suffixes in jaxlib)
+    if [ "${JAX_BASE_VER}" = "${JAXLIB_BASE_VER}" ] || [ "${JAX_VER}" = "${JAXLIB_BASE_VER}" ]; then
+        echo "  ✓ Version alignment verified: jax and jaxlib versions match"
+    else
+        echo "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
+        echo "    This may cause compatibility issues. Consider reinstalling with matching versions."
+    fi
+    
+    # Verify CUDA variant in jaxlib version string
+    if echo "${JAXLIB_VER}" | grep -qE "(cuda11|cuda12)"; then
+        CUDA_VARIANT=$(echo "${JAXLIB_VER}" | grep -oE "cuda(11|12)" | head -1)
+        echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
+    else
+        echo "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
+    fi
 else
     echo "  ⚠ JAX installation verification failed (non-fatal)"
 fi
@@ -5806,10 +6044,32 @@ def test_imports():
         
         print(f"  ✓ JAX version: {jax.__version__}")
         print(f"  ✓ jaxlib version: {jaxlib.__version__}")
+        
+        # Check for version alignment (critical for JAX stability)
+        jax_base = jax.__version__.split('+')[0] if '+' in jax.__version__ else jax.__version__
+        jaxlib_base = jaxlib.__version__.split('+')[0].split('.')[0:2] if '+' in jaxlib.__version__ else jaxlib.__version__.split('.')[0:2]
+        jaxlib_base = '.'.join(jaxlib_base)
+        if jax_base.startswith(jaxlib_base) or jaxlib_base.startswith(jax_base.split('.')[0:2][0]):
+            print(f"  ✓ Version alignment: jax {jax.__version__} matches jaxlib {jaxlib.__version__}")
+        else:
+            print(f"  ⚠ Version mismatch: jax {jax.__version__} vs jaxlib {jaxlib.__version__}")
+            print("    Warning: Version mismatch may cause compatibility issues")
+        
         test_results["passed"] += 1
         return True
     except Exception as e:
-        print(f"  ✗ Import failed: {e}")
+        error_msg = str(e)
+        # Check for cuBLAS version mismatch (common JAX installation issue)
+        if "cuBLAS" in error_msg or "cublas" in error_msg.lower():
+            print(f"  ✗ Import failed: {e}")
+            print("    ERROR: cuBLAS version mismatch detected!")
+            print("    This usually means:")
+            print("    - JAX was built against a different CUDA/cuDNN version than installed")
+            print("    - System cuBLAS version is older than JAX requires")
+            print("    Solution: Ensure CUDA/cuDNN versions match JAX requirements")
+            print("    JAX supports: CUDA 12.3 (cuDNN 8.9) or CUDA 11.8 (cuDNN 8.6)")
+        else:
+            print(f"  ✗ Import failed: {e}")
         test_results["failed"] += 1
         return False
 
@@ -5881,6 +6141,10 @@ def test_gpu():
         else:
             print("  ⚠ GPU devices not found (JAX will use CPU)")
             print("  Note: This is non-fatal - JAX will still work in CPU mode")
+            print("  Possible causes:")
+            print("    - CUDA/cuDNN version mismatch with JAX build")
+            print("    - GPU drivers not properly installed")
+            print("    - cuBLAS version incompatibility")
             test_results["warnings"] += 1
             return True  # CPU mode is acceptable
     except Exception as e:
@@ -6202,7 +6466,8 @@ echo "Installing optional robotics/Open3D libraries..."
 #   - libfmt-dev: C++ formatting library (enables USE_SYSTEM_FMT=ON, faster builds)
 #   - libassimp-dev: 3D model loading library (enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)
 #   - pybind11-dev: Python bindings library (enables USE_SYSTEM_PYBIND11=ON, faster builds)
-#   - libtbb-dev: Threading Building Blocks (already installed for OpenCV/GTSAM, enables USE_SYSTEM_TBB=ON)
+#   - libtbb-dev: Threading Building Blocks (system TBB, not MKL TBB - ensures OpenBLAS compatibility)
+#                 Already installed for OpenCV/GTSAM, enables USE_SYSTEM_TBB=ON
 #   - liburiparser-dev: URI parsing (used by some 3D formats)
 #   - libcurl4-openssl-dev: HTTP client support (if USE_SYSTEM_CURL=ON)
 #   - liblz4-dev: Fast compression (used by some data formats)
@@ -6259,7 +6524,8 @@ if dpkg -l | grep -q "^ii.*pybind11-dev"; then
     echo "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
 fi
 if dpkg -l | grep -q "^ii.*libtbb-dev"; then
-    echo "✓ TBB installed (Threading Building Blocks - enables USE_SYSTEM_TBB=ON, better performance)"
+    echo "✓ TBB installed (System Threading Building Blocks from libtbb-dev - not MKL TBB)"
+    echo "  This ensures OpenBLAS compatibility and enables USE_SYSTEM_TBB=ON"
 fi
 if dpkg -l | grep -q "^ii.*libspdlog-dev"; then
     echo "✓ spdlog installed (C++ logging library)"
@@ -6956,7 +7222,7 @@ echo "⚙️ Running CMake configuration with Ninja generator..."
 BUILD_LLVM11_LOCALLY="${BUILD_LLVM11_LOCALLY:-false}"
 LOCAL_LLVM11_DIR=""
 
-if [ "$BUILD_LLVM11_LOCALLY" = "true" ] && [ -z "$CLANG_LIBDIR_11" ] && [ -z "$CLANG_LIBDIR_DETECTED" ]; then
+if [ "${BUILD_LLVM11_LOCALLY}" = "true" ] && [ -z "${CLANG_LIBDIR_11:-}" ] && [ -z "${CLANG_LIBDIR_DETECTED:-}" ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "Building LLVM-11 locally for Open3D (this will take 30-60 minutes)..."
@@ -6986,9 +7252,12 @@ if [ "$BUILD_LLVM11_LOCALLY" = "true" ] && [ -z "$CLANG_LIBDIR_11" ] && [ -z "$C
     fi
     
     # Build only libc++ and libc++abi (not full LLVM - much faster)
-    if [ "$LLVM_CLONE_SUCCESS" = "true" ] && [ -d "llvm-project" ]; then
+    if [ "${LLVM_CLONE_SUCCESS}" = "true" ] && [ -d "llvm-project" ]; then
         mkdir -p build-libcxx
-        cd build-libcxx
+        if ! cd build-libcxx; then
+            echo "✗ ERROR: Cannot change to build-libcxx directory"
+            exit 1
+        fi
         
         echo "Configuring libc++ build..."
         cmake ../llvm-project/runtimes \
@@ -7004,14 +7273,16 @@ if [ "$BUILD_LLVM11_LOCALLY" = "true" ] && [ -z "$CLANG_LIBDIR_11" ] && [ -z "$C
             -DLIBCXXABI_ENABLE_STATIC=OFF \
             2>&1 | tee cmake.log
         
-        if [ ${PIPESTATUS[0]} -eq 0 ]; then
+        CMAKE_EXIT_CODE="${PIPESTATUS[0]}"
+        if [ "${CMAKE_EXIT_CODE}" -eq 0 ]; then
             echo "Building libc++ (this may take 20-40 minutes)..."
             cmake --build . --target install -j"$(nproc)" 2>&1 | tee build.log
             
-            if [ ${PIPESTATUS[0]} -eq 0 ]; then
+            BUILD_EXIT_CODE="${PIPESTATUS[0]}"
+            if [ "${BUILD_EXIT_CODE}" -eq 0 ]; then
                 LOCAL_LLVM11_LIBDIR="${LOCAL_LLVM11_DIR}/install/lib"
                 if [ -f "${LOCAL_LLVM11_LIBDIR}/libc++.so" ] && [ -f "${LOCAL_LLVM11_LIBDIR}/libc++abi.so" ]; then
-                    CLANG_LIBDIR_11="$LOCAL_LLVM11_LIBDIR"
+                    CLANG_LIBDIR_11="${LOCAL_LLVM11_LIBDIR}"
                     echo "✓ LLVM-11 libc++ built successfully: ${CLANG_LIBDIR_11}"
                 else
                     echo "⚠ LLVM-11 build completed but libraries not found"
@@ -7023,7 +7294,11 @@ if [ "$BUILD_LLVM11_LOCALLY" = "true" ] && [ -z "$CLANG_LIBDIR_11" ] && [ -z "$C
             echo "⚠ LLVM-11 configuration failed - check cmake.log"
         fi
         
-        cd "$LOCAL_LLVM11_DIR" || cd /tmp/Open3D
+        if ! cd "${LOCAL_LLVM11_DIR}" 2>/dev/null; then
+            if ! cd /tmp/Open3D 2>/dev/null; then
+                echo "⚠ WARNING: Could not return to expected directory"
+            fi
+        fi
     fi
     
     # Ensure we're back in Open3D directory
@@ -7041,20 +7316,21 @@ fi
 CLANG_LIBDIR_FLAG=""
 CLANG_LIBDIR_TO_USE=""
 
-if [ -n "$CLANG_LIBDIR_11" ] && [ -d "$CLANG_LIBDIR_11" ]; then
-    CLANG_LIBDIR_TO_USE="$CLANG_LIBDIR_11"
+if [ -n "${CLANG_LIBDIR_11:-}" ] && [ -d "${CLANG_LIBDIR_11}" ]; then
+    CLANG_LIBDIR_TO_USE="${CLANG_LIBDIR_11}"
     echo "  Using LLVM-11 libc++: ${CLANG_LIBDIR_TO_USE} (Open3D Filament only - avoids libunwind conflict)"
     echo "  Note: LLVM-11 built locally. This does NOT affect other LLVM usage in the image."
-elif [ -n "$CLANG_LIBDIR_DETECTED" ] && [ -d "$CLANG_LIBDIR_DETECTED" ]; then
-    CLANG_LIBDIR_TO_USE="$CLANG_LIBDIR_DETECTED"
-    LLVM_VERSION_DETECTED=$(echo "$CLANG_LIBDIR_TO_USE" | sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' | head -1)
-    if [ -n "$LLVM_VERSION_DETECTED" ]; then
+elif [ -n "${CLANG_LIBDIR_DETECTED:-}" ] && [ -d "${CLANG_LIBDIR_DETECTED}" ]; then
+    CLANG_LIBDIR_TO_USE="${CLANG_LIBDIR_DETECTED}"
+    LLVM_VERSION_DETECTED=""
+    LLVM_VERSION_DETECTED=$(echo "${CLANG_LIBDIR_TO_USE}" | sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' | head -1 || echo "")
+    if [ -n "${LLVM_VERSION_DETECTED}" ]; then
         # Check if version is numeric and greater than 11
-        if expr "$LLVM_VERSION_DETECTED" : '^[0-9][0-9]*$' >/dev/null 2>&1 && [ "$LLVM_VERSION_DETECTED" -gt 11 ]; then
+        if expr "${LLVM_VERSION_DETECTED}" : '^[0-9][0-9]*$' >/dev/null 2>&1 && [ "${LLVM_VERSION_DETECTED}" -gt 11 ]; then
             echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE} (may have libunwind conflict)"
             echo "  Warning: LLVM-${LLVM_VERSION_DETECTED} may cause Python exception issues with Filament renderer"
             echo "  Workaround: If Python exceptions fail, set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally"
-        elif expr "$LLVM_VERSION_DETECTED" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
+        elif expr "${LLVM_VERSION_DETECTED}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
             echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE}"
         else
             echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
@@ -7069,7 +7345,7 @@ else
 fi
 
 # Only set CLANG_LIBDIR flag if we have a valid directory
-if [ -n "$CLANG_LIBDIR_TO_USE" ] && [ -d "$CLANG_LIBDIR_TO_USE" ]; then
+if [ -n "${CLANG_LIBDIR_TO_USE:-}" ] && [ -d "${CLANG_LIBDIR_TO_USE}" ]; then
     CLANG_LIBDIR_FLAG="-DCLANG_LIBDIR=${CLANG_LIBDIR_TO_USE}"
 fi
 
@@ -7085,7 +7361,7 @@ fi
 
 if dpkg -l | grep -q "^ii.*libtbb-dev" || ldconfig -p | grep -q libtbb; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_TBB=ON"
-    echo "  Will use system TBB library"
+    echo "  Will use system TBB library (from libtbb-dev, not MKL TBB - ensures OpenBLAS compatibility)"
 fi
 
 if dpkg -l | grep -q "^ii.*libassimp-dev" || [ -f "/usr/lib/x86_64-linux-gnu/libassimp.so" ]; then
@@ -7098,9 +7374,36 @@ if dpkg -l | grep -q "^ii.*pybind11-dev" || [ -f "/usr/include/pybind11/pybind11
     echo "  Will use system pybind11 library"
 fi
 
+#===============================================================================
+# CUDA Compiler Compatibility Workarounds for Open3D
+#===============================================================================
+# Check GCC version and apply workarounds for known NVCC compatibility issues
+# GCC 11 has known issues with NVCC and C++17 parameter pack expansion
+OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
+GCC_VERSION_FOR_OPEN3D=""
+GCC_MAJOR_FOR_OPEN3D=""
+if command -v gcc &>/dev/null; then
+    GCC_VERSION_FOR_OPEN3D=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [ -n "${GCC_VERSION_FOR_OPEN3D}" ]; then
+        GCC_MAJOR_FOR_OPEN3D=$(echo "${GCC_VERSION_FOR_OPEN3D}" | cut -d. -f1)
+        echo "  Detected GCC version for Open3D: ${GCC_VERSION_FOR_OPEN3D}"
+        
+        # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
+        # Error: parameter packs not expanded with '...' in std_function.h
+        if [ "${GCC_MAJOR_FOR_OPEN3D}" = "11" ]; then
+            echo -e "  ${YELLOW}⚠ GCC 11 detected - ensuring compatibility workarounds for NVCC${NC}"
+            # Flags already include --allow-unsupported-compiler, but ensure they're set correctly
+            OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
+        elif [ "${GCC_MAJOR_FOR_OPEN3D}" -gt "11" ]; then
+            # GCC 12+ generally works better, but keep compatibility flags
+            OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
+        fi
+    fi
+fi
+
 # CUDA configuration flags for better performance
 CUDA_FLAGS=""
-if [ -n "$CUDA_VERSION" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
+if [ -n "${CUDA_VERSION}" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
     CUDA_FLAGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-${CUDA_VERSION}/bin/nvcc"
     CUDA_FLAGS="${CUDA_FLAGS} -DENABLE_CACHED_CUDA_MANAGER=ON"
     CUDA_FLAGS="${CUDA_FLAGS} -DBUILD_WITH_CUDA_STATIC=ON"
@@ -7109,7 +7412,7 @@ fi
 
 # Enhanced include path with OpenBLAS headers if found
 ENHANCED_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include;/usr/local/include"
-if [ -n "$OPENBLAS_HEADER_DIR" ]; then
+if [ -n "${OPENBLAS_HEADER_DIR:-}" ]; then
     ENHANCED_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH};${OPENBLAS_HEADER_DIR}"
 fi
 
@@ -7225,7 +7528,7 @@ cmake .. \
     ${LAPACK_LIBRARIES_FLAG:+${LAPACK_LIBRARIES_FLAG} }\
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DCMAKE_CUDA_STANDARD=17 \
-    -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow" \
+    -DCMAKE_CUDA_FLAGS="${OPEN3D_CUDA_FLAGS_VALUE}" \
     -DOPEN3D_WARNINGS_AS_ERRORS=OFF \
     -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive -Wno-array-bounds -Wno-stringop-overflow -Wno-restrict -Wno-maybe-uninitialized -Wno-deprecated-declarations -Wno-unused-but-set-variable" \
     -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -Wno-array-bounds -Wno-stringop-overflow -Wno-maybe-uninitialized" \
@@ -7245,7 +7548,8 @@ cmake .. \
     2>&1 | tee /tmp/open3d_cmake.log
 
 # Check if configuration succeeded
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
+CMAKE_CONFIG_EXIT_CODE="${PIPESTATUS[0]}"
+if [ "${CMAKE_CONFIG_EXIT_CODE}" -ne 0 ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✗ Open3D CUDA configuration FAILED"

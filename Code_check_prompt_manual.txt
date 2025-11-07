@@ -1,0 +1,31 @@
+You will be given a Bash script segment for audit and correction, specified by a line range or a distinct code block that may differ from earlier reviews.
+
+Instructions:
+
+1. Analyze the provided Bash code block thoroughly, regardless of its position or relation to previous code.
+
+2. For the block, check and correct all issues in:
+   - Syntax correctness, formatting, and indentation.
+   - Variable declaration, scoping (local/global), and quoting to avoid unintentional expansions.
+   - Proper use of quoting and escaping for strings, variables, command substitutions.
+   - Logical correctness in conditionals, loops, and pipelines.
+   - Functions: declaration, parameter usage, and return handling.
+   - Error handling, exit statuses, and presence or absence of strict mode (`set -euo pipefail`). Recommend adding if missing.
+   - Edge cases, input validation, file existence checks.
+   - Security aspects such as injection risks and unsafe eval or expansions.
+   - Performance and maintainability improvements, e.g., simplifying commands or removing unnecessary subshells.
+
+3. Apply corrections and explain each change with a summary including the relevant line numbers or block identifier.
+
+4. Maintain the intended script behavior; do not modify functional logic unless erroneous or unsafe.
+
+5. After completing the audit for the given block, provide:
+   - Corrected Bash script code.
+   - A concise explanation of corrections done with associated line numbers or block reference.
+   - A confirmation message that this specific block has been fully audited and corrected.
+
+6. Reason contextually within the block and prior knowledge from the script, respecting dependencies, shadowing, and usage patterns.
+
+7. Await further instructions for new line ranges or blocks as needed.
+
+This prompt should be customized dynamically by replacing the code and specifying the exact line numbers or block content before submission.

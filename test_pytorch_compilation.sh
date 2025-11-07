@@ -47,6 +47,24 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 #===============================================================================
+# Get script directory and create timestamped log file name
+#===============================================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
+
+# Validate script directory was determined successfully
+if [ -z "${SCRIPT_DIR}" ] || [ ! -d "${SCRIPT_DIR}" ]; then
+    echo -e "${RED}✗ ERROR: Cannot determine script directory${NC}" >&2
+    exit 1
+fi
+
+# Create log file name with date, time, weekday, and AM/PM
+# Format: pytorch_build_YYYY-MM-DD_HH-MM-SS_Weekday_AMPM.log
+# Optimize: Use single date call to avoid time discrepancies
+LOG_TIMESTAMP=$(date +"%Y-%m-%d_%I-%M-%S_%A_%p")
+PYTORCH_BUILD_LOG="${SCRIPT_DIR}/pytorch_build_${LOG_TIMESTAMP}.log"
+
+#===============================================================================
 # Detect Ubuntu Version for Compatibility
 #===============================================================================
 detect_ubuntu_version() {
@@ -2412,6 +2430,67 @@ export BUILD_TEST=0  # Skip tests (faster build)
 export BUILD_SHARED_LIBS=ON
 export CMAKE_BUILD_TYPE=Release
 
+#===============================================================================
+# CUDA Compiler Compatibility Workarounds
+#===============================================================================
+# Check GCC version and apply workarounds for known NVCC compatibility issues
+# GCC 11 has known issues with NVCC and C++17 parameter pack expansion
+GCC_VERSION=""
+GCC_MAJOR=""
+if command -v gcc &>/dev/null; then
+    GCC_VERSION=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    if [ -n "${GCC_VERSION}" ]; then
+        GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1)
+        echo "  Detected GCC version: ${GCC_VERSION}"
+    fi
+fi
+
+# Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
+# Error: parameter packs not expanded with '...' in std_function.h
+# This is a known issue: https://github.com/pytorch/pytorch/issues/51026
+if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ] && [ "${USE_CUDA:-0}" = "1" ]; then
+    echo -e "  ${YELLOW}⚠ GCC 11 detected with CUDA - applying compatibility workarounds${NC}"
+    echo "    Known issue: NVCC + GCC 11 + C++17 parameter pack expansion errors"
+    echo "    Solution: Adding compiler flags to work around std_function.h issues"
+    
+    # Set CUDA compiler flags to work around GCC 11 compatibility issues
+    # These flags are passed to NVCC via CMake
+    if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+        export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations"
+    else
+        export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations"
+    fi
+    
+    # Also set CUDA_NVCC_FLAGS for direct NVCC invocation
+    if [ -z "${CUDA_NVCC_FLAGS:-}" ]; then
+        export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler"
+    else
+        export CUDA_NVCC_FLAGS="${CUDA_NVCC_FLAGS} --expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler"
+    fi
+    
+    # Set host compiler explicitly to help NVCC
+    if [ -z "${CUDA_HOST_COMPILER:-}" ] && command -v g++ &>/dev/null; then
+        export CUDA_HOST_COMPILER="$(command -v g++)"
+        echo "    CUDA_HOST_COMPILER: ${CUDA_HOST_COMPILER}"
+    fi
+    
+    # Alternative: Use C++14 instead of C++17 if the above doesn't work
+    # Uncomment the following lines if the error persists:
+    # export CMAKE_CXX_STANDARD=14
+    # export CMAKE_CUDA_STANDARD=14
+    # echo "    Using C++14 instead of C++17 to avoid GCC 11 compatibility issues"
+    
+    echo -e "  ${GREEN}✓ Compatibility flags applied${NC}"
+elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -gt "11" ] && [ "${USE_CUDA:-0}" = "1" ]; then
+    # GCC 12+ generally works better with NVCC, but still add basic flags
+    if [ -z "${CMAKE_CUDA_FLAGS:-}" ]; then
+        export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations"
+    else
+        export CMAKE_CUDA_FLAGS="${CMAKE_CUDA_FLAGS} -Xcompiler -Wno-deprecated-declarations"
+    fi
+    echo "  GCC ${GCC_VERSION} detected - using standard CUDA flags"
+fi
+
 # Optional: Disable features we don't need (faster build)
 export USE_NNPACK=0  # Can enable if needed
 export USE_DISTRIBUTED=0  # Disable distributed training (can enable if needed)
@@ -2684,6 +2763,8 @@ echo ""
 # Step 5: Create build directory
 #===============================================================================
 echo -e "${BLUE}[Step 5] Preparing build directory...${NC}"
+echo -e "${GREEN}✓ Build log will be saved to: ${PYTORCH_BUILD_LOG}${NC}"
+echo ""
 
 # Determine build directory - use overlay if available, otherwise /tmp
 # Overlay provides persistent storage for build artifacts
@@ -3097,6 +3178,21 @@ else
     export LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH:-}
     export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:${PKG_CONFIG_PATH:-}
     
+    # Ensure CUDA compiler flags are set for PyTorch's CMake build system
+    # PyTorch's setup.py uses CMake internally, and CMake respects CMAKE_CUDA_FLAGS env var
+    if [ "${USE_CUDA:-0}" = "1" ] && [ -n "${CMAKE_CUDA_FLAGS:-}" ]; then
+        echo "  CUDA compiler flags: ${CMAKE_CUDA_FLAGS}"
+        # CMAKE_CUDA_FLAGS environment variable is automatically picked up by CMake
+        # No need to set CMAKE_ARGS - CMake will use the environment variable
+    fi
+    
+    # Set CUDA host compiler if specified (CMake also respects this as env var)
+    if [ "${USE_CUDA:-0}" = "1" ] && [ -n "${CUDA_HOST_COMPILER:-}" ]; then
+        echo "  CUDA host compiler: ${CUDA_HOST_COMPILER}"
+        # Export as CMAKE_CUDA_HOST_COMPILER for CMake to pick up
+        export CMAKE_CUDA_HOST_COMPILER="${CUDA_HOST_COMPILER}"
+    fi
+    
     cd "${PYTORCH_SOURCE_DIR}" || exit 1
     
     # Check if this is a resume (partial build exists)
@@ -3128,6 +3224,100 @@ else
 
     WHEEL_DIR="${BUILD_DIR}/wheels"
     mkdir -p "${WHEEL_DIR}"
+    
+    # Initialize variables for exit hook
+    LOG_SYNC_PID=""
+    BUILD_PID=""
+    LOG_SYNC_PID_FILE="${BUILD_DIR}/.log_sync_pid"
+    BUILD_PID_FILE="${BUILD_DIR}/.build_pid"
+    PIPELINE_PID_FILE="${BUILD_DIR}/.pipeline_pid"
+    
+    # Exit hook to ensure log file is synced on script termination
+    # This catches SIGTERM, SIGINT, EXIT, and other termination signals
+    cleanup_and_sync_log() {
+        local exit_code="${1:-0}"
+        
+        # Kill build process and all child processes if still running
+        if [ -f "${BUILD_PID_FILE}" ]; then
+            local build_pid
+            build_pid="$(cat "${BUILD_PID_FILE}" 2>/dev/null || echo "")"
+            if [ -n "${build_pid}" ] && kill -0 "${build_pid}" 2>/dev/null; then
+                # Try to get process group ID and kill the whole group
+                # This ensures all child processes are terminated
+                local pgid
+                pgid="$(ps -o pgid= -p "${build_pid}" 2>/dev/null | tr -d ' ' || echo "")"
+                if [ -n "${pgid}" ] && [ "${pgid}" != "$$" ]; then
+                    # Kill the process group (use negative PID for process group)
+                    kill -TERM "-${pgid}" 2>/dev/null || true
+                    sleep 1
+                    # Force kill if still running
+                    if kill -0 "${build_pid}" 2>/dev/null; then
+                        kill -KILL "-${pgid}" 2>/dev/null || kill -KILL "${build_pid}" 2>/dev/null || true
+                    fi
+                else
+                    # Fallback: kill just the process and its direct children
+                    kill -TERM "${build_pid}" 2>/dev/null || true
+                    sleep 1
+                    if kill -0 "${build_pid}" 2>/dev/null; then
+                        kill -KILL "${build_pid}" 2>/dev/null || true
+                    fi
+                    # Also try to kill children
+                    pkill -P "${build_pid}" -TERM 2>/dev/null || true
+                    sleep 0.5
+                    pkill -P "${build_pid}" -KILL 2>/dev/null || true
+                fi
+            fi
+            rm -f "${BUILD_PID_FILE}" 2>/dev/null || true
+        fi
+        
+        # Kill pipeline process if still running
+        if [ -f "${PIPELINE_PID_FILE}" ]; then
+            local pipeline_pid
+            pipeline_pid="$(cat "${PIPELINE_PID_FILE}" 2>/dev/null || echo "")"
+            if [ -n "${pipeline_pid}" ] && kill -0 "${pipeline_pid}" 2>/dev/null; then
+                kill -TERM "${pipeline_pid}" 2>/dev/null || true
+                sleep 1
+                if kill -0 "${pipeline_pid}" 2>/dev/null; then
+                    kill -KILL "${pipeline_pid}" 2>/dev/null || true
+                fi
+            fi
+            rm -f "${PIPELINE_PID_FILE}" 2>/dev/null || true
+        fi
+        
+        # Kill log sync process if it exists
+        if [ -n "${LOG_SYNC_PID:-}" ] && kill -0 "${LOG_SYNC_PID}" 2>/dev/null; then
+            kill "${LOG_SYNC_PID}" 2>/dev/null || true
+            wait "${LOG_SYNC_PID}" 2>/dev/null || true
+        fi
+        
+        # Also check for sync PID in file (in case variable wasn't set)
+        if [ -f "${LOG_SYNC_PID_FILE:-}" ]; then
+            local file_sync_pid
+            file_sync_pid="$(cat "${LOG_SYNC_PID_FILE}" 2>/dev/null || echo "")"
+            if [ -n "${file_sync_pid}" ]; then
+                # Try to kill it (may already be dead)
+                kill "${file_sync_pid}" 2>/dev/null || true
+                wait "${file_sync_pid}" 2>/dev/null || true
+            fi
+            rm -f "${LOG_SYNC_PID_FILE}" 2>/dev/null || true
+        fi
+        
+        # Final sync to ensure all log data is written to disk
+        if [ -n "${PYTORCH_BUILD_LOG:-}" ] && [ -f "${PYTORCH_BUILD_LOG}" ]; then
+            sync "${PYTORCH_BUILD_LOG}" 2>/dev/null || true
+            sync 2>/dev/null || true  # Full filesystem sync as backup
+            echo "  [Exit Hook] Final log sync completed at $(date)" >> "${PYTORCH_BUILD_LOG}" 2>/dev/null || true
+            sync "${PYTORCH_BUILD_LOG}" 2>/dev/null || true
+        else
+            sync 2>/dev/null || true  # Sync filesystem even if log file doesn't exist yet
+        fi
+    }
+    
+    # Set trap handlers for various exit conditions
+    trap 'cleanup_and_sync_log $?' EXIT
+    trap 'cleanup_and_sync_log 130' INT   # SIGINT (Ctrl+C)
+    trap 'cleanup_and_sync_log 143' TERM # SIGTERM
+    trap 'cleanup_and_sync_log 1' HUP    # SIGHUP
     
     # Save build state before starting
     save_build_state "building"
@@ -3348,6 +3538,116 @@ fi
 
 # Note: Swap monitoring is now integrated into the comprehensive resource monitor above
 
+# Function to create a logging wrapper that syncs periodically
+# This ensures log file is written in real-time (line-buffered) and synced every 10 lines
+# or every few seconds to prevent data loss on interruption
+# Writes sync PID and build PID to files for exit hook cleanup
+create_synced_logger() {
+    local log_file="${1}"
+    local sync_interval_lines="${2:-10}"  # Sync every N lines (default: 10)
+    local sync_interval_sec="${3:-5}"     # Backup sync every N seconds (default: 5)
+    local sync_pid_file="${4:-}"          # File to store sync PID
+    local build_pid_file="${5:-}"         # File to store build process PID (parent of python)
+    
+    # Create log file if it doesn't exist
+    if ! touch "${log_file}" 2>/dev/null; then
+        echo "ERROR: Cannot create log file: ${log_file}" >&2
+        return 1
+    fi
+    
+    # Start background process to sync filesystem periodically (backup mechanism)
+    # This ensures data is written to disk even if process is killed
+    (
+        # Make this process ignore signals so it can always sync on exit
+        trap '' INT TERM HUP
+        while true; do
+            sleep "${sync_interval_sec}"
+            # Sync filesystem (lightweight operation, ensures all buffered data is written)
+            if [ -f "${log_file}" ]; then
+                sync "${log_file}" 2>/dev/null || sync 2>/dev/null || true
+            else
+                sync 2>/dev/null || true
+            fi
+        done
+    ) &
+    local sync_pid=$!
+    
+    # Store sync PID in file immediately (atomic write)
+    if [ -n "${sync_pid_file}" ]; then
+        if ! (echo "${sync_pid}" > "${sync_pid_file}.tmp" && mv "${sync_pid_file}.tmp" "${sync_pid_file}" 2>/dev/null); then
+            # Fallback: direct write if atomic move fails
+            echo "${sync_pid}" > "${sync_pid_file}" 2>/dev/null || true
+        fi
+    fi
+    
+    # Try to capture the actual Python process PID by looking at the process tree
+    # We need to find the Python process in the pipeline
+    # It will be a child of the parent process that started the pipeline
+    (
+        sleep 1  # Wait for Python to start
+        if [ -n "${build_pid_file}" ]; then
+            # Find Python setup.py process in the entire process tree
+            # Look for processes matching python.*setup.py
+            local python_pid=""
+            local parent_pid
+            parent_pid=$$
+            # Try multiple methods to find the Python process
+            # Method 1: Look at parent's process group
+            python_pid="$(pgrep -P "${parent_pid}" -f "python.*setup\.py.*bdist_wheel" 2>/dev/null | head -1 || echo "")"
+            # Method 2: Look in entire process tree if Method 1 fails
+            if [ -z "${python_pid}" ]; then
+                python_pid="$(pgrep -f "python.*setup\.py.*bdist_wheel" 2>/dev/null | head -1 || echo "")"
+            fi
+            # Method 3: Use ps if pgrep not available
+            if [ -z "${python_pid}" ]; then
+                python_pid="$(ps aux 2>/dev/null | grep -E "python.*setup\.py.*bdist_wheel" | grep -v grep | head -1 | awk '{print $2}' || echo "")"
+            fi
+            if [ -n "${python_pid}" ] && kill -0 "${python_pid}" 2>/dev/null; then
+                if ! (echo "${python_pid}" > "${build_pid_file}.tmp" && mv "${build_pid_file}.tmp" "${build_pid_file}" 2>/dev/null); then
+                    # Fallback: direct write if atomic move fails
+                    echo "${python_pid}" > "${build_pid_file}" 2>/dev/null || true
+                fi
+            fi
+        fi
+    ) &
+    
+    # Use awk to count lines and sync every N lines
+    # fflush() ensures immediate write to disk (real-time logging)
+    # This provides real-time logging with minimal performance impact
+    awk -v logfile="${log_file}" -v sync_lines="${sync_interval_lines}" '
+    BEGIN {
+        # Write header to log file
+        print "═══════════════════════════════════════════════════════════════" > logfile
+        print "  BUILD LOG START: " strftime("%Y-%m-%d %H:%M:%S") > logfile
+        print "  Real-time logging enabled (synced every " sync_lines " lines)" > logfile
+        print "═══════════════════════════════════════════════════════════════" > logfile
+        fflush(logfile)
+    }
+    {
+        # Print to both stdout (terminal) and log file
+        print > logfile
+        print
+        fflush(logfile)  # Flush log file immediately (real-time)
+        fflush(stdout)   # Flush stdout immediately
+        
+        # Count lines and sync filesystem every N lines
+        line_count++
+        if (line_count >= sync_lines) {
+            # Quote the logfile path to handle spaces/special chars
+            system("sync \"" logfile "\" 2>/dev/null || sync 2>/dev/null || true")
+            line_count = 0
+        }
+    }
+    END {
+        # Final sync on exit
+        print "═══════════════════════════════════════════════════════════════" > logfile
+        print "  BUILD LOG END: " strftime("%Y-%m-%d %H:%M:%S") > logfile
+        print "═══════════════════════════════════════════════════════════════" > logfile
+        # Quote the logfile path to handle spaces/special chars
+        system("sync \"" logfile "\" 2>/dev/null || sync 2>/dev/null || true")
+    }'
+}
+
 # Build with MAX_JOBS limit (PyTorch respects this environment variable)
 # PyTorch setup.py internally uses cmake/ninja which respects MAX_JOBS
 # We use nice for CPU priority and ionice for I/O priority
@@ -3355,18 +3655,75 @@ fi
 if [ -n "${IONICE_CMD}" ]; then
     # Use both nice and ionice for maximum resource limiting
     # Run build in background to capture PID for monitoring
-    ${IONICE_CMD} nice -n ${NICE_VALUE} python3 setup.py bdist_wheel \
-        --dist-dir "${WHEEL_DIR}" \
-        2>&1 | tee "${BUILD_DIR}/pytorch_build.log" &
-    BUILD_PID=$!
+    # Use stdbuf for line-buffered output and custom logger for periodic syncing
+    echo "  Build log: ${PYTORCH_BUILD_LOG} (synced every 10 lines and every 5 seconds)"
+    echo "  Exit hook configured - log will be synced on script termination"
     
-    # Start resource monitor with build PID
+    # Create a subshell to run the build pipeline and capture the pipeline PID
+    (
+        ${IONICE_CMD} nice -n ${NICE_VALUE} stdbuf -oL -eL python3 setup.py bdist_wheel \
+            --dist-dir "${WHEEL_DIR}" \
+            2>&1 | create_synced_logger "${PYTORCH_BUILD_LOG}" 10 5 "${LOG_SYNC_PID_FILE}" "${BUILD_PID_FILE}"
+    ) &
+    PIPELINE_PID=$!
+    echo "${PIPELINE_PID}" > "${PIPELINE_PID_FILE}"
+    BUILD_PID=${PIPELINE_PID}  # Use pipeline PID for now, will try to get Python PID below
+    
+    # Wait a moment for processes to start and PIDs to be written
+    sleep 1
+    
+    # Read sync PID from file
+    LOG_SYNC_PID=""
+    if [ -f "${LOG_SYNC_PID_FILE}" ]; then
+        LOG_SYNC_PID=$(cat "${LOG_SYNC_PID_FILE}" 2>/dev/null || echo "")
+    fi
+    
+    # Try to get the actual Python process PID
+    if [ -f "${BUILD_PID_FILE}" ]; then
+        python_pid="$(cat "${BUILD_PID_FILE}" 2>/dev/null || echo "")"
+        if [ -n "${python_pid}" ] && kill -0 "${python_pid}" 2>/dev/null; then
+            BUILD_PID="${python_pid}"
+            echo "  Detected Python process PID: ${BUILD_PID}"
+        fi
+    fi
+    
+    # If we couldn't get Python PID, try to find it from process tree
+    if [ "${BUILD_PID}" = "${PIPELINE_PID}" ]; then
+        python_pid="$(ps --ppid "${PIPELINE_PID}" -o pid=,cmd= 2>/dev/null | grep -E "python.*setup\.py" | head -1 | awk '{print $1}' || echo "")"
+        if [ -n "${python_pid}" ]; then
+            BUILD_PID="${python_pid}"
+            echo "${BUILD_PID}" > "${BUILD_PID_FILE}"
+            echo "  Detected Python process PID from process tree: ${BUILD_PID}"
+        fi
+    fi
+    
+    echo "  Pipeline PID: ${PIPELINE_PID}"
+    if [ -n "${LOG_SYNC_PID}" ]; then
+        echo "  Log sync PID: ${LOG_SYNC_PID}"
+    fi
+    
+    # Start resource monitor with build PID (use Python PID if available, otherwise pipeline PID)
     RESOURCE_MONITOR_PID=$(start_resource_monitor "${BUILD_PID}")
     echo "  Resource monitor started (PID: ${RESOURCE_MONITOR_PID})"
     
-    # Wait for build process and check exit status
-    wait "${BUILD_PID}"
+    # Wait for pipeline process and check exit status
+    wait "${PIPELINE_PID}"
     BUILD_EXIT_CODE=$?
+    
+    # Clean up sync process (exit hook will also try, but do it here explicitly)
+    if [ -n "${LOG_SYNC_PID:-}" ] && kill -0 "${LOG_SYNC_PID}" 2>/dev/null; then
+        kill "${LOG_SYNC_PID}" 2>/dev/null || true
+        wait "${LOG_SYNC_PID}" 2>/dev/null || true
+    fi
+    
+    # Clean up PID files
+    rm -f "${LOG_SYNC_PID_FILE}" "${BUILD_PID_FILE}" "${PIPELINE_PID_FILE}" 2>/dev/null || true
+    
+    # Final sync to ensure all data is written
+    if [ -f "${PYTORCH_BUILD_LOG}" ]; then
+        sync "${PYTORCH_BUILD_LOG}" 2>/dev/null || true
+    fi
+    sync 2>/dev/null || true
     
     if [ "${BUILD_EXIT_CODE}" -eq 0 ] && [ ! -f "${BUILD_STOP_FLAG_FILE}" ]; then
         BUILD_SUCCESS=true
@@ -3379,17 +3736,75 @@ if [ -n "${IONICE_CMD}" ]; then
     fi
 else
     # Fallback: Only use nice if ionice not available
-    nice -n ${NICE_VALUE} python3 setup.py bdist_wheel \
-        --dist-dir "${WHEEL_DIR}" \
-        2>&1 | tee "${BUILD_DIR}/pytorch_build.log" &
-    BUILD_PID=$!
+    # Use stdbuf for line-buffered output and custom logger for periodic syncing
+    LOG_SYNC_PID_FILE="${BUILD_DIR}/.log_sync_pid"
+    echo "  Build log: ${PYTORCH_BUILD_LOG} (synced every 10 lines and every 5 seconds)"
+    echo "  Exit hook configured - log will be synced on script termination"
     
-    # Start resource monitor with build PID
+    # Create a subshell to run the build pipeline and capture the pipeline PID
+    (
+        nice -n ${NICE_VALUE} stdbuf -oL -eL python3 setup.py bdist_wheel \
+            --dist-dir "${WHEEL_DIR}" \
+            2>&1 | create_synced_logger "${PYTORCH_BUILD_LOG}" 10 5 "${LOG_SYNC_PID_FILE}" "${BUILD_PID_FILE}"
+    ) &
+    PIPELINE_PID=$!
+    echo "${PIPELINE_PID}" > "${PIPELINE_PID_FILE}"
+    BUILD_PID=${PIPELINE_PID}  # Use pipeline PID for now, will try to get Python PID below
+    
+    # Wait a moment for processes to start and PIDs to be written
+    sleep 1
+    
+    # Read sync PID from file
+    LOG_SYNC_PID=""
+    if [ -f "${LOG_SYNC_PID_FILE}" ]; then
+        LOG_SYNC_PID=$(cat "${LOG_SYNC_PID_FILE}" 2>/dev/null || echo "")
+    fi
+    
+    # Try to get the actual Python process PID
+    if [ -f "${BUILD_PID_FILE}" ]; then
+        python_pid="$(cat "${BUILD_PID_FILE}" 2>/dev/null || echo "")"
+        if [ -n "${python_pid}" ] && kill -0 "${python_pid}" 2>/dev/null; then
+            BUILD_PID="${python_pid}"
+            echo "  Detected Python process PID: ${BUILD_PID}"
+        fi
+    fi
+    
+    # If we couldn't get Python PID, try to find it from process tree
+    if [ "${BUILD_PID}" = "${PIPELINE_PID}" ]; then
+        python_pid="$(ps --ppid "${PIPELINE_PID}" -o pid=,cmd= 2>/dev/null | grep -E "python.*setup\.py" | head -1 | awk '{print $1}' || echo "")"
+        if [ -n "${python_pid}" ]; then
+            BUILD_PID="${python_pid}"
+            echo "${BUILD_PID}" > "${BUILD_PID_FILE}"
+            echo "  Detected Python process PID from process tree: ${BUILD_PID}"
+        fi
+    fi
+    
+    echo "  Pipeline PID: ${PIPELINE_PID}"
+    if [ -n "${LOG_SYNC_PID}" ]; then
+        echo "  Log sync PID: ${LOG_SYNC_PID}"
+    fi
+    
+    # Start resource monitor with build PID (use Python PID if available, otherwise pipeline PID)
     RESOURCE_MONITOR_PID=$(start_resource_monitor "${BUILD_PID}")
     echo "  Resource monitor started (PID: ${RESOURCE_MONITOR_PID})"
     
-    wait "${BUILD_PID}"
+    wait "${PIPELINE_PID}"
     BUILD_EXIT_CODE=$?
+    
+    # Clean up sync process (exit hook will also try, but do it here explicitly)
+    if [ -n "${LOG_SYNC_PID:-}" ] && kill -0 "${LOG_SYNC_PID}" 2>/dev/null; then
+        kill "${LOG_SYNC_PID}" 2>/dev/null || true
+        wait "${LOG_SYNC_PID}" 2>/dev/null || true
+    fi
+    
+    # Clean up PID files
+    rm -f "${LOG_SYNC_PID_FILE}" "${BUILD_PID_FILE}" "${PIPELINE_PID_FILE}" 2>/dev/null || true
+    
+    # Final sync to ensure all data is written
+    if [ -f "${PYTORCH_BUILD_LOG}" ]; then
+        sync "${PYTORCH_BUILD_LOG}" 2>/dev/null || true
+    fi
+    sync 2>/dev/null || true
     
     if [ "${BUILD_EXIT_CODE}" -eq 0 ] && [ ! -f "${BUILD_STOP_FLAG_FILE}" ]; then
         BUILD_SUCCESS=true
@@ -3433,7 +3848,7 @@ fi
         
         BUILD_STATUS="${PIPESTATUS[0]:-1}"
         echo -e "${RED}✗ PyTorch wheel build failed (exit code: ${BUILD_STATUS})${NC}"
-        echo "  Build log: ${BUILD_DIR}/pytorch_build.log"
+        echo "  Build log: ${PYTORCH_BUILD_LOG}"
         echo "  Build state saved - you can resume by running this script again"
         echo "  The script will automatically detect partial build and continue"
         echo "  Checking log for common errors..."
@@ -3455,9 +3870,9 @@ fi
         echo ""
         
         # Check for memory-related errors
-        if grep -qi "out of memory\|OOM\|killed\|memory" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null; then
+        if grep -qi "out of memory\|OOM\|killed\|memory" "${PYTORCH_BUILD_LOG}" 2>/dev/null; then
             echo -e "  ${YELLOW}⚠ Memory-related errors detected:${NC}"
-            grep -i "out of memory\|OOM\|killed\|memory" "${BUILD_DIR}/pytorch_build.log" | head -5
+            grep -i "out of memory\|OOM\|killed\|memory" "${PYTORCH_BUILD_LOG}" | head -5
             echo ""
             echo "  Recommendation: Reduce build parallelism to prevent freezes"
             echo "    export BUILD_JOBS_OVERRIDE=1  # Very conservative"
@@ -3468,7 +3883,7 @@ fi
             echo ""
         fi
         
-        grep -i "error\|failed\|fatal" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null | head -20 || true
+        grep -i "error\|failed\|fatal" "${PYTORCH_BUILD_LOG}" 2>/dev/null | head -20 || true
         exit 1
     fi
 fi
@@ -3537,18 +3952,18 @@ WHEEL_CHECK_EOF
 #===============================================================================
 echo -e "\n${BLUE}[Step 11] Checking build log for BLAS configuration...${NC}"
 
-if [ -f "${BUILD_DIR}/pytorch_build.log" ]; then
-    if grep -qi "OpenBLAS\|openblas" "${BUILD_DIR}/pytorch_build.log"; then
+if [ -f "${PYTORCH_BUILD_LOG}" ]; then
+    if grep -qi "OpenBLAS\|openblas" "${PYTORCH_BUILD_LOG}"; then
         echo -e "${GREEN}✓ OpenBLAS references found in build log${NC}"
-        grep -i "OpenBLAS\|openblas" "${BUILD_DIR}/pytorch_build.log" | head -5
+        grep -i "OpenBLAS\|openblas" "${PYTORCH_BUILD_LOG}" | head -5
     else
         echo -e "${YELLOW}⚠ No OpenBLAS references found in build log${NC}"
     fi
     
     # Check for MKL references after filtering out disabled mentions
-    if grep -qi "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | grep -q .; then
+    if grep -qi "MKL\|mkl" "${PYTORCH_BUILD_LOG}" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | grep -q .; then
         echo -e "${YELLOW}⚠ MKL references found in build log (may indicate MKL usage)${NC}"
-        grep -i "MKL\|mkl" "${BUILD_DIR}/pytorch_build.log" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | head -3
+        grep -i "MKL\|mkl" "${PYTORCH_BUILD_LOG}" 2>/dev/null | grep -v "USE_MKL=0\|disabled\|disable" | head -3
     else
         echo -e "${GREEN}✓ MKL appears to be disabled in build${NC}"
     fi
@@ -3560,7 +3975,7 @@ fi
 echo -e "\n${BLUE}[Step 12] Build Summary...${NC}"
 echo -e "${GREEN}✓ PyTorch wheel built successfully with OpenBLAS configuration${NC}"
 echo "  Wheel location: ${WHEEL_FILE}"
-echo "  Build log: ${BUILD_DIR}/pytorch_build.log"
+echo "  Build log: ${PYTORCH_BUILD_LOG}"
 echo ""
 echo -e "${YELLOW}Note: Wheel is not installed (as requested)${NC}"
 echo -e "${YELLOW}To test installation and verify OpenBLAS linking:${NC}"
@@ -3588,15 +4003,15 @@ if [ -d "${BUILD_DIR}" ]; then
     echo "    - Wheel file: ${WHEEL_FILE:-${BUILD_DIR}/wheels/*.whl}"
 fi
 
-if [ -f "${BUILD_DIR}/pytorch_build.log" ]; then
-    echo "  ✓ Build log preserved: ${BUILD_DIR}/pytorch_build.log"
+if [ -f "${PYTORCH_BUILD_LOG}" ]; then
+    echo "  ✓ Build log preserved: ${PYTORCH_BUILD_LOG}"
 fi
 
 echo ""
 echo -e "${YELLOW}Note: Build artifacts are preserved for reuse${NC}"
 echo -e "${YELLOW}      Clean up manually after code is integrated into main script:${NC}"
 echo -e "${YELLOW}      rm -rf ${BUILD_DIR}${NC}"
-echo -e "${YELLOW}      rm -f "${BUILD_DIR}/pytorch_build.log"${NC}"
+echo -e "${YELLOW}      rm -f "${PYTORCH_BUILD_LOG}"${NC}"
 
 #===============================================================================
 # Final Summary
