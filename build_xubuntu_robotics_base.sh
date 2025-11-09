@@ -513,9 +513,9 @@ OUR_HOME_DIR="${HOME}/singularity_builds"    # Fallback builds in home
 log_with_timestamp() {
     local message="[$(date +'%H:%M:%S')] ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
-        echo -e "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
+        printf '%b\n' "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
     else
-        echo -e "${BLUE}${message}${NC}"
+        printf '%b\n' "${BLUE}${message}${NC}"
     fi
 }
 
@@ -525,9 +525,9 @@ log_with_timestamp() {
 log_error() {
     local message="[$(date +'%H:%M:%S')] ERROR: ${1:-}"
     if [ -f "${ERROR_LOG:-}" ] && [ -f "${LOG_FILE:-}" ]; then
-        echo -e "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
+        printf '%b\n' "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
     else
-        echo -e "${RED}${message}${NC}"
+        printf '%b\n' "${RED}${message}${NC}"
     fi
 }
 
@@ -537,9 +537,9 @@ log_error() {
 log_warning() {
     local message="[$(date +'%H:%M:%S')] WARNING: ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
-        echo -e "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
+        printf '%b\n' "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
     else
-        echo -e "${YELLOW}${message}${NC}"
+        printf '%b\n' "${YELLOW}${message}${NC}"
     fi
 }
 
@@ -549,20 +549,10 @@ log_warning() {
 # Outputs: Filters stdout/stderr and writes matches to ERROR_LOG
 # Note: This function is defined here but called later in BLOCK 14 after ERROR_LOG is set
 filter_errors_and_warnings() {
-    # Ensure ERROR_LOG is available (should be set before this function is called)
-    local error_log="${ERROR_LOG:-}"
-    if [ -z "${error_log}" ]; then
-        # If ERROR_LOG not set, just pass through without filtering
-        while IFS= read -r line || [ -n "${line}" ]; do
-            echo "${line}"
-        done
-        return
-    fi
-    
     local line
     while IFS= read -r line || [ -n "${line}" ]; do
         # Write all output to terminal and main log (already handled by tee)
-        echo "${line}"
+        printf '%s\n' "${line}"
         
         # Comprehensive error/warning pattern matching (case-insensitive)
         # This pattern catches: errors, warnings, debug messages, diagnostic output, 
@@ -570,7 +560,13 @@ filter_errors_and_warnings() {
         if echo "${line}" | grep -qiE \
             '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
             # Write matching line to error log with timestamp
-            echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
+            local target_log="${ERROR_LOG:-}"
+            if [ -n "${target_log}" ]; then
+                if [ ! -f "${target_log}" ]; then
+                    touch "${target_log}" 2>/dev/null || true
+                fi
+                printf '[%s] %s\n' "$(date +'%Y-%m-%d %H:%M:%S')" "${line}" >> "${target_log}" 2>/dev/null || true
+            fi
         fi
     done
 }
@@ -581,18 +577,18 @@ filter_errors_and_warnings() {
 log_success() {
     local message="[$(date +'%H:%M:%S')] SUCCESS: ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
-        echo -e "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
+        printf '%b\n' "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
     else
-        echo -e "${GREEN}${message}${NC}"
+        printf '%b\n' "${GREEN}${message}${NC}"
     fi
 }
 
 #--- Sub-block 8.5: Simple logging functions ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-log() { printf "\n[info] %s\n" "$@" ; }              # Simple info log
-warn() { printf "\n[warn] %s\n" "$@" >&2; }          # Simple warning to stderr
-err() { printf "\n[err] %s\n" "$@" >&2; exit 1; }    # Error with exit
+log() { printf '\n[info] %s\n' "$*"; }              # Simple info log
+warn() { printf '\n[warn] %s\n' "$*" >&2; }         # Simple warning to stderr
+err() { printf '\n[err] %s\n' "$*" >&2; exit 1; }   # Error with exit
 
 #--- Sub-block 8.6: Progress reporting function ---
 # Dependencies: None (foundational)
@@ -726,7 +722,7 @@ strict_cleanup_our_dirs() {
     # Critical: Try up to 3 times with escalating force
     for attempt in $(seq 1 "${max_attempts}"); do
         # Step 1: Kill all processes using these directories
-        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+        printf '%s\n' "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
             [ ! -d "${dir}" ] && continue
             # Find all PIDs with open files in this directory
             sudo lsof +D "${dir}" 2>/dev/null | tail -n +2 | awk '{print $2}' | sort -u | while IFS= read -r pid || [ -n "${pid}" ]; do
@@ -752,7 +748,7 @@ strict_cleanup_our_dirs() {
         sleep 1
 
         # Step 2: Unmount any mount points within these directories
-        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+        printf '%s\n' "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
             [ ! -d "${dir}" ] && continue
             # Find and unmount all mount points under this directory
             mount 2>/dev/null | grep -F "${dir}" | awk '{print $3}' | while IFS= read -r mpoint || [ -n "${mpoint}" ]; do
@@ -763,7 +759,7 @@ strict_cleanup_our_dirs() {
         sleep 1
 
         # Step 3: Remove with escalating force (chmod, chattr, rm)
-        echo "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
+        printf '%s\n' "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
             [ ! -d "${dir}" ] && continue
             sudo chmod -R 777 "${dir}" 2>/dev/null        # Make all writable
             sudo chattr -i -R "${dir}" 2>/dev/null        # Remove immutable flags
@@ -1024,7 +1020,7 @@ comprehensive_cleanup() {
     echo ""
     echo "6. Cleaning mount point remnants..."
     # Critical: Check for orphaned overlay/underlay mounts
-    mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | awk '{print $3}' | while IFS= read -r mpoint || [ -n "${mpoint}" ]; do
+    mount 2>/dev/null | awk -v user="${USER}" '/singularity|apptainer/ && index($0, user) {print $3}' | while IFS= read -r mpoint || [ -n "${mpoint}" ]; do
         echo "   Unmounting: ${mpoint}"
         sudo umount -l "${mpoint}" 2>/dev/null || true  # Lazy unmount
         sudo umount -f "${mpoint}" 2>/dev/null || true  # Force unmount
@@ -1105,13 +1101,21 @@ comprehensive_cleanup() {
     local issues=0
 
     # Check 1: Remaining build-temp directories
-    local remaining_temps
-    remaining_temps=$(find "${OUR_TMP_DIR}" "${OUR_HOME_DIR}" -maxdepth 1 -type d \( \
-        -name "build-temp-*" \
-        -o -name "bundle-temp-*" \
-        -o -name "sbuild-*" \
-    \) 2>/dev/null | wc -l | tr -d '[:space:]')
-    remaining_temps="${remaining_temps:-0}"
+    local -a cleanup_dirs=()
+    local remaining_temps=0
+    for candidate_dir in "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
+        if [ -d "${candidate_dir}" ]; then
+            cleanup_dirs+=("${candidate_dir}")
+        fi
+    done
+    if [ "${#cleanup_dirs[@]}" -gt 0 ]; then
+        remaining_temps=$(find "${cleanup_dirs[@]}" -maxdepth 1 -type d \( \
+            -name "build-temp-*" \
+            -o -name "bundle-temp-*" \
+            -o -name "sbuild-*" \
+        \) 2>/dev/null | wc -l | tr -d '[:space:]')
+        remaining_temps="${remaining_temps:-0}"
+    fi
 
     if [ "${remaining_temps:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_temps} temp directories"
@@ -1127,14 +1131,13 @@ comprehensive_cleanup() {
 # Purpose: Continued implementation
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
-    local remaining_procs
-    # Use pgrep (installed in BLOCK 3) for reliable process counting
-    remaining_procs=$(pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null | wc -l | tr -d '[:space:]')
-    remaining_procs="${remaining_procs:-0}"
-    
+    local -a container_pids=()
+    mapfile -t container_pids < <(pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null || true)
+    local remaining_procs="${#container_pids[@]}"
+
     if [ "${remaining_procs:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_procs} container processes running"
-        pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null | while IFS= read -r pid || [ -n "${pid}" ]; do
+        for pid in "${container_pids[@]}"; do
             local cmd
             cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
             if [ -n "${cmd}" ]; then
@@ -1159,7 +1162,10 @@ comprehensive_cleanup() {
 # Outputs: Configured system components
     # Check 3: Orphaned mounts
     local remaining_mounts
-    remaining_mounts=$(mount 2>/dev/null | grep -E "singularity|apptainer" | grep "${USER}" | wc -l | tr -d '[:space:]')
+    remaining_mounts=$(mount 2>/dev/null | awk -v user="${USER}" '
+        /singularity|apptainer/ && index($0, user) {count++}
+        END {print count+0}
+    ')
     remaining_mounts="${remaining_mounts:-0}"
     if [ "${remaining_mounts:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_mounts} orphaned mounts"
@@ -1202,8 +1208,8 @@ comprehensive_cleanup() {
 # Outputs: Environment variables, configuration
 log "Starting comprehensive pre-build cleanup..."
 if ! comprehensive_cleanup; then
-    log "ERROR: Comprehensive cleanup failed"
-    log "Cannot proceed with build until all remnants are removed"
+    log_error "Comprehensive cleanup failed"
+    log_error "Cannot proceed with build until all remnants are removed"
     exit 1
 fi
 # End if-fi block (self-contained)
@@ -1309,13 +1315,17 @@ if [ -z "${ERROR_LOG}" ] || [ ! -f "${ERROR_LOG}" ]; then
     touch "${ERROR_LOG}" 2>/dev/null || true
 fi
 # Validate ERROR_LOG is writable before appending
-if [ -n "${ERROR_LOG}" ] && [ -w "${ERROR_LOG}" ] 2>/dev/null || touch "${ERROR_LOG}" 2>/dev/null; then
-    {
-        echo "========================================"
-        echo "Error Log Started: $(date)"
-        echo "Build Log: ${LOG_FILE}"
-        echo "========================================"
-    } >> "${ERROR_LOG}" 2>/dev/null || true
+if [ -n "${ERROR_LOG}" ]; then
+    if touch "${ERROR_LOG}" 2>/dev/null; then
+        {
+            echo "========================================"
+            echo "Error Log Started: $(date)"
+            echo "Build Log: ${LOG_FILE}"
+            echo "========================================"
+        } >> "${ERROR_LOG}" 2>/dev/null || true
+    else
+        log_warning "Failed to initialize error log header: ${ERROR_LOG}"
+    fi
 fi
 
 # Set up filtered output redirection
@@ -1599,8 +1609,11 @@ fetch() {
     if command -v aria2c >/dev/null 2>&1; then
         # Critical: Adaptive connection count based on file size
         local file_size_mb=0
-        local content_length
-        content_length=$(curl -sSLI "${url}" 2>/dev/null | grep -i "content-length:" | awk '{print $2}' | head -1)
+        local content_length=""
+        local head_response=""
+        if head_response=$(curl -sS --retry 2 --retry-delay 2 --connect-timeout 10 -IL "${url}" 2>/dev/null); then
+            content_length=$(printf '%s\n' "${head_response}" | awk 'tolower($1)=="content-length:" {print $2; exit}')
+        fi
         if [ -n "${content_length}" ] && [[ "${content_length}" =~ ^[0-9]+$ ]]; then
             file_size_mb=$((content_length / 1024 / 1024))
         fi
@@ -2008,12 +2021,15 @@ check_and_download_required_files() {
     
     # Check each required file
     for file_name in "${!required_files[@]}"; do
+        local file_info=""
+        local validation_method="" file_url="" param1="" param2="" param3="" optional_flag=""
+        local file_path=""
+        local old_ifs="${IFS}"
         # Extract file info
         file_info="${required_files[${file_name}]}"
         # Save and restore IFS to avoid affecting other commands
-        OLD_IFS="${IFS}"
         IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
-        IFS="${OLD_IFS}"
+        IFS="${old_ifs}"
         
         # Determine cache directory based on file type
         # Use case statement for better pattern matching reliability
@@ -2061,11 +2077,14 @@ check_and_download_required_files() {
         echo ""
         
         for file_name in "${missing_compulsory[@]}"; do
+            local file_info=""
+            local validation_method="" file_url="" param1="" param2="" param3="" optional_flag=""
+            local dest_path=""
+            local old_ifs="${IFS}"
             file_info="${required_files[${file_name}]}"
             # Save and restore IFS to avoid affecting other commands
-            OLD_IFS="${IFS}"
             IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
-            IFS="${OLD_IFS}"
+            IFS="${old_ifs}"
             
             # Skip local files - they're generated/fetched elsewhere
             if [[ "$validation_method" == "local" ]]; then
@@ -2146,11 +2165,14 @@ check_and_download_required_files() {
         echo ""
         
         for file_name in "${missing_optional[@]}"; do
+            local file_info=""
+            local validation_method="" file_url="" param1="" param2="" param3="" optional_flag=""
+            local dest_path=""
+            local old_ifs="${IFS}"
             file_info="${required_files[${file_name}]}"
             # Save and restore IFS to avoid affecting other commands
-            OLD_IFS="${IFS}"
             IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
-            IFS="${OLD_IFS}"
+            IFS="${old_ifs}"
             
             # Skip optional manual downloads (NVIDIA Video SDK)
             if [[ "$file_url" == "optional_manual" ]]; then
@@ -2215,11 +2237,14 @@ check_and_download_required_files() {
     local final_missing_optional=()
     
     for file_name in "${!required_files[@]}"; do
+        local file_info=""
+        local validation_method="" file_url="" param1="" param2="" param3="" optional_flag=""
+        local file_path=""
+        local old_ifs="${IFS}"
         file_info="${required_files[${file_name}]}"
         # Save and restore IFS to avoid affecting other commands
-        OLD_IFS="${IFS}"
         IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
-        IFS="${OLD_IFS}"
+        IFS="${old_ifs}"
         
         # Use case statement for better pattern matching reliability
         case "${file_name}" in
@@ -2298,10 +2323,15 @@ else
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
     # Use a safer temporary file location with proper cleanup
-    DOWNLOAD_TASKS_FILE="${BUILD_TMP_DIR:-/tmp}/download_tasks_$$"
-    trap "rm -f '${DOWNLOAD_TASKS_FILE}' 2>/dev/null || true" EXIT INT TERM
+    (
+        set -euo pipefail
+        tasks_file=$(mktemp "${BUILD_TMP_DIR:-/tmp}/download_tasks.XXXXXX") || {
+            log_warning "Failed to create temporary download task list; skipping legacy download queue"
+            exit 0
+        }
+        trap 'rm -f "${tasks_file}" 2>/dev/null || true' EXIT
     
-    cat > "${DOWNLOAD_TASKS_FILE}" << EOF
+        cat > "${tasks_file}" << EOF
 MINIFORGE|${MINIFORGE_URL}|${BIN_CACHE}/${MINIFORGE_SH}|binary
 MICROMAMBA|${MICROMAMBA_URL}|${BIN_CACHE}/${MICROMAMBA_BIN}|binary
 YQ|${YQ_URL}|${BIN_CACHE}/${YQ_BIN}|binary
@@ -2313,11 +2343,10 @@ NVIDIA_KEYRING|${NVIDIA_KEYRING_URL}|${DEB_CACHE}/${NVIDIA_KEYRING_DEB}|deb
 OPEN3D_WEBRTC|${OPEN3D_WEBRTC_URL}|${BIN_CACHE}/${OPEN3D_WEBRTC_FILE}|file
 EOF
 
-    # Execute downloads in parallel (max 4 concurrent) - only for files not already downloaded
-    log "Downloading any remaining artifacts in parallel..."
-    # Process downloads sequentially for safety (parallel execution removed due to complexity with exported functions)
-    # Note: This is safer than xargs with bash -c which has quoting/injection risks
-    if [ -f "${DOWNLOAD_TASKS_FILE}" ]; then
+        # Execute downloads in parallel (max 4 concurrent) - only for files not already downloaded
+        log "Downloading any remaining artifacts in parallel..."
+        # Process downloads sequentially for safety (parallel execution removed due to complexity with exported functions)
+        # Note: This is safer than xargs with bash -c which has quoting/injection risks
         while IFS='|' read -r name url dst type || [ -n "${name:-}" ]; do
             # Skip empty lines
             [ -z "${name:-}" ] && continue
@@ -2337,9 +2366,8 @@ EOF
                 fi
                 echo "Completed download: ${name}"
             fi
-        done < "${DOWNLOAD_TASKS_FILE}"
-    fi
-    rm -f "${DOWNLOAD_TASKS_FILE}" 2>/dev/null || true
+        done < "${tasks_file}"
+    )
 fi
 
 # --- Prefetch GPG Keys ---
@@ -2505,6 +2533,9 @@ From: ${BASE_IMAGE}
     /bin/echo "--- [DEBUG] Running 'ls -l' on host for xubuntu_robotics_base_post_ULTRA_CLEANED.sh:"
     /bin/ls -l xubuntu_robotics_base_post_ULTRA_CLEANED.sh
 
+    set -euo pipefail
+    umask 022
+
     # NOTE: All version configurations loaded from config.sh (sourced at top of build script)
     # Variables available: MINIFORGE_*, MICROMAMBA_*, TURBOVNC_*, VIRTUALGL_*, YQ_*, DRAKE_*, etc.
     # \$SINGULARITY_ROOTFS or \$APPTAINER_ROOTFS is the image root during build; this runs on the HOST
@@ -2520,7 +2551,11 @@ From: ${BASE_IMAGE}
     
     echo "Running %setup on host to pre-populate caches..."
     echo "Container root: \${ROOTFS}"
-    
+
+    if [ ! -d "\${PWD}/container_cache" ]; then
+        echo "WARNING: Host cache directory missing at \${PWD}/container_cache; continuing without preseeding."
+    fi
+
     mkdir -p "\${ROOTFS}/container_cache/binaries"
     mkdir -p "\${ROOTFS}/container_cache/apt/archives"
     mkdir -p "\${ROOTFS}/container_cache/conda_pkgs"
@@ -2550,6 +2585,8 @@ From: ${BASE_IMAGE}
 
 # === %post Section ===
 %post -c /bin/bash
+    set -euo pipefail
+    umask 022
     # Source configuration to make all variables available in %post section
     # This must happen BEFORE any validation code that uses these variables
     if [ -f /etc/config.sh ]; then
@@ -2849,6 +2886,7 @@ else
         log_with_timestamp "Moving build log to output directory..."
         if mv "${LOG_FILE}" "${BUILD_OUTPUT_DIR}/" 2>/dev/null; then
             BUILD_LOG_BASENAME=$(basename "${LOG_FILE}")
+            LOG_FILE="${BUILD_OUTPUT_DIR}/${BUILD_LOG_BASENAME}"
             log_success "Build log moved to: ${BUILD_OUTPUT_DIR}/${BUILD_LOG_BASENAME}"
         else
             log_warning "Failed to move build log: ${LOG_FILE}"
@@ -2862,6 +2900,7 @@ else
         log_with_timestamp "Moving error log to output directory..."
         if mv "${ERROR_LOG}" "${BUILD_OUTPUT_DIR}/" 2>/dev/null; then
             ERROR_LOG_BASENAME=$(basename "${ERROR_LOG}")
+            ERROR_LOG="${BUILD_OUTPUT_DIR}/${ERROR_LOG_BASENAME}"
             log_success "Error log moved to: ${BUILD_OUTPUT_DIR}/${ERROR_LOG_BASENAME}"
         else
             log_warning "Failed to move error log: ${ERROR_LOG}"
@@ -2895,7 +2934,10 @@ if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
     log_error "Cannot generate BUILD_ARCHITECTURE.md: build output directory does not exist"
 else
 ARCHITECTURE_FILE="${BUILD_OUTPUT_DIR}/BUILD_ARCHITECTURE.md"
-log_with_timestamp "Generating BUILD_ARCHITECTURE.md..."
+if ! touch "${ARCHITECTURE_FILE}" 2>/dev/null; then
+    log_error "Failed to create BUILD_ARCHITECTURE.md at ${ARCHITECTURE_FILE}"
+else
+    log_with_timestamp "Generating BUILD_ARCHITECTURE.md..."
 
 cat > "${ARCHITECTURE_FILE}" << 'ARCH_EOF'
 # Build Architecture and Software Inventory
@@ -2968,16 +3010,16 @@ if [ -z "${JULIA_CACHE_SIZE:-}" ]; then
     JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
     [ -z "${JULIA_CACHE_SIZE}" ] && JULIA_CACHE_SIZE="0B"
 fi
-if [ -z "${APT_CACHE_COUNT:-}" ]; then
-    APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE:-}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+if [ -z "${APT_CACHE_COUNT:-}" ] && [ -d "${APT_ARCHIVE_CACHE:-}" ]; then
+    APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
     [ -z "${APT_CACHE_COUNT}" ] && APT_CACHE_COUNT="0"
 fi
-if [ -z "${CONDA_CACHE_COUNT:-}" ]; then
-    CONDA_CACHE_COUNT=$(find "${CONDA_CACHE:-}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+if [ -z "${CONDA_CACHE_COUNT:-}" ] && [ -d "${CONDA_CACHE:-}" ]; then
+    CONDA_CACHE_COUNT=$(find "${CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
     [ -z "${CONDA_CACHE_COUNT}" ] && CONDA_CACHE_COUNT="0"
 fi
-if [ -z "${WHEELS_CACHE_COUNT:-}" ]; then
-    WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE:-}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || echo "0")
+if [ -z "${WHEELS_CACHE_COUNT:-}" ] && [ -d "${WHEELS_CACHE:-}" ]; then
+    WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
     [ -z "${WHEELS_CACHE_COUNT}" ] && WHEELS_CACHE_COUNT="0"
 fi
 
@@ -3158,8 +3200,11 @@ fi  # End of BUILD_OUTPUT_DIR check
 if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
     log_error "Cannot generate README.md: build output directory does not exist"
 else
-README_FILE="${BUILD_OUTPUT_DIR}/README.md"
-log_with_timestamp "Generating README.md..."
+    README_FILE="${BUILD_OUTPUT_DIR}/README.md"
+    if ! touch "${README_FILE}" 2>/dev/null; then
+        log_error "Failed to create README.md at ${README_FILE}"
+    else
+        log_with_timestamp "Generating README.md..."
 
 cat > "${README_FILE}" << 'README_EOF'
 # Xubuntu Robotics Base Image - Usage Guide
@@ -4048,7 +4093,7 @@ echo "Julia cache directory: ${JULIA_CACHE:-not set}"
 if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}/open3d" ]; then
     OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
     OPEN3D_WHEELS="${OPEN3D_WHEELS:-0}"
-    if [ "${OPEN3D_WHEELS}" -gt 0 ] 2>/dev/null; then
+    if [[ "${OPEN3D_WHEELS}" =~ ^[0-9]+$ ]] && [ "${OPEN3D_WHEELS}" -gt 0 ]; then
         echo ""
         echo "=============== OPEN3D WHEEL INFORMATION ==============="
         # Safely get directory size, handle case where directory might not exist

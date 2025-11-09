@@ -60,7 +60,13 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Clean up old logs FIRST - keep only N most recent logs
     # Ensure BUILD_LOG_PREFIX is set (default if not set)
     BUILD_LOG_PREFIX="${BUILD_LOG_PREFIX:-singularity_build}"
-    
+
+    # Validate keep count to avoid arithmetic errors under set -u
+    if ! [[ "${BUILD_LOG_KEEP_COUNT:-2}" =~ ^[0-9]+$ ]]; then
+        echo "⚠ Warning: Invalid BUILD_LOG_KEEP_COUNT='${BUILD_LOG_KEEP_COUNT:-}' (expected non-negative integer). Defaulting to 2."
+        BUILD_LOG_KEEP_COUNT=2
+    fi
+
     if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT:-2}" -gt 0 ]; then
         echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
         
@@ -374,10 +380,20 @@ debug_glibc() {
   gcc -xc++ -E -v - < /dev/null 2>&1 | grep '^ /' 2>/dev/null || echo "Cannot check (GCC not ready)"
   echo "---"
   echo "Test compile with stdlib.h:"
-  echo '#include <stdlib.h>' > /tmp/test_$$$.c
-  echo 'int main() { return 0; }' >> /tmp/test_$$$.c
-  gcc /tmp/test_$$$.c -o /tmp/test_$$$ 2>&1 && echo "SUCCESS" || echo "FAILED"
-  rm -f /tmp/test_$$$.c /tmp/test_$$$
+  local tmp_src
+  local tmp_bin
+  tmp_src=$(mktemp -t glibc_testXXXX.c) || tmp_src="/tmp/glibc_test_$$.c"
+  tmp_bin=$(mktemp -t glibc_testXXXX) || tmp_bin="/tmp/glibc_test_$$"
+  {
+    echo '#include <stdlib.h>'
+    echo 'int main(void) { return 0; }'
+  } > "${tmp_src}"
+  if gcc "${tmp_src}" -o "${tmp_bin}" 2>&1; then
+    echo "SUCCESS"
+  else
+    echo "FAILED"
+  fi
+  rm -f "${tmp_src}" "${tmp_bin}"
   echo "---"
   echo
   # Reset terminal state after debug output (gcc -v can leave control codes)
@@ -388,7 +404,7 @@ debug_glibc() {
 # End function (self-contained)
 
 #===============================================================================
-# BLOCK 2.5: BUILD JOB CALCULATION FUNCTION (FOR PARALLEL COMPILATION)
+# BLOCK 3: BUILD JOB CALCULATION FUNCTION (FOR PARALLEL COMPILATION)
 #===============================================================================
 # Purpose: Calculate optimal number of parallel build jobs based on CPU and memory
 # Self-contained: Yes (no external dependencies)
@@ -401,8 +417,20 @@ calculate_build_jobs() {
     # Declare and assign separately to avoid masking return values
     local mem_gb
     local cpu_cores
-    mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
-    cpu_cores=$(nproc)
+
+    if command -v free >/dev/null 2>&1; then
+        mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
+    else
+        echo "  ⚠ Warning: 'free' command not available, assuming 4GB RAM" >&2
+        mem_gb=4
+    fi
+
+    if command -v nproc >/dev/null 2>&1; then
+        cpu_cores=$(nproc)
+    else
+        echo "  ⚠ Warning: 'nproc' command not available, assuming 1 CPU core" >&2
+        cpu_cores=1
+    fi
     
     # Validate numeric values
     if ! [ "${mem_gb:-0}" -ge 0 ] 2>/dev/null; then
@@ -448,8 +476,50 @@ calculate_build_jobs() {
 }
 # End function (self-contained)
 
+#-------------------------------------------------------------------------------
+# PACKAGE STATUS HELPER FUNCTIONS
+#-------------------------------------------------------------------------------
+# Purpose: Provide reliable detection of installed packages, including held or
+# multi-arch variants (e.g., pkg:amd64) which `dpkg -l` may omit.
+# Dependencies: dpkg-query
+# Outputs: Functions for package presence and version detection
+#-------------------------------------------------------------------------------
+
+dpkg_resolve_installed_package() {
+    local base_pkg="${1:-}"
+    if [ -z "${base_pkg}" ]; then
+        return 1
+    fi
+
+    local candidates=("${base_pkg}")
+    if [[ "${base_pkg}" != *":"* ]]; then
+        candidates+=("${base_pkg}:amd64" "${base_pkg}:arm64" "${base_pkg}:i386")
+    fi
+
+    local candidate
+    for candidate in "${candidates[@]}"; do
+        if dpkg-query -W -f='${Status}\n' "${candidate}" 2>/dev/null | grep -q "install ok installed"; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+dpkg_get_installed_version() {
+    local base_pkg="${1:-}"
+    if [ -z "${base_pkg}" ]; then
+        return 1
+    fi
+
+    local resolved_pkg
+    resolved_pkg=$(dpkg_resolve_installed_package "${base_pkg}") || return 1
+    dpkg-query -W -f='${Version}\n' "${resolved_pkg}" 2>/dev/null | head -n1
+}
+
 #===============================================================================
-# BLOCK 3: MIRROR PROBING FUNCTIONS (MUST BE EARLY FOR APT OPERATIONS)
+# BLOCK 4: MIRROR PROBING FUNCTIONS (MUST BE EARLY FOR APT OPERATIONS)
 #===============================================================================
 # Purpose: Test and select fastest Ubuntu mirror BEFORE any apt-get operations
 # Self-contained: Yes (complete mirror selection system)
@@ -458,7 +528,7 @@ calculate_build_jobs() {
 # Note: Moved early to ensure ALL package downloads use fastest mirror
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 3.1: Mirror test function (for parallel execution) ---
+#--- Sub-block 4.1: Mirror test function (for parallel execution) ---
 # Purpose: Test a single mirror's speed for parallel execution with xargs
 # Dependencies: curl (from Ubuntu base image)
 # Outputs: Speed score written to PROBE_RESULTS file
@@ -471,6 +541,7 @@ test_mirror() {
     [[ -z "${URL}" ]] && return
 
     # Download Packages.gz (~20MB) to measure actual bandwidth
+    local previous_opts="$-"
     set +e
     local CURL_OUTPUT CURL_EXIT_CODE
 
@@ -487,7 +558,11 @@ test_mirror() {
         CURL_OUTPUT=$(printf "%.3f" "$(echo "${CURL_OUTPUT} 10" | awk '{print $1 * $2}' 2>/dev/null || echo "${CURL_OUTPUT}")")
       fi
     fi
-    set -e
+    if [[ "${previous_opts}" == *e* ]]; then
+        set -e
+    else
+        set +e
+    fi
 
     # Write results (flock doesn't work reliably in xargs subshells, using simple append)
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
@@ -497,16 +572,45 @@ test_mirror() {
     fi
 }
 
+#--- Sub-block 4.2: Dynamic linker helper ---
+# Purpose: Ensure compiled libraries in /usr/local are prioritised early
+# Dependencies: None
+# Outputs: /etc/ld.so.conf.d/00-compiled-libs.conf
+ensure_compiled_lib_priority() {
+  local conf_file="/etc/ld.so.conf.d/00-compiled-libs.conf"
+
+  echo "    Ensuring ${conf_file} prioritises /usr/local libraries..."
+  cat > "${conf_file}" <<'LDCONF'
+# CRITICAL: Search /usr/local first for compiled libraries
+/usr/local/lib
+/usr/local/lib64
+/usr/local/lib/x86_64-linux-gnu
+LDCONF
+}
+
+#--- Sub-block 4.3: ldconfig wrapper ---
+# Purpose: Always ensure /usr/local priority file exists before refreshing cache
+# Dependencies: ensure_compiled_lib_priority
+# Outputs: Updated dynamic linker cache
+run_ldconfig_refresh() {
+  ensure_compiled_lib_priority
+  ldconfig "$@"
+}
+
 # Export function for parallel execution with xargs
 export -f test_mirror
 
-#--- Sub-block 3.2: Mirror probing and selection function ---
+#--- Sub-block 4.4: Mirror probing and selection function ---
 # Purpose: Find fastest Ubuntu mirror and update all APT sources
 # Dependencies: test_mirror function, curl
 # Outputs: FASTEST_MIRROR (exported), updated /etc/apt/sources.list and sources.list.d/
 probe_and_set_mirrors() {
   # Set locale for numeric operations (exported for subshells)
   export LC_NUMERIC=C # Prevents printf errors with decimals
+  local MIRRORS_HTML=""
+  local DYNAMIC_MIRRORS=""
+  local MIRROR_COUNT=0
+  local CANDIDATE_MIRRORS=""
   echo "==> Probing for the fastest Ubuntu mirror by testing a candidate list..."
 
   # Detect Ubuntu codename correctly (noble for 24.04, jammy for 22.04, etc.)
@@ -545,7 +649,9 @@ probe_and_set_mirrors() {
   MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
   
   if [ -n "${MIRRORS_HTML:-}" ]; then
-    echo "[info] Successfully fetched mirror list ($(echo "${MIRRORS_HTML}" | wc -c) bytes). Parsing..."
+    local mirror_html_bytes
+    mirror_html_bytes=${#MIRRORS_HTML}
+    echo "[info] Successfully fetched mirror list (${mirror_html_bytes} bytes). Parsing..."
     
     # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
     DYNAMIC_MIRRORS=$(echo "${MIRRORS_HTML}" | \
@@ -558,19 +664,20 @@ probe_and_set_mirrors() {
       sort -u | \
       head -20)  # Limit to top 20 mirrors for performance
     
-    MIRROR_COUNT=$(echo "${DYNAMIC_MIRRORS:-}" | grep -c . || echo 0)
+    if [ -n "${DYNAMIC_MIRRORS:-}" ]; then
+      MIRROR_COUNT=$(printf '%s\n' "${DYNAMIC_MIRRORS}" | grep -c . || echo 0)
+    else
+      MIRROR_COUNT=0
+    fi
     
     # Explicit check for non-empty and sufficient mirrors
     if [ -n "${DYNAMIC_MIRRORS:-}" ] && [ "${MIRROR_COUNT:-0}" -ge 10 ]; then
-      CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
-      # Convert to array to handle spaces in URLs safely
+      CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
+      # Append dynamic mirrors line-by-line to preserve whitespace safely
       while IFS= read -r mirror; do
-        # Skip empty lines
         [ -z "${mirror:-}" ] && continue
-        CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} ${mirror}"
-      done <<EOF
-${DYNAMIC_MIRRORS}
-EOF
+        CANDIDATE_MIRRORS+="${mirror}"$'\n'
+      done <<< "${DYNAMIC_MIRRORS}"
       echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors"
     else
       echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
@@ -584,38 +691,29 @@ EOF
   # Fallback to curated static list if dynamic fetch failed
   if [ -z "${CANDIDATE_MIRRORS:-}" ]; then
     echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
-    CANDIDATE_MIRRORS="http://archive.ubuntu.com/ubuntu"
-    # Australia (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.aarnet.edu.au/pub/ubuntu/archive"
-    # Germany (400 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.fau.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.uni-stuttgart.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.halifax.rwth-aachen.de/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.netcologne.de/ubuntu"
-    # Netherlands (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ubuntu.mirror.pcextreme.nl/ubuntu"
-    # United Kingdom (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.ox.ac.uk/sites/archive.ubuntu.com/ubuntu"
-    # United States (400 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.wikimedia.org/ubuntu"
-    # United States (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ocf.berkeley.edu/ubuntu"
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.math.princeton.edu/pub/ubuntu"
-    # Canada (200 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirror.csclub.uwaterloo.ca/ubuntu"
-    # China (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://mirrors.ustc.edu.cn/ubuntu"
-    # Japan (100 Gbps)
-    CANDIDATE_MIRRORS="${CANDIDATE_MIRRORS} http://ftp.jaist.ac.jp/pub/Linux/ubuntu"
+    CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirror.aarnet.edu.au/pub/ubuntu/archive\n'
+    CANDIDATE_MIRRORS+=$'http://ftp.fau.de/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://ftp.uni-stuttgart.de/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://ftp.halifax.rwth-aachen.de/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirror.netcologne.de/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://ubuntu.mirror.pcextreme.nl/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirror.ox.ac.uk/sites/archive.ubuntu.com/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirrors.wikimedia.org/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirrors.ocf.berkeley.edu/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirror.math.princeton.edu/pub/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirror.csclub.uwaterloo.ca/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://mirrors.ustc.edu.cn/ubuntu\n'
+    CANDIDATE_MIRRORS+=$'http://ftp.jaist.ac.jp/pub/Linux/ubuntu\n'
   fi
 
   # Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
   local mirror_total
-  mirror_total=$(echo "${CANDIDATE_MIRRORS:-}" | tr ' ' '\n' | grep -c . || echo "0")
+  mirror_total=$(printf '%s' "${CANDIDATE_MIRRORS:-}" | grep -c . || echo "0")
   echo "Testing ${mirror_total} mirrors in parallel (max 6 concurrent)..."
   # Use printf to safely handle empty strings and ensure proper line separation
   if [ -n "${CANDIDATE_MIRRORS:-}" ]; then
-    echo "${CANDIDATE_MIRRORS}" | tr ' ' '\n' | grep -v '^$' | xargs -P 6 -I {} bash -c 'test_mirror "{}" "${CODENAME}" "${PROBE_RESULTS}"' || true
+    printf '%s' "${CANDIDATE_MIRRORS}" | grep -v '^[[:space:]]*$' | xargs -P 6 -I{} bash -c 'test_mirror "$1" "$2" "$3"' _ "{}" "${CODENAME}" "${PROBE_RESULTS}" || true
   fi
 
   # Display mirror probe results
@@ -662,38 +760,36 @@ EOF
     # Verify the update was successful (more robust check)
     # Extract base URL without protocol for flexible matching
     local mirror_base mirror_no_protocol
-    mirror_base=$(echo "${FASTEST_MIRROR}" | sed 's|https\?://||' || echo "")
-    mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+    mirror_base="${FASTEST_MIRROR#http://}"
+    mirror_base="${mirror_base#https://}"
+    mirror_no_protocol="${FASTEST_MIRROR#http://}"
+    mirror_no_protocol="${mirror_no_protocol#https://}"
     
     # Escape special regex characters for safe use in grep patterns
     local mirror_base_escaped mirror_no_protocol_escaped fastest_mirror_escaped
     if [ -n "${mirror_base:-}" ]; then
-      mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+      mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
     else
       mirror_base_escaped=""
     fi
     if [ -n "${mirror_no_protocol:-}" ]; then
-      mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+      mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
     else
       mirror_no_protocol_escaped=""
     fi
-    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
   
     # Check if mirror appears in active (non-commented) deb lines
-    local verification_passed=false
     if [ -n "${mirror_base_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_base_escaped}" 2>/dev/null; then
-      verification_passed=true
       echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
     elif [ -n "${mirror_no_protocol_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_no_protocol_escaped}" 2>/dev/null; then
-      verification_passed=true
       echo "[info] ✓ Verified: sources.list uses mirror (format may vary)"
     elif [ -n "${fastest_mirror_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qF "${FASTEST_MIRROR}" 2>/dev/null; then
-      verification_passed=true
       echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
     else
       # Check if file is actually empty or only has comments
       local active_lines
-      active_lines=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -v "^$" | wc -l || echo "0")
+      active_lines=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -cv '^$' || echo "0")
       if [ "${active_lines:-0}" -eq 0 ]; then
         echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
         verification_passed=true
@@ -793,7 +889,7 @@ EOF
 }
 # End probe_and_set_mirrors function (self-contained)
 
-#--- Sub-block 3.3: Mirror verification function ---
+#--- Sub-block 4.5: Mirror verification function ---
 # Purpose: Verify that sources.list uses the fastest mirror
 # Dependencies: FASTEST_MIRROR variable
 # Outputs: Diagnostic messages, returns 0 if OK, 1 if issues found
@@ -884,7 +980,7 @@ verify_fastest_mirror() {
 }
 export -f verify_fastest_mirror
 
-#--- Sub-block 3.4: Mirror re-application function ---
+#--- Sub-block 4.6: Mirror re-application function ---
 # Purpose: Re-apply fastest mirror to all sources (for use after add-apt-repository)
 # Dependencies: FASTEST_MIRROR variable
 # Outputs: Updated sources.list and sources.list.d/ files
@@ -903,11 +999,17 @@ reapply_fastest_mirror() {
   
   # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
   local fastest_mirror_sed_escaped
-  fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g' || echo "")"
+  fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
   
-  # Compute mirror_no_protocol once for reuse
+  # Compute mirror_no_protocol once for reuse (strip both http:// and https://)
   local mirror_no_protocol
-  mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+  mirror_no_protocol="${FASTEST_MIRROR#http://}"
+  mirror_no_protocol="${mirror_no_protocol#https://}"
+  
+  local mirror_no_protocol_escaped=""
+  if [ -n "${mirror_no_protocol:-}" ]; then
+    mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
+  fi
   
   # Update main sources.list with multiple aggressive replacement patterns
   if [ -f /etc/apt/sources.list ]; then
@@ -924,13 +1026,8 @@ reapply_fastest_mirror() {
     # Also verify no archive.ubuntu.com remains
     if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
-      # Escape special sed characters in mirror_no_protocol for safe replacement
-      local mirror_sed_escaped
-      if [ -n "${mirror_no_protocol:-}" ]; then
-        mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
-        if [ -n "${mirror_sed_escaped:-}" ]; then
-          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list
-        fi
+      if [ -n "${mirror_no_protocol_escaped:-}" ]; then
+        sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list
       fi
     fi
     echo "[info] ✓ Updated /etc/apt/sources.list"
@@ -972,14 +1069,9 @@ reapply_fastest_mirror() {
       
       # Final check - remove any remaining archive.ubuntu.com references
       if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
-        # Escape special sed characters in mirror_no_protocol for safe replacement
-        local mirror_sed_escaped
-        if [ -n "${mirror_no_protocol:-}" ]; then
-          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
-          if [ -n "${mirror_sed_escaped:-}" ]; then
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
-            echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
-          fi
+        if [ -n "${mirror_no_protocol_escaped:-}" ]; then
+          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}"
+          echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
         fi
       fi
     done
@@ -1006,7 +1098,7 @@ reapply_fastest_mirror() {
 export -f reapply_fastest_mirror
 
 #===============================================================================
-# BLOCK 4: CACHE MONITORING SYSTEM
+# BLOCK 5: CACHE MONITORING SYSTEM
 #===============================================================================
 # Purpose: Track cache growth throughout build phases
 # Self-contained: Yes (complete function definitions)
@@ -1014,14 +1106,14 @@ export -f reapply_fastest_mirror
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 3.1: Initialize cache monitoring data file ---
+#--- Sub-block 5.1: Initialize cache monitoring data file ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 CACHE_MONITOR_DATA="/tmp/cache_monitor_data.txt"
 # Critical: CSV header for cache tracking across all build phases
 echo "Stage|Container APT|Var APT|Conda|Wheels|Julia" > "$CACHE_MONITOR_DATA"
 
-#--- Sub-block 3.2: Cache monitoring function ---
+#--- Sub-block 5.2: Cache monitoring function ---
 # Purpose: Record cache sizes at each build stage
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1077,7 +1169,7 @@ monitor_cache() {
 }
 # End function (self-contained)
 
-#--- Sub-block 3.3: Cache monitoring summary display function ---
+#--- Sub-block 5.3: Cache monitoring summary display function ---
 # Purpose: Display cache growth table across all stages
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1106,7 +1198,7 @@ display_cache_monitoring_summary() {
 }
 # End function (self-contained)
 
-#--- Sub-block 3.4: Final cache summary function ---
+#--- Sub-block 5.4: Final cache summary function ---
 # Purpose: Display detailed cache statistics before image creation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1170,7 +1262,7 @@ cache_summary() {
 # End function (self-contained)
 
 #===============================================================================
-# BLOCK 4: CACHE DIRECTORY CONFIGURATION
+# BLOCK 6: CACHE DIRECTORY CONFIGURATION
 #===============================================================================
 # Purpose: Configure unified cache structure for all package managers
 # Self-contained: Yes
@@ -1178,13 +1270,13 @@ cache_summary() {
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 4.1: Define unified cache root ---
+#--- Sub-block 6.1: Define unified cache root ---
 # Critical: All package caches will be subdirectories of this root
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 export CACHE_ROOT="/container_cache"
 
-#--- Sub-block 4.2: Configure package manager cache paths ---
+#--- Sub-block 6.2: Configure package manager cache paths ---
 # Critical: Point all package managers to unified cache structure
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1195,7 +1287,7 @@ export JULIA_DEPOT_PATH="${CACHE_ROOT}/julia_pkgs:/usr/local/share/julia"  # Jul
 # NOTE: All version configurations now loaded from /etc/config.sh (sourced at top of file)
 
 #===============================================================================
-# BLOCK 6: ADVANCED PACKAGE MANAGEMENT FUNCTIONS
+# BLOCK 7: ADVANCED PACKAGE MANAGEMENT FUNCTIONS
 #===============================================================================
 # Purpose: Robust package installation with staging, retry logic, and atomicity
 # Self-contained: Yes (complete function definitions)
@@ -1204,11 +1296,11 @@ export JULIA_DEPOT_PATH="${CACHE_ROOT}/julia_pkgs:/usr/local/share/julia"  # Jul
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 5.2: Validate configuration loaded successfully ---
+#--- Sub-block 7.1: Validate configuration loaded successfully ---
 # Purpose: Verify all required variables are set
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 6.1: Conda staging area setup ---
+#--- Sub-block 7.2: Conda staging area setup ---
 # Purpose: Create isolated staging area for package operations
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -1224,7 +1316,7 @@ setup_conda_staging_area() {
 }
 # End function (self-contained)
 
-#--- Sub-block 6.2: Atomic package replacement with retry ---
+#--- Sub-block 7.3: Atomic package replacement with retry ---
 # Purpose: Replace corrupted packages with exponential backoff
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -1288,12 +1380,8 @@ atomic_package_replace() {
 }
 # End function (self-contained)
 
-#--- Sub-block: Code section 322 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-#--- Sub-block 6.3: Package integrity verification ---
+#--- Sub-block 7.4: Package integrity verification ---
 # Purpose: Verify package file integrity (bzip2/zip)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1344,12 +1432,8 @@ verify_package_integrity() {
 }
 # End function (self-contained)
 
-#--- Sub-block: Section continuation (371) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-#--- Sub-block 6.4: Package locking mechanism ---
+#--- Sub-block 7.5: Package locking mechanism ---
 # Purpose: Prevent concurrent access to packages with timeout
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1394,7 +1478,7 @@ acquire_package_lock() {
 }
 # End function (self-contained)
 
-#--- Sub-block 6.5: Release package lock ---
+#--- Sub-block 7.6: Release package lock ---
 # Purpose: Remove lock file for package
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1413,7 +1497,7 @@ release_package_lock() {
 # End function (self-contained)
 
 #===============================================================================
-# BLOCK 6.9: MAIN BUILD EXECUTION START
+# BLOCK 8: MAIN BUILD EXECUTION START
 #===============================================================================
 # Purpose: Initialize build environment and create cache directories
 # Self-contained: Yes
@@ -1421,12 +1505,12 @@ release_package_lock() {
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.9.1: Initial diagnostic checkpoint ---
+#--- Sub-block 8.1: Initial diagnostic checkpoint ---
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 debug_glibc "START - Before any apt operations"
 
-#--- Sub-block 6.9.2: Create cache directory structure ---
+#--- Sub-block 8.2: Create cache directory structure ---
 # Critical: All cache directories must exist before package operations
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -1442,7 +1526,7 @@ mkdir -p /root/.cache/pip
 # Note: ${MINIFORGE_HOME} will be created by Miniforge installer
 mkdir -p /usr/local/share/julia
 
-#--- Sub-block 6.9.3: Additional cache directories ---
+#--- Sub-block 8.3: Additional cache directories ---
 # Critical: User-specific cache directories for conda, julia, pip
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1451,7 +1535,7 @@ mkdir -p /root/.cache/julia
 mkdir -p /root/.local/share/julia
 # apt-fast cache directory removed - using apt-aria wrapper instead
 
-#--- Sub-block 6.9.4: Set cache directory permissions ---
+#--- Sub-block 8.4: Set cache directory permissions ---
 # Critical: Ensure all cache directories are writable
 # Dependencies: Block 17 (Conda/Miniforge), Block 8.5 (Julia installation)
 # Outputs: Python packages, conda environments
@@ -1462,7 +1546,7 @@ if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
 fi
 echo "✓ All cache directories created successfully"
 
-#--- Sub-block 6.9.5: Cache validation and repair function ---
+#--- Sub-block 8.5: Cache validation and repair function ---
 # Purpose: Validate cache directory structure and permissions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -1496,7 +1580,7 @@ validate_and_repair_cache() {
 }
 # End validate_and_repair_cache function
 
-#--- Sub-block 6.9.6: Test write permissions ---
+#--- Sub-block 8.6: Test write permissions ---
 # Critical: Verify cache directories are actually writable
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1510,7 +1594,7 @@ else
 fi
 # End write permission test (if-else self-contained)
 
-#--- Sub-block 6.9.7: GPG verification functions ---
+#--- Sub-block 8.7: GPG verification functions ---
 # Purpose: Setup GPG verification for package signatures
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1519,7 +1603,7 @@ setup_gpg_verification() {
 }
 
 #===============================================================================
-# BLOCK 6.11: EARLY MIRROR SELECTION (BEFORE ANY APT OPERATIONS)
+# BLOCK 9: EARLY MIRROR SELECTION (BEFORE ANY APT OPERATIONS)
 #===============================================================================
 # Purpose: Select fastest Ubuntu mirror BEFORE any package downloads
 # Self-contained: Yes
@@ -1528,7 +1612,7 @@ setup_gpg_verification() {
 # Critical: This MUST run BEFORE first apt-get update to ensure all downloads use fast mirror
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.11.1: Check curl availability ---
+#--- Sub-block 9.1: Check curl availability ---
 # Purpose: Ensure curl is available for mirror probing
 # Dependencies: Ubuntu base image (includes curl by default)
 # Outputs: curl availability confirmed
@@ -1543,14 +1627,14 @@ else
     echo "✓ curl is available"
 fi
 
-#--- Sub-block 6.11.2: Execute mirror probing ---
+#--- Sub-block 9.2: Execute mirror probing ---
 # Critical: Select fastest mirror BEFORE any significant apt operations
 # Dependencies: curl, test_mirror() and probe_and_set_mirrors() functions (BLOCK 3)
 # Outputs: FASTEST_MIRROR variable (exported), updated sources
 echo "==> Executing mirror probing BEFORE package installations..."
 probe_and_set_mirrors
 
-#--- Sub-block 6.11.3: Display selected mirror ---
+#--- Sub-block 9.3: Display selected mirror ---
 # Purpose: Confirm mirror selection for build logs
 # Dependencies: FASTEST_MIRROR (set by probe_and_set_mirrors)
 # Outputs: Log output
@@ -1576,7 +1660,7 @@ else
     reapply_fastest_mirror || echo "[ERROR] Failed to fix mirror issues"
 fi
 
-#--- Sub-block 6.11.4: Force apt-get update after mirror change ---
+#--- Sub-block 9.4: Force apt-get update after mirror change ---
 # CRITICAL: apt-get --print-uris reads URIs from cached Release files in /var/lib/apt/lists/
 # If package lists weren't refreshed after mirror change, --print-uris will still return
 # archive.ubuntu.com URLs even though sources.list points to the fastest mirror.
@@ -1590,7 +1674,7 @@ rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 /usr/bin/apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
 echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirror"
 
-#--- Sub-block 6.9.8: Enable additional APT repositories ---
+#--- Sub-block 9.5: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1612,7 +1696,7 @@ reapply_fastest_mirror
 
 echo "✓ Additional repositories enabled and verified"
 
-#--- Sub-block 6.9.9: Synchronize base image with repositories ---
+#--- Sub-block 9.6: Synchronize base image with repositories ---
 # Purpose: Resolve inconsistencies between base image and APT sources
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1625,7 +1709,7 @@ dpkg --configure -a || echo "⚠ dpkg --configure had issues"
 echo -e "${GREEN}✓ Base image synchronized.${NC}"
 
 #===============================================================================
-# BLOCK 6.12: APT CONFIGURATION AND GPG KEY SETUP
+# BLOCK 10: APT CONFIGURATION AND GPG KEY SETUP
 #===============================================================================
 # Purpose: Configure APT, import GPG keys, set up package verification
 # Self-contained: Yes (complete GPG and APT setup)
@@ -1633,7 +1717,7 @@ echo -e "${GREEN}✓ Base image synchronized.${NC}"
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.12.1: Install package verification tools ---
+#--- Sub-block 10.1: Install package verification tools ---
 # Critical: dpkg-sig for .deb package verification (optional - not available in all Ubuntu versions)
 # Dependencies: Block 6 (APT configuration), Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: Installed packages
@@ -1654,7 +1738,7 @@ else
     echo "⚠ VIRTUALGL_TURBOVNC_GPG_KEY_URL not set - skipping GPG key import"
 fi
 
-#--- Sub-block 6.12.2: Import Drake GPG key ---
+#--- Sub-block 10.2: Import Drake GPG key ---
 # Critical: Import Drake robotics framework GPG key from cache
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1677,7 +1761,7 @@ else
 fi
 # End Drake GPG import (if-else self-contained)
 
-#--- Sub-block 6.12.3: .deb package verification function ---
+#--- Sub-block 10.3: .deb package verification function ---
 # Purpose: Verify .deb packages using GPG signatures
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1738,12 +1822,8 @@ verify_deb_package() {
     fi
 }
 
-#--- Sub-block: Section continuation (595) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-#--- Sub-block 6.12.4: Unified cache configuration function ---
+#--- Sub-block 10.4: Unified cache configuration function ---
 # Purpose: Configure all package manager caches (APT, pip, conda, Julia)
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -1798,16 +1878,8 @@ EOF
         echo "⚠ WARNING: MINIFORGE_HOME not set - skipping conda cache configuration"
     fi
 
-#--- Sub-block: Section continuation (640) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 634 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # === 4. Configure Julia Caching ===
     # Verify APT cache configuration was properly applied
     echo "==> Verifying APT cache configuration..."
@@ -1829,13 +1901,13 @@ EOF
 }
 # End setup_unified_cache function (self-contained)
 
-#--- Sub-block 6.12.5: Execute unified cache setup ---
+#--- Sub-block 10.5: Execute unified cache setup ---
 # Critical: Initialize all package manager caches before any installations
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 setup_unified_cache
 
-#--- Sub-block 6.12.6: Protect pre-seeded cache files ---
+#--- Sub-block 10.6: Protect pre-seeded cache files ---
 # Purpose: Apply immutable flag to prevent accidental deletion of cached packages
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -1859,14 +1931,14 @@ else
 fi
 # End cache protection (if-else self-contained)
 
-#--- Sub-block 6.12.7: Install essential system tools ---
+#--- Sub-block 10.7: Install essential system tools ---
 # Critical: Tools needed for GPG verification, downloads, and system management
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Installing essential tools for verification, downloads, and system management..."
 apt-get update -o Acquire::Retries=3
 
-#--- Sub-block 6.12.8: Install aria2 download accelerator ---
+#--- Sub-block 10.8: Install aria2 download accelerator ---
 # Critical: Install aria2 BEFORE creating apt-aria wrapper
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1877,7 +1949,7 @@ echo "==> Installing aria2 before creating apt-aria wrapper..."
 monitor_cache "After aria2 installation"
 debug_glibc "After Aria installation"
 
-#--- Sub-block 6.12.9: Install core APT and system utilities ---
+#--- Sub-block 10.9: Install core APT and system utilities ---
 # Critical: Essential tools for system configuration and package management
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1905,7 +1977,7 @@ else
 fi
 debug_glibc "After installing core APT & System utilities"
 
-#--- Sub-block 6.12.10: Install network and download tools ---
+#--- Sub-block 10.10: Install network and download tools ---
 # Critical: Tools for downloading packages and accessing repositories
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1916,7 +1988,7 @@ apt-get install -y --no-install-recommends \
     apt-transport-https
 debug_glibc "After installing network & download tools"
 
-#--- Sub-block 6.12.11: Install security and encryption tools ---
+#--- Sub-block 10.11: Install security and encryption tools ---
 # Critical: GPG, certificates, and security infrastructure
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1929,7 +2001,7 @@ apt-get install -y --no-install-recommends \
 # debsig-verify removed - we use dpkg-deb for package verification instead
 debug_glibc "After installing security & encryption tools"
 
-#--- Sub-block 6.12.12: Install archive and compression tools ---
+#--- Sub-block 10.12: Install archive and compression tools ---
 # Critical: Tools for extracting and compressing packages
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1945,7 +2017,7 @@ debug_glibc "After installing archive & compression tools"
 # Monitor cache after 4 batches of installations
 monitor_cache "After 4 batches of essential tools"
 
-#--- Sub-block 6.12.13: Install file and text utilities ---
+#--- Sub-block 10.13: Install file and text utilities ---
 # Critical: File manipulation and text editing tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1961,7 +2033,7 @@ apt-get install -y --no-install-recommends \
     xxd
 debug_glibc "After installing file & text utilities"
 
-#--- Sub-block 6.12.14: Install development and system tools ---
+#--- Sub-block 10.14: Install development and system tools ---
 # Critical: Git, rsync, monitoring tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1973,13 +2045,13 @@ apt-get install -y --no-install-recommends \
     jq
 debug_glibc "After installing development and system tools"
 
-#--- Sub-block 6.12.15: Install apt-utils (optional) ---
+#--- Sub-block 10.15: Install apt-utils (optional) ---
 # Purpose: Additional APT utilities if available
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 apt-get install -y --no-install-recommends apt-utils || echo "Δ apt-utils not available (continuing without it)"
 
-#--- Sub-block 6.12.16: Install advanced package managers (optional) ---
+#--- Sub-block 10.16: Install advanced package managers (optional) ---
 # Purpose: Install alternative APT frontends if available
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -1990,7 +2062,7 @@ apt-get install -y --no-install-recommends nala || echo "Δ nala not available (
 apt-get install -y --no-install-recommends synaptic || echo "Δ synaptic not available (continuing without it)"
 debug_glibc "After installing advanced package managers"
 
-#--- Sub-block 6.12.17: Verify essential tool installation ---
+#--- Sub-block 10.17: Verify essential tool installation ---
 # Critical: Ensure all required tools are available before proceeding
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -2005,7 +2077,7 @@ command -v git || { echo "git install failed"; exit 1; }
 command -v jq || { echo "jq install failed"; exit 1; }
 command -v aptitude || { echo "aptitude install failed"; exit 1; }
 
-#--- Sub-block 6.12.18: Check optional package managers ---
+#--- Sub-block 10.18: Check optional package managers ---
 # Purpose: Report availability of optional tools
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -2013,14 +2085,18 @@ echo "Checking for advanced package managers..."
 command -v nala >& /dev/null && echo "✓ nala available" || echo "Δ nala not available"
 # apt-fast removed - using apt-aria wrapper instead
 command -v synaptic >& /dev/null && echo "✓ synaptic available" || echo "Δ synaptic not available"
-if dpkg -l | grep -q "ii.*apt-utils"; then echo "✓ apt-utils package is installed"; else echo "Δ apt-utils package is not installed"; fi
+if dpkg_resolve_installed_package "apt-utils" >/dev/null; then
+    echo "✓ apt-utils package is installed"
+else
+    echo "Δ apt-utils package is not installed"
+fi
 
 echo "✓ Essential tools installed and verified"
 
 # Monitor cache after essential tools installation
 monitor_cache "After essential tools installation"
 
-#--- Sub-block 6.12.19: Install SSHFS (Rust tools compiled from source later) ---
+#--- Sub-block 10.19: Install SSHFS (Rust tools compiled from source later) ---
 # Critical: SSHFS for remote filesystems; Rust tools compiled in Block 24
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -2029,7 +2105,7 @@ echo "==> Installing SSHFS (Rust tools compiled from source in Block 24)..."
 apt-get install -y --no-install-recommends \
   sshfs
 
-#--- Sub-block 6.12.20: Configure aliases for modern tools (MOVED TO BLOCK 24) ---
+#--- Sub-block 10.20: Configure aliases for modern tools (MOVED TO BLOCK 24) ---
 # Purpose: Aliases configured after Rust tools are compiled from source
 # Dependencies: Block 24 (cargo install)
 # Outputs: Deferred to Block 24
@@ -2037,7 +2113,7 @@ apt-get install -y --no-install-recommends \
 echo "==> Rust tool aliases will be configured in Block 24 after compilation"
 
 #===============================================================================
-# BLOCK 6.12A: APT-ARIA WRAPPER SETUP (MUST BE BEFORE NVIDIA!)
+# BLOCK 11: APT-ARIA WRAPPER SETUP (MUST BE BEFORE NVIDIA!)
 #===============================================================================
 # Purpose: Setup apt-aria wrapper for accelerated downloads with aria2
 # Critical: MUST be configured BEFORE NVIDIA installation to enable aria2 for 4GB downloads
@@ -2045,7 +2121,7 @@ echo "==> Rust tool aliases will be configured in Block 24 after compilation"
 # Outputs: apt-aria wrapper, symlinks for apt/apt-get
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.12A.1: Create APT tool aliasing wrapper ---
+#--- Sub-block 11.1: Create APT tool aliasing wrapper ---
 # Purpose: Setup unified caching with aria2 acceleration
 # Dependencies: Block 6 (APT configuration), aria2
 # Outputs: Installed packages
@@ -2197,7 +2273,7 @@ echo "✓ apt-aria wrapper created"
 # Monitor cache after apt-aria setup
 monitor_cache "After apt-aria wrapper setup"
 
-#--- Sub-block 6.12A.2: Create APT tool symlinks for consistent caching ---
+#--- Sub-block 11.2: Create APT tool symlinks for consistent caching ---
 # Critical: Ensure ALL apt commands use unified cache and aria2 acceleration
 # Dependencies: apt-aria wrapper (created above)
 # Outputs: Symlinks for apt/apt-get
@@ -2205,7 +2281,7 @@ echo "Creating APT tool symlinks for consistent caching..."
 ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt-get
 ln -sf /usr/local/bin/apt-aria /usr/local/bin/apt
 
-#--- Sub-block 6.12A.3: Verify APT aliasing ---
+#--- Sub-block 11.3: Verify APT aliasing ---
 # Purpose: Confirm symlinks are properly configured
 # Dependencies: apt-aria wrapper and symlinks
 # Outputs: Verification output
@@ -2216,7 +2292,7 @@ echo "✓ APT-aria wrapper and symlinks configured successfully"
 echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + caching"
 
 #===============================================================================
-# BLOCK 6.12B: OPENBLAS COMPILATION AND INSTALLATION
+# BLOCK 12: OPENBLAS COMPILATION AND INSTALLATION
 #===============================================================================
 # Purpose: Compile and install OpenBLAS with DYNAMIC_ARCH=1 for maximum performance
 #          and CPU portability. Make it the default BLAS/LAPACK implementation via
@@ -2248,7 +2324,7 @@ echo -e "${BLUE}BLOCK 6.12B: OpenBLAS Compilation and Installation${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-#--- Sub-block 6.12B.1: Check base image for existing OpenBLAS ---
+#--- Sub-block 12.1: Check base image for existing OpenBLAS ---
 # Purpose: Verify base image status (analysis shows no OpenBLAS exists)
 # Dependencies: None (foundational check)
 # Outputs: Status information
@@ -2282,7 +2358,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 6.12B.2: Install build prerequisites ---
+#--- Sub-block 12.2: Install build prerequisites ---
 # Purpose: Install tools and libraries needed for OpenBLAS and PyTorch compilation
 # Dependencies: Block 6.12 (APT configuration), Block 6.12A (apt-aria wrapper)
 # Outputs: Installed packages
@@ -2318,7 +2394,7 @@ apt-get install -y --no-install-recommends \
 echo -e "${GREEN}✓ Build prerequisites installed${NC}"
 echo ""
 
-#--- Sub-block 6.12B.3: Download OpenBLAS source ---
+#--- Sub-block 12.3: Download OpenBLAS source ---
 # Purpose: Download OpenBLAS from official repository
 # Dependencies: Block 6.12B.2 (git, wget, curl), config.sh (OPENBLAS_VERSION)
 # Outputs: OpenBLAS source code
@@ -2408,7 +2484,7 @@ fi
 echo -e "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
 echo ""
 
-#--- Sub-block 6.12B.4: Compile OpenBLAS ---
+#--- Sub-block 12.4: Compile OpenBLAS ---
 # Purpose: Compile OpenBLAS with DYNAMIC_ARCH=1 for CPU portability
 # Dependencies: Block 6.12B.3 (OpenBLAS source)
 # Outputs: Compiled OpenBLAS library
@@ -2457,7 +2533,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 6.12B.5: Install OpenBLAS ---
+#--- Sub-block 12.5: Install OpenBLAS ---
 # Purpose: Install OpenBLAS to /usr/local
 # Dependencies: Block 6.12B.4 (compiled OpenBLAS)
 # Outputs: Installed OpenBLAS library and headers
@@ -2485,7 +2561,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 6.12B.6: Verify OpenBLAS installation ---
+#--- Sub-block 12.6: Verify OpenBLAS installation ---
 # Purpose: Verify OpenBLAS library exists and has DYNAMIC_ARCH support
 # Dependencies: Block 6.12B.5 (installed OpenBLAS)
 # Outputs: Verification status
@@ -2532,7 +2608,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 6.12B.7: Update alternatives system ---
+#--- Sub-block 12.7: Update alternatives system ---
 # Purpose: Make OpenBLAS the default BLAS/LAPACK implementation
 # Dependencies: Block 6.12B.6 (verified OpenBLAS installation)
 # Outputs: Updated alternatives configuration
@@ -2589,7 +2665,7 @@ fi
 echo -e "  ${GREEN}✓ Alternatives system updated${NC}"
 echo ""
 
-#--- Sub-block 6.12B.8: Configure library paths ---
+#--- Sub-block 12.8: Configure library paths ---
 # Purpose: Make OpenBLAS available system-wide via library paths
 # Dependencies: Block 6.12B.7 (alternatives updated)
 # Outputs: Updated ldconfig, environment variables, pkg-config
@@ -2602,12 +2678,15 @@ if [ ! -f "${OPENBLAS_LIB_FILE}" ]; then
     exit 1
 fi
 
+# Prioritise /usr/local libraries early in the build
+ensure_compiled_lib_priority
+
 # Update ldconfig
 echo "  Updating ldconfig cache..."
 echo "${OPENBLAS_INSTALL_PREFIX}/lib" > /etc/ld.so.conf.d/openblas-custom.conf
 
 # Run ldconfig and verify it succeeded
-if ldconfig 2>&1; then
+if run_ldconfig_refresh 2>&1; then
     echo -e "  ${GREEN}✓ ldconfig executed successfully${NC}"
 else
     echo -e "  ${YELLOW}⚠ ldconfig returned non-zero exit code, but continuing...${NC}"
@@ -2619,7 +2698,7 @@ if timeout 5 ldconfig -p 2>/dev/null | grep -q libopenblas; then
 else
     echo -e "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}"
     # Retry ldconfig
-    ldconfig 2>&1 || true
+    run_ldconfig_refresh 2>&1 || true
     # Check again
     if ldconfig -p 2>/dev/null | grep -q libopenblas; then
         echo -e "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
@@ -2657,7 +2736,7 @@ EOF
 echo -e "  ${GREEN}✓ Library paths configured${NC}"
 echo ""
 
-#--- Sub-block 6.12B.9: Set up APT pinning ---
+#--- Sub-block 12.9: Set up APT pinning ---
 # Purpose: Prevent APT from installing system OpenBLAS packages
 # Dependencies: None (APT configuration)
 # Outputs: APT preferences file
@@ -2673,7 +2752,7 @@ EOF
 echo -e "  ${GREEN}✓ APT pinning configured${NC}"
 echo ""
 
-#--- Sub-block 6.12B.10: Final verification ---
+#--- Sub-block 12.10: Final verification ---
 # Purpose: Verify OpenBLAS is properly configured and being used
 # Dependencies: Block 6.12B.8 (library paths configured)
 # Outputs: Verification status
@@ -2723,7 +2802,7 @@ cd / || true
 rm -rf "${OPENBLAS_SOURCE_DIR}" /tmp/openblas_build.log
 
 #===============================================================================
-# BLOCK 6.13: NVIDIA CUDA/cuDNN SETUP
+# BLOCK 13: NVIDIA CUDA/cuDNN SETUP
 #===============================================================================
 # Purpose: Install NVIDIA CUDA toolkit and cuDNN libraries (~4GB)
 # Self-contained: Yes (complete NVIDIA stack installation)
@@ -2743,7 +2822,7 @@ rm -rf "${OPENBLAS_SOURCE_DIR}" /tmp/openblas_build.log
 #     3. Reused in subsequent builds (no re-download)
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.13.1: NVIDIA repository keyring installation ---
+#--- Sub-block 13.1: NVIDIA repository keyring installation ---
 # Critical: Add NVIDIA GPG key and repository for CUDA 12.x
 # Dependencies: Block 6 (APT configuration), Block 6.13 (NVIDIA CUDA)
 # Outputs: Installed packages
@@ -2815,8 +2894,14 @@ if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
         if [ "${PIPESTATUS[0]}" -eq 0 ]; then
             CUDNN_INSTALLED=true
             # Detect installed version
-            INSTALLED_CUDNN_VER=$(dpkg -l | grep -E "^ii\s+libcudnn9" | awk '{print $3}' | head -1)
-            if [ -n "${INSTALLED_CUDNN_VER}" ]; then
+            INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || true)
+            if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || true)
+            fi
+            if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
+            fi
+            if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
                 echo "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
             else
                 echo "  ✓ Successfully installed latest cuDNN version"
@@ -2843,12 +2928,8 @@ fi
 # CUDA_VERSION now contains either detected version or config.sh default
 echo "Detected CUDA version: ${CUDA_VERSION}"
 
-#--- Sub-block: Section continuation (870) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-#--- Sub-block 6.13.2: Configure CUDA environment variables ---
+#--- Sub-block 13.2: Configure CUDA environment variables ---
 # Critical: Set PATH and LD_LIBRARY_PATH for CUDA toolkit
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -2860,7 +2941,7 @@ export CUDA_HOME=/usr/local/cuda-${CUDA_VERSION:-12.6}
 EOF
 chmod +x /etc/profile.d/cuda.sh
 
-#--- Sub-block 6.13.3: Ensure CUDA environment in non-login shells ---
+#--- Sub-block 13.3: Ensure CUDA environment in non-login shells ---
 # Purpose: Make CUDA available in all shell types
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -2872,16 +2953,16 @@ if [ -f /etc/profile.d/cuda.sh ]; then
 fi
 # End environment sourcing (if-else self-contained)
 
-#--- Sub-block 6.13.4: Source CUDA environment for current build session ---
+#--- Sub-block 13.4: Source CUDA environment for current build session ---
 # Critical: Make CUDA available immediately for rest of build process
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 echo "==> Sourcing CUDA environment to make it available for the rest of this build..."
 source /etc/profile.d/cuda.sh
 # Note: ldconfig should be run without sudo in container context (already root)
-ldconfig
+run_ldconfig_refresh
 
-#--- Sub-block 6.13.5: Verify CUDA installation ---
+#--- Sub-block 13.5: Verify CUDA installation ---
 # Critical: Validate nvcc and cuDNN are properly installed
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -2901,7 +2982,7 @@ else
   echo -e "  - libcudnn.so: ${GREEN}OK (Visible to linker)${NC}"
 fi
 
-#--- Sub-block 6.13.6: Report CUDA installation status ---
+#--- Sub-block 13.6: Report CUDA installation status ---
 # Critical: Exit if CUDA setup failed
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -2917,7 +2998,7 @@ fi
 
 debug_glibc "After installing NVIDIA Cuda Toolkit"
 
-#--- Sub-block 6.13.7: IMMEDIATE cache sync for NVIDIA packages ---
+#--- Sub-block 13.7: IMMEDIATE cache sync for NVIDIA packages ---
 # Critical: Preserve large NVIDIA packages (~4GB) immediately to survive build failures
 # Purpose: Sync NVIDIA .deb files from /var/cache/apt/archives to container cache NOW
 # Rationale: NVIDIA packages are massive; if build fails later, we don't want to re-download
@@ -2967,7 +3048,7 @@ sync
 
 echo "==> Continuing with rest of build process..."
 
-#--- Sub-block 6.13.11: Test unified APT cache functionality (apt-aria already configured) ---
+#--- Sub-block 13.8: Test unified APT cache functionality (apt-aria already configured) ---
 # Purpose: Verify cache is working correctly
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -2985,7 +3066,7 @@ else
 fi
 # End cache test (if-else self-contained)
 
-#--- Sub-block 6.13.12: Early cached file verification function ---
+#--- Sub-block 13.9: Early cached file verification function ---
 # Critical: Verify integrity of all cached binaries after container copy
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -3051,10 +3132,6 @@ early_verify_cached_files() {
         fi
     fi
 
-#--- Sub-block: Section continuation (1132) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
     # Verify yq
     if [ -f "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
@@ -3086,10 +3163,6 @@ early_verify_cached_files() {
     fi
 
 
-#--- Sub-block: Code section 1135 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # Verify Julia (early verification for complex archive)
     if [ -f "${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}" ]; then
     echo "Verifying Julia archive..."
@@ -3151,38 +3224,34 @@ early_verify_cached_files() {
     fi
 
 
-#--- Sub-block: Section continuation (1192) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     echo "✓ Early verification completed - all cached files are intact"
 }
 # End early_verify_cached_files function (self-contained)
 
 
-#--- Sub-block 6.8.1: Verify all cached binaries ---
+#--- Sub-block 13.10: Verify all cached binaries ---
 # Purpose: Check integrity of TurboVNC, VirtualGL, Miniforge, Julia
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 6.13.13: Execute early file verification ---
+#--- Sub-block 13.11: Execute early file verification ---
 # Critical: Run verification before proceeding with build
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 early_verify_cached_files
 
-#--- Sub-block 6.13.14: Setup GPG verification system ---
+#--- Sub-block 13.12: Setup GPG verification system ---
 # Purpose: Initialize GPG verification for package signatures
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 setup_gpg_verification
 
-#--- Sub-block 6.13.14: Mirror functions moved to BLOCK 3 ---
+#--- Sub-block 13.13: Mirror functions moved to BLOCK 3 ---
 # Note: Mirror probing functions (test_mirror, probe_and_set_mirrors) have been
 # moved to BLOCK 3 (lines 250-436) and executed early in BLOCK 6.11 (lines 841-889)
 # This ensures ALL apt-get operations use the fastest mirror from the start.
 # The old code here has been removed to avoid duplication.
 
-#--- Sub-block 6.13.16: Configure dpkg to exclude documentation ---
+#--- Sub-block 13.14: Configure dpkg to exclude documentation ---
 # Purpose: Save space by excluding man pages and non-essential docs
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3199,14 +3268,14 @@ path-exclude /usr/share/info/*
 path-exclude /usr/share/dict/wordlist.de*
 EOF
 
-#--- Sub-block 6.13.17: Prepare for bootstrap package installation ---
+#--- Sub-block 13.15: Prepare for bootstrap package installation ---
 # Purpose: Create directories and update package lists
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 install -d -m 0755 /usr/local/bin
 apt-get update -o Acquire::Retries=3
 
-#--- Sub-block 6.13.18: Install bootstrap packages ---
+#--- Sub-block 13.16: Install bootstrap packages ---
 # Critical: Additional essential tools for container functionality
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3215,7 +3284,7 @@ echo "==> Installing all bootstrap and utility packages..."
 rm -rf /tmp/apt-dpkg-install-* 2>/dev/null || true
 rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
 
-#--- Sub-block 6.13.19: Install additional network tools ---
+#--- Sub-block 13.17: Install additional network tools ---
 # Purpose: rsync for file synchronization
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3223,7 +3292,7 @@ echo "==> Installing additional network and download tools..."
 apt-get install -y --no-install-recommends \
     rsync
 
-#--- Sub-block 6.13.20: Install additional security tools ---
+#--- Sub-block 13.18: Install additional security tools ---
 # Purpose: Additional encryption and security packages
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3231,7 +3300,7 @@ echo "==> Installing additional security and encryption tools..."
 apt-get install -y --no-install-recommends \
     ca-certificates-java
 
-#--- Sub-block 6.13.21: Install development and utility tools ---
+#--- Sub-block 13.19: Install development and utility tools ---
 # Purpose: Python pip for package management
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3239,7 +3308,7 @@ echo "==> Installing development and utility tools..."
 apt-get install -y --no-install-recommends \
     python3-pip
 
-#--- Sub-block 6.13.22: Post-bootstrap validation and configuration ---
+#--- Sub-block 13.20: Post-bootstrap validation and configuration ---
 # Critical: Verify installation, update certificates and locales
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3250,13 +3319,13 @@ locale-gen en_US.UTF-8
 # We already have nala and aptitude installed via APT for package management
 command -v curl || { echo "curl install failed"; exit 1; }
 
-#--- Sub-block 6.13.23: Mirror probing already executed (moved to line ~1649) ---
+#--- Sub-block 13.21: Mirror probing already executed (moved to line ~1649) ---
 # Note: probe_and_set_mirrors was moved earlier to run BEFORE apt-get operations
 # This ensures all package downloads use the fastest mirror
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-#--- Sub-block 6.13.24: Configure additional PPAs ---
+#--- Sub-block 13.22: Configure additional PPAs ---
 # Purpose: Add Mozilla, Ulauncher PPAs with fallback mechanisms
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3290,7 +3359,7 @@ echo ""
 echo "==> Verifying fastest mirror after PPA operations (safeguard check)..."
 verify_fastest_mirror || echo "[warn] Mirror verification after PPA operations found issues"
 
-#--- Sub-block 6.13.25: Add PPA GPG keys ---
+#--- Sub-block 13.23: Add PPA GPG keys ---
 # Critical: Import signing keys for all configured PPAs
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3303,7 +3372,7 @@ curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xAEBDF4819BE2
 # Ulauncher PPA key
 curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xFAF1020699503176 | gpg --dearmor -o /etc/apt/trusted.gpg.d/ulauncher.gpg 2>/dev/null || echo "[warn] Ulauncher key failed"
 
-#--- Sub-block 6.13.26: Verify PPA keys ---
+#--- Sub-block 13.24: Verify PPA keys ---
 # Purpose: Confirm all PPA keys are properly installed
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3315,7 +3384,7 @@ for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
 done
 # End PPA key verification loop (for loop self-contained)
 
-#--- Sub-block 6.13.27: Update package lists with PPAs ---
+#--- Sub-block 13.25: Update package lists with PPAs ---
 # Critical: Refresh APT cache with all newly added repositories
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3325,7 +3394,7 @@ apt-get update -o Acquire::Retries=3
 # Monitor cache after PPA update
 monitor_cache "After PPA update"
 
-#--- Sub-block 6.13.28: Configure APT robustness settings ---
+#--- Sub-block 13.26: Configure APT robustness settings ---
 # Purpose: Set retry and timeout policies for reliable downloads
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3338,7 +3407,7 @@ EOF
 # apt-fast environment variables and verification removed - using apt-aria wrapper instead
 
 #===============================================================================
-# BLOCK 6.10: DRAKE ROBOTICS FRAMEWORK SETUP
+# BLOCK 14: DRAKE ROBOTICS FRAMEWORK SETUP
 #===============================================================================
 # Purpose: Configure Drake APT repository and install Drake
 # Self-contained: Yes (complete setup with GPG verification)
@@ -3347,11 +3416,12 @@ EOF
 # NOTE: Drake installed early to be available during Phase 1
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.10.1: Drake APT repository configuration ---
+#--- Sub-block 14.1: Drake APT repository configuration ---
 # Critical: Uses hardened security with cached GPG key
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Drake APT (hardened via cached key) + INSTALL"
+drake_prev_opts="$-"
 set -e  # Exit on any error during Drake setup
 # 1) BEFORE apt-get update (temporary insecure override for just the Drake host)
 cat > /etc/apt/apt.conf.d/99-drake-insecure.conf <<'EOF'
@@ -3359,7 +3429,7 @@ Acquire::https::drake-apt.csail.mit.edu::Verify-Peer "false";
 Acquire::https::drake-apt.csail.mit.edu::Verify-Host "false";
 EOF
 
-#--- Sub-block 6.10.2: Download and configure Drake GPG key ---
+#--- Sub-block 14.2: Download and configure Drake GPG key ---
 # Critical: Use cached key if available, fallback to download
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3371,7 +3441,7 @@ else
   wget -qO- https://drake-apt.csail.mit.edu/drake.asc | tee "$DRAKE_ASC" >/dev/null
 fi
 
-#--- Sub-block 6.10.3: Add Drake GPG key to APT keychain ---
+#--- Sub-block 14.3: Add Drake GPG key to APT keychain ---
 # Critical: Install key for package signature verification
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3386,7 +3456,7 @@ else
 fi
 # End Drake GPG setup (if-else self-contained)
 
-#--- Sub-block 6.10.4: Configure Drake APT repository ---
+#--- Sub-block 14.4: Configure Drake APT repository ---
 # Critical: Add Drake repository to sources list
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3394,7 +3464,7 @@ CODENAME="$(lsb_release -cs)"
 echo "deb [arch=amd64] https://drake-apt.csail.mit.edu/${CODENAME} ${CODENAME} main" \
   >/etc/apt/sources.list.d/drake.list
 
-#--- Sub-block 6.10.5: Install Drake dependencies ---
+#--- Sub-block 14.5: Install Drake dependencies ---
 # Purpose: Install required X11 libraries before Drake
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3405,7 +3475,7 @@ apt-get install -y \
   libglib2.0-0
 apt-get -o Dir::Cache::archives=${CONTAINER_APT_CACHE} update || apt-get update
 
-#--- Sub-block 6.10.6: Fix broken packages before Drake ---
+#--- Sub-block 14.6: Fix broken packages before Drake ---
 # Critical: Ensure clean package state before Drake installation
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3413,7 +3483,7 @@ echo "Checking for broken packages..."
 apt-get -f install -y || true
 dpkg --configure -a || true
 
-#--- Sub-block 6.10.7: Install Drake framework ---
+#--- Sub-block 14.7: Install Drake framework ---
 # Critical: Install drake-dev package with all dependencies
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3423,13 +3493,13 @@ apt-get install -y --no-install-recommends drake-dev
 # Monitor cache growth after Drake installation
 monitor_cache "After Drake installation"
 
-#--- Sub-block 6.10.8: Cleanup Drake security overrides ---
+#--- Sub-block 14.8: Cleanup Drake security overrides ---
 # Critical: Remove temporary insecure APT configuration
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
 
-#--- Sub-block 6.10.9: Cache Drake GPG key for future builds ---
+#--- Sub-block 14.9: Cache Drake GPG key for future builds ---
 # Purpose: Save key to cache for subsequent container builds
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3437,7 +3507,7 @@ if [ -s "${DRAKE_ASC:-}" ]; then
     cp -f "$DRAKE_ASC" "${CONTAINER_BIN_CACHE}/drake.asc" 2>/dev/null || true
 fi
 
-#--- Sub-block 6.10.10: Configure Drake environment ---
+#--- Sub-block 14.10: Configure Drake environment ---
 # Purpose: Set up Drake Python bindings and library paths
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3467,15 +3537,19 @@ chmod +x /etc/profile.d/drake.sh
 
 echo "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 
-#--- Sub-block 6.10.11: Disable Drake repository after installation ---
+#--- Sub-block 14.11: Disable Drake repository after installation ---
 # Critical: Comment out Drake repo to prevent automatic updates
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 sed -i 's/^deb /#deb /' /etc/apt/sources.list.d/drake.list || true
 apt-get update
+if [[ "${drake_prev_opts}" != *e* ]]; then
+  set +e
+fi
+unset drake_prev_opts
 
 #===============================================================================
-# BLOCK 6.11: FIREFOX INSTALLATION
+# BLOCK 15: FIREFOX INSTALLATION
 #===============================================================================
 # Purpose: Install Firefox from Mozilla Team PPA with priority pinning
 # Self-contained: Yes (complete with verification)
@@ -3483,7 +3557,7 @@ apt-get update
 # Outputs: Installed packages
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 6.11.1: Configure Firefox PPA preferences ---
+#--- Sub-block 15.1: Configure Firefox PPA preferences ---
 # Critical: Pin Firefox to Mozilla Team PPA for latest updates
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3493,7 +3567,7 @@ Pin: release o=LP-PPA-mozillateam
 Pin-Priority: 501
 PREF
 
-#--- Sub-block 6.11.2: Install Firefox with dependencies ---
+#--- Sub-block 15.2: Install Firefox with dependencies ---
 # Critical: Install Firefox from Mozilla Team PPA
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3505,7 +3579,7 @@ else
 fi
 # End if-else block (self-contained)
 
-#--- Sub-block 6.11.3: Verify Firefox installation ---
+#--- Sub-block 15.3: Verify Firefox installation ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -x /usr/bin/firefox ]; then
@@ -3517,21 +3591,21 @@ fi
 
 # APT caching already configured above
 
-#--- Sub-block 6.11.4: Post-installation monitoring ---
+#--- Sub-block 15.4: Post-installation monitoring ---
 # Purpose: Track cache growth and system state after desktop installations
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 monitor_cache "After desktop stack installation"
 debug_glibc "After installing firefox, drake"
 
-#--- Sub-block 6.11.5: noVNC HTML5 VNC client installation ---
+#--- Sub-block 15.5: noVNC HTML5 VNC client installation ---
 # Purpose: Install noVNC for browser-based VNC access
 # Dependencies: config.sh (NOVNC_VER)
 # Outputs: Environment variables, configuration
 echo "==> Installing noVNC and websockify for HTML5 VNC access..."
 # Using NOVNC_VER from config.sh
 
-#--- Sub-block 6.11.6: Install websockify proxy ---
+#--- Sub-block 15.6: Install websockify proxy ---
 # Critical: WebSocket proxy for noVNC browser access
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3542,14 +3616,14 @@ apt-get install -y --no-install-recommends websockify python3-numpy python3-scip
 # System packages are built together and are ABI-compatible, ensuring stability.
 
 # Install latest websockify with all features via pip
-pip3 install --no-cache-dir \
+python3 -m pip install --no-cache-dir \
   websockify \
   jwcrypto \
   redis
 
 echo "✓ NumPy and SciPy installed via system packages (using OpenBLAS)"
 
-#--- Sub-block 6.11.7: Download and configure noVNC client ---
+#--- Sub-block 15.7: Download and configure noVNC client ---
 # Critical: Install noVNC v1.6.0 for HTML5 VNC access
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -3563,7 +3637,7 @@ chmod -R 755 /usr/local/share/novnc
 echo "✓ noVNC v${NOVNC_VER} installed"
 
 #===============================================================================
-# BLOCK 7: PHASE 1 - FOUNDATIONAL SYSTEM LIBRARIES
+# BLOCK 16: PHASE 1 - FOUNDATIONAL SYSTEM LIBRARIES
 #===============================================================================
 # Purpose: Install all base system packages via APT
 # Self-contained: Yes (complete phase with success tracking)
@@ -3571,7 +3645,7 @@ echo "✓ noVNC v${NOVNC_VER} installed"
 # Outputs: Installed packages
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 7.1: Phase 1 initialization ---
+#--- Sub-block 16.1: Phase 1 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo -e "\n${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}"
@@ -3579,7 +3653,7 @@ echo -e "\n${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}
 # Critical: Track overall phase success
 PHASE1_ALL_SUCCESS=true
 
-#--- Sub-block 7.2: Robust package installation helper function ---
+#--- Sub-block 16.2: Robust package installation helper function ---
 # Purpose: Install packages with resilience to already-installed packages and missing optional packages
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3694,7 +3768,7 @@ install_packages_resilient() {
   return 0
 }
 
-#--- Sub-block 7.2.1: Package group installation helper function (updated to use resilient installer) ---
+#--- Sub-block 16.3: Package group installation helper function (updated to use resilient installer) ---
 # Purpose: Install and verify package groups with detailed logging
 # Dependencies: Block 6 (APT configuration), install_packages_resilient()
 # Outputs: Installed packages
@@ -3772,12 +3846,12 @@ install_and_verify_group() {
 }
 # End install_and_verify_group function (self-contained)
 
-#--- Sub-block 7.3: Define package groups ---
+#--- Sub-block 16.4: Define package groups ---
 # Purpose: Organize packages into logical installation groups
 # Dependencies: PHASE 1 (Build tools), PHASE 1 (Compilers)
 # Outputs: Configured system components
 
-#--- Sub-block 7.3.0: Check base image glog status ---
+#--- Sub-block 16.5: Check base image glog status ---
 # CRITICAL: Verify if base ROS image already has glog installed
 # Base image: osrf/ros:jazzy-desktop-full-noble may include glog as ROS dependency
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -3834,7 +3908,7 @@ PKGS_SIM="libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libbullet-dev libode-d
 # Serialization libraries
 PKGS_SERIALIZATION="libyaml-cpp-dev libjsoncpp-dev"
 
-#--- Sub-block 7.4: Execute package group installations ---
+#--- Sub-block 16.6: Execute package group installations ---
 # Critical: Install all package groups with verification
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -3877,7 +3951,7 @@ install_and_verify_group "OpenGL_3D" "${PKGS_OPENGL_3D_ARRAY[@]}"
 install_and_verify_group "Simulation" "${PKGS_SIM_ARRAY[@]}"
 install_and_verify_group "Serialization" "${PKGS_SERIALIZATION_ARRAY[@]}"
 
-#--- Sub-block 7.5: Verify compiler toolchain ---
+#--- Sub-block 16.7: Verify compiler toolchain ---
 # Critical: Ensure C++ compiler is properly installed
 # Dependencies: Block 6 (APT configuration), PHASE 1 (Compilers)
 # Outputs: Installed packages
@@ -3885,7 +3959,7 @@ echo -e "\n${YELLOW}[PHASE 1 | Sanity Check] Reinstalling core C++ compiler to f
 apt-get install --reinstall -y g++ build-essential
 echo -e "${GREEN}✓ Compiler toolchain verified.${NC}"
 
-#--- Sub-block 7.5.5: EARLY PROTECTION - Block system Ceres packages ---
+#--- Sub-block 16.8: EARLY PROTECTION - Block system Ceres packages ---
 # CRITICAL: Apply APT pinning NOW to prevent accidental Ceres installation
 # This must happen BEFORE any other apt operations that might pull in Ceres
 # Dependencies: None (foundational protection)
@@ -3936,7 +4010,7 @@ echo "✓ System Ceres packages are now blocked (early protection active)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-#--- Sub-block 7.6: Configure tmux for ROS workflows ---
+#--- Sub-block 16.9: Configure tmux for ROS workflows ---
 # Purpose: Optimize tmux for multi-pane ROS development
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -3966,56 +4040,67 @@ EOF
 
 # Create helper script for multi-ROS workflow
 cat > /usr/local/bin/ros_multiterm << 'EOF'
-#!/bin/bash
-# Launch tmux session with multiple ROS environments
+#!/usr/bin/env bash
+set -euo pipefail
 
 SESSION="ros_multi"
+CONDA_SH="/etc/profile.d/conda.sh"
 
-# Create new tmux session
-tmux new-session -d -s "${SESSION}"
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "[ros_multiterm] tmux is not installed. Install tmux before running this helper." >&2
+  exit 1
+fi
+
+# Allow re-attachment if the session already exists
+if ! tmux has-session -t "${SESSION}" 2>/dev/null; then
+  tmux new-session -d -s "${SESSION}"
+else
+  echo "[ros_multiterm] Session '${SESSION}' already exists; attaching..."
+  tmux attach-session -t "${SESSION}"
+  exit 0
+fi
+
+# Helper to prefix each tmux pane with conda initialization if available
+tmux_conda_prefix() {
+  local target="$1"
+  if [ -f "${CONDA_SH}" ]; then
+    tmux send-keys -t "${target}" "source ${CONDA_SH} >/dev/null 2>&1 || true" C-m
+  fi
+}
 
 # Window 0: Humble workspace
 tmux rename-window -t "${SESSION}:0" 'Humble'
-tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble" C-m
+tmux_conda_prefix "${SESSION}:0"
+tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble >/dev/null 2>&1 || true" C-m
 tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
 
-#--- Sub-block: Section continuation (1774) ---
-# Purpose: Implementation details
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-
-# Window 1: ROS workspace (using ROS_DISTRO from config.sh)
-# Note: ${ROS_DISTRO^} is bash parameter expansion to capitalize first letter
+# Window 1: ROS workspace (using ROS_DISTRO from environment/config.sh)
 ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
-ROS_WINDOW_NAME="${ROS_WINDOW_NAME^}"  # Capitalize first letter
+ROS_WINDOW_NAME="${ROS_WINDOW_NAME^}"
 tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
-tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy}" C-m
+tmux_conda_prefix "${SESSION}:1"
+tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy} >/dev/null 2>&1 || true" C-m
 tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO:-jazzy}_ws" C-m
 
-
-#--- Sub-block: Code section 1755 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # Window 2: Bridge/monitoring
 tmux new-window -t "${SESSION}:2" -n 'Bridge'
+tmux_conda_prefix "${SESSION}:2"
 tmux send-keys -t "${SESSION}:2" "echo 'Domain bridge - start when ready'" C-m
 
 # Window 3: Julia processing
 tmux new-window -t "${SESSION}:3" -n 'Julia'
 tmux send-keys -t "${SESSION}:3" 'julia' C-m
 
-# Attach to session
 tmux attach-session -t "${SESSION}"
 EOF
 chmod +x /usr/local/bin/ros_multiterm
 
 
-#--- Sub-block 13.4: Tmux configuration complete ---
+#--- Sub-block 16.10: Tmux configuration complete ---
 # Purpose: Optimized for multi-pane ROS development
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 7.7: Phase 1 completion verification ---
+#--- Sub-block 16.11: Phase 1 completion verification ---
 # Critical: Verify all Phase 1 packages installed successfully
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4029,30 +4114,24 @@ else
 fi
 # End Phase 1 verification (if-else self-contained)
 
-#--- Sub-block 7.7.1: Configure linker to prioritize compiled libraries ---
+#--- Sub-block 16.12: Configure linker to prioritize compiled libraries ---
 # Critical: Ensure /usr/local/lib is searched BEFORE system libraries
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> Configuring dynamic linker to prioritize compiled libraries..."
 
-# Create ld.so.conf.d file with HIGHEST priority (00- prefix ensures it's read first)
-cat > /etc/ld.so.conf.d/00-compiled-libs.conf << 'LDCONF'
-# CRITICAL: Search /usr/local first for our optimized compiled libraries
-# This prevents system packages from shadowing our Ceres, G2O, GTSAM, OpenCV, etc.
-/usr/local/lib
-/usr/local/lib64
-/usr/local/lib/x86_64-linux-gnu
-LDCONF
+# Create /etc/ld.so.conf.d entry with highest priority (00- prefix ensures it's read first)
+ensure_compiled_lib_priority
 
 echo "✓ Linker configured to prioritize /usr/local/lib"
 
-#--- Sub-block 7.8: Update dynamic linker cache ---
+#--- Sub-block 16.13: Update dynamic linker cache ---
 # Critical: Make newly installed libraries available at runtime
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> Updating dynamic linker cache..."
 # Note: ldconfig should be run without sudo in container context (already root)
-ldconfig
+run_ldconfig_refresh
 echo "Linker cache updated."
 
 # Verify /usr/local/lib is prioritized in cache
@@ -4062,7 +4141,7 @@ ldconfig -v 2>/dev/null | grep -E "^/" | head -15 || true
 debug_glibc "After Phase 1 install: foundational system libraries"
 
 #===============================================================================
-# BLOCK 8: PHASE 3 - HIGH-LEVEL DEPENDENCIES
+# BLOCK 17: PHASE 3 - HIGH-LEVEL DEPENDENCIES
 #===============================================================================
 # Purpose: Compile robotics/vision libraries (g2o, Ceres, GTSAM) from source
 # Self-contained: Yes (complete phase with success tracking)
@@ -4070,7 +4149,7 @@ debug_glibc "After Phase 1 install: foundational system libraries"
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 8.1: Phase 3 initialization ---
+#--- Sub-block 17.1: Phase 3 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo -e "\n${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
@@ -4173,7 +4252,7 @@ clone_with_retry() {
     return 1
 }
 
-#--- Sub-block 8.1.5: Use Ubuntu's System glog Package ---
+#--- Sub-block 17.2: Use Ubuntu's System glog Package ---
 # Purpose: Use Ubuntu's patched glog for COLMAP 3.12.6 compatibility
 # 
 # CHANGED APPROACH (2025-01-30):
@@ -4208,7 +4287,7 @@ echo "  - No compilation needed"
 echo ""
 monitor_cache "After glog setup (system package)"
 
-#--- Sub-block 8.1.5.1: Verify System glog Installation ---
+#--- Sub-block 17.3: Verify System glog Installation ---
 # Purpose: Verify Ubuntu's glog 0.6.0 is installed and check for version conflicts
 # Dependencies: PKGS_CORE_DEPS (libgoogle-glog-dev already installed from apt)
 # Outputs: Verified glog installation
@@ -4231,14 +4310,19 @@ echo "3. Checking dpkg for installed glog packages:"
 dpkg -l | grep glog || echo "  ℹ No glog packages in dpkg"
 echo ""
 
-# Verify system glog is installed
-if ! dpkg -l | grep -q "^ii.*libgoogle-glog-dev"; then
+# Verify system glog is installed (accept held packages as well)
+GLOG_PKG_NAME="libgoogle-glog-dev"
+RESOLVED_GLOG_PKG=$(dpkg_resolve_installed_package "${GLOG_PKG_NAME}" 2>/dev/null || true)
+if [ -z "${RESOLVED_GLOG_PKG:-}" ]; then
     echo "✗ ERROR: libgoogle-glog-dev not installed!"
     echo "  This should have been installed via PKGS_CORE_DEPS"
     exit 1
 fi
 
-INSTALLED_GLOG=$(dpkg -l | grep "^ii.*libgoogle-glog-dev" | awk '{print $3}')
+INSTALLED_GLOG=$(dpkg_get_installed_version "${GLOG_PKG_NAME}" || true)
+if [ -z "${INSTALLED_GLOG:-}" ]; then
+    INSTALLED_GLOG="unknown"
+fi
 echo "✓ Found system glog: ${INSTALLED_GLOG}"
 echo ""
 
@@ -4318,7 +4402,7 @@ echo "  COLMAP:        System glog (Ubuntu's patched 0.6.0)"
 echo ""
 monitor_cache "After glog verification"
 
-#--- Sub-block 8.2: Compile Ceres Solver ---
+#--- Sub-block 17.4: Compile Ceres Solver ---
 # Purpose: Build Ceres optimization library from source (COMPILE FIRST - g2o can link to it)
 # Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
 # Note: Uses internal MINIGLOG (bundled), NOT system glog - fully isolated
@@ -4352,7 +4436,7 @@ rm -rf build
 mkdir -p build
 cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
-#--- Sub-block 8.3: Configure Ceres with CMake ---
+#--- Sub-block 17.5: Configure Ceres with CMake ---
 # Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
 # 
 # COMPATIBILITY NOTE: MINIGLOG=OFF (uses system glog 0.6.0)
@@ -4387,11 +4471,13 @@ cmake .. \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
   -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
 
-#--- Sub-block 8.4: Build and install Ceres ---
+#--- Sub-block 17.6: Build and install Ceres ---
 # Critical: Compile with ninja using memory-aware job calculation
 BUILD_JOBS=$(calculate_build_jobs)
 echo "Building Ceres with ${BUILD_JOBS} parallel jobs..."
-echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+if command -v nproc >/dev/null 2>&1 && command -v free >/dev/null 2>&1; then
+    echo "  System: $(nproc) cores, $(free -h | awk '/^Mem:/ {print $2}') RAM"
+fi
 echo ""
 
 # Build with fallback to single-threaded on failure
@@ -4406,16 +4492,16 @@ if ! ninja -j"${BUILD_JOBS}"; then
 fi
 
 ninja install || { echo "ERROR: Failed to install Ceres"; exit 1; }
-ldconfig
+run_ldconfig_refresh
 
-#--- Sub-block 8.5: Verify Ceres installation ---
+#--- Sub-block 17.7: Verify Ceres installation ---
 # Critical: Confirm Ceres libraries in linker cache
 if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
   echo -e "${RED}✗ Ceres compilation FAILED.${NC}"
   PHASE3_ALL_SUCCESS=false
 fi
 
-  #--- Sub-block 8.5.1: Verify Ceres APT protection is active ---
+  #--- Sub-block 17.8: Verify Ceres APT protection is active ---
   # Critical: Confirm APT pinning is still protecting compiled Ceres
   # Note: APT pinning was applied early in Block 7.5.5 (before any apt operations)
   # Strategy: Just verify it's still in place
@@ -4443,7 +4529,7 @@ fi
 cd / && rm -rf /tmp/ceres-solver
 debug_glibc "After installing CERES"
 
-#--- Sub-block 8.5.5: Build PyCeres (Python bindings for Ceres) ---
+#--- Sub-block 17.9: Build PyCeres (Python bindings for Ceres) ---
 # Purpose: Build PyCeres from source to link against compiled Ceres
 # Dependencies: Sub-block 8.4 (Ceres Solver installed)
 # Outputs: PyCeres Python package
@@ -4464,40 +4550,55 @@ cd /tmp || exit 1
 rm -rf pyceres
 if ! clone_with_retry "https://github.com/cvg/pyceres.git" "/tmp/pyceres" "v${PYCERES_VERSION}"; then
     echo "⚠ PyCeres clone failed, trying PyPI installation as fallback..."
-    if pip3 install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee /tmp/pyceres_install.log; then
+    if python3 -m pip install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee /tmp/pyceres_install.log; then
         echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
     else
         echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
     fi
 else
     cd /tmp/pyceres || exit 1
-    echo "Building PyCeres from source (linking against compiled Ceres)..."
-    
-    # Build PyCeres from source
-    # This will automatically detect Ceres in /usr/local via CMAKE_PREFIX_PATH
-    if pip3 install --no-deps --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee /tmp/pyceres_install.log; then
-        echo "✓ PyCeres built and installed from source (using compiled Ceres)"
-        
-        # Verify PyCeres installation
-        if python3 -c "import pyceres" 2>/dev/null; then
-            echo "✓ PyCeres Python module verified"
-        else
-            echo "⚠ PyCeres Python module verification failed (non-fatal)"
-        fi
-    else
-        echo "⚠ PyCeres source build failed, trying PyPI..."
-        if pip3 install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee -a /tmp/pyceres_install.log; then
-            echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
-        else
-            echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
-        fi
-    fi
-    
-    # Cleanup
-    cd / && rm -rf /tmp/pyceres
+  echo "Building PyCeres from source (linking against compiled Ceres)..."
+
+  export SKBUILD_CONFIGURE_OPTIONS="\
+-DWITH_TESTS=OFF \
+-DWITH_BENCHMARKS=OFF \
+-DWITH_PYTEST=OFF \
+-DCeres_DIR=/usr/local/lib/cmake/Ceres"
+
+  if python3 -m pip install \
+        --no-deps \
+        --disable-pip-version-check \
+        --no-binary :all: \
+        --config-settings=cmake.build-type=Release \
+        --config-settings=cmake.verbose=true \
+        --config-settings=cmake.install-prefix=/usr/local \
+        . 2>&1 | tee /tmp/pyceres_install.log; then
+      echo "✓ PyCeres built and installed from source (using compiled Ceres)"
+
+      if python3 - <<'PY' 2>/tmp/pyceres_import.log; then
+import pyceres
+print(f"pyceres version: {getattr(pyceres, '__version__', 'unknown')}")
+PY
+        echo "✓ PyCeres Python module verified"
+      else
+        echo "⚠ PyCeres import check failed"
+        sed 's/^/  /' /tmp/pyceres_import.log || true
+      fi
+  else
+      echo "⚠ PyCeres source build failed, trying PyPI..."
+      if python3 -m pip install --disable-pip-version-check pyceres 2>&1 | tee -a /tmp/pyceres_install.log; then
+          echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
+      else
+          echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
+      fi
+  fi
+
+  unset SKBUILD_CONFIGURE_OPTIONS
+
+  cd / && rm -rf /tmp/pyceres
 fi
 
-#--- Sub-block 8.6: Compile g2o (graph optimization) ---
+#--- Sub-block 17.10: Compile g2o (graph optimization) ---
 # Purpose: Graph optimization library (uses Ceres if available - compiled after Ceres)
 # Dependencies: PHASE 1 (Build tools), Sub-block 8.2 (Ceres Solver - optional but recommended)
 # Outputs: Configured system components
@@ -4523,7 +4624,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     exit 1
   fi
 
-  #--- Sub-block 8.7: Configure g2o with CMake ---
+  #--- Sub-block 17.11: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
   cmake .. \
     -G Ninja \
@@ -4544,20 +4645,20 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
     -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
 
-  #--- Sub-block 8.8: Build and install g2o ---
+  #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores
   ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build g2o"; exit 1; }
   ninja install || { echo "ERROR: Failed to install g2o"; exit 1; }
-  ldconfig
+  run_ldconfig_refresh
 
-  #--- Sub-block 8.9: Verify g2o installation ---
+  #--- Sub-block 17.13: Verify g2o installation ---
   # Critical: Confirm g2o libraries are in linker cache
   if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
     echo -e "${RED}✗ g2o compilation FAILED.${NC}"
     PHASE3_ALL_SUCCESS=false
   fi
 
-  #--- Sub-block 8.9.1: Protect compiled G2O from APT overwrites ---
+  #--- Sub-block 17.14: Protect compiled G2O from APT overwrites ---
   # Critical: Prevent APT from installing ANY system G2O packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, and OpenCV)
   echo "Protecting compiled G2O from APT overwrites..."
@@ -4600,7 +4701,7 @@ EOF
 fi
 debug_glibc "After installing g2o"
 
-#--- Sub-block 8.10: Compile GTSAM ---
+#--- Sub-block 17.15: Compile GTSAM ---
 # Purpose: Build GTSAM SLAM library with TBB and Python bindings
 # Dependencies: PHASE 1 (Build tools), sparse solvers (CHOLMOD, METIS)
 # Outputs: Configured system components
@@ -4626,7 +4727,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     exit 1
   fi
 
-  #--- Sub-block 8.11: Configure GTSAM with CMake ---
+  #--- Sub-block 17.16: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
   # IMPORTANT: TBB (Threading Building Blocks) is a SEPARATE library from OpenBLAS
   # - TBB: Intel's threading library for parallel algorithms (separate from OpenBLAS)
@@ -4663,20 +4764,20 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
     -D CMAKE_IGNORE_PATH="/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl"
 
-  #--- Sub-block 8.12: Build and install GTSAM ---
+  #--- Sub-block 17.17: Build and install GTSAM ---
   # Critical: Compile with ninja using half CPU cores
   ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build GTSAM"; exit 1; }
   ninja install || { echo "ERROR: Failed to install GTSAM"; exit 1; }
-  ldconfig
+  run_ldconfig_refresh
 
-  #--- Sub-block 8.13: Verify GTSAM installation ---
+  #--- Sub-block 17.18: Verify GTSAM installation ---
   # Critical: Confirm GTSAM libraries in linker cache
   if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libgtsam.so"; then
     echo -e "${RED}✗ GTSAM compilation FAILED.${NC}"
     PHASE3_ALL_SUCCESS=false
   fi
 
-  #--- Sub-block 8.13.1: Protect compiled GTSAM from APT overwrites ---
+  #--- Sub-block 17.19: Protect compiled GTSAM from APT overwrites ---
   # Critical: Prevent APT from installing ANY system GTSAM packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, G2O, and OpenCV)
   echo "Protecting compiled GTSAM from APT overwrites..."
@@ -4719,7 +4820,7 @@ EOF
 fi
 debug_glibc "After installing GTSAM"
 
-#--- Sub-block 8.14: Phase 3 completion verification ---
+#--- Sub-block 17.20: Phase 3 completion verification ---
 # Critical: Verify all Phase 3 libraries compiled successfully
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4734,7 +4835,7 @@ fi
 # End Phase 3 verification (if-else self-contained)
 
 #===============================================================================
-# BLOCK 8.5: JULIA LANGUAGE INSTALLATION
+# BLOCK 18: JULIA LANGUAGE INSTALLATION
 #===============================================================================
 # Purpose: Install Julia 1.10 LTS with package environments
 # Self-contained: Yes (complete with verification)
@@ -4743,7 +4844,7 @@ fi
 # NOTE: Installed after GTSAM to use CxxWrap for Julia-C++ interop
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 8.5.1: Julia version and path configuration ---
+#--- Sub-block 18.1: Julia version and path configuration ---
 # Critical: Use Julia configuration from config.sh
 # Dependencies: config.sh (sourced at top of script)
 # Outputs: Environment variables, configuration
@@ -4757,13 +4858,13 @@ CACHE_DIR="${CONTAINER_BIN_CACHE}"
 INSTALL_DIR="/opt"
 LATEST_TGZ="${CACHE_DIR}/${JULIA_TARBALL}"
 
-#--- Sub-block 8.5.2: Prepare cache directory ---
+#--- Sub-block 18.2: Prepare cache directory ---
 # Purpose: Create cache directory for Julia tarball
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 mkdir -p "${CACHE_DIR}"
 
-#--- Sub-block 8.5.3: Determine if Julia download needed ---
+#--- Sub-block 18.3: Determine if Julia download needed ---
 # Critical: Check if cached tarball exists and is valid
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4777,7 +4878,7 @@ else
   fi
 fi
 
-#--- Sub-block 8.5.4: Download Julia if needed ---
+#--- Sub-block 18.4: Download Julia if needed ---
 # Purpose: Fetch Julia tarball with retry logic
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4790,13 +4891,13 @@ if [ "${need_fetch}" -eq 1 ]; then
 fi
 # End download if block (self-contained)
 
-#--- Sub-block 8.5.5: Julia archive verification ---
+#--- Sub-block 18.5: Julia archive verification ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Note: Archive already verified in early verification phase
 echo "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
 
-#--- Sub-block 8.5.6: Optional GPG signature verification ---
+#--- Sub-block 18.6: Optional GPG signature verification ---
 # Purpose: Best-effort GPG verification (non-blocking)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4806,7 +4907,7 @@ mkdir -p "${GNUPGHOME}"
 chmod 700 "${GNUPGHOME}"
 # Download .asc file if available
 curl -fsSL --retry 3 "${JULIA_ASC_URL}" -o "${LATEST_TGZ}.asc" || true
-#--- Sub-block 8.5.7: Import Julia GPG key ---
+#--- Sub-block 18.7: Import Julia GPG key ---
 # Purpose: Load GPG key for signature verification
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4818,7 +4919,7 @@ else
 fi
 # End GPG key import (if-else self-contained)
 
-#--- Sub-block 8.5.8: Verify Julia GPG signature ---
+#--- Sub-block 18.8: Verify Julia GPG signature ---
 # Purpose: Verify .asc signature if available (non-blocking)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4833,7 +4934,7 @@ else
 fi
 # End GPG verification (if-else self-contained)
 
-#--- Sub-block 8.5.9: Extract and install Julia ---
+#--- Sub-block 18.9: Extract and install Julia ---
 # Critical: Extract Julia to /opt and create symlink
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -4849,7 +4950,7 @@ if ! ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"; then
 fi
 echo "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
 
-#--- Sub-block 8.5.10: Verify Julia installation ---
+#--- Sub-block 18.10: Verify Julia installation ---
 # Critical: Ensure julia binary is executable
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
@@ -4862,7 +4963,7 @@ if [ ! -x "${JULIA_BIN}" ]; then
 fi
 # End Julia verification (if self-contained)
 
-#--- Sub-block 8.5.11: Update PATH for Julia ---
+#--- Sub-block 18.11: Update PATH for Julia ---
 # Critical: Make Julia available for rest of build script
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
@@ -4884,12 +4985,18 @@ echo "✓ Julia is now available in the PATH."
 # Quick smoke test
 "${JULIA_BIN}" --version || true
 
-#--- Sub-block 8.5.12: Build libCxxWrap-julia from source ---
+#--- Sub-block 18.12: Build libCxxWrap-julia from source ---
 # Purpose: Build C++ wrapper library for Julia-C++ interop
 # Dependencies: Block 8.5 (Julia installation), PHASE 1 (Build tools)
 # Outputs: Julia packages, environments
 echo "==> Building libCxxWrap-julia from source for OpenCV/Integration"
 CXXWRAP_PREFIX="/opt/libcxxwrap-julia"
+if [ -z "${LIBCXXWRAP_JULIA_VERSION:-}" ]; then
+  echo "ERROR: LIBCXXWRAP_JULIA_VERSION is not set. Check /etc/config.sh."
+  exit 1
+fi
+LIBCXXWRAP_JULIA_TAG="${LIBCXXWRAP_JULIA_TAG:-v${LIBCXXWRAP_JULIA_VERSION}}"
+echo "  Using libcxxwrap-julia release ${LIBCXXWRAP_JULIA_TAG}"
 if [ -x "${JULIA_BIN:-}" ]; then
   if [ ! -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
     echo "Building libCxxWrap-julia from source..."
@@ -4901,7 +5008,10 @@ if [ -x "${JULIA_BIN:-}" ]; then
     # Clone and build
     BUILD_DIR="/tmp/cxxwrap_build"
     rm -rf "${BUILD_DIR}"
-    git clone -q --depth 1 https://github.com/JuliaInterop/libcxxwrap-julia.git "${BUILD_DIR}" || { echo "ERROR: Failed to clone libcxxwrap-julia"; exit 1; }
+    if ! clone_with_retry "https://github.com/JuliaInterop/libcxxwrap-julia.git" "${BUILD_DIR}" "${LIBCXXWRAP_JULIA_TAG}"; then
+      echo "ERROR: Failed to clone libcxxwrap-julia after all retry attempts"
+      exit 1
+    fi
     cd "${BUILD_DIR}" || { echo "ERROR: Failed to access libcxxwrap-julia directory"; exit 1; }
     # Clean build directory for fresh compilation
     rm -rf build
@@ -4919,7 +5029,7 @@ if [ -x "${JULIA_BIN:-}" ]; then
       exit 1
     fi
 
-    #--- Sub-block 8.5.13: Build and install CxxWrap ---
+    #--- Sub-block 18.13: Build and install CxxWrap ---
     # Critical: Compile with make using all CPU cores
     if ! make -j"$(nproc)"; then
       echo "ERROR: Build failed for libCxxWrap-julia"
@@ -4938,22 +5048,14 @@ if [ -x "${JULIA_BIN:-}" ]; then
   fi
   # End CxxWrap build check (if-else self-contained)
 
-#--- Sub-block: Section continuation (2149) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-  #--- Sub-block 8.5.14: Fix CMake target export for CxxWrap ---
+  #--- Sub-block 18.14: Fix CMake target export for CxxWrap ---
   # Critical: Ensure OpenCV can find JlCxx CMake target
   if ! grep -q "JlCxx::cxxwrap_julia" "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake"; then
     echo "Adding CMake target export to JlCxxConfig.cmake..."
     cat >> "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" << 'CMAKE_FIX'
 
 
-#--- Sub-block: Code section 2122 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 8.5 (Julia installation)
-# Outputs: Julia packages, environments
 # =================================================
 # Exported target for OpenCV integration
 # =================================================
@@ -4976,13 +5078,18 @@ CMAKE_FIX
   fi
   # End CMake target fix (if self-contained)
 
-  #--- Sub-block 8.5.15: Configure CMAKE_PREFIX_PATH for CxxWrap ---
+  #--- Sub-block 18.15: Configure CMAKE_PREFIX_PATH for CxxWrap ---
   # Critical: Make CxxWrap findable by CMake for OpenCV build
-  export CMAKE_PREFIX_PATH="${CXXWRAP_PREFIX}:${CMAKE_PREFIX_PATH:-}"
-  # Make permanent for future sessions
-  echo "export CMAKE_PREFIX_PATH=\"${CXXWRAP_PREFIX}:\${CMAKE_PREFIX_PATH}\"" >> /etc/profile.d/cxxwrap.sh
+  case ":${CMAKE_PREFIX_PATH:-}:" in
+    *":${CXXWRAP_PREFIX}:"*) ;;
+    *) export CMAKE_PREFIX_PATH="${CXXWRAP_PREFIX}:${CMAKE_PREFIX_PATH:-}" ;;
+  esac
+  # Make permanent for future sessions (idempotent append)
+  if ! grep -Fq 'CMAKE_PREFIX_PATH' /etc/profile.d/cxxwrap.sh 2>/dev/null; then
+    printf 'export CMAKE_PREFIX_PATH="%s:${CMAKE_PREFIX_PATH}"\n' "${CXXWRAP_PREFIX}" >> /etc/profile.d/cxxwrap.sh
+  fi
 
-  #--- Sub-block 8.5.16: Verify CxxWrap CMake configuration ---
+  #--- Sub-block 18.16: Verify CxxWrap CMake configuration ---
   # Critical: Ensure JlCxx CMake config file exists
   if [ -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
     echo "✓ JlCxx CMake config ready"
@@ -4996,13 +5103,9 @@ fi
 debug_glibc "After CxxWrap source build"
 echo "CxxWrap source build ready for OpenCV"
 
-#--- Sub-block: Section continuation (2200) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 #===============================================================================
-# BLOCK 9: NVIDIA VIDEO CODEC SDK INSTALLATION
+# BLOCK 19: NVIDIA VIDEO CODEC SDK INSTALLATION
 #===============================================================================
 # Purpose: Install NVIDIA Video Codec SDK for hardware video encoding/decoding
 # Self-contained: Yes (complete with verification)
@@ -5012,11 +5115,11 @@ echo "CxxWrap source build ready for OpenCV"
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 8.5.13: libCxxWrap-julia build complete ---
+#--- Sub-block 19.1: libCxxWrap-julia build complete ---
 # Purpose: C++ wrapper for Julia integration
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 9.1: Initialize NVIDIA SDK installation ---
+#--- Sub-block 19.2: Initialize NVIDIA SDK installation ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> Installing NVIDIA Video Codec SDK from cache..."
@@ -5026,7 +5129,7 @@ SDK_VERSION="${NVIDIA_VIDEO_SDK_VERSION}"
 SDK_ZIP_FILENAME="Video_Codec_SDK_${SDK_VERSION}.zip"
 SDK_ZIP_CACHE_PATH="${CONTAINER_BIN_CACHE}/${SDK_ZIP_FILENAME}"
 
-#--- Sub-block 9.2: Check for cached SDK file ---
+#--- Sub-block 19.3: Check for cached SDK file ---
 # Critical: SDK is optional - if not present, skip installation (don't fail build)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5058,7 +5161,7 @@ fi
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   echo "  → Proceeding with NVIDIA Video Codec SDK installation"
   
-  #--- Sub-block 9.3: Extract NVIDIA SDK ---
+  #--- Sub-block 19.4: Extract NVIDIA SDK ---
   # Purpose: Unzip SDK to /tmp
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
@@ -5068,7 +5171,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
     exit 1
   fi
 
-  #--- Sub-block 9.4: Move SDK to /opt ---
+  #--- Sub-block 19.5: Move SDK to /opt ---
   # Purpose: Install SDK to system location
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
@@ -5084,7 +5187,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
     sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
   fi
 
-  #--- Sub-block 9.5: Set SDK ownership and permissions ---
+  #--- Sub-block 19.6: Set SDK ownership and permissions ---
   # Purpose: Ensure SDK is accessible without sudo
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
@@ -5099,7 +5202,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   fi
   echo "SDK successfully moved to /opt/Video_Codec_SDK"
 
-  #--- Sub-block 9.6: Copy SDK headers to system locations ---
+  #--- Sub-block 19.7: Copy SDK headers to system locations ---
   # Critical: Make headers available for FFmpeg/OpenCV compilation
   # Dependencies: Block 6.13 (NVIDIA CUDA)
   # Outputs: GPU libraries, CUDA toolkit
@@ -5110,7 +5213,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
     echo "WARNING: Failed to copy SDK headers to CUDA include directory"
   fi
 
-  #--- Sub-block 9.7: Verify SDK header installation ---
+  #--- Sub-block 19.8: Verify SDK header installation ---
   # Critical: Ensure required headers are in place
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
@@ -5123,7 +5226,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   fi
   # End SDK header verification (if-else self-contained)
 
-  #--- Sub-block 9.8: Cleanup temporary SDK files ---
+  #--- Sub-block 19.9: Cleanup temporary SDK files ---
   # Purpose: Remove temporary extraction files
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
@@ -5139,7 +5242,7 @@ fi
 # End NVIDIA Video SDK installation (conditional based on file presence)
 
 #===============================================================================
-# BLOCK 10: PHASE 4 - OPENCV COMPILATION
+# BLOCK 20: PHASE 4 - OPENCV COMPILATION
 #===============================================================================
 # Purpose: Compile OpenCV from source with CUDA, TBB, and all accelerations
 # Self-contained: Yes (complete build with verification)
@@ -5148,13 +5251,13 @@ fi
 # NOTE: OpenCV 4.12.0 compiled with full GPU acceleration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 10.1: Phase 4 initialization ---
+#--- Sub-block 20.1: Phase 4 initialization ---
 # Purpose: Initialize OpenCV build environment
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo -e "\n${BLUE}### PHASE 4: Compiling OpenCV from source ###${NC}"
 
-#--- Sub-block 10.2: Cleanup previous build attempts ---
+#--- Sub-block 20.2: Cleanup previous build attempts ---
 # Purpose: Ensure clean build environment
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5162,7 +5265,7 @@ echo -e "\n${BLUE}### PHASE 4: Compiling OpenCV from source ###${NC}"
 cd / || true
 rm -rf /tmp/opencv /tmp/opencv_contrib
 
-#--- Sub-block 10.3: Configure OpenCV version and paths ---
+#--- Sub-block 20.3: Configure OpenCV version and paths ---
 # Critical: Pin OpenCV version for consistency (using version from config.sh)
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -5174,7 +5277,7 @@ echo "========================================="
 echo "OpenCV ${OPENCV_VERSION} Build Automation"
 echo "========================================="
 
-#--- Sub-block 10.4: Install OpenCV build dependencies ---
+#--- Sub-block 20.4: Install OpenCV build dependencies ---
 # Critical: Install all required libraries for OpenCV compilation
 # Dependencies: Block 6 (APT configuration), PHASE 1 (Build tools), PHASE 1 (Compilers)
 # Outputs: Installed packages
@@ -5240,7 +5343,7 @@ else
   echo "No optional OpenCV packages to install"
 fi
 
-#--- Sub-block 10.5: Download OpenCV source code ---
+#--- Sub-block 20.5: Download OpenCV source code ---
 # Purpose: Clone OpenCV core and contrib modules
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5257,7 +5360,7 @@ if ! clone_with_retry "https://github.com/opencv/opencv_contrib.git" "/tmp/openc
     exit 1
 fi
 
-#--- Sub-block 10.6: Create OpenCV build directory ---
+#--- Sub-block 20.6: Create OpenCV build directory ---
 # Purpose: Prepare build directory for CMake
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5267,14 +5370,14 @@ rm -rf build
 mkdir -p build
 cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
-#--- Sub-block 10.7: Configure build environment variables ---
+#--- Sub-block 20.7: Configure build environment variables ---
 # Critical: Set PKG_CONFIG_PATH and LIBRARY_PATH for dependencies
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
 export LIBRARY_PATH="${LIBRARY_PATH}:/usr/lib/x86_64-linux-gnu"
 
-#--- Sub-block 10.8: Configure OpenCV with CMake ---
+#--- Sub-block 20.8: Configure OpenCV with CMake ---
 # Critical: Comprehensive CMake configuration with all features enabled
 # Dependencies: PHASE 1 (Build tools), PHASE 1 (Compilers), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -5323,130 +5426,132 @@ if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
 fi
 
 # Build OpenCV CMake command (base configuration)
-OPENCV_CMAKE_CMD="cmake -G Ninja \
-  -D CPU_BASELINE=AVX2 \
-  -D CPU_DISPATCH=AVX2,FP16,AVX512_SKX \
-  -D CMAKE_BUILD_TYPE=Release \
-  -D CMAKE_C_COMPILER=/usr/bin/gcc-12 \
-  -D CMAKE_CXX_COMPILER=/usr/bin/g++-12 \
-  -D CUDA_HOST_COMPILER=/usr/bin/g++-12 \
-  -D CMAKE_INSTALL_PREFIX=\"${INSTALL_PREFIX}\" \
-  -D CMAKE_POLICY_DEFAULT_CMP0146=OLD \
-  -D OPENCV_EXTRA_MODULES_PATH=/tmp/opencv_contrib/modules \
-  -D BUILD_SHARED_LIBS=ON \
-  -D CMAKE_C_COMPILER_LAUNCHER=ccache \
-  -D CMAKE_CXX_COMPILER_LAUNCHER=ccache \
-  -D OPENCV_GENERATE_PKGCONFIG=ON \
-  -D CMAKE_C_COMPILER_WORKS=TRUE \
-  -D CMAKE_CXX_COMPILER_WORKS=TRUE \
-  -D CUDA_NVCC_FLAGS=\"${OPENCV_CUDA_NVCC_FLAGS}\" \
-  -D CMAKE_CUDA_FLAGS=\"${OPENCV_CUDA_FLAGS}\" \
-  -D WITH_CUDA=ON \
-  -D WITH_CUDNN=ON \
-  -D WITH_OPENBLAS=ON \
-  -D CUDA_ARCH_BIN=\"${CUDA_ARCH}\" \
-  -D CUDA_ARCH_PTX=\"${CUDA_ARCH}\" \
-  -D OPENCV_DNN_CUDA=ON \
-  -D OPENCV_DNN_CUDA_VERSION=${CUDA_VERSION} \
-  -D CUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-${CUDA_VERSION} \
-  -D ENABLE_FAST_MATH=1 \
-  -D CUDA_FAST_MATH=1 \
-  -D WITH_CUBLAS=1 \
-  -D WITH_CUFFT=ON \
-  -D WITH_OPENGL=ON \
-  -D WITH_TBB=ON \
-  -D WITH_EIGEN=ON \
-  -D WITH_FFMPEG=ON \
-  -D WITH_GSTREAMER=ON \
-  -D WITH_LAPACK=ON \
-  -D WITH_TIFF=ON \
-  -D WITH_OPENMP=ON \
-  -D JlCxx_DIR=\"${JULIA_HOME}/CxxWrap/deps/build/JlCxx/\" \
-  -D LAPACK_ENABLE_LAPACKE=ON \
-  -D WITH_VTK=ON \
-  -D VTK_DIR=/usr/lib/x86_64-linux-gnu/cmake/vtk-9.3 \
-  -D OPENCV_ENABLE_NONFREE=ON \
-  -D BUILD_EXAMPLES=OFF \
-  -D BUILD_TESTS=OFF \
-  -D BUILD_PERF_TESTS=OFF \
-  -D BUILD_DOCS=OFF \
-  -D WITH_IPP=OFF \
-  -D BUILD_opencv_apps=OFF \
-  -D BUILD_opencv_sfm=OFF \
-  -D BUILD_opencv_python3=ON \
-  -D BUILD_opencv_cudacodec=ON \
-  -D BUILD_opencv_cudaarithm=ON \
-  -D BUILD_opencv_cudev=ON \
-  -D BUILD_opencv_cudafeatures2d=ON \
-  -D BUILD_opencv_cudafilters=ON \
-  -D BUILD_opencv_cudaimgproc=ON \
-  -D BUILD_opencv_cudalegacy=ON \
-  -D BUILD_opencv_cudaobjdetect=ON \
-  -D BUILD_opencv_cudaoptflow=ON \
-  -D BUILD_opencv_cudastereo=ON \
-  -D BUILD_opencv_cudawarping=ON \
-  -D BUILD_opencv_julia=OFF \
-  -D PYTHON3_EXECUTABLE=/usr/bin/python3 \
-  -D PYTHON3_INCLUDE_DIR=/usr/include/python${SYSTEM_PYTHON_VER} \
-  -D PYTHON3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython${SYSTEM_PYTHON_VER}.so \
-  -D PYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include \
-  -D TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
-  -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
-  -D BLAS_LIBRARIES=/usr/local/lib/libopenblas.so \
-  -D BLA_VENDOR=OpenBLAS \
-  -D LAPACK_LIBRARIES=\"/usr/local/lib/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3\" \
-  -D LAPACK_LIBRARY=/usr/local/lib/libopenblas.so \
-  -D LAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3 \
-  -D LAPACK_LIBRARY_DEBUG=/usr/local/lib/libopenblas.so \
-  -D LAPACK_CBLAS_H=/usr/local/include/cblas.h \
-  -D LAPACK_LAPACKE_H=/usr/include/lapacke.h \
-  -D OpenBLAS_LIB=/usr/local/lib/libopenblas.so \
-  -D OpenBLAS_INCLUDE_DIR=/usr/local/include \
-  -D CMAKE_INSTALL_RPATH=\"/usr/local/lib\" \
-  -D CMAKE_C_STANDARD=17 \
-  -D CMAKE_CXX_STANDARD=17 \
-  -D CMAKE_CUDA_STANDARD=17 \
-  -D CMAKE_C_STANDARD_REQUIRED=ON \
-  -D CMAKE_CXX_STANDARD_REQUIRED=ON \
-  -D CMAKE_CUDA_STANDARD_REQUIRED=ON \
-  -D CMAKE_INCLUDE_PATH=\"/usr/include/x86_64-linux-gnu;/usr/include\" \
-  -D CMAKE_CXX_FLAGS=\"-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp\" \
-  -D CMAKE_C_FLAGS=\"-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp\" \
-  -D CMAKE_EXE_LINKER_FLAGS=\"-flto -fopenmp\" \
-  -D CMAKE_MODULE_LINKER_FLAGS=\"-flto -fopenmp\" \
-  -D CMAKE_SHARED_LINKER_FLAGS=\"-flto -fopenmp\" \
-  -D ENABLE_PRECOMPILED_HEADERS=ON \
-  -D CV_ENABLE_INTRINSICS=ON \
-  -D PARALLEL_ENABLE_PLUGINS=ON \
-  -D Julia_EXECUTABLE=\"${JULIA_HOME}/bin/julia\" \
-  -D Julia_INCLUDE_DIRS=\"${JULIA_HOME}/include/julia\" \
-  -D Julia_LIBRARIES=\"${JULIA_HOME}/lib/libjulia.so\" \
-  -D JlCxx_DIR=\"/opt/libcxxwrap-julia/lib/cmake/JlCxx\" \
-  -D CMAKE_PREFIX_PATH=\"/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}\" \
-  -D CMAKE_IGNORE_PATH=\"/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl\"
-"
-
+OPENCV_CMAKE_ARGS=(
+  -G "Ninja"
+  "-DCPU_BASELINE=AVX2"
+  "-DCPU_DISPATCH=AVX2,FP16,AVX512_SKX"
+  "-DCMAKE_BUILD_TYPE=Release"
+  "-DCMAKE_C_COMPILER=/usr/bin/gcc-12"
+  "-DCMAKE_CXX_COMPILER=/usr/bin/g++-12"
+  "-DCUDA_HOST_COMPILER=/usr/bin/g++-12"
+  "-DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX}"
+  "-DCMAKE_POLICY_DEFAULT_CMP0146=OLD"
+  "-DOPENCV_EXTRA_MODULES_PATH=/tmp/opencv_contrib/modules"
+  "-DBUILD_SHARED_LIBS=ON"
+  "-DCMAKE_C_COMPILER_LAUNCHER=ccache"
+  "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+  "-DOPENCV_GENERATE_PKGCONFIG=ON"
+  "-DCMAKE_C_COMPILER_WORKS=TRUE"
+  "-DCMAKE_CXX_COMPILER_WORKS=TRUE"
+  "-DCUDA_NVCC_FLAGS=${OPENCV_CUDA_NVCC_FLAGS}"
+  "-DCMAKE_CUDA_FLAGS=${OPENCV_CUDA_FLAGS}"
+  "-DWITH_CUDA=ON"
+  "-DWITH_CUDNN=ON"
+  "-DWITH_OPENBLAS=ON"
+  "-DCUDA_ARCH_BIN=${CUDA_ARCH}"
+  "-DCUDA_ARCH_PTX=${CUDA_ARCH}"
+  "-DOPENCV_DNN_CUDA=ON"
+  "-DOPENCV_DNN_CUDA_VERSION=${CUDA_VERSION}"
+  "-DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda-${CUDA_VERSION}"
+  "-DENABLE_FAST_MATH=1"
+  "-DCUDA_FAST_MATH=1"
+  "-DWITH_CUBLAS=1"
+  "-DWITH_CUFFT=ON"
+  "-DWITH_OPENGL=ON"
+  "-DWITH_TBB=ON"
+  "-DWITH_EIGEN=ON"
+  "-DWITH_FFMPEG=ON"
+  "-DWITH_GSTREAMER=ON"
+  "-DWITH_LAPACK=ON"
+  "-DWITH_TIFF=ON"
+  "-DWITH_OPENMP=ON"
+  "-DJlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/"
+  "-DLAPACK_ENABLE_LAPACKE=ON"
+  "-DWITH_VTK=ON"
+  "-DVTK_DIR=/usr/lib/x86_64-linux-gnu/cmake/vtk-9.3"
+  "-DOPENCV_ENABLE_NONFREE=ON"
+  "-DBUILD_EXAMPLES=OFF"
+  "-DBUILD_TESTS=OFF"
+  "-DBUILD_PERF_TESTS=OFF"
+  "-DBUILD_DOCS=OFF"
+  "-DWITH_IPP=OFF"
+  "-DBUILD_opencv_apps=OFF"
+  "-DBUILD_opencv_sfm=OFF"
+  "-DBUILD_opencv_python3=ON"
+  "-DBUILD_opencv_cudacodec=ON"
+  "-DBUILD_opencv_cudaarithm=ON"
+  "-DBUILD_opencv_cudev=ON"
+  "-DBUILD_opencv_cudafeatures2d=ON"
+  "-DBUILD_opencv_cudafilters=ON"
+  "-DBUILD_opencv_cudaimgproc=ON"
+  "-DBUILD_opencv_cudalegacy=ON"
+  "-DBUILD_opencv_cudaobjdetect=ON"
+  "-DBUILD_opencv_cudaoptflow=ON"
+  "-DBUILD_opencv_cudastereo=ON"
+  "-DBUILD_opencv_cudawarping=ON"
+  "-DBUILD_opencv_julia=OFF"
+  "-DPYTHON3_EXECUTABLE=/usr/bin/python3"
+  "-DPYTHON3_INCLUDE_DIR=/usr/include/python${SYSTEM_PYTHON_VER}"
+  "-DPYTHON3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython${SYSTEM_PYTHON_VER}.so"
+  "-DPYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include"
+  "-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  "-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"
+  "-DBLAS_LIBRARIES=/usr/local/lib/libopenblas.so"
+  "-DBLA_VENDOR=OpenBLAS"
+  "-DLAPACK_LIBRARIES=/usr/local/lib/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3"
+  "-DLAPACK_LIBRARY=/usr/local/lib/libopenblas.so"
+  "-DLAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3"
+  "-DLAPACK_LIBRARY_DEBUG=/usr/local/lib/libopenblas.so"
+  "-DLAPACK_CBLAS_H=/usr/local/include/cblas.h"
+  "-DLAPACK_LAPACKE_H=/usr/include/lapacke.h"
+  "-DOpenBLAS_LIB=/usr/local/lib/libopenblas.so"
+  "-DOpenBLAS_INCLUDE_DIR=/usr/local/include"
+  "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
+  "-DCMAKE_C_STANDARD=17"
+  "-DCMAKE_CXX_STANDARD=17"
+  "-DCMAKE_CUDA_STANDARD=17"
+  "-DCMAKE_C_STANDARD_REQUIRED=ON"
+  "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
+  "-DCMAKE_CUDA_STANDARD_REQUIRED=ON"
+  "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include"
+  "-DCMAKE_CXX_FLAGS=-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
+  "-DCMAKE_C_FLAGS=-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
+  "-DCMAKE_EXE_LINKER_FLAGS=-flto -fopenmp"
+  "-DCMAKE_MODULE_LINKER_FLAGS=-flto -fopenmp"
+  "-DCMAKE_SHARED_LINKER_FLAGS=-flto -fopenmp"
+  "-DENABLE_PRECOMPILED_HEADERS=ON"
+  "-DCV_ENABLE_INTRINSICS=ON"
+  "-DPARALLEL_ENABLE_PLUGINS=ON"
+  "-DJulia_EXECUTABLE=${JULIA_HOME}/bin/julia"
+  "-DJulia_INCLUDE_DIRS=${JULIA_HOME}/include/julia"
+  "-DJulia_LIBRARIES=${JULIA_HOME}/lib/libjulia.so"
+  "-DJlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx"
+  "-DCMAKE_PREFIX_PATH=/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}"
+  "-DCMAKE_IGNORE_PATH=/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl"
+)
 # Add NVIDIA Video Codec SDK support to OpenCV if SDK is installed
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
   echo "  → Adding NVIDIA Video Codec SDK support to OpenCV configuration"
-  OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} \\
-  -D VIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK \\
-  -D WITH_NVCUVID=ON \\
-  -D WITH_NVCUVENC=ON \\
-  -D NVCUVID_HEADER_DIR=/usr/local/include/"
+  OPENCV_CMAKE_ARGS+=(
+    "-DVIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK"
+    "-DWITH_NVCUVID=ON"
+    "-DWITH_NVCUVENC=ON"
+    "-DNVCUVID_HEADER_DIR=/usr/local/include/"
+  )
 else
   echo "  → OpenCV will be built without NVIDIA Video Codec SDK support (SDK not installed)"
-  OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} \\
-  -D WITH_NVCUVID=OFF \\
-  -D WITH_NVCUVENC=OFF"
+  OPENCV_CMAKE_ARGS+=(
+    "-DWITH_NVCUVID=OFF"
+    "-DWITH_NVCUVENC=OFF"
+  )
+fi
+# Execute the CMake command
+if ! cmake "${OPENCV_CMAKE_ARGS[@]}" ..; then
+  echo "ERROR: Failed to configure OpenCV with CMake"
+  exit 1
 fi
 
-OPENCV_CMAKE_CMD="${OPENCV_CMAKE_CMD} .."
-
-# Execute the CMake command
-eval "${OPENCV_CMAKE_CMD}"
-
-#--- Sub-block 10.9: Verify OpenCV CMake configuration ---
+#--- Sub-block 20.9: Verify OpenCV CMake configuration ---
 # Critical: Check that key dependencies were detected and verify TBB is from system (not MKL)
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -5479,7 +5584,7 @@ fi
 echo "Configuration summary:"
 grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 
-#--- Sub-block 10.10: Build OpenCV with ninja ---
+#--- Sub-block 20.10: Build OpenCV with ninja ---
 # Critical: Compile OpenCV using memory-aware job calculation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5498,20 +5603,20 @@ if ! ninja -j"${BUILD_JOBS}"; then
     fi
 fi
 
-#--- Sub-block 10.11: Install OpenCV ---
+#--- Sub-block 20.11: Install OpenCV ---
 # Purpose: Install compiled OpenCV libraries to system
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Installing..."
 ninja install || { echo "ERROR: Failed to install OpenCV"; exit 1; }
 
-#--- Sub-block 10.12: Update linker cache ---
+#--- Sub-block 20.12: Update linker cache ---
 # Critical: Ensure OpenCV libraries are in linker cache
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-ldconfig
+run_ldconfig_refresh
 
-#--- Sub-block 10.13: Verify OpenCV installation ---
+#--- Sub-block 20.13: Verify OpenCV installation ---
 # Critical: Test OpenCV Python bindings and CUDA support
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -5523,7 +5628,7 @@ pkg-config --modversion opencv4 || echo "pkg-config not found (normal for some b
 echo "Build complete!"
 echo "==============="
 
-#--- Sub-block 10.13.1: Protect compiled OpenCV from APT overwrites ---
+#--- Sub-block 20.14: Protect compiled OpenCV from APT overwrites ---
 # Critical: Prevent APT from installing ANY system OpenCV packages
 # Strategy: Use APT pinning with negative priority to block ALL libopencv-* packages
 # Benefits: Simple, robust, survives apt-mark unhold, no dummy packages needed
@@ -5581,12 +5686,30 @@ if [ -f "/etc/apt/preferences.d/block-system-opencv" ] && grep -q "Pin-Priority:
     OPENCV_VERIFICATION_PASSED=true
 fi
 
-# Method 2: Try to verify with apt-cache (may not work in all environments)
-if apt-cache policy libopencv-dev 2>/dev/null | grep -qi "pin.*-1\|candidate.*none"; then
-    echo "✓ OpenCV protection verified via apt-cache (packages blocked)"
-    OPENCV_VERIFICATION_PASSED=true
-elif ! apt-cache show libopencv-dev &>/dev/null; then
-    echo "✓ OpenCV protection verified (system packages not in repository)"
+# Method 2: Use python-apt to confirm the package is pinned or unavailable
+if python3 - <<'PY'
+import apt
+import sys
+pkg_name = "libopencv-dev"
+try:
+    cache = apt.Cache()
+except Exception:
+    sys.exit(1)
+if pkg_name not in cache:
+    sys.exit(0)
+pkg = cache[pkg_name]
+candidate = pkg.candidate
+if candidate is None:
+    sys.exit(0)
+priority = getattr(candidate, 'policy_priority', None)
+if priority is None:
+    sys.exit(1)
+if priority <= 0:
+    sys.exit(0)
+sys.exit(1)
+PY
+then
+    echo "✓ OpenCV protection verified via python-apt policy check (packages blocked)"
     OPENCV_VERIFICATION_PASSED=true
 fi
 
@@ -5597,7 +5720,7 @@ else
     echo "  This is usually fine - APT pinning is active even if verification fails"
 fi
 
-#--- Sub-block 10.14: Cleanup OpenCV build files ---
+#--- Sub-block 20.15: Cleanup OpenCV build files ---
 # Purpose: Remove temporary build files
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5606,7 +5729,7 @@ cd /
 rm -rf /tmp/opencv /tmp/opencv_contrib
 
 #===============================================================================
-# BLOCK 11: JULIA ENVIRONMENT SETUP
+# BLOCK 21: JULIA ENVIRONMENT SETUP
 #===============================================================================
 # Purpose: Configure Julia package environments for robotics and CUDA workflows
 # Self-contained: Yes (complete with CxxWrap integration)
@@ -5615,14 +5738,14 @@ rm -rf /tmp/opencv /tmp/opencv_contrib
 # NOTE: Must run after OpenCV build to ensure CxxWrap integration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 11.1: Initialize Julia environment setup ---
+#--- Sub-block 21.1: Initialize Julia environment setup ---
 # Dependencies: Block 8.5 (Julia installation), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 echo "==> Julia ${JULIA_LTS_VER:-1.10.x} install & envs"
 if [ -x "${JULIA_BIN:-}" ]; then
   echo "Julia installed successfully"
 
-  #--- Sub-block 11.2: Create CxxWrap artifact override ---
+  #--- Sub-block 21.2: Create CxxWrap artifact override ---
   # Critical: Force Julia to use source-built CxxWrap instead of binary JLL
   mkdir -p /root/.julia/artifacts
   cat > /root/.julia/artifacts/Overrides.toml << 'OVERRIDE'
@@ -5632,49 +5755,45 @@ libcxxwrap_julia = "/opt/libcxxwrap-julia"
 OVERRIDE
   echo "✓ Artifact override created for CxxWrap source build"
 
-  #--- Sub-block 11.3: Setup Julia base environment ---
+  #--- Sub-block 21.3: Setup Julia base environment ---
   # Purpose: Update base environment and install IJulia for Jupyter
   echo "Setting up Julia base environment..."
   "${JULIA_BIN}" -e 'using Pkg; Pkg.update(); Pkg.add(["IJulia"]); using IJulia;' || echo "[warn] IJulia setup failed"
 
-  #--- Sub-block 11.4: Install CxxWrap Julia package ---
+  #--- Sub-block 21.4: Install CxxWrap Julia package ---
   # Critical: Install CxxWrap package using source build via artifact override
   echo "Installing CxxWrap Julia package (will use source build)..."
-  if ! "${JULIA_BIN}" -e 'using Pkg; Pkg.add("CxxWrap"); Pkg.build("CxxWrap")'; then
+  if [ -z "${CXXWRAP_JL_VERSION:-}" ]; then
+    echo "ERROR: CXXWRAP_JL_VERSION is not set. Check /etc/config.sh."
+    exit 1
+  fi
+  if ! "${JULIA_BIN}" -e "using Pkg; Pkg.add(PackageSpec(name=\"CxxWrap\", version=\"${CXXWRAP_JL_VERSION}\")); Pkg.build(\"CxxWrap\")"; then
     echo "[warn] CxxWrap Julia package installation failed"
   fi
 
-  #--- Sub-block 11.5: Verify CxxWrap source build usage ---
+  #--- Sub-block 21.5: Verify CxxWrap source build usage ---
   # Purpose: Confirm Julia is using our source-built CxxWrap
   "${JULIA_BIN}" -e 'using CxxWrap; build_path = CxxWrap.prefix_path(); println("✓ CxxWrap using: ", build_path); if !occursin("/opt/libcxxwrap-julia", build_path) @warn "CxxWrap may not be using source build! Path: $build_path" end' || echo "[warn] CxxWrap Julia package setup failed"
 
-  #--- Sub-block 11.6: Create robotics Julia environment ---
+  #--- Sub-block 21.6: Create robotics Julia environment ---
   # Purpose: Set up dedicated environment for robotics packages
   echo "Setting up Julia robotics environment..."
   mkdir -p "${JULIA_HOME}envs"
   "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/robotics_env\"); Pkg.add([\"RigidBodyDynamics\", \"MeshCat\", \"ControlSystems\", \"DifferentialEquations\", \"ForwardDiff\", \"StaticArrays\", \"Rotations\", \"CoordinateTransformations\", \"Interpolations\", \"Optim\"]); Pkg.precompile()" || echo "[warn] Robotic env setup failed"
 
-  #--- Sub-block 11.7: Create CUDA Julia environment ---
+  #--- Sub-block 21.7: Create CUDA Julia environment ---
   # Purpose: Set up dedicated environment for CUDA packages
   echo "Setting up Julia CUDA environment..."
   "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/cuda_env\"); Pkg.instantiate()" || echo "[warn] CUDA env setup failed"
 
-  #--- Sub-block 11.8: Register IJulia kernel ---
+  #--- Sub-block 21.8: Register IJulia kernel ---
   # Purpose: Make Julia available in Jupyter notebooks
   echo "Registering Julia kernel..."
   "${JULIA_BIN}" -e 'using IJulia; IJulia.installkernel("Julia 1.10 (base)", "--project=@.")' || echo "[warn] Julia kernel registration failed"
 
-#--- Sub-block: Section continuation (2530) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 2491 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-  #--- Sub-block 11.9: Create GPU precompile helper script ---
+  #--- Sub-block 21.9: Create GPU precompile helper script ---
   # Purpose: Helper script for precompiling Julia CUDA packages on GPU systems
   cat > /usr/local/bin/precompile_julia_cuda.sh << 'EOS'
 #!/usr/bin/env bash
@@ -5713,17 +5832,13 @@ fi
 '
 EOS
 
-#--- Sub-block: Section continuation (2572) ---
-# Purpose: Implementation details
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
 
-  #--- Sub-block 11.10: Make precompile script executable ---
+  #--- Sub-block 21.10: Make precompile script executable ---
   # Purpose: Set permissions and convert line endings
   chmod 0755 /usr/local/bin/precompile_julia_cuda.sh
   dos2unix -q /usr/local/bin/precompile_julia_cuda.sh 2>/dev/null || true
 
-  #--- Sub-block 11.11: Run GPU precompile (non-fatal) ---
+  #--- Sub-block 21.11: Run GPU precompile (non-fatal) ---
   # Purpose: Precompile Julia CUDA packages if GPU available
   if [ -x /usr/local/bin/precompile_julia_cuda.sh ]; then
     /usr/local/bin/precompile_julia_cuda.sh || true
@@ -5733,15 +5848,11 @@ else
 fi
 # End Julia environment setup (if block self-contained)
 
-#--- Sub-block: Code section 2544 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 debug_glibc "After Julia environment setup"
 debug_glibc "After OpenCV Compile and Install"
 
 #===============================================================================
-# BLOCK 12: PHASE 5 - ROS 2 VISION LIBRARY RECOMPILATION
+# BLOCK 22: PHASE 5 - ROS 2 VISION LIBRARY RECOMPILATION
 #===============================================================================
 # Purpose: Recompile cv_bridge and vision_opencv against custom OpenCV
 # Self-contained: Yes (complete rebuild with verification)
@@ -5751,43 +5862,43 @@ debug_glibc "After OpenCV Compile and Install"
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 11.2: Julia environments setup complete ---
+#--- Sub-block 22.1: Julia environments setup complete ---
 # Purpose: Robotics and CUDA environments ready
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 12.1: Phase 5 initialization ---
+#--- Sub-block 22.2: Phase 5 initialization ---
 # Purpose: Begin ROS 2 vision library recompilation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo -e "\n${BLUE}### PHASE 5: Recompiling ROS 2 vision libraries against custom OpenCV ###${NC}"
 PHASE5_SUCCESS=true
 
-#--- Sub-block 12.2: Source ROS 2 environment ---
+#--- Sub-block 22.3: Source ROS 2 environment ---
 # Critical: Load ROS 2 environment for colcon build tools
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 source /opt/ros/${ROS_DISTRO}/setup.bash
 
-#--- Sub-block 12.3: Create ROS overlay workspace ---
+#--- Sub-block 22.4: Create ROS overlay workspace ---
 # Purpose: Create colcon workspace for custom-built packages
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 mkdir -p /ros_overlay_ws/src
 cd /ros_overlay_ws
 
-#--- Sub-block 12.4: Clone vision_opencv source ---
+#--- Sub-block 22.5: Clone vision_opencv source ---
 # Purpose: Get cv_bridge and vision_opencv source code
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 git clone --branch rolling https://github.com/ros-perception/vision_opencv.git src/vision_opencv || { echo "ERROR: Failed to clone vision_opencv"; exit 1; }
 
-#--- Sub-block 12.5: Build vision_opencv with custom OpenCV ---
+#--- Sub-block 22.6: Build vision_opencv with custom OpenCV ---
 # Critical: Compile against our optimized OpenCV in /usr/local
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 colcon build --cmake-args -D CMAKE_BUILD_TYPE=Release -D CMAKE_POLICY_DEFAULT_CMP0146=OLD -D CMAKE_SHARED_LINKER_FLAGS="-flto" -D CMAKE_EXE_LINKER_FLAGS="-flto"
 
-#--- Sub-block 12.6: Verify cv_bridge linkage ---
+#--- Sub-block 22.7: Verify cv_bridge linkage ---
 # Critical: Confirm cv_bridge uses custom OpenCV
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5804,7 +5915,7 @@ else
 fi
 # End cv_bridge verification (if-else self-contained)
 
-#--- Sub-block 12.7: Configure automatic overlay sourcing ---
+#--- Sub-block 22.8: Configure automatic overlay sourcing ---
 # Purpose: Make overlay active in all new shell sessions
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5812,7 +5923,7 @@ echo "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc
 
 debug_glibc "After building ROS2 CV_Bridge"
 
-#--- Sub-block 12.8: POST-ROS CHECK - Verify no system Ceres was installed ---
+#--- Sub-block 22.9: POST-ROS CHECK - Verify no system Ceres was installed ---
 # CRITICAL: Ensure ROS dependencies didn't pull in system Ceres packages
 # Dependencies: Block 12 (ROS overlay compilation)
 # Outputs: Warning if system Ceres detected
@@ -5821,14 +5932,31 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "POST-ROS CHECK: Verifying no system Ceres was installed"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
-if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1 || dpkg -s libceres3 >/dev/null 2>&1; then
+CERES_PACKAGE_CANDIDATES=(
+    "libceres-dev"
+    "libceres2"
+    "libceres3"
+)
+CERES_INSTALLED_PACKAGES=()
+for pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
+    if resolved_pkg=$(dpkg_resolve_installed_package "${pkg}" 2>/dev/null); then
+        CERES_INSTALLED_PACKAGES+=("${resolved_pkg}")
+    fi
+done
+
+if [ ${#CERES_INSTALLED_PACKAGES[@]} -gt 0 ]; then
     echo "⚠️  WARNING: System Ceres packages were installed during ROS operations!"
-    dpkg -l | grep libceres | sed 's/^/  /'
+    for installed_pkg in "${CERES_INSTALLED_PACKAGES[@]}"; do
+        echo "  ${installed_pkg}"
+    done
     echo ""
     echo "Removing system Ceres to prevent conflicts with /usr/local Ceres..."
-    apt-get remove -y libceres-dev libceres2 libceres3 2>/dev/null || true
-    apt-get autoremove -y
-    ldconfig
+    if ! apt-get remove -y "${CERES_INSTALLED_PACKAGES[@]}"; then
+        echo "[warn] Failed to remove one or more system Ceres packages"
+        PHASE5_SUCCESS=false
+    fi
+    apt-get autoremove -y || true
+    run_ldconfig_refresh
     echo "✓ System Ceres removed"
 else
     echo "✓ No system Ceres packages detected after ROS operations"
@@ -5847,7 +5975,7 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo ""
 
 #===============================================================================
-# BLOCK 13: ADDITIONAL ROBOTICS/ML LIBRARIES
+# BLOCK 23: ADDITIONAL ROBOTICS/ML LIBRARIES
 #===============================================================================
 # Purpose: Install supplementary libraries for robotics and machine learning
 # Self-contained: Yes (package management with conflict resolution)
@@ -5856,12 +5984,12 @@ echo ""
 # NOTE: PCL and VTK from Drake dependencies, avoid version conflicts
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 13.1: Initialize additional libraries installation ---
+#--- Sub-block 23.1: Initialize additional libraries installation ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> Additional system libraries for robotics/ML."
 
-#--- Sub-block 13.2: Fix broken dependencies ---
+#--- Sub-block 23.2: Fix broken dependencies ---
 # Purpose: Resolve any dependency issues from previous installations
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -5870,7 +5998,7 @@ apt-get -y --fix-broken install || true
 dpkg --configure -a || true
 apt-get -y autoremove || true
 
-#--- Sub-block 13.3: Remove held packages ---
+#--- Sub-block 23.3: Remove held packages ---
 # Purpose: Clear package holds that might cause conflicts
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5889,34 +6017,51 @@ else
     echo "  No held packages found (already clear)"
 fi
 
-#--- Sub-block 13.4: Install essential package tools ---
+#--- Sub-block 23.4: Install essential package tools ---
 # Purpose: Ensure pkg-config is available
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "Installing essential dependencies..."
-apt-get install -y --no-install-recommends \
-    pkg-config || true
+ESSENTIAL_ROBOTICS_PKGS=(
+    "pkg-config"
+)
+if ! install_packages_resilient "Essential robotics dependencies" "${ESSENTIAL_ROBOTICS_PKGS[@]}"; then
+    echo "[warn] Failed to install essential robotics dependencies (pkg-config)"
+fi
 
-#--- Sub-block 13.5: Update package lists ---
+#--- Sub-block 23.5: Update package lists ---
 # Purpose: Refresh APT cache after conflict resolution
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 apt-get update || true
 
-#--- Sub-block 13.6: Note PCL/VTK from Drake ---
+#--- Sub-block 23.6: Note PCL/VTK from Drake ---
 # Purpose: Document that PCL/VTK already available via Drake
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "PCL and VTK libraries already available via Drake dependencies"
 
-#--- Sub-block 13.7: Install Python VTK bindings ---
+#--- Sub-block 23.7: Install Python VTK bindings ---
 # Purpose: Add Python bindings for VTK scripting (non-fatal)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "Installing Python VTK bindings if available..."
-apt-get install -y --no-install-recommends python3-vtk9 || apt-get install -y --no-install-recommends python3-vtk7 || echo "Δ Python VTK bindings not available"
+PYTHON_VTK_CANDIDATES=(
+    "python3-vtk9"
+    "python3-vtk7"
+)
+PYTHON_VTK_INSTALLED=false
+for vtk_pkg in "${PYTHON_VTK_CANDIDATES[@]}"; do
+    if install_packages_resilient "Python VTK bindings (${vtk_pkg})" "${vtk_pkg}"; then
+        PYTHON_VTK_INSTALLED=true
+        break
+    fi
+done
+if [ "${PYTHON_VTK_INSTALLED}" = false ]; then
+    echo "Δ Python VTK bindings not available"
+fi
 
-#--- Sub-block 13.8: Monitor cache after installation ---
+#--- Sub-block 23.8: Monitor cache after installation ---
 # Purpose: Track cache growth from robotics/ML packages
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -5925,7 +6070,7 @@ monitor_cache "After robotics/ML libraries installation"
 debug_glibc "After Robotics/ML libraries installation"
 
 #===============================================================================
-# BLOCK 13A: 3D RECONSTRUCTION AND NERF TOOLS
+# BLOCK 24: 3D RECONSTRUCTION AND NERF TOOLS
 #===============================================================================
 # Purpose: Install COLMAP (SfM) and Open3D with full CUDA optimizations
 # Self-contained: Yes (complete 3D reconstruction stack)
@@ -5935,7 +6080,7 @@ debug_glibc "After Robotics/ML libraries installation"
 
 echo "==> Installing 3D Reconstruction Tools (COLMAP + Open3D)"
 
-#--- Sub-block 13A.0: Configure pip to protect compiled libraries ---
+#--- Sub-block 24.1: Configure pip to protect compiled libraries ---
 # Critical: Prevent pip from installing precompiled binaries that would overwrite our optimized libraries
 # Dependencies: None (foundational)
 # Outputs: Configured pip environment
@@ -5978,48 +6123,51 @@ echo "  GTSAM: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || echo 0)
 
 echo "✓ pip configured to protect compiled libraries"
 
-#--- Sub-block 13A.1: Install COLMAP dependencies ---
+#--- Sub-block 24.2: Install COLMAP dependencies ---
 # Note: libgoogle-glog-dev (system glog) installed via PKGS_CORE_DEPS in Block 2
 # Critical: Qt5, CGAL, FreeImage, and other build dependencies
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "Installing COLMAP dependencies..."
-apt-get install -y --no-install-recommends \
-    libqt5core5a \
-    libqt5gui5 \
-    libqt5widgets5 \
-    libqt5opengl5 \
-    libqt5concurrent5 \
-    qtbase5-dev \
-    qtbase5-dev-tools \
-    libcgal-dev \
-    libcgal-qt5-dev \
-    libfreeimage-dev \
-    libmetis-dev \
-    libgmp-dev \
-    libmpfr-dev \
-    libsqlite3-dev \
-    libflann-dev \
-    libflame-dev \
-    libblas-dev \
-    liblapack-dev \
-    python3-dev \
-    python3-pip \
-    pybind11-dev \
-    libboost-dev \
-    libboost-system-dev \
-    libboost-filesystem-dev \
-    libboost-program-options-dev \
-    libboost-graph-dev \
-    libboost-thread-dev \
-    libgflags-dev \
-    libcurl4-openssl-dev \
-    || echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
+COLMAP_DEP_PACKAGES=(
+    "libqt5core5a"
+    "libqt5gui5"
+    "libqt5widgets5"
+    "libqt5opengl5"
+    "libqt5concurrent5"
+    "qtbase5-dev"
+    "qtbase5-dev-tools"
+    "libcgal-dev"
+    "libcgal-qt5-dev"
+    "libfreeimage-dev"
+    "libmetis-dev"
+    "libgmp-dev"
+    "libmpfr-dev"
+    "libsqlite3-dev"
+    "libflann-dev"
+    "libflame-dev"
+    "libblas-dev"
+    "liblapack-dev"
+    "python3-dev"
+    "python3-pip"
+    "pybind11-dev"
+    "libboost-dev"
+    "libboost-system-dev"
+    "libboost-filesystem-dev"
+    "libboost-program-options-dev"
+    "libboost-graph-dev"
+    "libboost-thread-dev"
+    "libgflags-dev"
+    "libcurl4-openssl-dev"
+)
+if ! install_packages_resilient "COLMAP dependencies" "${COLMAP_DEP_PACKAGES[@]}"; then
+    echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
+fi
 # Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
 echo "✓ COLMAP dependencies installed"
 
-#--- Sub-block 13A.1.5: PRE-FLIGHT CHECKS - Verify glog and Ceres before COLMAP ---
+#--- Sub-block 24.3: PRE-FLIGHT CHECKS - Verify glog and Ceres before COLMAP ---
 # CRITICAL: Verify dependency versions to prevent compilation failures
 # Dependencies: Block 7 (glog), Block 8 (Ceres)
 # Outputs: Diagnostic information
@@ -6105,9 +6253,17 @@ fi
 # 4. Check for system Ceres packages (should be blocked)
 echo ""
 echo "4. Checking for conflicting system Ceres packages:"
-if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+CERES_CONFLICT_PKGS=()
+for ceres_pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
+    if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
+        CERES_CONFLICT_PKGS+=("${resolved_pkg}")
+    fi
+done
+if [ ${#CERES_CONFLICT_PKGS[@]} -gt 0 ]; then
     echo "  ⚠️  WARNING: System Ceres packages detected!"
-    dpkg -l | grep libceres | sed 's/^/    /'
+    for conflict_pkg in "${CERES_CONFLICT_PKGS[@]}"; do
+        echo "    ${conflict_pkg}"
+    done
     echo "  This may cause conflicts with compiled Ceres in /usr/local"
 else
     echo "  ✓ No system Ceres packages (clean state)"
@@ -6127,7 +6283,7 @@ echo "  Status: Ready for COLMAP compilation"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-#--- Sub-block 13A.2: Download COLMAP source ---
+#--- Sub-block 24.4: Download COLMAP source ---
 # Purpose: Clone COLMAP with specific version
 # Dependencies: None (foundational)
 # Outputs: COLMAP source code
@@ -6149,7 +6305,7 @@ fi
 cd /tmp/colmap || exit 1
 echo "✓ COLMAP source downloaded"
 
-#--- Sub-block 13A.3: Configure COLMAP with CMake ---
+#--- Sub-block 24.5: Configure COLMAP with CMake ---
 # Critical: Enable CUDA, OpenMP, CGAL, GUI for maximum performance
 # Dependencies: Block 10 (OpenCV), Block 8 (Ceres), System glog (libgoogle-glog-dev)
 # Outputs: COLMAP build configuration
@@ -6239,38 +6395,41 @@ fi
 # CMake configuration with Ninja generator
 echo ""
 echo "⚙️ Running CMake configuration (this may take a few minutes)..."
-cmake .. \
-    -GNinja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_INSTALL_PREFIX=/usr/local \
-    -DBUILD_SHARED_LIBS=ON \
-    -DCUDA_ENABLED=ON \
-    -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
-    -DCGAL_ENABLED=ON \
-    -DOPENMP_ENABLED=ON \
-    -DSIMD_ENABLED=ON \
-    -DGUI_ENABLED=ON \
-    -DTESTS_ENABLED=OFF \
-    -DPROFILING_ENABLED=OFF \
-    -DCMAKE_CXX_STANDARD=17 \
-    -DCMAKE_CXX_STANDARD_REQUIRED=ON \
-    -DCMAKE_CUDA_FLAGS="${COLMAP_CUDA_FLAGS}" \
-    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive" \
-    -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops" \
-    -DCMAKE_EXE_LINKER_FLAGS="-Wl,--no-as-needed" \
-    -DCMAKE_SHARED_LINKER_FLAGS="-Wl,--no-as-needed" \
-    -DCMAKE_INSTALL_RPATH="/usr/local/lib" \
-    -DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    -DCMAKE_PREFIX_PATH="/usr/local;/usr" \
-    -DCMAKE_IGNORE_PATH="/usr/local/lib/cmake/glog;/usr/local/include/glog;/usr/local/lib/cmake/gflags;/usr/local/include/gflags" \
-    -DEigen3_DIR=/usr/local/share/eigen3/cmake \
-    -DCeres_DIR=/usr/local/lib/cmake/Ceres \
-    -Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog \
-    -Dgflags_DIR=/usr/lib/x86_64-linux-gnu/cmake/gflags \
-    -Dglog_ROOT=/usr \
-    -Dgflags_ROOT=/usr \
-    2>&1 | tee /tmp/colmap_cmake.log
 
+COLMAP_CMAKE_ARGS=(
+  -G "Ninja"
+  "-DCMAKE_BUILD_TYPE=Release"
+  "-DCMAKE_INSTALL_PREFIX=/usr/local"
+  "-DBUILD_SHARED_LIBS=ON"
+  "-DCUDA_ENABLED=ON"
+  "-DCMAKE_CUDA_ARCHITECTURES=86;89;90"
+  "-DCGAL_ENABLED=ON"
+  "-DOPENMP_ENABLED=ON"
+  "-DSIMD_ENABLED=ON"
+  "-DGUI_ENABLED=ON"
+  "-DTESTS_ENABLED=OFF"
+  "-DPROFILING_ENABLED=OFF"
+  "-DCMAKE_CXX_STANDARD=17"
+  "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
+  "-DCMAKE_CUDA_FLAGS=${COLMAP_CUDA_FLAGS}"
+  "-DCMAKE_CXX_FLAGS=-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops -fpermissive"
+  "-DCMAKE_C_FLAGS=-march=x86-64-v3 -O3 -ffast-math -mavx2 -mfma -msse4.2 -funroll-loops"
+  "-DCMAKE_EXE_LINKER_FLAGS=-Wl,--no-as-needed"
+  "-DCMAKE_SHARED_LINKER_FLAGS=-Wl,--no-as-needed"
+  "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
+  "-DCMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE"
+  "-DCMAKE_PREFIX_PATH=/usr/local;/usr"
+  "-DCMAKE_IGNORE_PATH=/usr/local/lib/cmake/glog;/usr/local/include/glog;/usr/local/lib/cmake/gflags;/usr/local/include/gflags"
+  "-DEigen3_DIR=/usr/local/share/eigen3/cmake"
+  "-DCeres_DIR=/usr/local/lib/cmake/Ceres"
+  "-Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog"
+  "-Dgflags_DIR=/usr/lib/x86_64-linux-gnu/cmake/gflags"
+  "-Dglog_ROOT=/usr"
+  "-Dgflags_ROOT=/usr"
+)
+COLMAP_CMAKE_LOG="/tmp/colmap_cmake.log"
+
+cmake "${COLMAP_CMAKE_ARGS[@]}" .. 2>&1 | tee "${COLMAP_CMAKE_LOG}"
 if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -6278,14 +6437,14 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo ""
     echo "Last 50 lines of CMake log:"
-    tail -50 /tmp/colmap_cmake.log
+    tail -50 "${COLMAP_CMAKE_LOG}"
     echo ""
     echo "📊 Diagnostic checks:"
     echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
     echo "  Ceres: $(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')"
     echo "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
     echo ""
-    echo "Full CMake log saved to: /tmp/colmap_cmake.log"
+    echo "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 1
 fi
@@ -6293,9 +6452,9 @@ fi
 # Verify glog was detected correctly
 echo ""
 echo "🔍 Verifying glog detection in CMake configuration..."
-if grep -i "glog" /tmp/colmap_cmake.log | grep -q "0.6.0\|Found glog"; then
+if grep -i "glog" "${COLMAP_CMAKE_LOG}" | grep -q "0.6.0\|Found glog"; then
     echo "✓ CMake successfully detected glog:"
-    grep -i "Found glog\|glog.*version" /tmp/colmap_cmake.log | head -3 || echo "  (detection confirmed)"
+    grep -i "Found glog\|glog.*version" "${COLMAP_CMAKE_LOG}" | head -3 || echo "  (detection confirmed)"
 else
     echo "⚠ WARNING: Could not verify glog version in CMake output"
     echo "  Build may still succeed if glog is correctly installed"
@@ -6307,7 +6466,7 @@ echo "  Generator: Ninja"
 echo "  glog: System package (Ubuntu patched 0.6.0)"
 echo "  Additional flags: -fpermissive"
 
-#--- Sub-block 13A.4: Build COLMAP ---
+#--- Sub-block 24.6: Build COLMAP ---
 # Critical: Compile with Ninja (faster, better error messages than make)
 # Dependencies: CMake configuration (Ninja generator)
 # Outputs: COLMAP binaries
@@ -6440,14 +6599,14 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         echo "📋 NEXT STEPS FOR DEBUGGING:"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "1. Check full log: /tmp/colmap_build.log"
-        echo "2. Check CMake log: /tmp/colmap_cmake.log"
+        echo "2. Check CMake log: ${COLMAP_CMAKE_LOG}"
         echo "3. Verify glog: pkg-config --modversion libglog"
         echo "4. Verify Ceres: ldconfig -p | grep libceres"
         echo "5. Check PRE-FLIGHT output (earlier in build log)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
         echo "Full build log saved to: /tmp/colmap_build.log"
-        echo "Full CMake log saved to: /tmp/colmap_cmake.log"
+        echo "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
@@ -6456,16 +6615,16 @@ fi
 echo ""
 echo "✓ COLMAP built successfully with Ninja"
 
-#--- Sub-block 13A.5: Install COLMAP ---
+#--- Sub-block 24.7: Install COLMAP ---
 # Purpose: Install to system paths
 # Dependencies: Successful build
 # Outputs: COLMAP installed to /usr/local
 echo ""
 echo "Installing COLMAP to /usr/local..."
 ninja install
-ldconfig
+run_ldconfig_refresh
 
-#--- Sub-block 13A.6: Install PyCOLMAP (Python bindings for COLMAP) ---
+#--- Sub-block 24.8: Install PyCOLMAP (Python bindings for COLMAP) ---
 # Purpose: Build PyCOLMAP from source to link against compiled COLMAP
 # Dependencies: Sub-block 13A.5 (COLMAP installed), Sub-block 8.5.5 (PyCeres - optional for cost functions)
 # Outputs: PyCOLMAP Python package
@@ -6545,12 +6704,12 @@ if [ "${PYCOLMAP_FOUND:-}" = false ]; then
     # Install from PyPI but prevent overwriting our compiled libraries
     # The PyPI package will link against our compiled COLMAP if LD_LIBRARY_PATH is set
     # Version pin to match COLMAP version for compatibility
-    if pip3 install --no-binary opencv-python,opencv-contrib-python "pycolmap==${COLMAP_VERSION}" 2>&1 | tee /tmp/pycolmap_install.log; then
+    if python3 -m pip install --no-binary opencv-python,opencv-contrib-python "pycolmap==${COLMAP_VERSION}" 2>&1 | tee /tmp/pycolmap_install.log; then
         echo "✓ PyCOLMAP installed from PyPI (will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
     else
         # Try without version pin if exact version not available
         echo "⚠ Version-pinned install failed, trying latest PyCOLMAP..."
-        if pip3 install --no-binary opencv-python,opencv-contrib-python pycolmap 2>&1 | tee -a /tmp/pycolmap_install.log; then
+        if python3 -m pip install --no-binary opencv-python,opencv-contrib-python pycolmap 2>&1 | tee -a /tmp/pycolmap_install.log; then
             echo "✓ PyCOLMAP installed from PyPI (latest version, using compiled COLMAP libraries)"
         else
             echo "⚠ PyCOLMAP PyPI installation failed (non-fatal)"
@@ -6589,7 +6748,7 @@ else
     echo "  Installation logs: /tmp/pycolmap_install.log"
 fi
 
-#--- Sub-block 13A.5.1: Protect compiled COLMAP from APT overwrites ---
+#--- Sub-block 24.9: Protect compiled COLMAP from APT overwrites ---
 # Critical: Prevent APT from installing ANY system COLMAP packages
 # Strategy: Use APT pinning with negative priority (consistent with other compiled libraries)
 echo "Protecting compiled COLMAP from APT overwrites..."
@@ -6632,7 +6791,7 @@ fi
 
 echo "✓ COLMAP protected from APT overwrites (APT pinning method)"
 
-#--- Sub-block 13A.6: Cleanup COLMAP build ---
+#--- Sub-block 24.10: Cleanup COLMAP build ---
 # Purpose: Remove build files to save space
 # Dependencies: None (foundational)
 # Outputs: Disk space freed
@@ -6642,7 +6801,7 @@ rm -rf /tmp/colmap
 rm -f /tmp/colmap_*.log
 echo "✓ COLMAP build cleaned up"
 
-#--- Sub-block 13A.7: Install Jupyter/ipywidgets for Open3D Jupyter extension ---
+#--- Sub-block 24.11: Install Jupyter/ipywidgets for Open3D Jupyter extension ---
 # Purpose: Install Python packages required for BUILD_JUPYTER_EXTENSION=ON
 # Dependencies: python3-pip (Block 6)
 # Outputs: Installed Python packages
@@ -6661,18 +6820,18 @@ if python3 -c "import traitlets" 2>/dev/null; then
     # Install compatible versions that work with traitlets 5.5.0
     # traitlets 5.5.0 is only compatible with jupyter 1.x, not 6.x
     # Use jupyter<2.0.0 to get the latest 1.x version compatible with traitlets 5.5.0
-    pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+    python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
       "jupyter>=1.0.0,<2.0.0" "jupyterlab>=3.0.0,<4.0.0" "ipywidgets>=7.0.0,<8.0.0" || \
       echo "⚠ Jupyter installation with traitlets 5.5.0 failed"
   else
     # Upgrade traitlets if it's not the Debian version
-    pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+    python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
       "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
       echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
   fi
 else
   # No traitlets installed, install normally
-  pip3 install --no-cache-dir --upgrade-strategy=only-if-needed \
+  python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
     "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
     echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
 fi
@@ -6751,7 +6910,7 @@ else
 fi
 
 #===============================================================================
-# BLOCK 13B: JAX CUDA INSTALLATION (REINFORCEMENT LEARNING)
+# BLOCK 25: JAX CUDA INSTALLATION (REINFORCEMENT LEARNING)
 #===============================================================================
 # Purpose: Install JAX with CUDA support via pre-built wheels for GPU-accelerated RL
 # Self-contained: Yes (complete JAX CUDA installation with verification)
@@ -6761,7 +6920,7 @@ fi
 
 echo "==> Installing JAX CUDA for GPU-Accelerated Reinforcement Learning"
 
-#--- Sub-block 13B.1: Auto-detect CUDA version for JAX ---
+#--- Sub-block 25.1: Auto-detect CUDA version for JAX ---
 # Purpose: Dynamically detect CUDA version and map to JAX-compatible variant
 # Dependencies: CUDA installation (Block 12 or earlier)
 # Outputs: CUDA_FOR_JAX, CUDA_VERSION, DETECTED_CUDA
@@ -6841,7 +7000,7 @@ detect_cuda_version_for_jax() {
 detect_cuda_version_for_jax
 echo "  JAX CUDA variant: ${CUDA_FOR_JAX} (CUDA ${CUDA_VERSION}.x)"
 
-#--- Sub-block 13B.1.1: Install system prerequisites ---
+#--- Sub-block 25.2: Install system prerequisites ---
 # Purpose: Install system packages required for JAX CUDA (pre-built wheels)
 # Dependencies: APT repositories configured
 # Outputs: System packages installed
@@ -6856,16 +7015,19 @@ apt-get update -o Acquire::Retries=3 -qq
 # libjpeg-dev: JPEG support (used by some ML libraries)
 # libpng-dev: PNG support (used by some ML libraries)
 # unzip: Archive extraction (may be needed for some dependencies)
-apt-get install -y --no-install-recommends \
-    zlib1g-dev \
-    libjpeg-dev \
-    libpng-dev \
-    unzip \
-    2>&1 | grep -v "^\(Reading database\|Building dependency tree\|Reading state information\)" || true
+JAX_PREREQ_PACKAGES=(
+    "zlib1g-dev"
+    "libjpeg-dev"
+    "libpng-dev"
+    "unzip"
+)
+if ! install_packages_resilient "JAX CUDA prerequisites" "${JAX_PREREQ_PACKAGES[@]}"; then
+    echo "[warn] Some JAX CUDA prerequisites failed to install"
+fi
 
 echo "  ✓ System prerequisites installed"
 
-#--- Sub-block 13B.1.2: Verify prerequisites ---
+#--- Sub-block 25.3: Verify prerequisites ---
 # Purpose: Ensure all required packages and libraries are available
 # Dependencies: CUDA, cuDNN, Python, NumPy (installed earlier)
 # Outputs: Prerequisite verification status
@@ -6906,7 +7068,9 @@ fi
 # Note: NumPy should already be installed via system packages (python3-numpy) which use OpenBLAS
 if ! python3 -c "import numpy" 2>/dev/null; then
     echo "  ⚠ WARNING: NumPy not found - installing via system package (OpenBLAS)..."
-    apt-get install -y --no-install-recommends python3-numpy || echo "  ⚠ NumPy installation failed (non-fatal)"
+    if ! install_packages_resilient "JAX NumPy dependency" "python3-numpy"; then
+        echo "  ⚠ NumPy installation failed (non-fatal)"
+    fi
 else
     NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
     echo "  ✓ NumPy ${NUMPY_VER} found"
@@ -6941,7 +7105,7 @@ fi
 
 echo "  Prerequisites check complete"
 
-#--- Sub-block 13B.2: Configure threading for optimal performance ---
+#--- Sub-block 25.4: Configure threading for optimal performance ---
 # Purpose: Set up parallel computing environment variables
 # Dependencies: nproc command
 # Outputs: Threading environment variables
@@ -6961,7 +7125,7 @@ export NUMEXPR_NUM_THREADS="${num_cores}"
 export OPENBLAS_NUM_THREADS="${num_cores}"
 echo "  Set threading environment: OMP_NUM_THREADS=${num_cores}"
 
-#--- Sub-block 13B.3: Install JAX with CUDA support ---
+#--- Sub-block 25.5: Install JAX with CUDA support ---
 # Purpose: Install JAX via pre-built wheels with CUDA support
 # Dependencies: pip, CUDA, cuDNN
 # Outputs: JAX and jaxlib with CUDA support
@@ -7080,20 +7244,29 @@ if python3 -c "import jax; import jaxlib" 2>/dev/null; then
     fi
     
     if [ "${JAX_VER}" != "unknown" ] && [ "${JAXLIB_VER}" != "unknown" ]; then
-        # Extract base version (without CUDA variant suffix) for comparison
-        # Use explicit error handling for pipe failures
-        JAX_BASE_VER=$(echo "${JAX_VER}" | sed 's/[^0-9.]*$//' 2>/dev/null | sed 's/\.[0-9]*$//' 2>/dev/null | head -c 10 2>/dev/null || echo "")
+        JAX_BASE_VER=$(python3 - <<'PY_VER'
+import re
+ver = "${JAX_VER}"
+match = re.match(r"(\\d+\.\\d+)", ver)
+print(match.group(1) if match else '')
+PY_VER
+)
+        JAXLIB_BASE_VER=$(python3 - <<'PY_LIB'
+import re
+ver = "${JAXLIB_VER}"
+match = re.match(r"(\\d+\.\\d+)", ver)
+print(match.group(1) if match else '')
+PY_LIB
+)
         if [ -z "${JAX_BASE_VER}" ]; then
             JAX_BASE_VER="${JAX_VER}"
         fi
-        JAXLIB_BASE_VER=$(echo "${JAXLIB_VER}" | sed 's/+.*$//' 2>/dev/null | sed 's/\.[0-9]*$//' 2>/dev/null | head -c 10 2>/dev/null || echo "")
         if [ -z "${JAXLIB_BASE_VER}" ]; then
             JAXLIB_BASE_VER="${JAXLIB_VER}"
         fi
-        
+
         echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
-        
-        # Check if base versions align (allowing for CUDA variant suffixes in jaxlib)
+
         if [ -n "${JAX_BASE_VER}" ] && [ -n "${JAXLIB_BASE_VER}" ]; then
             if [ "${JAX_BASE_VER}" = "${JAXLIB_BASE_VER}" ] || [ "${JAX_VER}" = "${JAXLIB_BASE_VER}" ]; then
                 echo "  ✓ Version alignment verified: jax and jaxlib versions match"
@@ -7104,15 +7277,15 @@ if python3 -c "import jax; import jaxlib" 2>/dev/null; then
         else
             echo "  ⚠ WARNING: Could not extract base versions for comparison"
         fi
-        
-        # Verify CUDA variant in jaxlib version string
-        if echo "${JAXLIB_VER}" | grep -qE "(cuda11|cuda12)" 2>/dev/null; then
-            CUDA_VARIANT=$(echo "${JAXLIB_VER}" | grep -oE "cuda(11|12)" 2>/dev/null | head -1 || echo "")
-            if [ -n "${CUDA_VARIANT}" ]; then
-                echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
-            else
-                echo "  ⚠ WARNING: CUDA variant pattern found but extraction failed"
-            fi
+
+        CUDA_VARIANT=$(python3 - <<'PY_VARIANT'
+import re
+match = re.search(r"cuda(11|12)", "${JAXLIB_VER}")
+print(match.group(0) if match else '')
+PY_VARIANT
+)
+        if [ -n "${CUDA_VARIANT}" ]; then
+            echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
         else
             echo "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
         fi
@@ -7128,7 +7301,7 @@ else
     echo "  Note: JAX may still be functional - comprehensive verification will continue"
 fi
 
-#--- Sub-block 13B.4: Comprehensive JAX verification ---
+#--- Sub-block 25.6: Comprehensive JAX verification ---
 # Purpose: Test JAX functionality with comprehensive verification (imports, GPU, JIT, threading, performance)
 # Dependencies: JAX installed, CUDA, cuDNN
 # Outputs: Test results (non-fatal)
@@ -7441,7 +7614,7 @@ rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
 echo "✓ JAX CUDA installation complete"
 
 #===============================================================================
-# BLOCK 13C: PYTORCH COMPILATION WITH OPENBLAS
+# BLOCK 26: PYTORCH COMPILATION WITH OPENBLAS
 #===============================================================================
 # Purpose: Compile PyTorch from source with OpenBLAS and CUDA support
 #          Uses optimal flags from test_pytorch_compilation.sh
@@ -7468,12 +7641,15 @@ echo "✓ JAX CUDA installation complete"
 #   - GCC recommendation: GCC 10 preferred for CUDA 12.6 + PyTorch
 #-------------------------------------------------------------------------------
 
+if [ "${ENABLE_PYTORCH_BUILD:-false}" != true ]; then
+  echo "Skipping PyTorch compilation (ENABLE_PYTORCH_BUILD=${ENABLE_PYTORCH_BUILD:-false})"
+else
 echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo -e "${BLUE}BLOCK 13C: PyTorch Compilation with OpenBLAS${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-#--- Sub-block 13C.1: Verify OpenBLAS installation ---
+#--- Sub-block 26.1: Verify OpenBLAS installation ---
 # Purpose: Verify our compiled OpenBLAS is available and usable
 # Dependencies: Block 6.12B (OpenBLAS compilation)
 # Outputs: Verification status
@@ -7512,7 +7688,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 13C.2: Verify prerequisites ---
+#--- Sub-block 26.2: Verify prerequisites ---
 # Purpose: Verify all prerequisites are installed (from Block 6.12B.2)
 # Dependencies: Block 6.12B.2 (prerequisites installation)
 # Outputs: Verification status
@@ -7546,7 +7722,7 @@ fi
 echo -e "  ${GREEN}✓ Python ${PYTHON_VERSION} (compatible)${NC}"
 echo ""
 
-#--- Sub-block 13C.3: Detect GCC version and install GCC 10 if needed ---
+#--- Sub-block 26.3: Detect GCC version and install GCC 10 if needed ---
 # Purpose: Install GCC 10 for better CUDA 12.6 compatibility (recommended)
 # Dependencies: Block 6.12B.2 (apt-get available)
 # Outputs: GCC compiler selection
@@ -7584,7 +7760,8 @@ if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" 
     echo -e "  ${YELLOW}⚠ GCC ${GCC_VERSION:-unknown} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
     echo "  Installing GCC 10 for better compatibility..."
     apt-get update -o Acquire::Retries=3 -qq
-    if apt-get install -y -qq gcc-10 g++-10 >/dev/null 2>&1; then
+    GCC10_PACKAGES=("gcc-10" "g++-10")
+    if install_packages_resilient "GCC 10 toolchain" "${GCC10_PACKAGES[@]}" >/dev/null 2>&1; then
         GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
         GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
         if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
@@ -7609,7 +7786,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 13C.4: Detect CUDA version and compute architectures ---
+#--- Sub-block 26.4: Detect CUDA version and compute architectures ---
 # Purpose: Detect CUDA version and determine supported compute architectures
 # Dependencies: Block 6.13 (NVIDIA CUDA setup)
 # Outputs: CUDA version, compute architectures
@@ -7681,7 +7858,7 @@ if [ "${USE_CUDA}" = 1 ] && [ -n "${CUDA_MAJOR}" ]; then
 fi
 echo ""
 
-#--- Sub-block 13C.5: Configure PyTorch build environment ---
+#--- Sub-block 26.5: Configure PyTorch build environment ---
 # Purpose: Set up all PyTorch build flags with optimal configuration
 # Dependencies: Block 13C.3 (GCC selection), Block 13C.4 (CUDA detection)
 # Outputs: Environment variables for PyTorch build
@@ -7794,7 +7971,7 @@ echo "    CMAKE_CXX_STANDARD=17"
 echo "    CPU flags: ${CPU_ARCH_FLAGS}"
 echo ""
 
-#--- Sub-block 13C.6: Download PyTorch source ---
+#--- Sub-block 26.6: Download PyTorch source ---
 # Purpose: Download PyTorch source code
 # Dependencies: Block 13C.2 (git available), config.sh (PYTORCH_VERSION)
 # Outputs: PyTorch source code
@@ -7848,7 +8025,7 @@ fi
 echo -e "  ${GREEN}✓ PyTorch source ready${NC}"
 echo ""
 
-#--- Sub-block 13C.7: Build PyTorch ---
+#--- Sub-block 26.7: Build PyTorch ---
 # Purpose: Build PyTorch wheel with OpenBLAS and CUDA support
 # Dependencies: Block 13C.5 (build environment configured), Block 13C.6 (source downloaded)
 # Outputs: PyTorch wheel file
@@ -7859,9 +8036,32 @@ echo ""
 
 # Install PyTorch build dependencies
 echo "  Installing PyTorch build dependencies..."
-pip3 install --no-cache-dir -q setuptools wheel pyyaml typing-extensions filelock || {
+PYTORCH_PIP_PACKAGES=(
+    "setuptools"
+    "wheel"
+    "pyyaml"
+    "typing-extensions"
+    "filelock"
+)
+# Detect externally-managed environment to decide on pip flags
+pip_flags=""
+if python3 -m pip install --dry-run pip >/tmp/pytorch_pip_dry_run.log 2>&1; then
+    if grep -q "externally-managed-environment" /tmp/pytorch_pip_dry_run.log 2>/dev/null; then
+        pip_flags="--break-system-packages"
+    fi
+fi
+rm -f /tmp/pytorch_pip_dry_run.log 2>/dev/null || true
+
+pip_cmd=(python3 -m pip install --no-cache-dir --quiet --ignore-installed)
+if [ -n "${pip_flags}" ]; then
+    IFS=' ' read -r -a _pip_flag_array <<< "${pip_flags}"
+    pip_cmd+=("${_pip_flag_array[@]}")
+    unset _pip_flag_array
+fi
+pip_cmd+=("${PYTORCH_PIP_PACKAGES[@]}")
+if ! "${pip_cmd[@]}"; then
     echo -e "  ${YELLOW}⚠ Some pip dependencies failed (may continue)${NC}"
-}
+fi
 
 # Build wheel (no installation yet)
 # Note: python setup.py bdist_wheel --dist-dir places the wheel in the specified directory
@@ -7899,7 +8099,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 13C.7.1: Save wheel to known location ---
+#--- Sub-block 26.8: Save wheel to known location ---
 # Purpose: Copy built wheel to a known persistent location for reuse and backup
 # Dependencies: Block 13C.7 (wheel built)
 # Outputs: Wheel file in known location
@@ -7952,7 +8152,7 @@ else
 fi
 echo ""
 
-#--- Sub-block 13C.8: Install PyTorch wheel ---
+#--- Sub-block 26.9: Install PyTorch wheel ---
 # Purpose: Install the built PyTorch wheel from known location
 # Dependencies: Block 13C.7.1 (wheel saved to known location)
 # Outputs: Installed PyTorch
@@ -7975,19 +8175,19 @@ fi
 
 # Install wheel
 echo "  Installing: $(basename "${INSTALL_WHEEL}")"
-if pip3 install --no-cache-dir "${INSTALL_WHEEL}" 2>&1; then
+if python3 -m pip install --no-cache-dir "${INSTALL_WHEEL}" 2>&1; then
     echo -e "  ${GREEN}✓ PyTorch installed successfully${NC}"
     echo "  Wheel location: ${WHEEL_STORAGE_PATH}"
     echo "  Note: Wheel preserved at ${PYTORCH_WHEEL_STORAGE} for potential reuse"
 else
     echo -e "  ${RED}✗ PyTorch installation failed${NC}"
     echo "  Wheel is available at: ${WHEEL_STORAGE_PATH}"
-    echo "  You can manually install with: pip3 install ${WHEEL_STORAGE_PATH}"
+    echo "  You can manually install with: python3 -m pip install ${WHEEL_STORAGE_PATH}"
     exit 1
 fi
 echo ""
 
-#--- Sub-block 13C.9: Verify PyTorch installation ---
+#--- Sub-block 26.10: Verify PyTorch installation ---
 # Purpose: Verify PyTorch installation and OpenBLAS linking
 # Dependencies: Block 13C.8 (PyTorch installed)
 # Outputs: Verification status
@@ -8040,7 +8240,7 @@ else
     exit 1
 fi
 
-#--- Sub-block 13C.10: Protect PyTorch from APT overwrites ---
+#--- Sub-block 26.11: Protect PyTorch from APT overwrites ---
 # Purpose: Prevent APT from installing system PyTorch packages (if any exist)
 # Dependencies: Block 13C.8 (PyTorch installed via pip)
 # Outputs: APT preferences file
@@ -8123,8 +8323,9 @@ elif [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_D
     fi
 fi
 echo ""
+fi
 
-#--- Sub-block 13A.8: Install Open3D dependencies ---
+#--- Sub-block 26.12: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
 # Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: Block 6 (APT configuration), Phase 1 (build tools should already be installed)
@@ -8168,12 +8369,18 @@ fi
 #   - libfmt-dev: Modern C++ formatting library (used by many scientific libraries)
 #   - libspdlog-dev: Fast C++ logging library (used by Open3D and other modern C++ libraries)
 echo "Updating apt package lists before installing Open3D dependencies..."
-apt-get update -o Acquire::Retries=3
+if ! apt-get update -o Acquire::Retries=3; then
+    echo "✗ ERROR: Failed to update package lists before Open3D install"
+    exit 1
+fi
 
 # Verify ninja-build is available (we use Ninja generator)
 if ! command -v ninja >/dev/null 2>&1; then
     echo "⚠ ninja-build not found, installing..."
-    apt-get install -y --no-install-recommends ninja-build
+    if ! install_packages_resilient "ninja build system" "ninja-build"; then
+        echo "✗ ERROR: Failed to install ninja-build"
+        exit 1
+    fi
 fi
 echo "✓ Ninja build system available"
 
@@ -8238,12 +8445,12 @@ echo "  LLVM-18 may have libunwind conflicts with Python exceptions"
 
 # Install LLVM-14 libc++ packages
 LLVM14_INSTALLED=false
-if apt-get install -y --no-install-recommends \
-    libc++-14-dev \
-    libc++abi-14-dev \
-    libunwind-14-dev \
-    2>&1 | tee /tmp/llvm14_install.log; then
-    # Verify packages were actually installed
+LLVM14_PACKAGES=(
+    "libc++-14-dev"
+    "libc++abi-14-dev"
+    "libunwind-14-dev"
+)
+if install_packages_resilient "LLVM-14 libc++" "${LLVM14_PACKAGES[@]}"; then
     if { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+-14-dev"; } && \
        { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+abi-14-dev"; }; then
         LLVM14_INSTALLED=true
@@ -8252,7 +8459,7 @@ if apt-get install -y --no-install-recommends \
         echo "⚠ Installation reported success but packages not found in dpkg"
     fi
 else
-    echo "⚠ LLVM-14 libc++ installation failed - check /tmp/llvm14_install.log"
+    echo "⚠ LLVM-14 libc++ installation failed"
 fi
 
 if [ "${LLVM14_INSTALLED:-}" = "false" ]; then
@@ -8283,25 +8490,28 @@ echo "Installing optional robotics/Open3D libraries..."
 #     * libxtst-dev: X11 test library (WebRTC X11 support)
 #     * nodejs, npm: JavaScript runtime for Jupyter extension build
 # NOTE: libjsoncpp-dev, libxss-dev already in PKGS_MEDIA_GUI and PKGS_CORE_LIBS
-apt-get install -y --no-install-recommends \
-    libflann-dev \
-    libpcl-dev \
-    libnetcdf-dev \
-    libfmt-dev \
-    libspdlog-dev \
-    liburiparser-dev \
-    libcurl4-openssl-dev \
-    liblz4-dev \
-    libzstd-dev \
-    cmake-data \
-    pkg-config \
-    libnss3-dev \
-    libasound2-dev \
-    libdbus-1-dev \
-    libxtst-dev \
-    nodejs \
-    npm \
-    2>&1 | grep -v "Unable to locate package" || true
+OPEN3D_OPTIONAL_PACKAGES=(
+    "libflann-dev"
+    "libpcl-dev"
+    "libnetcdf-dev"
+    "libfmt-dev"
+    "libspdlog-dev"
+    "liburiparser-dev"
+    "libcurl4-openssl-dev"
+    "liblz4-dev"
+    "libzstd-dev"
+    "cmake-data"
+    "pkg-config"
+    "libnss3-dev"
+    "libasound2-dev"
+    "libdbus-1-dev"
+    "libxtst-dev"
+    "nodejs"
+    "npm"
+)
+if ! install_packages_resilient "Open3D optional packages" "${OPEN3D_OPTIONAL_PACKAGES[@]}"; then
+    echo "Δ Some optional Open3D packages were unavailable (non-fatal)"
+fi
 
 # Check which optional packages were installed
 if dpkg -l 2>/dev/null | grep -q "^ii.*libflann-dev"; then
@@ -8445,7 +8655,7 @@ if ! command -v python &> /dev/null; then
     ln -sf /usr/bin/python3 /usr/bin/python
 fi
 
-#--- Sub-block 13A.7.5: Install yarn for Open3D Jupyter extension ---
+#--- Sub-block 26.13: Install yarn for Open3D Jupyter extension ---
 # Purpose: Install yarn globally via npm (required for BUILD_JUPYTER_EXTENSION=ON)
 # Dependencies: nodejs, npm (installed in Sub-block 13A.8)
 # Outputs: yarn installed globally
@@ -8475,7 +8685,7 @@ else
     echo "  Open3D Jupyter extension build will likely fail"
 fi
 
-#--- Sub-block 13A.8: Download Open3D source ---
+#--- Sub-block 26.14: Download Open3D source ---
 # Purpose: Clone Open3D with specific version
 # Dependencies: None (foundational)
 # Outputs: Open3D source code
@@ -8498,7 +8708,7 @@ fi
 cd /tmp/Open3D || exit 1
 echo "✓ Open3D source downloaded"
 
-#--- Sub-block 13A.8.1: Verify Jupyter extension requirements from repository ---
+#--- Sub-block 26.15: Verify Jupyter extension requirements from repository ---
 # Purpose: Check Open3D repository for Jupyter extension build requirements
 # Dependencies: Open3D source downloaded
 # Outputs: Verification report of required dependencies
@@ -8753,7 +8963,7 @@ else
     echo "  Some Open3D parallel features may be unavailable"
 fi
 
-#--- Sub-block 13A.9: Configure Open3D with CMake ---
+#--- Sub-block 26.16: Configure Open3D with CMake ---
 # Critical: CUDA-ONLY build with GUI support (no CPU fallback)
 # Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: CUDA (REQUIRED), Eigen, GCC/G++, GLFW, GLEW (system libraries)
@@ -8790,7 +9000,7 @@ fi
 echo "✓ Clean build directory created"
 echo ""
 
-#--- Sub-block 13A.9.1: Configure build environment variables for OpenBLAS ---
+#--- Sub-block 26.17: Configure build environment variables for OpenBLAS ---
 # Critical: Set LIBRARY_PATH and PKG_CONFIG_PATH for OpenBLAS detection (matching OpenCV approach)
 # This ensures CMake can find OpenBLAS libraries in /usr/lib/x86_64-linux-gnu
 # Dependencies: None (foundational)
@@ -9353,9 +9563,10 @@ if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
         # Check if extraction created webrtc_release subdirectory
         if [ -d "webrtc_release" ]; then
             echo "  Archive extracted to webrtc_release/, moving contents to parent..."
-            # Move all files including hidden ones
             shopt -s dotglob
-            mv webrtc_release/* . 2>/dev/null || true
+            if ! mv webrtc_release/* . 2>/dev/null; then
+                echo "  Δ Failed to flatten webrtc_release contents (continuing)"
+            fi
             shopt -u dotglob
             rm -rf webrtc_release
         fi
@@ -9521,7 +9732,7 @@ fi
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-#--- Sub-block 13A.10: Build Open3D ---
+#--- Sub-block 26.18: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
 # Note: Official docs show "make -j$(nproc)" but we use "ninja -j${BUILD_JOBS}" 
 #       which is equivalent since we configured with -GNinja
@@ -9587,7 +9798,7 @@ fi
 echo ""
 echo "✓ Open3D built successfully with Ninja"
 
-#--- Sub-block 13A.11: Install Open3D ---
+#--- Sub-block 26.19: Install Open3D ---
 # Purpose: Install to system paths (C++ and Python)
 # Dependencies: Successful build
 # Outputs: Open3D installed to /usr/local
@@ -9978,7 +10189,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 echo "  Installing wheel without dependencies (preserving compiled libs)..."
                 # Install WITHOUT dependencies to avoid overwriting compiled libraries
                 # Use --break-system-packages for externally-managed environments
-                python3 -m pip install --no-deps --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
+                python3 -m pip install --no-deps --ignore-installed --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
                 PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
                 if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
                     echo "  ✓ Wheel installation completed (pip exit code: 0)"
@@ -9998,7 +10209,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                     fi
                 else
                     PIP_EXIT_CODE="${PIPESTATUS[0]}"
-                    echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
+                    echo "⚠ python3 -m pip install failed (exit code: ${PIP_EXIT_CODE})"
                 fi
             else
                 # Wheel not found - but python-package may have installed directly
@@ -10034,7 +10245,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
         if [ -d "${PKG_DIR}" ] && { [ -f "${PKG_DIR}/setup.py" ] || [ -f "${PKG_DIR}/pyproject.toml" ]; }; then
             echo "  Found package directory: ${PKG_DIR}"
             # Install WITHOUT dependencies to protect compiled libraries
-            pip3 install --no-deps "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log
+            python3 -m pip install --no-deps --ignore-installed --break-system-packages "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log
             PIP_INSTALL_DIR_EXIT="${PIPESTATUS[0]}"
             if [ "${PIP_INSTALL_DIR_EXIT}" -eq 0 ]; then
                 sleep 1
@@ -10045,7 +10256,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 fi
             else
                 PIP_EXIT_CODE_DIR="${PIPESTATUS[0]}"
-                echo "  ⚠ pip3 install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
+                echo "  ⚠ python3 -m pip install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
             fi
         fi
     done
@@ -10191,7 +10402,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
         echo "  Installing wheel without dependencies (preserving compiled libs)..."
         # Install WITHOUT dependencies to avoid overwriting compiled libraries
         # Use --break-system-packages for externally-managed environments
-        python3 -m pip install --no-deps --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
+        python3 -m pip install --no-deps --ignore-installed --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
         PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
         if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
             echo "  ✓ Wheel installation completed (pip exit code: 0)"
@@ -10211,7 +10422,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
             fi
         else
             PIP_EXIT_CODE="${PIPESTATUS[0]}"
-            echo "⚠ pip3 install failed (exit code: ${PIP_EXIT_CODE})"
+            echo "⚠ python3 -m pip install failed (exit code: ${PIP_EXIT_CODE})"
         fi
     else
         echo "  No wheel found in ephemeral pip cache directories"
@@ -10244,9 +10455,9 @@ if verify_open3d_installation; then
     
     # Get installation info via pip show if available
     OPEN3D_INSTALL_INFO=""
-    if pip3 show open3d >/dev/null 2>&1; then
-        OPEN3D_INSTALL_LOCATION=$(pip3 show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
-        OPEN3D_INSTALL_VERSION=$(pip3 show open3d 2>/dev/null | grep "^Version:" | cut -d' ' -f2 | head -1)
+    if python3 -m pip show open3d >/dev/null 2>&1; then
+        OPEN3D_INSTALL_LOCATION=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+        OPEN3D_INSTALL_VERSION=$(python3 -m pip show open3d 2>/dev/null | grep "^Version:" | cut -d' ' -f2 | head -1)
         if [ -n "${OPEN3D_INSTALL_LOCATION}" ]; then
             OPEN3D_INSTALL_INFO=" (installed at: ${OPEN3D_INSTALL_LOCATION})"
         fi
@@ -10326,10 +10537,12 @@ elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     python3 -c "import sys; print('\\n'.join(['  ' + p for p in sys.path]))" 2>/dev/null || echo "  (Could not retrieve)"
     echo ""
     echo "Package installation status:"
-    pip3 list 2>/dev/null | grep -i open3d || echo "  ✗ open3d not found in pip list"
-    if pip3 show open3d >/dev/null 2>&1; then
+    if ! python3 -m pip list 2>/dev/null | grep -i open3d; then
+        echo "  ✗ open3d not found in pip list"
+    fi
+    if python3 -m pip show open3d >/dev/null 2>&1; then
         echo "  pip show open3d:"
-        pip3 show open3d | sed 's/^/    /' || true
+        python3 -m pip show open3d | sed 's/^/    /' || true
     else
         echo "  ✗ pip show open3d: package not found"
     fi
@@ -10354,10 +10567,17 @@ elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     
     # Check if C++ library was successfully built (more important than Python module)
     CXX_LIBRARY_BUILT=false
-    if [ -f /usr/local/lib/libOpen3D.so ] || [ -f /usr/local/lib/libOpen3D.a ] || \
-       [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.so" ] || [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.a" ]; then
-        CXX_LIBRARY_BUILT=true
-    fi
+    for lib_candidate in \
+        "/usr/local/lib/libOpen3D.so" \
+        "/usr/local/lib/libOpen3D.a" \
+        "${OPEN3D_BUILD_DIR}/lib/libOpen3D.so" \
+        "${OPEN3D_BUILD_DIR}/lib/libOpen3D.a"
+    do
+        if [ -f "${lib_candidate}" ]; then
+            CXX_LIBRARY_BUILT=true
+            break
+        fi
+    done
     
     # Decide whether to exit or continue based on configuration and C++ library status
     if [ "${OPEN3D_PYTHON_REQUIRED}" = "true" ]; then
@@ -10374,7 +10594,7 @@ elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
             echo "  Since the library is compiled, continuing build as NON-FATAL error."
             echo ""
             echo "  Note: You can manually install the Python module later if needed:"
-            echo "    pip3 install --no-deps /path/to/open3d-*.whl"
+            echo "    python3 -m pip install --no-deps /path/to/open3d-*.whl"
             echo ""
             OPEN3D_PYTHON_REQUIRED="false"  # Override to non-fatal since library is built
         else
@@ -10417,7 +10637,7 @@ else
     fi
 fi
 
-#--- Sub-block 13A.12: Cleanup Open3D build ---
+#--- Sub-block 26.20: Cleanup Open3D build ---
 # Purpose: Remove build files to save space
 # Dependencies: None (foundational)
 # Outputs: Disk space freed
@@ -10427,7 +10647,7 @@ rm -rf /tmp/Open3D
 rm -f /tmp/open3d_*.log
 echo "✓ Open3D build cleaned up"
 
-#--- Sub-block 13A.13: Create 3D reconstruction tools info script ---
+#--- Sub-block 26.21: Create 3D reconstruction tools info script ---
 # Purpose: Provide usage information for COLMAP and Open3D
 # Dependencies: None (foundational)
 # Outputs: Info script
@@ -10493,7 +10713,7 @@ echo ""
 echo "  1. Install PyTorch (via Conda or pip):"
 echo "     conda install pytorch torchvision torchaudio pytorch-cuda=12.6 -c pytorch -c nvidia"
 echo "     OR"
-echo "     pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126"
+echo "     python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126"
 echo ""
 echo "  2. Rebuild Open3D with ML support:"
 echo "     cd /tmp && git clone https://github.com/isl-org/Open3D.git"
@@ -10512,7 +10732,7 @@ echo ""
 monitor_cache "After 3D reconstruction tools"
 
 #===============================================================================
-# BLOCK 14: X11 PERFORMANCE AND DIAGNOSTIC TOOLS
+# BLOCK 27: X11 PERFORMANCE AND DIAGNOSTIC TOOLS
 #===============================================================================
 # Purpose: Install X11 utilities for display management and diagnostics
 # Self-contained: Yes (complete X11 toolset)
@@ -10521,33 +10741,38 @@ monitor_cache "After 3D reconstruction tools"
 # NOTE: Essential for VNC server operation and debugging
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 14.1: Install X11 performance tools ---
+#--- Sub-block 27.1: Install X11 performance tools ---
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Installing X11 performance and diagnostic tools..."
-
-apt-get install -y --no-install-recommends \
-  x11-utils \
-  x11-xserver-utils \
-  x11vnc \
-  mesa-utils \
-  xdotool \
-  xclip \
-  xsel \
-  wmctrl \
+X11_TOOL_PACKAGES=(
+  x11-utils
+  x11-xserver-utils
+  mesa-utils
+  xdotool
+  xclip
+  xsel
+  wmctrl
   xinput
-
+)
+if ! install_packages_resilient "X11 diagnostics toolchain" "${X11_TOOL_PACKAGES[@]}"; then
+    echo "ERROR: Failed to install X11 diagnostics toolchain"
+    exit 1
+fi
 echo "✓ X11 tools installed"
 
-#--- Sub-block 14.2: Install x11vnc VNC server ---
+#--- Sub-block 27.2: Install x11vnc VNC server ---
 # Purpose: Alternative VNC server that can attach to existing X sessions
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Installing x11vnc as additional VNC option..."
 
-apt-get install -y --no-install-recommends x11vnc
+if ! install_packages_resilient "x11vnc VNC server" "x11vnc"; then
+    echo "ERROR: Failed to install x11vnc VNC server"
+    exit 1
+fi
 
-#--- Sub-block 14.3: Create x11vnc startup script ---
+#--- Sub-block 27.3: Create x11vnc startup script ---
 # 🔗 REMOTE DESKTOP: Part of Block 15 Remote Desktop Infrastructure
 # Purpose: Helper script to start x11vnc with optimal settings
 # Dependencies: x11vnc package (Block 14), see Block 15 for RD overview
@@ -10611,7 +10836,7 @@ x11vnc -display "${DISPLAY_NUM}" \
   -o ~/.vnc/x11vnc.log
 X11VNC
 
-#--- Sub-block 14.4: Make x11vnc script executable ---
+#--- Sub-block 27.4: Make x11vnc script executable ---
 # Purpose: Set permissions for startup script
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -10619,7 +10844,7 @@ chmod +x /usr/local/bin/start_x11vnc.sh
 
 echo "✓ x11vnc installed (use: start_x11vnc.sh)"
 
-#--- Sub-block 14.5: Install clipboard and file transfer tools ---
+#--- Sub-block 27.5: Install clipboard and file transfer tools ---
 # Purpose: Enhanced clipboard sync between VNC and host
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -10631,7 +10856,7 @@ apt-get install -y --no-install-recommends \
   autocutsel \
   xdotool
 
-#--- Sub-block 14.6: Create clipboard sync script ---
+#--- Sub-block 27.6: Create clipboard sync script ---
 # 🔗 REMOTE DESKTOP: Part of Block 15 Remote Desktop Infrastructure
 # Purpose: Helper script to synchronize clipboard between VNC and local machine
 # Dependencies: autocutsel, xclip packages (Block 14)
@@ -10654,7 +10879,7 @@ echo "✓ Clipboard sync started"
 echo "  Copy/paste should work between VNC and local machine"
 CLIPBD
 
-#--- Sub-block 14.7: Make clipboard sync script executable ---
+#--- Sub-block 27.7: Make clipboard sync script executable ---
 # Purpose: Set permissions for clipboard sync script
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -10663,7 +10888,7 @@ chmod +x /usr/local/bin/vnc_clipboard_sync.sh
 echo "✓ Clipboard tools installed"
 
 #===============================================================================
-# BLOCK 15: DESKTOP ENVIRONMENT AND REMOTE ACCESS SETUP (Part 1 of 3)
+# BLOCK 28: DESKTOP ENVIRONMENT AND REMOTE ACCESS SETUP (Part 1 of 3)
 #===============================================================================
 # 🖥️  REMOTE DESKTOP INFRASTRUCTURE - CORE INSTALLATIONS
 #
@@ -10685,40 +10910,48 @@ echo "✓ Clipboard tools installed"
 #   Documentation:   Block 15.20 (summary), Block 25 (user guides)
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 15.1: Hardware video acceleration ---
+#--- Sub-block 28.1: Hardware video acceleration ---
 # Purpose: Install VA-API and VDPAU for GPU-accelerated video
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Installing hardware video acceleration support..."
-
-apt-get install -y --no-install-recommends \
-  libva2 \
-  libva-drm2 \
-  libva-x11-2 \
-  vainfo \
-  vdpauinfo \
-  libvdpau1 \
+VIDEO_ACCEL_PACKAGES=(
+  libva2
+  libva-drm2
+  libva-x11-2
+  vainfo
+  vdpauinfo
+  libvdpau1
   libvdpau-va-gl1
-
+)
+if ! install_packages_resilient "Hardware video acceleration stack" "${VIDEO_ACCEL_PACKAGES[@]}"; then
+    echo "ERROR: Failed to install hardware video acceleration stack"
+    exit 1
+fi
 echo "✓ Hardware video acceleration installed"
 
-#--- Sub-block 15.2: PulseAudio configuration ---
+#--- Sub-block 28.2: PulseAudio configuration ---
 # Purpose: Audio support for remote desktop sessions
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Installing audio support (PulseAudio)..."
-
-apt-get install -y --no-install-recommends \
-  pulseaudio \
-  pulseaudio-utils \
-  pavucontrol \
+PULSEAUDIO_PACKAGES=(
+  pulseaudio
+  pulseaudio-utils
+  pavucontrol
   alsa-utils
+)
+if ! install_packages_resilient "PulseAudio/ALSA audio stack" "${PULSEAUDIO_PACKAGES[@]}"; then
+    echo "ERROR: Failed to install PulseAudio/ALSA audio stack"
+    exit 1
+fi
 
-#--- Sub-block 15.3: Configure PulseAudio for network streaming ---
+#--- Sub-block 28.3: Configure PulseAudio for network streaming ---
 # Purpose: Enable remote audio streaming through PulseAudio
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-mkdir -p /etc/pulse/
+install -d -m 0755 /etc/pulse
+install -d -m 0755 /etc/pulse/default.pa.d
 
 cat > /etc/pulse/default.pa.d/network.conf << 'PANETWORK'
 # Allow network streaming
@@ -10726,39 +10959,44 @@ load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1
 load-module module-esound-protocol-tcp auth-ip-acl=127.0.0.1
 PANETWORK
 
-#--- Sub-block 15.4: Create PulseAudio startup script ---
+#--- Sub-block 28.4: Create PulseAudio startup script ---
 # Purpose: Helper script to start PulseAudio for VNC sessions
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 cat > /usr/local/bin/start_pulseaudio.sh << 'PASTART'
 #!/usr/bin/env bash
-# Start PulseAudio for VNC session
+set -euo pipefail
 
-if pulseaudio --check; then
+# Start PulseAudio for VNC session
+if pulseaudio --check 2>/dev/null; then
     echo "PulseAudio already running"
 else
-    pulseaudio --start --exit-idle-time=-1
-    echo "✓ PulseAudio started"
+    if pulseaudio --start --exit-idle-time=-1; then
+        echo "✓ PulseAudio started"
+    else
+        echo "✗ Failed to start PulseAudio" >&2
+        exit 1
+    fi
 fi
 PASTART
 chmod +x /usr/local/bin/start_pulseaudio.sh
 
 echo "✓ Audio support installed"
 
-#--- Sub-block 15.5: Initialize TurboVNC and VirtualGL installation ---
+#--- Sub-block 28.5: Initialize TurboVNC and VirtualGL installation ---
 # Purpose: Install TurboVNC and VirtualGL from cached .deb files with GPG verification
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
 echo "==> Installing TurboVNC and VirtualGL with official GPG signature verification..."
 
-#--- Sub-block 15.6: Download debsig-import helper script ---
+#--- Sub-block 28.6: Download debsig-import helper script ---
 # Critical: Required for GPG signature verification of .deb files
 # Official source: https://gist.githubusercontent.com/dcommander/2960e99d4a4f6998e249ec7cfec89b85
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Downloading the debsig-import helper script..."
 DEBSIG_IMPORT_URL="https://gist.githubusercontent.com/dcommander/2960e99d4a4f6998e249ec7cfec89b85/raw/debsig-import"
-if ! curl -fsSL -o /usr/local/bin/debsig-import "${DEBSIG_IMPORT_URL}"; then
+if ! curl -fsS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 --compressed -o /usr/local/bin/debsig-import "${DEBSIG_IMPORT_URL}"; then
   echo ""
   echo "═══════════════════════════════════════════════════════════════"
   echo "  DOWNLOAD FAILED: debsig-import script"
@@ -10775,7 +11013,7 @@ if ! curl -fsSL -o /usr/local/bin/debsig-import "${DEBSIG_IMPORT_URL}"; then
 fi
 chmod +x /usr/local/bin/debsig-import
 
-#--- Sub-block 15.7: Use centralized GPG key configuration ---
+#--- Sub-block 28.7: Use centralized GPG key configuration ---
 # Purpose: Use GPG key ID and URL from config.sh (single source of truth)
 # Documentation: https://virtualgl.org/Downloads/DigitalSignatures
 # Documentation: https://turbovnc.org/Downloads/DigitalSignatures
@@ -10786,7 +11024,7 @@ chmod +x /usr/local/bin/debsig-import
 # - VIRTUALGL_TURBOVNC_GPG_KEY_URL (primary)
 # - VIRTUALGL_TURBOVNC_GPG_KEY_URL_ALT (fallback)
 
-#--- Sub-block 15.8: Import TurboVNC/VirtualGL GPG key ---
+#--- Sub-block 28.8: Import TurboVNC/VirtualGL GPG key ---
 # Critical: Import GPG key for package signature verification using official method
 # Official docs syntax: sudo debsig-import <KEY_ID> <KEY_URL>
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC), debsig-import utility
@@ -10805,7 +11043,7 @@ if ! debsig-import "${VIRTUALGL_TURBOVNC_GPG_KEY_ID}" "${VIRTUALGL_TURBOVNC_GPG_
 fi
 echo "✓ GPG key imported successfully."
 
-#--- Sub-block 15.9: Verify and install TurboVNC/VirtualGL packages ---
+#--- Sub-block 28.9: Verify and install TurboVNC/VirtualGL packages ---
 # Critical: Install cached .deb packages with structural verification
 # Note: debsig-verify often fails even with valid packages due to policy setup
 # We verify package integrity via dpkg instead (safer for build environment)
@@ -10831,15 +11069,22 @@ for deb_file in "${CONTAINER_DEB_CACHE}"/turbovnc_*.deb "${CONTAINER_DEB_CACHE}"
 
     echo "Installing $(basename "${deb_file}")..."
     # Use dpkg directly to avoid downgrade issues
-    if ! dpkg -i "${deb_file}" 2>&1 | tee /tmp/dpkg_install.log; then
-        echo "⚠ dpkg failed, attempting with apt-get to resolve dependencies..."
-        DEBIAN_FRONTEND=noninteractive apt-get install -y -f
+    INSTALL_LOG="/tmp/dpkg_install_$(basename "${deb_file}" .deb).log"
+    dpkg -i "${deb_file}" 2>&1 | tee "${INSTALL_LOG}"
+    DPKG_EXIT=${PIPESTATUS[0]}
+    if [ "${DPKG_EXIT}" -ne 0 ]; then
+        echo "⚠ dpkg exited with ${DPKG_EXIT}, attempting apt-get -f install..."
+        if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -f; then
+            echo "✗ ERROR: apt-get -f install failed while processing $(basename "${deb_file}")"
+            echo "  Refer to ${INSTALL_LOG} for detailed output."
+            exit 1
+        fi
     fi
 done
 shopt -u nullglob
 # End package installation loop (for loop self-contained)
 
-#--- Sub-block 15.10: Create TurboVNC symlinks ---
+#--- Sub-block 28.10: Create TurboVNC symlinks ---
 # Purpose: Make TurboVNC binaries available in system PATH
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -10856,7 +11101,7 @@ TURBOVNC_BINARIES=(
   "tvncconfig:TurboVNC configuration utility"
 )
 
-#--- Sub-block 15.11: Create TurboVNC binary symlinks ---
+#--- Sub-block 28.11: Create TurboVNC binary symlinks ---
 # Purpose: Link all TurboVNC binaries to /usr/local/bin
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -10874,7 +11119,7 @@ for entry in "${TURBOVNC_BINARIES[@]}"; do
 done
 # End TurboVNC symlink loop (for loop self-contained)
 
-#--- Sub-block 15.12: Add TurboVNC to PATH ---
+#--- Sub-block 28.12: Add TurboVNC to PATH ---
 # Purpose: Make TurboVNC available in all shell sessions
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -10890,7 +11135,7 @@ chmod +x /etc/profile.d/turbovnc.sh
 
 echo "✓ TurboVNC symlinks and PATH configuration complete"
 
-#--- Sub-block 15.13: Initialize VirtualGL integration ---
+#--- Sub-block 28.13: Initialize VirtualGL integration ---
 # Purpose: Create VirtualGL symlinks and environment configuration
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -10920,7 +11165,7 @@ declare -A VIRTUALGL_BINARIES=(
   ["tcbench"]="TCP benchmark utility"
 )
 
-#--- Sub-block 15.14: Create VirtualGL binary symlinks ---
+#--- Sub-block 28.14: Create VirtualGL binary symlinks ---
 # Purpose: Link all VirtualGL binaries to /usr/local/bin
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -10939,7 +11184,7 @@ for binary in "${!VIRTUALGL_BINARIES[@]}"; do
 done
 # End VirtualGL symlink loop (for loop self-contained)
 
-#--- Sub-block 15.15: Configure VirtualGL environment ---
+#--- Sub-block 28.15: Configure VirtualGL environment ---
 # Critical: Set VirtualGL runtime environment variables for optimal VNC performance
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -11018,7 +11263,7 @@ chmod +x /etc/profile.d/virtualgl.sh
 
 echo "✓ VirtualGL symlinks and environment configuration complete"
 
-#--- Sub-block 15.16: Configure VirtualGL server (if needed) ---
+#--- Sub-block 28.16: Configure VirtualGL server (if needed) ---
 # Purpose: Run vglserver_config for system-wide VirtualGL configuration
 # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 # Dependencies: Block 15 (VirtualGL)
@@ -11033,17 +11278,21 @@ if [ -x /opt/VirtualGL/bin/vglserver_config ]; then
   # Create a helper script for manual configuration
   cat > /usr/local/bin/configure_vglserver.sh << 'VGLSCONF'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # VirtualGL Server Configuration Helper
 # Official docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 # This script helps configure VirtualGL for system-wide use
 # Note: In Singularity containers, this may not be necessary
 
-if [ -x /opt/VirtualGL/bin/vglserver_config ]; then
-  echo "Running VirtualGL server configuration..."
-  echo "This will set up permissions for VirtualGL to access the 3D X server"
-  /opt/VirtualGL/bin/vglserver_config
+readonly VGLSERVER_CONFIG="/opt/VirtualGL/bin/vglserver_config"
+
+if [ -x "${VGLSERVER_CONFIG}" ]; then
+  printf 'Running VirtualGL server configuration...\n'
+  printf 'This will set up permissions for VirtualGL to access the 3D X server\n'
+  "${VGLSERVER_CONFIG}"
 else
-  echo "ERROR: vglserver_config not found"
+  printf 'ERROR: vglserver_config not found\n' >&2
   exit 1
 fi
 VGLSCONF
@@ -11053,7 +11302,7 @@ else
   echo "  ⚠ vglserver_config not found (may not be needed in container environment)"
 fi
 
-#--- Sub-block 15.16.1: Verify VirtualGL installation ---
+#--- Sub-block 28.17: Verify VirtualGL installation ---
 # Purpose: Quick verification that vglrun is available
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -11066,12 +11315,14 @@ else
 fi
 # End VirtualGL verification (if-else self-contained)
 
-#--- Sub-block 15.17: Create VirtualGL test script ---
+#--- Sub-block 28.18: Create VirtualGL test script ---
 # Purpose: Comprehensive VirtualGL testing script for validation
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 cat > /usr/local/bin/test_virtualgl.sh << 'VGLTEST'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # VirtualGL Test Script
 
 echo "=========================================="
@@ -11079,54 +11330,71 @@ echo "VirtualGL Installation Test"
 echo "=========================================="
 echo ""
 
-# Add VirtualGL to PATH
+vgl_available="no"
+if command -v vglrun >/dev/null 2>&1; then
+  vgl_available="yes"
+fi
+
+timeout_available="no"
+if command -v timeout >/dev/null 2>&1; then
+  timeout_available="yes"
+fi
 
 echo "1. Checking VirtualGL binaries:"
 for binary in vglrun glxinfo glxspheres64; do
   if command -v "${binary}" >/dev/null 2>&1; then
-    echo "  ✓ ${binary}: $(which "${binary}")"
+    binary_path="$(command -v "${binary}")"
+    printf '  ✓ %s: %s\n' "${binary}" "${binary_path}"
   else
-    echo "  ✗ ${binary}: NOT FOUND"
+    printf '  ✗ %s: NOT FOUND\n' "${binary}"
   fi
 done
 
 echo ""
 echo "2. VirtualGL version:"
-vglrun --version 2>&1 | head -1
+if [ "${vgl_available}" = "yes" ]; then
+  if ! vglrun --version 2>&1 | head -1; then
+    echo "  ⚠ Unable to read VirtualGL version"
+  fi
+else
+  echo "  ⚠ VirtualGL not found"
+fi
 
 echo ""
 echo "3. OpenGL Information (via VirtualGL):"
 if [ -n "${DISPLAY:-}" ]; then
   echo "  Display: ${DISPLAY}"
-  vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)" | head -3
+  if [ "${vgl_available}" = "yes" ] && command -v glxinfo >/dev/null 2>&1; then
+    if ! { vglrun glxinfo 2>/dev/null | grep -E "OpenGL (vendor|renderer|version)" | head -3; }; then
+      echo "  ⚠ Unable to query VirtualGL OpenGL information"
+    fi
+  else
+    echo "  ⚠ glxinfo or VirtualGL unavailable; skipping GPU OpenGL query"
+  fi
 else
-
-#--- Sub-block: Section 3120 ---
-# Purpose: Continued implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
   echo "  ⚠ DISPLAY not set, skipping OpenGL test"
 fi
 
 echo ""
 echo "4. GPU Detection:"
 if command -v nvidia-smi >/dev/null 2>&1; then
-  echo "  NVIDIA GPU:"
-  timeout 5 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null | head -1 || echo "GPU info unavailable"
+  gpu_info=""
+  if [ "${timeout_available}" = "yes" ]; then
+    gpu_info="$(timeout 5 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
+  else
+    gpu_info="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
+  fi
+
+  if [ -n "${gpu_info}" ]; then
+    echo "  NVIDIA GPU:"
+    printf '%s\n' "${gpu_info}" | sed 's/^/  /'
+  else
+    echo "  ⚠ GPU info unavailable"
+  fi
 else
   echo "  ⚠ nvidia-smi not found"
 fi
 
-#--- Sub-block: Section continuation (3072) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 3027 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 echo ""
 echo "=========================================="
 echo "Test complete!"
@@ -11146,29 +11414,25 @@ chmod +x /usr/local/bin/test_virtualgl.sh
 echo "✓ VirtualGL test script created: /usr/local/bin/test_virtualgl.sh"
 
 
-#--- Sub-block 15.17.1: VirtualGL test script created ---
+#--- Sub-block 28.19: VirtualGL test script created ---
 # Purpose: Comprehensive testing and validation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-#--- Sub-block 15.18: Initialize VirtualGL helper scripts creation ---
+#--- Sub-block 28.20: Initialize VirtualGL helper scripts creation ---
 # Purpose: Create comprehensive helper scripts for VirtualGL testing
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 echo "==> Creating VirtualGL helper scripts..."
 
-#--- Sub-block 15.19: Create GPU benchmark script ---
+#--- Sub-block 28.21: Create GPU benchmark script ---
 # Purpose: Script to compare software vs GPU rendering performance
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 cat > /usr/local/bin/vgl_benchmark.sh << 'VGLBENCH'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # VirtualGL GPU Benchmark Script
-
-
-#--- Sub-block: Section 3170 ---
-# Purpose: Continued implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
-# Outputs: GPU libraries, CUDA toolkit
 
 echo "=========================================="
 echo "VirtualGL GPU Benchmark"
@@ -11186,9 +11450,25 @@ if ! command -v vglrun >/dev/null 2>&1; then
   exit 1
 fi
 
+collect_samples() {
+  local duration="$1"
+  shift
+  local run_output=""
+
+  if command -v timeout >/dev/null 2>&1; then
+    run_output="$(timeout "${duration}" "$@" 2>&1 || true)"
+  else
+    run_output="$("$@" 2>&1 || true)"
+  fi
+
+  printf '%s\n' "${run_output}" | grep -Ei "frames|fps" | tail -3 || true
+}
+
 echo "GPU Information:"
 if command -v nvidia-smi >/dev/null 2>&1; then
-  nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+  if ! nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; then
+    echo "  ⚠ Unable to query GPU information"
+  fi
 else
   echo "  nvidia-smi not available"
 fi
@@ -11201,33 +11481,18 @@ echo ""
 echo "1. Software rendering (no VirtualGL):"
 echo "   Running: glxspheres64"
 if command -v glxspheres64 >/dev/null 2>&1; then
-  timeout 10s glxspheres64 2>&1 | grep -i "frames\|fps" | tail -3
+  collect_samples 10 glxspheres64
 else
   echo "   glxspheres64 not found"
 fi
 
-#--- Sub-block: Section continuation (3144) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
 echo ""
 
-
-#--- Sub-block: Code section 3098 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 # Test 2: With VirtualGL (GPU rendering)
 echo "2. GPU rendering (with VirtualGL):"
 echo "   Running: vglrun glxspheres64"
 if command -v glxspheres64 >/dev/null 2>&1; then
-  timeout 10s vglrun glxspheres64 2>&1 | grep -i "frames\|fps" | tail -3
-
-#--- Sub-block: Section 3220 ---
-# Purpose: Continued implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
+  collect_samples 10 vglrun glxspheres64
 else
   echo "   glxspheres64 not found"
 fi
@@ -11248,12 +11513,14 @@ echo "=========================================="
 VGLBENCH
 chmod +x /usr/local/bin/vgl_benchmark.sh
 
-#--- Sub-block 15.20: Create OpenGL information script ---
+#--- Sub-block 28.22: Create OpenGL information script ---
 # Purpose: Display comprehensive OpenGL and GPU information
 # Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
 # Outputs: GPU libraries, CUDA toolkit
 cat > /usr/local/bin/vgl_info.sh << 'VGLINFO'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Display comprehensive OpenGL/VirtualGL information
 
 
@@ -11263,15 +11530,18 @@ echo "=========================================="
 echo ""
 
 # System info
-echo "Display: ${DISPLAY:-NOT SET}"
+display_value="${DISPLAY:-NOT SET}"
+echo "Display: ${display_value}"
 echo "Hostname: $(hostname)"
 echo ""
 
 # GPU info
 echo "GPU Information:"
 if command -v nvidia-smi >/dev/null 2>&1; then
-  nvidia-smi --query-gpu=index,name,driver_version,memory.total,memory.used \
-    --format=csv,noheader | nl
+  if ! { nvidia-smi --query-gpu=index,name,driver_version,memory.total,memory.used \
+    --format=csv,noheader | nl; }; then
+    echo "  ⚠ Unable to query GPU information"
+  fi
 else
   echo "  No NVIDIA GPU detected"
 fi
@@ -11280,7 +11550,9 @@ echo ""
 # OpenGL info (software rendering)
 echo "OpenGL (Software Rendering):"
 if [ -n "${DISPLAY:-}" ] && command -v glxinfo >/dev/null 2>&1; then
-  glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'
+  if ! { glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'; }; then
+    echo "  ⚠ Unable to query OpenGL information (software rendering)"
+  fi
 else
   echo "  Cannot query (DISPLAY not set or glxinfo not found)"
 fi
@@ -11289,27 +11561,24 @@ echo ""
 # OpenGL info (with VirtualGL)
 echo "OpenGL (VirtualGL/GPU Rendering):"
 if [ -n "${DISPLAY:-}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
-  vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'
+  if ! { vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'; }; then
+    echo "  ⚠ Unable to query VirtualGL OpenGL information"
+  fi
 else
   echo "  Cannot query (VirtualGL not available)"
 fi
 echo ""
 
-#--- Sub-block: Section continuation (3220) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3169 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 # VirtualGL status
 echo "VirtualGL Status:"
 if command -v vglrun >/dev/null 2>&1; then
-  echo "  ✓ VirtualGL installed: $(which vglrun)"
-  vglrun --version 2>&1 | head -1 | sed 's/^/  /'
+  vglrun_path="$(command -v vglrun)"
+  echo "  ✓ VirtualGL installed: ${vglrun_path}"
+  if ! vglrun --version 2>&1 | head -1 | sed 's/^/  /'; then
+    echo "  ⚠ Unable to read VirtualGL version"
+  fi
 else
   echo "  ✗ VirtualGL not found"
 fi
@@ -11330,12 +11599,14 @@ echo "=========================================="
 VGLINFO
 chmod +x /usr/local/bin/vgl_info.sh
 
-#--- Sub-block 15.21: Create application launcher script ---
+#--- Sub-block 28.23: Create application launcher script ---
 # Purpose: Wrapper script to launch applications with VirtualGL acceleration
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 cat > /usr/local/bin/vgl_launch.sh << 'VGLLAUNCH'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # Launch applications with VirtualGL acceleration
 
 if [ $# -eq 0 ]; then
@@ -11370,34 +11641,31 @@ fi
 
 # Launch with VirtualGL
 echo "Launching with VirtualGL GPU acceleration..."
-echo "Command: vglrun $*"
+printf 'Command: vglrun'
+for arg in "$@"; do
+  printf ' %q' "${arg}"
+done
+printf '\n'
 echo ""
 exec vglrun "$@"
 VGLLAUNCH
 chmod +x /usr/local/bin/vgl_launch.sh
 
-#--- Sub-block: Section continuation (3293) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3239 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 echo "✓ VirtualGL helper scripts created:"
 echo "  - test_virtualgl.sh   : Test VirtualGL installation"
 echo "  - vgl_benchmark.sh    : Benchmark GPU performance"
 echo "  - vgl_info.sh         : Display OpenGL/VirtualGL info"
 echo "  - vgl_launch.sh       : Launch apps with GPU acceleration"
 
-#--- Sub-block 15.22: Add VirtualGL convenience aliases ---
+#--- Sub-block 28.24: Add VirtualGL convenience aliases ---
 # Purpose: Add GPU-accelerated application aliases to system bashrc
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 echo "==> Adding VirtualGL convenience aliases..."
 
+if ! grep -Fq "# VirtualGL Convenience Aliases and Functions" /etc/bash.bashrc 2>/dev/null; then
 cat >> /etc/bash.bashrc << 'VGLALIAS'
 
 # ============================================================================
@@ -11414,7 +11682,21 @@ alias vmeshlab='vglrun meshlab'
 
 # Quick benchmark
 alias gpubench='vglrun glxspheres64'
-alias gpuinfo='vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)"'
+
+gpuinfo() {
+  if ! command -v vglrun >/dev/null 2>&1; then
+    echo "VirtualGL not found"
+    return 1
+  fi
+  if ! command -v glxinfo >/dev/null 2>&1; then
+    echo "glxinfo not found"
+    return 1
+  fi
+  if ! { vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)"; }; then
+    echo "Unable to query GPU OpenGL information"
+    return 1
+  fi
+}
 
 # Helper function: launch any app with VirtualGL
 vgl() {
@@ -11429,29 +11711,56 @@ vgl() {
 # Helper function: compare software vs GPU rendering
 compare_render() {
   local app="${1:-glxspheres64}"
+  local timeout_available="no"
+  local output=""
+
   echo "=== Software Rendering ==="
-  timeout 5s "${app}" 2>&1 | grep -i fps | tail -1
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_available="yes"
+  fi
+
+  if command -v "${app}" >/dev/null 2>&1; then
+    if [ "${timeout_available}" = "yes" ]; then
+      output="$(timeout 5 "${app}" 2>&1 || true)"
+    else
+      output="$("${app}" 2>&1 || true)"
+    fi
+    printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+  else
+    echo "Application ${app} not found"
+  fi
+
   echo ""
   echo "=== GPU Rendering (VirtualGL) ==="
-  timeout 5s vglrun "${app}" 2>&1 | grep -i fps | tail -1
+  if ! command -v vglrun >/dev/null 2>&1; then
+    echo "VirtualGL not available"
+    return 1
+  fi
+
+  if command -v "${app}" >/dev/null 2>&1; then
+    if [ "${timeout_available}" = "yes" ]; then
+      output="$(timeout 5 vglrun "${app}" 2>&1 || true)"
+    else
+      output="$(vglrun "${app}" 2>&1 || true)"
+    fi
+    printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+  else
+    echo "Application ${app} not found"
+    return 1
+  fi
 }
 
-#--- Sub-block: Section continuation (3345) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
-export -f vgl compare_render
+export -f vgl compare_render gpuinfo
 VGLALIAS
+else
+  echo "  • VirtualGL aliases already present in /etc/bash.bashrc"
+fi
 
 
-#--- Sub-block: Code section 3291 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 echo "✓ VirtualGL aliases added to /etc/bash.bashrc"
 
-#--- Sub-block 15.23: Initialize VirtualGL performance optimization ---
+#--- Sub-block 28.25: Initialize VirtualGL performance optimization ---
 # Purpose: Create optimized configuration profiles for different network speeds
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
@@ -11471,7 +11780,6 @@ VGL_SUBSAMP=444  # No subsampling - best quality
 VGL_QUAL=95      # High JPEG quality
 VGL_SPOIL=0      # No frame spoiling - all frames rendered
 VGL_FPS=60       # Target 60 FPS
-VGL_READBACK=sync
 VGL_TRANSPORT=vgl
 VGLFAST
 
@@ -11497,36 +11805,76 @@ VGL_FPS=15       # Target 15 FPS
 VGL_READBACK=sync
 VGLLOWBW
 
-#--- Sub-block: Section continuation (3397) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # Create wrapper scripts for each profile
 
-#--- Sub-block: Code section 3338 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 cat > /usr/local/bin/vglrun-fast << 'VGLFAST'
 #!/usr/bin/env bash
-source /usr/local/etc/virtualgl/vglrun-fast.conf
+set -euo pipefail
+
+config_file="/usr/local/etc/virtualgl/vglrun-fast.conf"
+vgl_binary="/opt/VirtualGL/bin/vglrun"
+
+if [ ! -r "${config_file}" ]; then
+  echo "Configuration file not found: ${config_file}" >&2
+  exit 1
+fi
+
+if [ ! -x "${vgl_binary}" ]; then
+  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${config_file}"
 export VGL_COMPRESS VGL_READBACK VGL_SYNC VGL_GAMMA VGL_LOGO VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_TRANSPORT
-exec /opt/VirtualGL/bin/vglrun "$@"
+exec "${vgl_binary}" "$@"
 VGLFAST
 
 cat > /usr/local/bin/vglrun-balanced << 'VGLBAL'
 #!/usr/bin/env bash
-source /usr/local/etc/virtualgl/vglrun-balanced.conf
+set -euo pipefail
+
+config_file="/usr/local/etc/virtualgl/vglrun-balanced.conf"
+vgl_binary="/opt/VirtualGL/bin/vglrun"
+
+if [ ! -r "${config_file}" ]; then
+  echo "Configuration file not found: ${config_file}" >&2
+  exit 1
+fi
+
+if [ ! -x "${vgl_binary}" ]; then
+  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${config_file}"
 export VGL_COMPRESS VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_READBACK
-exec /opt/VirtualGL/bin/vglrun "$@"
+exec "${vgl_binary}" "$@"
 VGLBAL
 
 cat > /usr/local/bin/vglrun-lowbw << 'VGLLOWBW'
 #!/usr/bin/env bash
-source /usr/local/etc/virtualgl/vglrun-lowbw.conf
+set -euo pipefail
+
+config_file="/usr/local/etc/virtualgl/vglrun-lowbw.conf"
+vgl_binary="/opt/VirtualGL/bin/vglrun"
+
+if [ ! -r "${config_file}" ]; then
+  echo "Configuration file not found: ${config_file}" >&2
+  exit 1
+fi
+
+if [ ! -x "${vgl_binary}" ]; then
+  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "${config_file}"
 export VGL_COMPRESS VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_READBACK
-exec /opt/VirtualGL/bin/vglrun "$@"
+exec "${vgl_binary}" "$@"
 VGLLOWBW
 
 chmod +x /usr/local/bin/vglrun-{fast,balanced,lowbw}
@@ -11536,7 +11884,7 @@ echo "  - vglrun-fast (best quality, fast network)"
 echo "  - vglrun-balanced (default)"
 echo "  - vglrun-lowbw (slow network)"
 
-#--- Sub-block 15.24: Initialize TurboVNC performance optimization ---
+#--- Sub-block 28.26: Initialize TurboVNC performance optimization ---
 # Purpose: Configure TurboVNC for optimal performance with VirtualGL
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -11587,17 +11935,9 @@ $numThreads = "auto";
 $idleTimeout = "0";
 TVNCPERF
 
-#--- Sub-block: Section continuation (3473) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # Create optimized xstartup template
 
-#--- Sub-block: Code section 3411 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 mkdir -p /usr/share/turbovnc/
 
 cat > /usr/share/turbovnc/xstartup.turbovnc.optimized << 'XSTARTOPT'
@@ -11639,10 +11979,6 @@ xset b off 2>/dev/null || true
 # Set keyboard repeat rate (faster responsiveness)
 xset r rate 250 30 2>/dev/null || true
 
-#--- Sub-block: Section continuation (3516) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # Start window manager with optimizations
 export XFWM4_USE_PRESENT=0  # Disable Present extension (can cause issues)
@@ -11653,13 +11989,11 @@ XSTARTOPT
 chmod +x /usr/share/turbovnc/xstartup.turbovnc.optimized
 
 
-#--- Sub-block: Code section 3458 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # Create performance testing script
 cat > /usr/local/bin/turbovnc_tune.sh << 'TVNCTUNE'
 #!/usr/bin/env bash
+set -euo pipefail
+
 # TurboVNC Performance Tuning Helper
 
 echo "=========================================="
@@ -11696,10 +12030,6 @@ test_setting() {
 }
 
 
-#--- Sub-block: Section continuation (3566) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 test_setting 95 1 "High quality (default)"
 test_setting 80 1 "Balanced (good for most)"
 test_setting 60 2 "Low bandwidth"
@@ -11717,33 +12047,56 @@ TVNCTUNE
 chmod +x /usr/local/bin/turbovnc_tune.sh
 
 
-#--- Sub-block: Code section 3512 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 echo "✓ TurboVNC performance optimizations configured"
 
-#--- Sub-block 15.25: Install yq YAML processor ---
+#--- Sub-block 28.27: Install yq YAML processor ---
 # Purpose: Install yq for YAML file manipulation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -s "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
-  install -o 0 -g 0 -m 0755 ${CONTAINER_BIN_CACHE}/yq_linux_amd64 /usr/local/bin/yq
+  if ! install -o 0 -g 0 -m 0755 "${CONTAINER_BIN_CACHE}/yq_linux_amd64" /usr/local/bin/yq; then
+    echo "[warn] Failed to install yq from cached binary" >&2
+  fi
+else
+  echo "[warn] Cached yq binary missing or empty; skipping yq installation" >&2
 fi
 
-#--- Sub-block 15.19.1: Create default VNC password (non-interactive) ---
+#--- Sub-block 28.28: Create default VNC password (non-interactive) ---
 # Purpose: Set up default VNC password to prevent interactive prompts
 # Dependencies: TurboVNC installation
 # Outputs: ~/.vnc/passwd
 echo "==> Setting up default VNC password..."
-mkdir -p ~/.vnc
-# Create default password "vncpassword" non-interactively
-# This prevents interactive prompts during build and provides secure default
-echo "vncpassword" | vncpasswd -f > ~/.vnc/passwd 2>/dev/null || true
-chmod 600 ~/.vnc/passwd 2>/dev/null || true
-echo "✓ Default VNC password configured (change with: vncpasswd)"
+if install -d -m 0700 "${HOME}/.vnc"; then
+  if command -v vncpasswd >/dev/null 2>&1; then
+    tmp_passwd=""
+    if tmp_passwd=$(mktemp -p "${HOME}/.vnc" passwd.XXXXXX 2>/dev/null); then
+      if printf '%s\n' "vncpassword" | vncpasswd -f >"${tmp_passwd}" 2>/dev/null; then
+        if mv -f "${tmp_passwd}" "${HOME}/.vnc/passwd"; then
+          if chmod 600 "${HOME}/.vnc/passwd"; then
+            echo "✓ Default VNC password configured (change with: vncpasswd)"
+          else
+            echo "[warn] Failed to set permissions on ${HOME}/.vnc/passwd" >&2
+            rm -f "${HOME}/.vnc/passwd"
+          fi
+        else
+          echo "[warn] Unable to move temporary VNC password into place" >&2
+          rm -f "${tmp_passwd}"
+        fi
+      else
+        echo "[warn] Failed to generate default VNC password" >&2
+        rm -f "${tmp_passwd}"
+      fi
+    else
+      echo "[warn] Unable to create temporary file for VNC password" >&2
+    fi
+  else
+    echo "[warn] vncpasswd command not available; skipping default password creation" >&2
+  fi
+else
+  echo "[warn] Unable to create ${HOME}/.vnc directory; skipping default password setup" >&2
+fi
 
-#--- Sub-block 15.20: Remote Desktop Scripts Summary ---
+#--- Sub-block 28.29: Remote Desktop Scripts Summary ---
 # Purpose: Index of all remote desktop helper scripts
 # Dependencies: Block 15 (TurboVNC, VirtualGL)
 # Outputs: Documentation
@@ -11782,7 +12135,7 @@ echo "════════════════════════�
 echo ""
 
 #===============================================================================
-# BLOCK 16: CONDA/PYTHON ENVIRONMENT SETUP
+# BLOCK 29: CONDA/PYTHON ENVIRONMENT SETUP
 #===============================================================================
 # Purpose: Install Miniforge/Micromamba and configure Python environments
 # Self-contained: Yes (complete with retry logic and verification)
@@ -11790,7 +12143,7 @@ echo ""
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 16.1: Initialize Miniforge installation ---
+#--- Sub-block 29.1: Initialize Miniforge installation ---
 # Critical: Conda environment manager with robust error handling and retry logic
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -11799,18 +12152,18 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
   # Miniforge installer already verified in early verification phase
   echo "✓ Miniforge installer already verified (SHA256 check passed)"
 
-  #--- Sub-block 16.2: Configure conda environment variables ---
+  #--- Sub-block 29.2: Configure conda environment variables ---
   # Purpose: Set conda cache and behavior for installation
   export CONDA_ALWAYS_YES=true
   export CONDA_AUTO_UPDATE_CONDA=false
 
-  #--- Sub-block 16.3: Initialize retry logic ---
+  #--- Sub-block 29.3: Initialize retry logic ---
   # Purpose: Allow multiple installation attempts with cleanup
   max_retries=3
   retry_count=0
   MINIFORGE_INSTALLED=false
 
-  #--- Sub-block 16.4: Miniforge installation retry loop ---
+  #--- Sub-block 29.4: Miniforge installation retry loop ---
   # Critical: Retry installation with cache cleanup between attempts
   while [ "${retry_count}" -lt "${max_retries}" ]; do
     echo "Miniforge installation attempt $((retry_count + 1))/${max_retries}..."
@@ -11819,7 +12172,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     rm -rf "${MINIFORGE_HOME}/pkgs"/* 2>/dev/null || true
     rm -rf /root/.cache/conda/* 2>/dev/null || true
 
-    #--- Sub-block 16.5: Advanced conda cache cleanup ---
+    #--- Sub-block 29.5: Advanced conda cache cleanup ---
     # Purpose: Remove corrupted packages before installation
     echo "Performing advanced conda package cache cleanup..."
     if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
@@ -11842,16 +12195,8 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         fi
       done
 
-#--- Sub-block: Section continuation (3650) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3578 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
       # Comprehensive integrity check with smart replacement
       echo "Performing comprehensive package integrity check..."
       corrupted_packages=()
@@ -11892,10 +12237,6 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     export CONDA_INSTALLER_TYPE=miniforge
     export CONDA_INSTALLER_VERSION=25.3.1-0
 
-#--- Sub-block: Section continuation (3694) ---
-# Purpose: Implementation details
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
 
     # Run installer with enhanced CRC error handling and non-interactive mode
     echo "Running Miniforge installer with enhanced CRC error handling..."
@@ -11906,10 +12247,6 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       mv /opt/.condarc.pre "${MINIFORGE_HOME}/.condarc" 2>/dev/null || true
 
 
-#--- Sub-block: Code section 3625 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
       # Verify Conda Installation
       if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
         echo "✓ Miniforge installed successfully"
@@ -11927,11 +12264,11 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       echo "[warn] Miniforge installer failed (attempt $((retry_count + 1))/${max_retries})"
 
       # Enhanced CRC error detection and handling
-      if grep -q "Bad CRC|ZIP had CRC|md5sum mismatch" /tmp/miniforge_install.log 2>/dev/null; then
+      if grep -E -q "Bad CRC|ZIP had CRC|md5sum mismatch" /tmp/miniforge_install.log 2>/dev/null; then
         echo "✓ CRC/MD5 error detected in installation log"
 
         # Extract all corrupted package names from the log
-        corrupted_pkgs=$(grep -o 'Extracting \(.*\)\.conda\|Extracting \(.*\)\.tar\.bz2' /tmp/miniforge_install.log | sed 's/Extracting //' | sort -u)
+        corrupted_pkgs=$(grep -E -o 'Extracting (.+\.conda|.+\.tar\.bz2)' /tmp/miniforge_install.log | sed 's/^Extracting //' | sort -u)
 
         if [ -n "${corrupted_pkgs}" ]; then
           echo "→ Removing corrupted packages:"
@@ -11961,16 +12298,8 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         fi
       fi
 
-#--- Sub-block: Section continuation (3750) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3672 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
       ((retry_count++))
       if [ "${retry_count}" -lt "${max_retries}" ]; then
         echo "Retrying Miniforge installation..."
@@ -12019,16 +12348,8 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       fi
     fi
 
-#--- Sub-block: Section continuation (3798) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3717 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
     # Final Verification of conda installation
     echo "Performing final conda installation verification..."
     
@@ -12085,9 +12406,9 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
       # Install mamba as the PREFERRED solver (with conda fallback)
       echo "Installing mamba solver (PREFERRED - will fallback to conda if needed)..."
-      
+
       MAMBA_AVAILABLE=0
-      
+
       # Try mamba installation (corrupted packages already cleaned in Xsetup)
       if "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge mamba; then
         printf '\033[0m\n' # Reset terminal state after conda install
@@ -12172,7 +12493,7 @@ fi
 # End Miniforge installation (if block self-contained)
 debug_glibc "After Miniforge installation and config"
 
-#--- Sub-block 16.6: Fix deprecated mamba.sh warning (mamba 2.0+) ---
+#--- Sub-block 29.6: Fix deprecated mamba.sh warning (mamba 2.0+) ---
 # Critical: Remove deprecated mamba.sh file to prevent warnings
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -12181,7 +12502,7 @@ if [ -d "${MINIFORGE_HOME}/etc/profile.d" ]; then
   if [ -f "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" ]; then
     echo "Removing deprecated mamba.sh file (mamba 2.0+ compatibility)..."
     mv "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" "${MINIFORGE_HOME}/etc/profile.d/mamba.sh.deprecated" 2>/dev/null || true
-    echo -e "${GREEN}✓ Deprecated mamba.sh removed${NC}"
+    printf '%s\n' "${GREEN}✓ Deprecated mamba.sh removed${NC}"
   fi
   
   # Note: We don't create a replacement mamba.sh in /etc/profile.d
@@ -12191,31 +12512,37 @@ if [ -d "${MINIFORGE_HOME}/etc/profile.d" ]; then
 fi
 # End mamba.sh fix (if block self-contained)
 
-#--- Sub-block 16.6.1: Configure system-wide Conda PATH ---
+#--- Sub-block 29.7: Configure system-wide Conda PATH ---
 # Critical: Make conda available in all shell sessions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-echo -e "${YELLOW}Configuring system-wide environment for Conda...${NC}"
+printf '%s\n' "${YELLOW}Configuring system-wide environment for Conda...${NC}"
 if [ -d "${MINIFORGE_HOME}/bin" ]; then
-  cat > /etc/profile.d/conda.sh << 'EOF'
+  if cat <<'EOF' >/etc/profile.d/conda.sh; then
 #!/bin/sh
 # Prepend conda binaries to the PATH
 EOF
-  chmod +x /etc/profile.d/conda.sh
-  echo -e "${GREEN}✓ Conda PATH configured successfully.${NC}"
+    if chmod +x /etc/profile.d/conda.sh; then
+      printf '%s\n' "${GREEN}✓ Conda PATH configured successfully.${NC}"
+    else
+      echo "[warn] Failed to set execute permissions on /etc/profile.d/conda.sh" >&2
+    fi
+  else
+    echo "[warn] Failed to create /etc/profile.d/conda.sh" >&2
+  fi
 else
-  echo -e "${RED}Δ Could not configure Conda PATH, ${MINIFORGE_HOME}/bin not found.${NC}"
+  printf '%s\n' "${RED}Δ Could not configure Conda PATH, ${MINIFORGE_HOME}/bin not found.${NC}"
 fi
 # End Conda PATH configuration (if-else self-contained)
 
-#--- Sub-block 16.7: Configure conda activation hooks for Drake compatibility ---
+#--- Sub-block 29.8: Configure conda activation hooks for Drake compatibility ---
 # Critical: Prevent Drake Python paths from conflicting with conda environments
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 echo "==> Configuring conda hooks for Drake compatibility"
 mkdir -p /opt/mamba/etc/conda/activate.d
 
-#--- Sub-block 16.8: Create conda activation hook ---
+#--- Sub-block 29.9: Create conda activation hook ---
 # Purpose: Save and clear PYTHONPATH when activating conda environment
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -12239,7 +12566,7 @@ EOF
 
 mkdir -p /opt/mamba/etc/conda/deactivate.d
 
-#--- Sub-block 16.9: Create conda deactivation hook ---
+#--- Sub-block 29.10: Create conda deactivation hook ---
 # Purpose: Restore PYTHONPATH when deactivating conda environment
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -12261,87 +12588,86 @@ chmod +x /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh
 
 echo "✓ Conda hooks configured for Drake compatibility"
 
-#--- Sub-block 16.10: Initialize Micromamba installation ---
+#--- Sub-block 29.11: Initialize Micromamba installation ---
 # Purpose: Install alternative lightweight conda package manager
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 echo "==> Micromamba (from embedded binary)"
 if [ -s "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
-    install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba
-    ln -sf /opt/micromamba /usr/local/bin/micromamba
+  if install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba; then
+    if ln -sf /opt/micromamba /usr/local/bin/micromamba; then
 
-    #--- Sub-block 16.11: Test micromamba binary with retry ---
-    # Critical: Verify binary integrity before configuration
-    if [ -x /opt/micromamba ]; then
+      #--- Sub-block 29.12: Test micromamba binary with retry ---
+      # Critical: Verify binary integrity before configuration
+      if [ -x /opt/micromamba ]; then
         echo "Testing micromamba binary..."
-        max_retries=3
-        retry_count=0
+        micromamba_max_retries=3
+        micromamba_retry_count=0
 
-        while [ "${retry_count}" -lt "${max_retries}" ]; do
-            if /opt/micromamba --version >/dev/null 2>&1; then
-                echo "✓ Micromamba binary is working"
-                break
-            else
-        echo "Δ Micromamba binary test failed (attempt $((retry_count + 1))/${max_retries})"
-                ((retry_count++))
-                if [ "${retry_count}" -lt "${max_retries}" ]; then
-          echo "  Removing corrupted binary and reinstalling..."
-          rm -f /usr/local/bin/micromamba /opt/micromamba
-                    install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba
-                fi
+        while [ "${micromamba_retry_count}" -lt "${micromamba_max_retries}" ]; do
+          if /opt/micromamba --version >/dev/null 2>&1; then
+            echo "✓ Micromamba binary is working"
+            break
+          fi
+          echo "[warn] Micromamba binary test failed (attempt $((micromamba_retry_count + 1))/${micromamba_max_retries})" >&2
+          micromamba_retry_count=$((micromamba_retry_count + 1))
+          if [ "${micromamba_retry_count}" -lt "${micromamba_max_retries}" ]; then
+            echo "  Removing corrupted binary and reinstalling..." >&2
+            rm -f /usr/local/bin/micromamba /opt/micromamba
+            if ! install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba; then
+              echo "[warn] Reinstallation of micromamba failed; aborting retries" >&2
+              break
             fi
+            if ! ln -sf /opt/micromamba /usr/local/bin/micromamba; then
+              echo "[warn] Failed to refresh micromamba symlink during retry" >&2
+            fi
+          fi
         done
-        # End micromamba retry loop (while loop self-contained)
 
-        if [ "${retry_count}" -ge "${max_retries}" ]; then
-      echo "✗ Micromamba binary failed after ${max_retries} attempts - removing corrupted binary"
-            rm -f /opt/micromamba /usr/local/bin/micromamba
-    fi
-    # End retry check (if self-contained)
+        if [ "${micromamba_retry_count}" -ge "${micromamba_max_retries}" ]; then
+          echo "[error] Micromamba binary failed after ${micromamba_max_retries} attempts - removing corrupted binary" >&2
+          rm -f /opt/micromamba /usr/local/bin/micromamba
+        else
+          #--- Sub-block 29.13: Configure micromamba settings ---
+          # Purpose: Set channel priority and behavior for optimal performance
+          echo "Configuring micromamba..."
+          # Note: Using flexible priority for micromamba allows users more freedom
+          # when creating their own ad-hoc environments.
+          if /opt/micromamba config set channel_priority flexible 2>/dev/null; then
+            echo "✓ Channel priority configured"
+          else
+            echo "[warn] Channel priority configuration failed" >&2
+          fi
 
-            #--- Sub-block 16.12: Configure micromamba settings ---
-            # Purpose: Set channel priority and behavior for optimal performance
-            echo "Configuring micromamba..."
-            # Note: Using flexible priority for micromamba allows users more freedom
-            # when creating their own ad-hoc environments.
-            if /opt/micromamba config set channel_priority flexible 2>/dev/null; then
-      echo "✓ Channel priority configured"
-            else
-      echo "Δ Channel priority configuration failed"
-            fi
+          if /opt/micromamba config set always_yes yes 2>/dev/null; then
+            echo "✓ Always yes configured"
+          else
+            echo "[warn] Always yes configuration failed" >&2
+          fi
 
-#--- Sub-block: Section continuation (3948) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 3864 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-            if /opt/micromamba config set always_yes yes 2>/dev/null; then
-      echo "✓ Always yes configured"
-            else
-      echo "Δ Always yes configuration failed"
-            fi
-
-            if /opt/micromamba config set quiet true 2>/dev/null; then
-      echo "✓ Quiet mode configured"
-            else
-      echo "Δ Quiet mode configuration failed"
-            fi
-            echo "✓ Micromamba configured successfully"
+          if /opt/micromamba config set quiet true 2>/dev/null; then
+            echo "✓ Quiet mode configured"
+          else
+            echo "[warn] Quiet mode configuration failed" >&2
+          fi
+          echo "✓ Micromamba configured successfully"
+        fi
+      else
+        echo "[warn] Micromamba binary not executable" >&2
+      fi
     else
-    echo "Δ Micromamba binary not executable"
+      echo "[warn] Failed to create micromamba symlink" >&2
+      rm -f /opt/micromamba
     fi
-    # End micromamba executable check (if-else self-contained)
+  else
+    echo "[warn] Failed to install micromamba binary" >&2
+  fi
 else
-  echo "Δ Micromamba binary not found in cache"
+  echo "[warn] Micromamba binary not found in cache" >&2
 fi
 # End micromamba installation (if block self-contained)
 
-#--- Sub-block 16.13: Initialize conda base environment setup ---
+#--- Sub-block 29.14: Initialize conda base environment setup ---
 # Purpose: Install full Jupyter stack and scientific computing packages
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -12350,7 +12676,7 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # Conda channel configuration is already set in .condarc.pre (strict conda-forge only)
   echo "Installing full Jupyter environment + additional libraries using mamba solver..."
 
-  #--- Sub-block 16.14: Enhanced conda cache management ---
+  #--- Sub-block 29.15: Enhanced conda cache management ---
   # Purpose: Clean cache before large package installation
   echo "Performing enhanced conda cache management before mamba installation..."
   if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
@@ -12359,7 +12685,7 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
     # Remove cache metadata that causes "modified by another program" warnings
     rm -rf "${CONTAINER_CONDA_CACHE}/cache" 2>/dev/null || true
 
-#--- Sub-block: Desktop application installation ---
+#--- Sub-block 29.16: Desktop application installation ---
 # Critical: CAD and productivity software setup
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
@@ -12370,13 +12696,13 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
     echo "✓ Enhanced conda cache management completed"
   fi
 
-#--- Sub-block: Application installation ---
+#--- Sub-block 29.17: Application installation ---
 # Purpose: Desktop applications setup
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
   # End cache management (if block self-contained)
 
-  #--- Sub-block 16.15: Install packages with mamba or conda ---
+  #--- Sub-block 29.18: Install packages with mamba or conda ---
   # Critical: Install scientific computing and ML packages
   
   # CRITICAL: Ensure SSL certificates are configured for all conda/mamba operations
@@ -12430,21 +12756,13 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   #   - Easy updates without rebuilding the entire image
   # End mamba/conda installation (if-else self-contained)
 
-#--- Sub-block: Section continuation (4036) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 3949 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-  #--- Sub-block 16.18: Register Jupyter kernel ---
+  #--- Sub-block 29.19: Register Jupyter kernel ---
   # Purpose: Make conda base environment available in Jupyter
   "${MINIFORGE_HOME}/bin/python" -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" || true
 
-  #--- Sub-block 16.19: Install additional pip packages ---
+  #--- Sub-block 29.20: Install additional pip packages ---
   # Purpose: Robotics and simulation packages not in conda
   # Note: openai-gym is deprecated, using gymnasium instead (already installed via conda)
   "${MINIFORGE_HOME}/bin/pip" install \
@@ -12453,7 +12771,7 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
     trimesh \
     pyglet || true
 
-  #--- Sub-block 16.20: Verify package installations ---
+  #--- Sub-block 29.21: Verify package installations ---
   # Purpose: Confirm critical packages installed correctly
   echo "Verifying critical package installations..."
   if [ -x "${MINIFORGE_HOME}/bin/jupyter" ]; then
@@ -12472,7 +12790,7 @@ fi
 debug_glibc "After conda environment setup"
 
 #===============================================================================
-# BLOCK 17: 3D MODELING AND OFFICE APPLICATIONS
+# BLOCK 30: 3D MODELING AND OFFICE APPLICATIONS
 #===============================================================================
 # Purpose: Install office suite and 3D modeling tools
 # Self-contained: Yes (complete application installations)
@@ -12480,94 +12798,153 @@ debug_glibc "After conda environment setup"
 # Outputs: Installed packages
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 17.1: LibreOffice installation ---
+#--- Sub-block 30.1: LibreOffice installation ---
 # Critical: Office productivity suite
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> LibreOffice installation"
-apt-get -y --no-install-recommends install \
-  libreoffice-writer libreoffice-calc libreoffice-impress
+if ! DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends install \
+  libreoffice-writer libreoffice-calc libreoffice-impress; then
+  echo "[error] Failed to install LibreOffice components" >&2
+  exit 1
+fi
 
-#--- Sub-block 17.2: Blender and 3D tools installation ---
+#--- Sub-block 30.2: Blender and 3D tools installation ---
 # Critical: 3D modeling, mesh processing, and CAD tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> Blender installation"
-apt-get -y --no-install-recommends install blender meshlab geomview librecad openscad-testing
+if ! DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends install \
+  blender meshlab geomview librecad openscad-testing; then
+  echo "[error] Failed to install Blender and 3D toolchain" >&2
+  exit 1
+fi
 
 debug_glibc "After installation of LibreOffice & Blender"
 
-#--- Sub-block 17.3: OCIO color management configuration ---
+#--- Sub-block 30.3: OCIO color management configuration ---
 # Purpose: Configure OpenColorIO for color-accurate 3D rendering
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> OCIO color profile configuration initialized"
+install_ocio_profile_from_aces() {
+  # Helper: download and install ACES OpenColorIO profiles when Blender data is unavailable.
+  local tmp_dir ocio_prev_dir ocio_archive_url ocio_config_found ocio_source_dir ocio_candidate
+
+  if ! install -d -m 0755 /usr/share/ocio/aces; then
+    echo "Failed to create /usr/share/ocio/aces" >&2
+    return 1
+  fi
+
+  tmp_dir="$(mktemp -d -t ocio-aces.XXXXXX)"
+  if [ ! -d "${tmp_dir}" ]; then
+    echo "Failed to create temporary directory for OCIO download" >&2
+    return 1
+  fi
+
+  ocio_prev_dir=$(pwd)
+  if ! cd "${tmp_dir}"; then
+    echo "Failed to change to temporary directory ${tmp_dir}" >&2
+    rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  ocio_archive_url="https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/archive/refs/heads/master.tar.gz"
+  if ! curl -fSLo aces.tar.gz --retry 5 --retry-delay 2 --retry-connrefused "${ocio_archive_url}"; then
+    echo "[warn] Failed to download ACES OCIO configuration archive" >&2
+    cd "${ocio_prev_dir}" >/dev/null 2>&1 || true
+    rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+  if ! tar -xzf aces.tar.gz; then
+    echo "[warn] Failed to extract ACES OCIO archive" >&2
+    cd "${ocio_prev_dir}" >/dev/null 2>&1 || true
+    rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
+    return 1
+  fi
+
+  ocio_config_found=""
+  for candidate in \
+    "OpenColorIO-Config-ACES-master/aces_1.2/config.ocio" \
+    "OpenColorIO-Config-ACES-master/aces_1.3/config.ocio" \
+    "OpenColorIO-Config-ACES-master/config.ocio"
+  do
+    if [ -f "${candidate}" ]; then
+      ocio_source_dir=$(dirname "${candidate}")
+      if cp -r "${ocio_source_dir}/." /usr/share/ocio/aces/ 2>/dev/null; then
+        ocio_config_found="/usr/share/ocio/aces/config.ocio"
+        break
+      else
+        echo "[warn] Failed to copy OCIO config from ${ocio_source_dir}" >&2
+      fi
+    fi
+  done
+
+  if [ -z "${ocio_config_found}" ]; then
+    ocio_candidate=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f | head -1 || true)
+    if [ -n "${ocio_candidate}" ]; then
+      ocio_source_dir=$(dirname "${ocio_candidate}")
+      if cp -r "${ocio_source_dir}/." /usr/share/ocio/aces/ 2>/dev/null; then
+        ocio_config_found="/usr/share/ocio/aces/config.ocio"
+      else
+        echo "[warn] Failed to copy discovered OCIO config directory" >&2
+        ocio_config_found=""
+      fi
+    fi
+  fi
+
+  cd "${ocio_prev_dir}" >/dev/null 2>&1 || true
+  rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
+
+  if [ -n "${ocio_config_found}" ] && [ -f "${ocio_config_found}" ]; then
+    printf '%s' "${ocio_config_found}"
+    return 0
+  fi
+
+  echo "[warn] OCIO config.ocio not found in ACES archive - OCIO may not be fully configured" >&2
+  return 1
+}
+ocio_prev_opts="$-"
 set -e
 DEBIAN_FRONTEND=noninteractive apt-get update -yq
-if ! dpkg -l blender-data >/dev/null 2>&1; then
+if ! dpkg_resolve_installed_package "blender-data" >/dev/null 2>&1; then
   DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends blender-data
   # Find Blender's bundled OCIO config
   OCIO_PATH="$(/usr/bin/python3 -c 'import glob; p=glob.glob("/usr/share/blender/*/datafiles/colormanagement/config.ocio"); print(p[0]) if p else ""')"
   if [ -n "${OCIO_PATH:-}" ]; then
-    printf 'export OCIO=%s\n' "${OCIO_PATH}" > /etc/profile.d/99-ocio.sh
+    if printf 'export OCIO=%s\n' "${OCIO_PATH}" > /etc/profile.d/99-ocio.sh; then
+      if ! chmod 0644 /etc/profile.d/99-ocio.sh; then
+        echo "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
+      fi
+    else
+      echo "[warn] Failed to write OCIO configuration profile" >&2
+    fi
   else
     echo "[OCIO] blender-data installed but config.ocio not found; continuing"
   fi
 else
   # Fallback: install a known-good ACES config
-  if ! mkdir -p /usr/share/ocio/aces; then
-    echo "Failed to create /usr/share/ocio/aces"
-    exit 1
-  fi
-  if ! cd /tmp; then
-    echo "Failed to change to /tmp"
-    exit 1
-  fi
-  curl -fsSL --retry 3 --retry-delay 2 -o aces.tar.gz https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/archive/refs/heads/master.tar.gz || true
-  if [ -f aces.tar.gz ]; then
-    # Extract the archive to inspect its structure
-    tar -xzf aces.tar.gz || true
-    # Find config.ocio in the extracted archive (try multiple possible locations)
-    OCIO_CONFIG_FOUND=""
-    if [ -d "OpenColorIO-Config-ACES-master" ]; then
-      # Try aces_1.2 first (most common)
-      if [ -f "OpenColorIO-Config-ACES-master/aces_1.2/config.ocio" ]; then
-        cp -r "OpenColorIO-Config-ACES-master/aces_1.2"/* /usr/share/ocio/aces/ 2>/dev/null || true
-        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
-      # Try aces_1.3 if available
-      elif [ -f "OpenColorIO-Config-ACES-master/aces_1.3/config.ocio" ]; then
-        cp -r "OpenColorIO-Config-ACES-master/aces_1.3"/* /usr/share/ocio/aces/ 2>/dev/null || true
-        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
-      # Try root level config.ocio
-      elif [ -f "OpenColorIO-Config-ACES-master/config.ocio" ]; then
-        cp "OpenColorIO-Config-ACES-master/config.ocio" /usr/share/ocio/aces/ 2>/dev/null || true
-        OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
-      # Search for any config.ocio in the archive
-      else
-        OCIO_CONFIG_FOUND=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f | head -1)
-        if [ -n "${OCIO_CONFIG_FOUND:-}" ]; then
-          OCIO_DIR=$(dirname "${OCIO_CONFIG_FOUND}")
-          cp -r "${OCIO_DIR}"/* /usr/share/ocio/aces/ 2>/dev/null || true
-          OCIO_CONFIG_FOUND="/usr/share/ocio/aces/config.ocio"
-        fi
+  if OCIO_CONFIG_FOUND="$(install_ocio_profile_from_aces)"; then
+    if printf 'export OCIO="%s"\n' "${OCIO_CONFIG_FOUND}" > /etc/profile.d/99-ocio.sh; then
+      if ! chmod 0644 /etc/profile.d/99-ocio.sh; then
+        echo "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
       fi
-    fi
-    # Clean up extracted archive
-    rm -rf OpenColorIO-Config-ACES-master aces.tar.gz 2>/dev/null || true
-    # Set OCIO environment variable if config was found
-    if [ -n "${OCIO_CONFIG_FOUND:-}" ] && [ -f "${OCIO_CONFIG_FOUND}" ]; then
-      printf 'export OCIO="%s"\n' "${OCIO_CONFIG_FOUND}" > /etc/profile.d/99-ocio.sh
       echo "✓ OCIO config installed from ACES repository: ${OCIO_CONFIG_FOUND}"
     else
-      echo "⚠ OCIO config.ocio not found in ACES archive - OCIO may not be fully configured"
+      echo "[warn] Failed to write OCIO configuration profile" >&2
     fi
+  else
+    echo "[warn] Unable to provision OCIO config from ACES archive" >&2
   fi
 fi
-set +e
+if [[ "${ocio_prev_opts}" != *e* ]]; then
+  set +e
+fi
+unset ocio_prev_opts
 echo "✓ OCIO color profile configuration complete"
 
 #===============================================================================
-# BLOCK 18: CAD AND 3D PRINTING TOOLS
+# BLOCK 31: CAD AND 3D PRINTING TOOLS
 #===============================================================================
 # Purpose: Install CAD software and 3D printing slicers
 # Self-contained: Yes (complete CAD toolchain)
@@ -12575,15 +12952,15 @@ echo "✓ OCIO color profile configuration complete"
 # Outputs: Installed packages
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 18.1: OpenSCAD installation ---
+#--- Sub-block 31.1: OpenSCAD installation ---
 # Critical: Parametric CAD software
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> CAD tools installation"
-apt-get -y --no-install-recommends install \
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   openscad
 
-#--- Sub-block 18.2: FreeCAD AppImage installation ---
+#--- Sub-block 31.2: FreeCAD AppImage installation ---
 # Critical: Professional CAD software (v1.0.2 via AppImage)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -12655,20 +13032,12 @@ MimeType=model/stl;application/vnd.ms-pki.stl;application/x-tgif;
 EOF
 echo "✓ OrcaSlicer installation complete."
 
-#--- Sub-block: Section continuation (4182) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 4092 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 debug_glibc "After installing CAD tools and Orca Slicer"
 
 #===============================================================================
-# BLOCK 19: TEX/LATEX TYPESETTING SYSTEM
+# BLOCK 32: TEX/LATEX TYPESETTING SYSTEM
 #===============================================================================
 # Purpose: Install comprehensive TeX/LaTeX environment
 # Self-contained: Yes (complete TeX distribution)
@@ -12676,12 +13045,12 @@ debug_glibc "After installing CAD tools and Orca Slicer"
 # Outputs: Installed packages
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 19.1: TeX Live installation (English-only, full features) ---
+#--- Sub-block 32.1: TeX Live installation (English-only, full features) ---
 # Critical: Academic and technical document preparation
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 echo "==> TeX (English-only, full feature)"
-apt-get -y --no-install-recommends install \
+DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   texlive texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra \
   latexmk latexml texlive-xetex texlive-bibtex-extra biber cm-super \
   texlive-pictures texlive-science texlive-pstricks texlive-context \
@@ -12690,7 +13059,7 @@ apt-get -y --no-install-recommends install \
 debug_glibc "After TeX packages installation"
 
 #===============================================================================
-# BLOCK 20: VNC STARTUP SCRIPTS AND CONFIGURATIONS (Part 2 of 3)
+# BLOCK 33: VNC STARTUP SCRIPTS AND CONFIGURATIONS (Part 2 of 3)
 #===============================================================================
 # 🖥️  REMOTE DESKTOP INFRASTRUCTURE - PRIMARY SCRIPTS & CONFIGURATION
 #
@@ -12712,12 +13081,15 @@ debug_glibc "After TeX packages installation"
 # See Also: Block 15.20 for complete remote desktop infrastructure summary
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 20.1: XFCE window manager optimization ---
+#--- Sub-block 33.1: XFCE window manager optimization ---
 # Critical: Configure XFCE for remote desktop performance
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "==> XFCE/VNC remote GUI tuning"
-mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+if ! install -d -m 0755 /etc/xdg/xfce4/xfconf/xfce-perchannel-xml; then
+  echo "Failed to create /etc/xdg/xfce4/xfconf/xfce-perchannel-xml" >&2
+  exit 1
+fi
 cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XFM'
 <?xml version="1.0" encoding="UTF-8"?>
 <channel name="xfwm4" version="1.0">
@@ -12730,19 +13102,30 @@ cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XFM'
 </channel>
 XFM
 
-#--- Sub-block 20.2: Configure X server permissions ---
+#--- Sub-block 33.2: Configure X server permissions ---
 # Purpose: Allow non-root users to run X clients in containers
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-printf 'allowed_users=anybody\nneeds_root_rights=no\n' > /etc/X11/Xwrapper.config
+if ! install -d -m 0755 /etc/X11; then
+  echo "Failed to create /etc/X11" >&2
+  exit 1
+fi
+if ! printf 'allowed_users=anybody\nneeds_root_rights=no\n' > /etc/X11/Xwrapper.config; then
+  echo "Failed to update /etc/X11/Xwrapper.config" >&2
+  exit 1
+fi
+if ! chmod 0644 /etc/X11/Xwrapper.config; then
+  echo "Failed to set permissions on /etc/X11/Xwrapper.config" >&2
+  exit 1
+fi
 
-#--- Sub-block 20.3: Create comprehensive VNC startup script ---
+#--- Sub-block 33.3: Create comprehensive VNC startup script ---
 # Critical: Main VNC launcher with TurboVNC + noVNC + VirtualGL integration
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
 echo "==> Creating enhanced VNC startup script with full TurboVNC support..."
 
-#--- Sub-block 19.1: Create main VNC startup script ---
+#--- Sub-block 33.4: Create main VNC startup script ---
 # Critical: Comprehensive VNC launcher with TurboVNC + noVNC + VirtualGL
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -12789,15 +13172,27 @@ parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --vgl-display)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vgl-display" >&2
+          exit 1
+        fi
         VGL_DISPLAY_AUTO_DETECT=0
         VGL_DISPLAY_FALLBACK="$2"
         shift 2
         ;;
       --vgl-compress)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vgl-compress" >&2
+          exit 1
+        fi
         VGL_COMPRESS="$2"
         shift 2
         ;;
       --vgl-readback)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vgl-readback" >&2
+          exit 1
+        fi
         VGL_READBACK="$2"
         shift 2
         ;;
@@ -12817,16 +13212,28 @@ parse_arguments() {
         shift
         ;;
       --vnc-display)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vnc-display" >&2
+          exit 1
+        fi
         VNC_DISPLAY_NUM="$2"
         VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
         TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))
         shift 2
         ;;
       --vnc-geometry)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vnc-geometry" >&2
+          exit 1
+        fi
         GEOM="$2"
         shift 2
         ;;
       --vnc-depth)
+        if [[ $# -lt 2 ]]; then
+          echo "Missing value for --vnc-depth" >&2
+          exit 1
+        fi
         DEPTH="$2"
         shift 2
         ;;
@@ -12928,16 +13335,16 @@ detect_vgl_display() {
     fi
     
     # Fallback: Try to detect VNC display from running processes
-    local vnc_display=""
+    local vnc_display="" vnc_cmd=""
     
     # Method 1: Check for Xvnc processes using pgrep
     if command -v pgrep >/dev/null 2>&1; then
       vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1 || true)
       if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1 || true)
+        vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     else
-      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
     fi
     
     # Method 2: Check for vncserver processes
@@ -12945,10 +13352,10 @@ detect_vgl_display() {
       if command -v pgrep >/dev/null 2>&1; then
         vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || true)
         if [ -n "${vnc_cmd}" ]; then
-          vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1 || true)
+          vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
         fi
       else
-        vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1 || true)
+        vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     fi
     
@@ -13028,15 +13435,16 @@ test_virtualgl() {
     fi
     
     # Check if VirtualGL can access the display
-      if [ -n "${VGL_DISPLAY:-}" ]; then
+    if [ -n "${VGL_DISPLAY:-}" ]; then
       echo "  ✓ VGL_DISPLAY set to: ${VGL_DISPLAY}"
       
       # Test VirtualGL connection
-      if vglrun -d "${VGL_DISPLAY}" glxinfo >/dev/null 2>&1; then
+      local glxinfo_output=""
+      if glxinfo_output=$(vglrun -d "${VGL_DISPLAY}" glxinfo 2>/dev/null); then
         echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
         
         # Test OpenGL rendering
-        if vglrun -d "${VGL_DISPLAY}" glxinfo 2>/dev/null | grep -q "OpenGL renderer"; then
+        if printf '%s\n' "${glxinfo_output}" | grep -q "OpenGL renderer"; then
           echo "  ✓ OpenGL rendering available"
           return 0
         else
@@ -13079,10 +13487,6 @@ check_dependencies() {
 
   echo "Checking dependencies..."
 
-#--- Sub-block: Section continuation (4279) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 
   if ! command -v vncserver >/dev/null 2>&1; then
     echo "  ✗ vncserver not found"
@@ -13092,10 +13496,6 @@ check_dependencies() {
   fi
 
 
-#--- Sub-block: Code section 4193 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
-# Outputs: GPU libraries, CUDA toolkit
   if ! command -v Xvnc >/dev/null 2>&1; then
     echo "  ✗ Xvnc not found"
     missing=1
@@ -13123,6 +13523,7 @@ check_dependencies() {
 
 # --- Check VirtualGL availability ---
 check_virtualgl() {
+  local gpu_info=""
   echo "Checking VirtualGL availability..."
 
   # Add VirtualGL to PATH
@@ -13132,9 +13533,9 @@ check_virtualgl() {
 
     # Check GPU
     if command -v nvidia-smi >/dev/null 2>&1; then
-      GPU_INFO=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
-      if [ -n "${GPU_INFO:-}" ]; then
-        echo "  ✓ GPU detected: ${GPU_INFO}"
+      gpu_info=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
+      if [ -n "${gpu_info:-}" ]; then
+        echo "  ✓ GPU detected: ${gpu_info}"
       else
         echo "  ⚠ nvidia-smi found but no GPU detected"
       fi
@@ -13142,16 +13543,8 @@ check_virtualgl() {
       echo "  ⚠ nvidia-smi not found (CPU rendering only)"
     fi
 
-#--- Sub-block: Section continuation (4336) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 4240 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
     # Check OpenGL utilities
     if command -v glxinfo >/dev/null 2>&1; then
       echo "  ✓ glxinfo available for OpenGL testing"
@@ -13169,12 +13562,18 @@ check_virtualgl() {
 
 # --- Setup VNC configuration ---
 setup_vnc_config() {
-  mkdir -p "${HOME}/.vnc"
+  if ! install -d -m 0700 "${HOME}/.vnc"; then
+    echo "Failed to create ${HOME}/.vnc directory" >&2
+    exit 1
+  fi
 
   # Create xstartup script with VirtualGL integration
   # Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
   # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-  cat > "${HOME}/.vnc/xstartup" << 'XSTART'
+  if ! cat > "${HOME}/.vnc/xstartup" << 'XSTART'; then
+    echo "Failed to create ${HOME}/.vnc/xstartup" >&2
+    exit 1
+  fi
 #!/bin/sh
 # Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
 # Official documentation:
@@ -13247,7 +13646,10 @@ fi
 exec /usr/bin/startxfce4
 XSTART
 
-  chmod +x "${HOME}/.vnc/xstartup"
+  if ! chmod +x "${HOME}/.vnc/xstartup"; then
+    echo "Failed to set execute permission on ${HOME}/.vnc/xstartup" >&2
+    exit 1
+  fi
   echo "✓ VNC configuration created"
 }
 
@@ -13324,19 +13726,11 @@ start_vnc_server() {
     exit 1
   fi
 
-#--- Sub-block: Section continuation (4430) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
   echo "✓ VNC server running on display :${VNC_DISPLAY_NUM} (port ${VNC_PORT})"
 }
 
 
-#--- Sub-block: Code section 4331 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # --- Check TurboVNC's built-in webserver ---
 check_turbovnc_webserver() {
   # TurboVNC may start its own webserver automatically
@@ -13354,81 +13748,94 @@ start_novnc() {
   echo "Starting noVNC (HTML5 VNC client)..."
 
   # Find websockify
-  WEBSOCKIFY=""
+  local websockify_path=""
 
-#--- Sub-block: Section 4574 ---
+#--- Sub-block 33.5: Section 4574 ---
 # Purpose: Continued implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
   for candidate in /usr/bin/websockify /usr/local/bin/websockify "${MINIFORGE_HOME:-/opt/miniforge3}/bin/websockify"; do
     if [ -x "${candidate}" ]; then
-      WEBSOCKIFY="${candidate}"
-      echo "  Found websockify: ${WEBSOCKIFY}"
+      websockify_path="${candidate}"
+      echo "  Found websockify: ${websockify_path}"
       break
     fi
   done
 
-  if [ -z "${WEBSOCKIFY:-}" ]; then
+  if [ -z "${websockify_path:-}" ]; then
     echo "  ✗ websockify not found - noVNC will not be available"
     return 1
   fi
 
   # Find noVNC web files
-  NOVNC_DIR=""
+  local novnc_dir=""
   for candidate in /usr/local/share/novnc /usr/share/novnc; do
     if [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ]; then
-      NOVNC_DIR="${candidate}"
-      echo "  Found noVNC: ${NOVNC_DIR}"
+      novnc_dir="${candidate}"
+      echo "  Found noVNC: ${novnc_dir}"
       break
     fi
   done
 
-#--- Sub-block: Section continuation (4477) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
   # Start websockify
-  if [ -n "${NOVNC_DIR:-}" ]; then
-    "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-      grep -v "WARNING" | grep -v "numpy" &
+  local websockify_pid=""
+  if [ -n "${novnc_dir:-}" ]; then
+    (
+      "${websockify_path}" --web "${novnc_dir}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
+        grep -v "WARNING" | grep -v "numpy" || true
+    ) &
   else
     echo "  ⚠ noVNC files not found, starting websockify without web interface"
-    "${WEBSOCKIFY}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-      grep -v "WARNING" | grep -v "numpy" &
+    (
+      "${websockify_path}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
+        grep -v "WARNING" | grep -v "numpy" || true
+    ) &
   fi
 
 
-#--- Sub-block: Code section 4382 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-  WEBSOCKIFY_PID=$!
+  websockify_pid=$!
   sleep 2
 
-  if ! kill -0 "${WEBSOCKIFY_PID}" 2>/dev/null; then
+  if ! kill -0 "${websockify_pid}" 2>/dev/null; then
     echo "  ✗ websockify failed to start"
     return 1
   fi
 
-  echo "✓ noVNC running on port ${WEB_PORT} (PID: ${WEBSOCKIFY_PID})"
+  WEBSOCKIFY_PID="${websockify_pid}"
+  echo "✓ noVNC running on port ${WEB_PORT} (PID: ${websockify_pid})"
   return 0
 }
 
-#--- Sub-block: Section 4624 ---
+#--- Sub-block 33.6: Section 4624 ---
 # Purpose: Continued implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
 # --- Display connection information ---
 display_connection_info() {
-  NODE=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")
+  local node=""
+  local username=""
+  local primary_ip=""
+  local login_placeholder=""
+
+  node=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")
+  username="${USER:-$(whoami)}"
+  primary_ip="$(
+    hostname -I 2>/dev/null \
+      | tr ' ' '\n' \
+      | grep -v '^127\.' \
+      | head -1 \
+      || true
+  )"
+  primary_ip=${primary_ip:-localhost}
+  login_placeholder="\${USER:-${username}}"
 
   echo ""
   echo "=========================================="
   echo "✓ VNC Server Ready!"
   echo "=========================================="
-  echo "Hostname: ${NODE}"
+  echo "Hostname: ${node}"
   echo "Display: :${VNC_DISPLAY_NUM}"
   echo "VirtualGL: $([ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && echo "Enabled (VGL_DISPLAY=${VGL_DISPLAY:-:1})" || echo "Disabled")"
   echo ""
@@ -13438,21 +13845,21 @@ display_connection_info() {
   echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
   echo ""
   echo "Auto-Detected Information:"
-  echo "  Username: \${USER:-$(whoami)}"
-  echo "  Compute Node: ${NODE}"
-  echo "  Node IP: $(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+  echo "  Username: ${username}"
+  echo "  Compute Node: ${node}"
+  echo "  Node IP: ${primary_ip}"
   echo ""
   echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 \${USER:-$(whoami)}@107.122.148.226"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 ${login_placeholder}@107.122.148.226"
   echo ""
   echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
   echo ""
   echo "Alternative Stage 2 (with IP):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${primary_ip}"
   echo ""
   echo "Direct Two-Stage Tunnel (Single Command):"
-  echo "   ssh -J \${USER:-$(whoami)}@107.122.148.226:22 -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+  echo "   ssh -J ${login_placeholder}@107.122.148.226:22 -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
   echo ""
   echo "Connect VNC viewer to: localhost:${VNC_PORT}"
   echo "   (or localhost:${VNC_DISPLAY_NUM})"
@@ -13465,30 +13872,26 @@ display_connection_info() {
     echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
     echo ""
     echo "Auto-Detected Information:"
-    echo "  Username: \${USER:-$(whoami)}"
-    echo "  Compute Node: ${NODE}"
-    echo "  Node IP: $(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+    echo "  Username: ${username}"
+    echo "  Compute Node: ${node}"
+    echo "  Node IP: ${primary_ip}"
     echo ""
     echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 \${USER:-$(whoami)}@107.122.148.226"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 ${login_placeholder}@107.122.148.226"
     echo ""
     echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
     echo ""
     echo "Alternative Stage 2 (with IP):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@$(hostname -I | awk '{print $1}' | grep -v '^127\.' | head -1 || echo 'localhost')"
+    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${primary_ip}"
     echo ""
     echo "Direct Two-Stage Tunnel (Single Command):"
-    echo "   ssh -J \${USER:-$(whoami)}@107.122.148.226:22 -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER:-$(whoami)}@${NODE}"
+    echo "   ssh -J ${login_placeholder}@107.122.148.226:22 -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
     echo ""
     echo "Open browser to: http://localhost:${WEB_PORT}"
     echo ""
   fi
 
-#--- Sub-block: Section continuation (4534) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 
   if ss -tuln 2>/dev/null | grep -q ":${TURBOVNC_WEB_PORT}\b"; then
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -13511,11 +13914,11 @@ display_connection_info() {
   fi
 
 
-#--- Sub-block: Code section 4438 ---
+#--- Code section 4438 ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-#--- Sub-block: Section 4674 ---
+#--- Sub-block 33.7: Section 4674 ---
 # Purpose: Continued implementation
 # Purpose: Continuing implementation
 # Dependencies: Block 15 (TurboVNC)
@@ -13568,6 +13971,7 @@ display_connection_info() {
 monitor_services() {
   local check_count=0
 
+  # Continuously verify that VNC and websockify remain healthy, restarting websockify if needed.
   while true; do
     sleep 30
     check_count=$((check_count + 1))
@@ -13590,21 +13994,13 @@ monitor_services() {
   done
 }
 
-#--- Sub-block: Section continuation (4595) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Section 4724 ---
+#--- Sub-block 33.8: Section 4724 ---
 # Purpose: Continued implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-#--- Sub-block: Code section 4484 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # ============================================================================
 # Main Execution
 # ============================================================================
@@ -13621,7 +14017,7 @@ setup_vnc_config
 start_vnc_server
 
 # Test VirtualGL after VNC is running
-if [ "$VNC_VGL_INTEGRATION" = "1" ]; then
+if [ "${VNC_VGL_INTEGRATION:-}" = "1" ]; then
   echo ""
   echo "Testing VirtualGL integration..."
   test_virtualgl || echo "⚠ VirtualGL test failed - check configuration"
@@ -13641,7 +14037,7 @@ VNCLAUNCHER
 chmod 0755 /usr/local/bin/start_vnc_xfce.sh
 echo "✓ Enhanced VNC startup script created at /usr/local/bin/start_vnc_xfce.sh"
 
-#--- Sub-block 20.4: Create SSL Tunneling Scripts ---
+#--- Sub-block 33.9: Create SSL Tunneling Scripts ---
 # Purpose: Automated two-stage SSL tunneling for HPC environments
 # Dependencies: VNC server running
 # Outputs: SSL tunneling scripts
@@ -13706,9 +14102,9 @@ NC='\033[0m'
 
 print_header() {
     echo ""
-    echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${CYAN}║  Two-Stage SSL Tunneling for VNC Access (HPC Environment)     ║${NC}"
-    echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+    printf '%b\n' "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+    printf '%b\n' "${CYAN}║  Two-Stage SSL Tunneling for VNC Access (HPC Environment)     ║${NC}"
+    printf '%b\n' "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
 
@@ -13835,42 +14231,42 @@ show_connection_info() {
     # Get login_port from outer scope
     local login_port="${LOGIN_PORT:-22}"
     
-    echo -e "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
+    printf '%b\n' "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
     echo ""
-    echo -e "${BLUE}Auto-Detected Information:${NC}"
+    printf '%b\n' "${BLUE}Auto-Detected Information:${NC}"
     echo "  Username: ${user_name}"
     echo "  Compute Node: ${compute_node}"
     echo "  Node IP: ${node_ip}"
     echo "  Login Node: ${login_node}"
     echo ""
-    echo -e "${BLUE}Port Information:${NC}"
+    printf '%b\n' "${BLUE}Port Information:${NC}"
     echo "  VNC Port: ${vnc_port}"
     echo "  Web Port: ${web_port}"
     echo "  TurboVNC Web Port: ${turbovnc_web_port}"
     echo ""
-    echo -e "${YELLOW}Ready-to-Copy SSH Commands:${NC}"
+    printf '%b\n' "${YELLOW}Ready-to-Copy SSH Commands:${NC}"
     echo ""
-    echo -e "${CYAN}Stage 1 (Run on your local machine):${NC}"
+    printf '%b\n' "${CYAN}Stage 1 (Run on your local machine):${NC}"
     echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} -p ${login_port} ${user_name}@${login_node}"
     echo ""
-    echo -e "${CYAN}Stage 2 (Run on login node):${NC}"
+    printf '%b\n' "${CYAN}Stage 2 (Run on login node):${NC}"
     echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
     echo ""
-    echo -e "${CYAN}Alternative Stage 2 (with IP):${NC}"
+    printf '%b\n' "${CYAN}Alternative Stage 2 (with IP):${NC}"
     echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
     echo ""
-    echo -e "${CYAN}Direct Two-Stage Tunnel (Single Command):${NC}"
+    printf '%b\n' "${CYAN}Direct Two-Stage Tunnel (Single Command):${NC}"
     echo "ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
     echo ""
-    echo -e "${CYAN}Alternative Direct Tunnel (with IP):${NC}"
+    printf '%b\n' "${CYAN}Alternative Direct Tunnel (with IP):${NC}"
     echo "ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
     echo ""
-    echo -e "${YELLOW}Available Scripts:${NC}"
+    printf '%b\n' "${YELLOW}Available Scripts:${NC}"
     echo "  /tmp/vnc_tunnel_stage1.sh  - Stage 1 (Local -> Login Node)"
     echo "  /tmp/vnc_tunnel_stage2.sh  - Stage 2 (Login -> Compute Node)"
     echo "  /tmp/vnc_tunnel_direct.sh  - Direct Two-Stage Tunnel"
     echo ""
-    echo -e "${GREEN}Connection URLs:${NC}"
+    printf '%b\n' "${GREEN}Connection URLs:${NC}"
     echo "  VNC Viewer: localhost:${vnc_port}"
     echo "  Web Browser: http://localhost:${web_port}"
     echo "  TurboVNC Web: http://localhost:${turbovnc_web_port}"
@@ -13885,7 +14281,7 @@ main() {
         exit 0
     fi
     
-    echo -e "${BLUE}Configuration:${NC}"
+    printf '%b\n' "${BLUE}Configuration:${NC}"
     echo "  Login Node: ${LOGIN_NODE}"
     echo "  Compute Node: ${COMPUTE_NODE}"
     echo "  Username: ${USER_NAME}"
@@ -13926,14 +14322,10 @@ set -euo pipefail
 # With all performance optimizations
 # ============================================================================
 
-#--- Sub-block: Section continuation (4641) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # --- Configuration ---
 
-#--- Sub-block: Section 4774 ---
+#--- Sub-block 33.10: Section 4774 ---
 # Purpose: Continued implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -13944,10 +14336,6 @@ GEOM="${VNC_GEOM:-1920x1080}"
 DEPTH="${VNC_DEPTH:-24}"
 
 
-#--- Sub-block: Code section 4534 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # Performance settings
 TVNC_QUALITY="${TVNC_QUALITY:-95}"
 TVNC_SUBSAMPLE="${TVNC_SUBSAMPLE:-1}"
@@ -13986,10 +14374,6 @@ for cmd in vncserver Xvnc startxfce4 vglrun websockify; do
   fi
 done
 
-#--- Sub-block: Section continuation (4694) ---
-# Purpose: Implementation details
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
 
 # --- Check GPU ---
 echo ""
@@ -14006,10 +14390,6 @@ else
 fi
 
 
-#--- Sub-block: Code section 4591 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # --- Setup VNC ---
 echo ""
 echo "[3/8] Configuring VNC..."
@@ -14052,10 +14432,6 @@ XSTART
 chmod +x "$HOME/.vnc/xstartup"
 echo "  ✓ xstartup configured"
 
-#--- Sub-block: Section continuation (4754) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 
 # --- Start VNC ---
 echo ""
@@ -14066,10 +14442,6 @@ echo "  Quality: ${TVNC_QUALITY}"
 echo "  Subsample: ${TVNC_SUBSAMPLE}"
 
 
-#--- Sub-block: Code section 4642 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 if [ ! -f "$HOME/.vnc/passwd" ]; then
   echo ""
   echo "⚠ VNC password not set. Please set it now:"
@@ -14109,10 +14481,6 @@ else
   echo "  ⚠ PulseAudio not available"
 fi
 
-#--- Sub-block: Section continuation (4804) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # --- Start noVNC ---
 echo ""
@@ -14123,11 +14491,24 @@ for candidate in /usr/bin/websockify /usr/local/bin/websockify; do
   [ -x "${candidate}" ] && WEBSOCKIFY="${candidate}" && break
 done
 
+# Launch websockify with filtered logging and relaxed pipe handling, returning background PID.
+start_websockify_filtered() {
+  local web_port="$1"
+  local vnc_port="$2"
+  local novnc_dir="$3"
 
-#--- Sub-block: Code section 4690 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
+  (
+    set +e
+    set +o pipefail
+    "${WEBSOCKIFY}" --web "${novnc_dir}" "${web_port}" "localhost:${vnc_port}" 2>&1 \
+      | grep -Ev "WARNING|numpy" \
+      || true
+  ) &
+
+  echo $!
+}
+
+
 if [ -z "${WEBSOCKIFY}" ]; then
   echo "  ✗ websockify not found - skipping web interface"
 else
@@ -14137,9 +14518,7 @@ else
   done
 
   if [ -n "${NOVNC_DIR}" ]; then
-    "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-      grep -v "WARNING" | grep -v "numpy" &
-    WSPID=$!
+    WSPID=$(start_websockify_filtered "${WEB_PORT}" "${VNC_PORT}" "${NOVNC_DIR}")
     sleep 2
     if kill -0 "${WSPID}" 2>/dev/null; then
       echo "  ✓ noVNC running on port ${WEB_PORT}"
@@ -14157,7 +14536,11 @@ echo "[7/8] Running performance check..."
 
 # Quick GPU test
 if command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
-  RENDERER=$(vglrun glxinfo 2>/dev/null | grep "OpenGL renderer" | cut -d: -f2 | xargs)
+  RENDERER=$(
+    vglrun glxinfo 2>/dev/null \
+      | awk -F': ' '/OpenGL renderer/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' \
+      || true
+  )
   if [ -n "${RENDERER:-}" ]; then
     echo "  ✓ GPU rendering: ${RENDERER}"
   else
@@ -14167,10 +14550,6 @@ else
   echo "  ⚠ Cannot test GPU rendering"
 fi
 
-#--- Sub-block: Section continuation (4856) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # --- Connection info ---
 NODE=$(hostname -f 2>/dev/null || hostname)
@@ -14200,10 +14579,6 @@ echo "Connect VNC to: localhost:${VNC_PORT}"
 echo ""
 
 
-#--- Sub-block: Code section 4749 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 if [ -n "${WSPID:-}" ] && kill -0 "${WSPID}" 2>/dev/null; then
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "METHOD 2: Web Browser (No Install Needed)"
@@ -14251,18 +14626,12 @@ while true; do
     exit 1
   fi
 
-#--- Sub-block: Section continuation (4917) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
   # Check websockify
   if [ -n "${WSPID:-}" ]; then
     if ! kill -0 "${WSPID}" 2>/dev/null; then
       echo "WARNING: websockify died, restarting..."
-      "${WEBSOCKIFY}" --web "${NOVNC_DIR}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-        grep -v "WARNING" &
-      WSPID=$!
+      WSPID=$(start_websockify_filtered "${WEB_PORT}" "${VNC_PORT}" "${NOVNC_DIR}")
     fi
   fi
 done
@@ -14270,10 +14639,6 @@ ULTIMATE
 chmod +x /usr/local/bin/start_vnc_ultimate.sh
 
 
-#--- Sub-block: Code section 4801 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo "✓ Ultimate VNC startup script created"
 
 # Create enhanced noVNC launcher with all features
@@ -14282,6 +14647,30 @@ cat > /usr/local/bin/start_novnc_advanced.sh << 'NOVNCADV'
 # Advanced noVNC launcher with token authentication and SSL
 
 set -euo pipefail
+
+if ! command -v openssl >/dev/null 2>&1; then
+  echo "ERROR: openssl is required to generate authentication tokens." >&2
+  exit 1
+fi
+
+WEBSOCKIFY_PATH=$(command -v websockify || true)
+if [ -z "${WEBSOCKIFY_PATH}" ]; then
+  echo "ERROR: websockify binary not found. Install noVNC/websockify before running this launcher." >&2
+  exit 1
+fi
+
+NOVNC_DIR=""
+for candidate in /usr/local/share/novnc /usr/share/novnc; do
+  if [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ]; then
+    NOVNC_DIR="${candidate}"
+    break
+  fi
+done
+
+if [ -z "${NOVNC_DIR}" ]; then
+  echo "ERROR: noVNC web assets not found (checked /usr/local/share/novnc and /usr/share/novnc)." >&2
+  exit 1
+fi
 
 VNC_DISPLAY="${1:-:1}"
 WEB_PORT="${2:-6081}"
@@ -14306,8 +14695,8 @@ TOKEN_FILE=$(mktemp)
 echo "${TOKEN}: localhost:${VNC_PORT}" > "${TOKEN_FILE}"
 trap "rm -f '${TOKEN_FILE}'" EXIT INT TERM
 
-/usr/bin/websockify \
-  --web /usr/local/share/novnc \
+"${WEBSOCKIFY_PATH}" \
+  --web "${NOVNC_DIR}" \
   --token-plugin TokenFile \
   --token-source "${TOKEN_FILE}" \
   "${WEB_PORT}"
@@ -14373,8 +14762,16 @@ echo ""
 echo "4. Checking OpenGL rendering..."
 if vglrun -d "${VGL_DISPLAY}" glxinfo | grep -q "OpenGL renderer"; then
   echo "  ✓ OpenGL rendering available"
-  OPENGL_RENDERER=$(vglrun -d "${VGL_DISPLAY}" glxinfo | grep "OpenGL renderer" | head -1)
-  OPENGL_VERSION=$(vglrun -d "${VGL_DISPLAY}" glxinfo | grep "OpenGL version" | head -1)
+  OPENGL_RENDERER=$(
+    vglrun -d "${VGL_DISPLAY}" glxinfo \
+      | awk -F': ' '/OpenGL renderer/{print $2; exit}' \
+      || true
+  )
+  OPENGL_VERSION=$(
+    vglrun -d "${VGL_DISPLAY}" glxinfo \
+      | awk -F': ' '/OpenGL version/{print $2; exit}' \
+      || true
+  )
   echo "  OpenGL renderer: ${OPENGL_RENDERER}"
   echo "  OpenGL version: ${OPENGL_VERSION}"
 else
@@ -14426,7 +14823,7 @@ chmod +x /usr/local/bin/test_virtualgl.sh
 echo "✓ VirtualGL test script created"
 
 #===============================================================================
-# BLOCK 21: ADDITIONAL VNC AND DISPLAY SERVERS (Part 3 of 3)
+# BLOCK 34: ADDITIONAL VNC AND DISPLAY SERVERS (Part 3 of 3)
 #===============================================================================
 # 🖥️  REMOTE DESKTOP INFRASTRUCTURE - ALTERNATIVE VNC SERVERS
 #
@@ -14450,7 +14847,7 @@ echo "✓ VirtualGL test script created"
 # See Also: Block 15.20 for complete remote desktop infrastructure summary
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 21.1: KasmVNC installation ---
+#--- Sub-block 34.1: KasmVNC installation ---
 # Critical: Modern VNC with web UI and containerized features
 # Dependencies: Block 6 (APT configuration), Block 15 (TurboVNC)
 # Outputs: Installed packages
@@ -14461,10 +14858,13 @@ ARCH="amd64"
 
 cd /tmp || exit 1
 KASMVNC_DEB="kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb"
-if wget -q "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${KASMVNC_DEB}"; then
-    apt-get install -y "./${KASMVNC_DEB}" || echo "⚠ KasmVNC installation failed (non-critical)"
-    rm -f "./${KASMVNC_DEB}"
-    echo "✓ KasmVNC installed successfully"
+if wget -q --show-progress -O "${KASMVNC_DEB}" "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${KASMVNC_DEB}"; then
+    if apt-get install -y "./${KASMVNC_DEB}"; then
+        echo "✓ KasmVNC installed successfully"
+    else
+        echo "⚠ KasmVNC installation failed (non-critical)"
+    fi
+    rm -f "./${KASMVNC_DEB}" || true
 else
     echo "⚠ Failed to download KasmVNC (non-critical, continuing)"
 fi
@@ -14499,10 +14899,6 @@ echo ""
 echo "Connect: http://localhost:${WEB_PORT}"
 echo ""
 
-#--- Sub-block: Section continuation (5022) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 
 kasmvncserver ":${DISPLAY_NUM}" \
   -geometry 1920x1080 \
@@ -14511,10 +14907,6 @@ kasmvncserver ":${DISPLAY_NUM}" \
   -interface 0.0.0.0
 
 
-#--- Sub-block: Code section 4896 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo "KasmVNC started!"
 tail -f "${HOME}/.vnc"/*.log
 KASMSTART
@@ -14522,7 +14914,7 @@ chmod +x /usr/local/bin/start_kasmvnc.sh
 
 echo "✓ KasmVNC installed (use: start_kasmvnc.sh)"
 
-#--- Sub-block 21.2: Vulkan graphics API support ---
+#--- Sub-block 34.2: Vulkan graphics API support ---
 # Critical: Modern GPU acceleration API for high-performance rendering
 # Dependencies: Block 6 (APT configuration), Block 15 (VirtualGL)
 # Outputs: Installed packages
@@ -14539,26 +14931,39 @@ cat > /usr/local/bin/test_vulkan.sh << 'VULKAN'
 #!/usr/bin/env bash
 # Test Vulkan support
 
+set -euo pipefail
+
+if ! command -v vulkaninfo >/dev/null 2>&1; then
+  echo "ERROR: vulkaninfo command not found. Install vulkan-tools." >&2
+  exit 1
+fi
+
 echo "Vulkan Instance Version:"
-vulkaninfo --summary | grep "Vulkan Instance Version"
+vulkaninfo --summary 2>/dev/null | grep "Vulkan Instance Version" || echo "  ⚠ Unable to determine instance version"
 
 echo ""
 echo "Available Vulkan Devices:"
-vulkaninfo | grep -A 5 "GPU id"
+if ! vulkaninfo 2>/dev/null | grep -A 5 "GPU id"; then
+  echo "  ⚠ No Vulkan devices detected"
+fi
 
 echo ""
-echo "Running vulkan cube demo (vglrun required)..."
-if command -v vglrun >/dev/null 2>&1; then
-  vglrun vkcube
+echo "Running vulkan cube demo (vglrun required if VirtualGL active)..."
+if command -v vkcube >/dev/null 2>&1; then
+  if command -v vglrun >/dev/null 2>&1; then
+    vglrun vkcube || echo "  ⚠ vkcube failed under VirtualGL"
+  else
+    vkcube || echo "  ⚠ vkcube failed"
+  fi
 else
-  vkcube
+  echo "  ⚠ vkcube command not available"
 fi
 VULKAN
 chmod +x /usr/local/bin/test_vulkan.sh
 
 echo "✓ Vulkan support installed"
 
-#--- Sub-block 21.3: Xpra modern X11 forwarding ---
+#--- Sub-block 34.3: Xpra modern X11 forwarding ---
 # Critical: Seamless application forwarding with HTML5 client
 # Dependencies: Block 6 (APT configuration), Python 3, pip
 # Outputs: Installed packages
@@ -14639,7 +15044,7 @@ apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non
 
 # CRITICAL: Verify libxxhash-dev is actually installed and provides .pc file
 # Some Ubuntu versions may have libxxhash-dev without .pc file, or it may be in a different package
-if ! dpkg -l | grep -q "^ii.*libxxhash-dev"; then
+if ! dpkg_resolve_installed_package "libxxhash-dev" >/dev/null; then
     echo "⚠ libxxhash-dev package not found in dpkg, attempting reinstall..."
     apt-get install -y --reinstall libxxhash-dev 2>/dev/null || echo "  (Reinstall may have failed)"
 fi
@@ -14818,7 +15223,7 @@ if ! pkg-config --exists py3cairo 2>/dev/null; then
     MISSING_PKG_CONFIG_PACKAGES+=("py3cairo")
     echo "⚠ WARNING: py3cairo not found in pkg-config"
     echo "  This is required by Xpra for GTK3 support"
-    if dpkg -l | grep -q "^ii.*python3-cairo-dev"; then
+    if dpkg_resolve_installed_package "python3-cairo-dev" >/dev/null; then
         echo "  python3-cairo-dev is installed, but py3cairo.pc may be missing"
         find /usr -name "py3cairo.pc" 2>/dev/null | head -3 || echo "    (py3cairo.pc not found)"
     fi
@@ -14830,7 +15235,7 @@ if ! pkg-config --exists pygobject-3.0 2>/dev/null; then
     MISSING_PKG_CONFIG_PACKAGES+=("pygobject-3.0")
     echo "⚠ WARNING: pygobject-3.0 not found in pkg-config"
     echo "  This is required by Xpra for GTK3 support"
-    if dpkg -l | grep -q "^ii.*python-gi-dev"; then
+    if dpkg_resolve_installed_package "python-gi-dev" >/dev/null; then
         echo "  python-gi-dev is installed, but pygobject-3.0.pc may be missing"
         find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -3 || echo "    (pygobject-3.0.pc not found)"
     fi
@@ -14883,12 +15288,12 @@ fi
 cd /tmp || exit 1
 echo "  Installing Xpra ${XPRA_VERSION} from PyPI..."
 echo "  PKG_CONFIG_PATH for build: ${PKG_CONFIG_PATH}"
-if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" pip3 install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
+if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" python3 -m pip install --no-cache-dir "xpra[server]==${XPRA_VERSION}" 2>&1 | tee /tmp/xpra_install.log; then
     echo "✓ Xpra ${XPRA_VERSION} installed from PyPI"
     XPRA_INSTALLED=true
 else
     echo "⚠ Xpra ${XPRA_VERSION} pip installation failed, trying without version pin..."
-    if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" pip3 install --no-cache-dir "xpra[server]" 2>&1 | tee -a /tmp/xpra_install.log; then
+    if env PKG_CONFIG_PATH="${PKG_CONFIG_PATH}" python3 -m pip install --no-cache-dir "xpra[server]" 2>&1 | tee -a /tmp/xpra_install.log; then
         echo "✓ Xpra installed from PyPI (latest available)"
         XPRA_INSTALLED=true
     else
@@ -14906,7 +15311,7 @@ else
         if ! apt-get update -qq; then
             echo "⚠ WARNING: apt-get update failed for Xpra repository"
         fi
-        if apt-get install -y --no-install-recommends xpra 2>/dev/null; then
+        if apt-get install -y --no-install-recommends xpra 2>&1 | tee -a /tmp/xpra_install.log; then
             echo "✓ Xpra installed from official repository"
             XPRA_INSTALLED=true
         else
@@ -14936,18 +15341,32 @@ else
     # Download and extract HTML5 client from GitHub release
     if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/tags/${XPRA_HTML5_TAG}.tar.gz" -O /tmp/xpra-html5.tar.gz; then
         if tar -xzf /tmp/xpra-html5.tar.gz 2>/dev/null; then
-            XPRA_HTML5_EXTRACTED=$(ls -d xpra-html5-* 2>/dev/null | head -1)
+            XPRA_HTML5_EXTRACTED="$(find . -maxdepth 1 -type d -name "xpra-html5-*" -print -quit 2>/dev/null || true)"
             if [ -n "${XPRA_HTML5_EXTRACTED}" ] && [ -d "${XPRA_HTML5_EXTRACTED}/html5" ]; then
                 # Construct full source path for robust glob expansion
                 XPRA_HTML5_SOURCE="${XPRA_HTML5_EXTRACTED}/html5"
-                # Use find to handle empty directories and avoid glob expansion issues
-                if [ -d "${XPRA_HTML5_SOURCE}" ] && find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -exec cp -r {} "${XPRA_HTML5_DIR}/" \; 2>/dev/null; then
-                    echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR}"
-                    XPRA_HTML5_INSTALLED=true
-                else
-                    echo "⚠ Failed to copy Xpra HTML5 client files"
+                # Enumerate files explicitly to avoid empty glob issues and preserve spaces
+                mapfile -d '' -t XPRA_HTML5_ENTRIES < <(find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                if [ "${#XPRA_HTML5_ENTRIES[@]}" -eq 0 ]; then
+                    echo "⚠ No Xpra HTML5 client files discovered in ${XPRA_HTML5_SOURCE}"
                     XPRA_HTML5_INSTALLED=false
+                else
+                    XPRA_HTML5_COPY_FAILED=false
+                    for XPRA_HTML5_ENTRY in "${XPRA_HTML5_ENTRIES[@]}"; do
+                        if ! cp -R "${XPRA_HTML5_ENTRY}" "${XPRA_HTML5_DIR}/"; then
+                            echo "⚠ Failed to copy ${XPRA_HTML5_ENTRY} to ${XPRA_HTML5_DIR}"
+                            XPRA_HTML5_COPY_FAILED=true
+                            break
+                        fi
+                    done
+                    if [ "${XPRA_HTML5_COPY_FAILED}" = false ]; then
+                        echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR}"
+                        XPRA_HTML5_INSTALLED=true
+                    else
+                        XPRA_HTML5_INSTALLED=false
+                    fi
                 fi
+                unset XPRA_HTML5_ENTRIES XPRA_HTML5_ENTRY XPRA_HTML5_COPY_FAILED
             else
                 echo "⚠ Failed to find html5 directory in extracted archive"
                 XPRA_HTML5_INSTALLED=false
@@ -14963,18 +15382,32 @@ else
         echo "  Attempting to download from master branch as fallback..."
         if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/heads/master.tar.gz" -O /tmp/xpra-html5-master.tar.gz; then
             if tar -xzf /tmp/xpra-html5-master.tar.gz 2>/dev/null; then
-                XPRA_HTML5_MASTER=$(ls -d xpra-html5-master 2>/dev/null | head -1)
+                XPRA_HTML5_MASTER="$(find . -maxdepth 1 -type d -name "xpra-html5-master*" -print -quit 2>/dev/null || true)"
                 if [ -n "${XPRA_HTML5_MASTER}" ] && [ -d "${XPRA_HTML5_MASTER}/html5" ]; then
                     # Construct full source path for robust glob expansion
                     XPRA_HTML5_SOURCE_MASTER="${XPRA_HTML5_MASTER}/html5"
-                    # Use find to handle empty directories and avoid glob expansion issues
-                    if [ -d "${XPRA_HTML5_SOURCE_MASTER}" ] && find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -exec cp -r {} "${XPRA_HTML5_DIR}/" \; 2>/dev/null; then
-                        echo "✓ Xpra HTML5 client installed from master branch"
-                        XPRA_HTML5_INSTALLED=true
-                    else
-                        echo "⚠ Failed to copy Xpra HTML5 client files from master"
+                    # Enumerate files explicitly to avoid empty glob issues and preserve spaces
+                    mapfile -d '' -t XPRA_HTML5_MASTER_ENTRIES < <(find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                    if [ "${#XPRA_HTML5_MASTER_ENTRIES[@]}" -eq 0 ]; then
+                        echo "⚠ No Xpra HTML5 client files discovered in master branch archive"
                         XPRA_HTML5_INSTALLED=false
+                    else
+                        XPRA_HTML5_MASTER_COPY_FAILED=false
+                        for XPRA_HTML5_MASTER_ENTRY in "${XPRA_HTML5_MASTER_ENTRIES[@]}"; do
+                            if ! cp -R "${XPRA_HTML5_MASTER_ENTRY}" "${XPRA_HTML5_DIR}/"; then
+                                echo "⚠ Failed to copy ${XPRA_HTML5_MASTER_ENTRY} to ${XPRA_HTML5_DIR}"
+                                XPRA_HTML5_MASTER_COPY_FAILED=true
+                                break
+                            fi
+                        done
+                        if [ "${XPRA_HTML5_MASTER_COPY_FAILED}" = false ]; then
+                            echo "✓ Xpra HTML5 client installed from master branch"
+                            XPRA_HTML5_INSTALLED=true
+                        else
+                            XPRA_HTML5_INSTALLED=false
+                        fi
                     fi
+                    unset XPRA_HTML5_MASTER_ENTRIES XPRA_HTML5_MASTER_ENTRY XPRA_HTML5_MASTER_COPY_FAILED
                 else
                     echo "⚠ Failed to find html5 directory in master archive"
                     XPRA_HTML5_INSTALLED=false
@@ -14996,6 +15429,13 @@ cat > /usr/local/bin/start_xpra.sh << 'XPRA'
 #!/usr/bin/env bash
 # Xpra Application Streaming with HTML5 client
 
+set -euo pipefail
+
+if ! command -v xpra >/dev/null 2>&1; then
+    echo "ERROR: xpra command not found. Please install Xpra before running this launcher." >&2
+    exit 1
+fi
+
 DISPLAY_NUM=${1:-10}
 PORT=${2:-10000}
 
@@ -15015,23 +15455,32 @@ echo ""
 # Set up Xpra HTML5 web directory
 # Official path per https://github.com/Xpra-org/xpra-html5
 XPRA_HTML5_DIR="/usr/share/xpra/www"
-if [ -d "$XPRA_HTML5_DIR" ]; then
-    export XPRA_WEB_DIR="$XPRA_HTML5_DIR"
+XPRA_WEB_DIR=""
+if [ -d "${XPRA_HTML5_DIR}" ]; then
+    XPRA_WEB_DIR="${XPRA_HTML5_DIR}"
+    export XPRA_WEB_DIR
     echo "✓ HTML5 client available at ${XPRA_HTML5_DIR}"
 else
     echo "⚠ HTML5 client not found (using built-in if available)"
 fi
 
+XPRA_ARGS=(
+    ":${DISPLAY_NUM}"
+    "--bind-tcp=0.0.0.0:${PORT}"
+    "--html=on"
+    "--start=startxfce4"
+    "--daemon=no"
+    "--notifications=no"
+    "--clipboard=yes"
+    "--printing=no"
+)
+
+if [ -n "${XPRA_WEB_DIR}" ]; then
+    XPRA_ARGS+=("--webdir=${XPRA_WEB_DIR}")
+fi
+
 echo "Starting Xpra server..."
-xpra start ":${DISPLAY_NUM}" \
-  --bind-tcp="0.0.0.0:${PORT}" \
-  --html=on \
-  --start=startxfce4 \
-  --daemon=no \
-  --webdir="${XPRA_HTML5_DIR:-/usr/share/xpra/www}" \
-  --notifications=no \
-  --clipboard=yes \
-  --printing=no
+xpra start "${XPRA_ARGS[@]}"
 
 echo ""
 echo "Xpra stopped"
@@ -15043,6 +15492,13 @@ cat > /usr/local/bin/xpra_seamless.sh << 'XPRA_SEAMLESS'
 #!/usr/bin/env bash
 # Xpra Seamless Mode - Stream individual applications
 
+set -euo pipefail
+
+if ! command -v xpra >/dev/null 2>&1; then
+    echo "ERROR: xpra command not found. Please install Xpra before running this launcher." >&2
+    exit 1
+fi
+
 APP=${1:-xterm}
 DISPLAY_NUM=${2:-10}
 PORT=${3:-10000}
@@ -15051,13 +15507,23 @@ echo "Starting Xpra in seamless mode for: ${APP}"
 echo "Connect: http://localhost:${PORT}/"
 echo ""
 
-xpra start --start="${APP}" \
-  --bind-tcp="0.0.0.0:${PORT}" \
-  --html=on \
-  --daemon=no \
-  --webdir="/usr/share/xpra/www" \
-  --notifications=no \
-  --clipboard=yes
+XPRA_HTML5_DIR="/usr/share/xpra/www"
+XPRA_ARGS=(
+    "--start=${APP}"
+    "--bind-tcp=0.0.0.0:${PORT}"
+    "--html=on"
+    "--daemon=no"
+    "--notifications=no"
+    "--clipboard=yes"
+)
+
+if [ -d "${XPRA_HTML5_DIR}" ]; then
+    XPRA_ARGS+=("--webdir=${XPRA_HTML5_DIR}")
+else
+    echo "⚠ HTML5 client not found at ${XPRA_HTML5_DIR} (falling back to Xpra defaults)"
+fi
+
+xpra start "${XPRA_ARGS[@]}"
 XPRA_SEAMLESS
 chmod +x /usr/local/bin/xpra_seamless.sh
 
@@ -15075,7 +15541,7 @@ echo "  Available commands:"
 echo "    start_xpra.sh [display] [port]  - Full desktop"
 echo "    xpra_seamless.sh [app] [display] [port]  - Single application"
 
-#--- Sub-block 21.4: x11vnc alternative VNC server ---
+#--- Sub-block 34.4: x11vnc alternative VNC server ---
 # Critical: Lightweight VNC server that attaches to existing X sessions
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -15139,7 +15605,7 @@ chmod +x /usr/local/bin/start_x11vnc.sh
 echo "✓ x11vnc installed"
 
 #===============================================================================
-# BLOCK 22: MULTIMEDIA AND PERFORMANCE TOOLS
+# BLOCK 35: MULTIMEDIA AND PERFORMANCE TOOLS
 #===============================================================================
 # Purpose: Install video encoding, performance monitoring, and system tools
 # Self-contained: Yes (complete multimedia stack)
@@ -15147,7 +15613,7 @@ echo "✓ x11vnc installed"
 # Outputs: GPU libraries, CUDA toolkit
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 22.1: FFmpeg with hardware encoding ---
+#--- Sub-block 35.1: FFmpeg with hardware encoding ---
 # Critical: Video encoding with NVENC GPU acceleration
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -15158,7 +15624,7 @@ apt-get install -y --no-install-recommends \
   libavcodec-extra
 
 # Create screen recording script
-#--- Sub-block 22.1: Create screen recording script ---
+#--- Sub-block 35.2: Create screen recording script ---
 # Purpose: ffmpeg-based screen recording with GPU encoding
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -15195,7 +15661,7 @@ chmod +x /usr/local/bin/record_screen.sh
 
 echo "✓ ffmpeg installed with screen recording support"
 
-#--- Sub-block 22.2: Remmina remote desktop client ---
+#--- Sub-block 35.3: Remmina remote desktop client ---
 # Critical: Multi-protocol remote desktop client (VNC/RDP/SSH)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -15208,7 +15674,7 @@ apt-get install -y --no-install-recommends \
 
 echo "✓ Remmina installed (launch from Applications menu)"
 
-#--- Sub-block 22.3: Performance monitoring and profiling tools ---
+#--- Sub-block 35.4: Performance monitoring and profiling tools ---
 # Critical: System performance analysis, debugging, and resource monitoring
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
@@ -15231,7 +15697,7 @@ apt-get install -y --no-install-recommends \
   shellcheck
 
 # Create GPU monitoring script
-#--- Sub-block 22.4: Create GPU monitoring script ---
+#--- Sub-block 35.5: Create GPU monitoring script ---
 # Purpose: Real-time GPU utilization monitoring
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
@@ -15259,13 +15725,15 @@ echo "  - htop/btop (process viewers)"
 echo "  - gpu_monitor.sh (GPU stats)"
 
 # Create VNC performance monitor script
-#--- Sub-block 22.5: Create VNC performance monitor ---
+#--- Sub-block 35.6: Create VNC performance monitor ---
 # Purpose: Monitor VNC session performance and connections
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 cat > /usr/local/bin/vnc_monitor.sh << 'VNCMON'
 #!/usr/bin/env bash
 # Monitor VNC session performance
+
+set -euo pipefail
 
 echo "=========================================="
 echo "VNC Session Performance Monitor"
@@ -15283,7 +15751,13 @@ fi
 echo ""
 
 echo "2. Network Connections:"
-ss -tuln | grep -E "5901|6081|5800" || echo "  No matching connections found"
+if command -v ss >/dev/null 2>&1; then
+    if ! ss -tuln | grep -E "5901|6081|5800"; then
+        echo "  No matching connections found"
+    fi
+else
+    echo "  Networking utility 'ss' not available"
+fi
 echo ""
 
 echo "3. GPU Utilization:"
@@ -15298,9 +15772,15 @@ echo ""
 echo "4. CPU Usage (VNC related):"
 # Use pgrep instead of ps aux | grep
 if command -v pgrep >/dev/null 2>&1; then
-    pids=$(pgrep -f "Xvnc|websockify" 2>/dev/null)
-    if [ -n "${pids}" ]; then
-        ps -o pid=,pcpu= -p "${pids}" 2>/dev/null | awk '{sum+=$2} END {print "  Total CPU: " sum "%"}' || echo "  Unable to calculate CPU usage"
+    mapfile -t vnc_pids < <(pgrep -f "Xvnc|websockify" 2>/dev/null || true)
+    if [ "${#vnc_pids[@]}" -gt 0 ]; then
+        pid_list=$(printf '%s\n' "${vnc_pids[@]}" | paste -sd, -)
+        if ps_output=$(ps -o pid=,pcpu= -p "${pid_list}" 2>/dev/null); then
+            total_cpu=$(printf '%s\n' "${ps_output}" | awk '{sum+=$2} END {print sum}')
+            echo "  Total CPU: ${total_cpu:-0}%"
+        else
+            echo "  Unable to calculate CPU usage"
+        fi
     else
         echo "  No VNC processes found"
     fi
@@ -15318,7 +15798,11 @@ echo ""
 echo "6. Display Information:"
 if [ -n "${DISPLAY:-}" ]; then
     echo "  DISPLAY: ${DISPLAY}"
-    xdpyinfo | grep -E "dimensions|resolution" | sed 's/^/  /'
+    if command -v xdpyinfo >/dev/null 2>&1; then
+        xdpyinfo | grep -E "dimensions|resolution" | sed 's/^/  /'
+    else
+        echo "  xdpyinfo command not available"
+    fi
 else
     echo "  Not running in X session"
 fi
@@ -15329,7 +15813,7 @@ chmod +x /usr/local/bin/vnc_monitor.sh
 echo "✓ Performance monitoring tools installed"
 
 #===============================================================================
-# BLOCK 23: MODERN RUST-BASED CLI TOOLS
+# BLOCK 36: MODERN RUST-BASED CLI TOOLS
 #===============================================================================
 # Purpose: Install fast, modern alternatives to traditional CLI tools
 # Self-contained: Yes (complete Rust toolset)
@@ -15337,45 +15821,54 @@ echo "✓ Performance monitoring tools installed"
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 23.1: Rust-based system utilities (COMPILED FROM SOURCE) ---
+#--- Sub-block 36.1: Rust-based system utilities (COMPILED FROM SOURCE) ---
 # Critical: Rust tools compiled from source in Block 24 for optimization
 # Dependencies: Block 24 (Rust toolchain + cargo install)
 # Outputs: Deferred to Block 24
 # Note: bat, fd, ripgrep, eza, bottom, procs installed via cargo for native optimization
 echo "==> Rust tools (bat, fd, ripgrep, eza, bottom, procs) compiled from source in Block 24"
 
-#--- Sub-block: Section continuation (5327) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # zoxide (better cd)
 # Download and verify script before execution
-if curl -sSf https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh -o /tmp/zoxide_install.sh; then
-    if [ -s /tmp/zoxide_install.sh ]; then
-        bash /tmp/zoxide_install.sh
-        rm -f /tmp/zoxide_install.sh
-    else
-        echo "⚠ WARNING: zoxide install script is empty, skipping installation"
-        rm -f /tmp/zoxide_install.sh
-    fi
+if command -v zoxide >/dev/null 2>&1; then
+    echo "✓ zoxide already installed"
 else
-    echo "⚠ WARNING: Failed to download zoxide install script, skipping installation"
+    if apt-get install -y --no-install-recommends zoxide; then
+        echo "✓ zoxide installed via apt repository"
+    else
+        echo "⚠ WARNING: Failed to install zoxide via apt; attempting upstream installer"
+        if curl -sSf https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh -o /tmp/zoxide_install.sh; then
+            if [ -s /tmp/zoxide_install.sh ]; then
+                chmod 700 /tmp/zoxide_install.sh
+                if bash /tmp/zoxide_install.sh; then
+                    echo "✓ zoxide installed via upstream installer"
+                else
+                    echo "✗ zoxide installer script failed"
+                fi
+            else
+                echo "⚠ WARNING: zoxide install script is empty, skipping installation"
+            fi
+            rm -f /tmp/zoxide_install.sh
+            if [ -d /root/.local/bin ]; then
+                case ":${PATH}:" in
+                    *":/root/.local/bin:"*) ;;
+                    *) export PATH="/root/.local/bin:${PATH}";;
+                esac
+                echo "==> Ensured /root/.local/bin is included in PATH for zoxide"
+            fi
+        else
+            echo "⚠ WARNING: Failed to download zoxide install script, skipping installation"
+        fi
+    fi
 fi
-# Add /root/.local/bin to PATH so zoxide is available
-export PATH="/root/.local/bin:${PATH}"
-echo "==> Added /root/.local/bin to PATH for zoxide"
 
 
-#--- Sub-block: Code section 5192 (ALIASES MOVED TO BLOCK 24) ---
-# Purpose: Rust tool aliases configured after compilation in Block 24
-# Dependencies: Block 24 (cargo install)
-# Outputs: Deferred to Block 24
 echo "==> Rust tool aliases will be configured after compilation in Block 24"
 
 # === Ulauncher (baseline) ===
 # Ulauncher (PPA already added above)
-apt-get -y --no-install-recommends install ulauncher
+apt-get install -y --no-install-recommends ulauncher
 debug_glibc "After installing Ulauncher"
 
 # === Install Alacritty: A modern, GPU-accelerated terminal ===
@@ -15392,7 +15885,7 @@ fi
 update-alternatives --install /usr/bin/x-terminal-emulator x-terminal-emulator /usr/bin/alacritty 50
 
 # === ADDITION 2: IPC Infrastructure ===
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   libzmq3-dev \
   libzmq5 \
   libfastrtps-dev \
@@ -15401,24 +15894,16 @@ apt-get install -y \
   libcycloneddsidl0t64 \
   supervisor
 
-#--- Sub-block: Section continuation (5380) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 5239 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6 (APT configuration), Block 8.5 (Julia installation)
-# Outputs: Installed packages
 # Remove Debian-managed Python packages that we'll reinstall via pip
 apt-get remove -y python3-zmq 2>/dev/null || true
-pip3 install --no-cache-dir \
+python3 -m pip install --no-cache-dir \
   pyzmq==${PYZMQ_VERSION} \
   msgpack==${MSGPACK_VERSION}
 
 # === ADDITION 3: Julia-Python Bridge (Modern) ===
-pip3 install --no-cache-dir \
+python3 -m pip install --no-cache-dir \
   juliacall==${JULIACALL_VERSION} \
   juliapkg==${JULIAPKG_VERSION}
 
@@ -15459,16 +15944,16 @@ ${JULIA_HOME}/bin/julia -e '
 '
 # === ADDITION 4: Monitoring Tools ===
 
-#--- Sub-block: Code section 5286 ---
+#--- Code section 5286 ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-#--- Sub-block: Rust tool compilation ---
+#--- Sub-block 36.2: Rust tool compilation ---
 # Purpose: Compiling Rust-based CLI tools
 # Purpose: Continuing implementation
 # Dependencies: Block 6 (APT configuration), PHASE 1 (Build tools)
 # Outputs: Installed packages
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   htop \
   iotop \
   glances
@@ -15477,7 +15962,7 @@ apt-get install -y \
 echo "Building nvtop (GPU monitoring tool)..."
 cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
 rm -rf nvtop  # Clean any existing clone
-git clone https://github.com/syllo/nvtop.git || { echo "ERROR: Failed to clone nvtop"; exit 1; }
+git clone --depth 1 --single-branch https://github.com/syllo/nvtop.git || { echo "ERROR: Failed to clone nvtop"; exit 1; }
 cd nvtop || { echo "ERROR: Failed to access nvtop directory"; exit 1; }
 
 # Clean build directory
@@ -15504,15 +15989,15 @@ cd / && rm -rf /tmp/nvtop
 echo "✓ nvtop installed successfully"
 
 
-#--- Sub-block: Rust tools build continuation ---
+#--- Sub-block 36.3: Rust tools build continuation ---
 # Purpose: Additional CLI tool compilation
 # Dependencies: Block 6 (APT configuration), Block 8.5 (Julia installation)
 # Outputs: Installed packages
 # === ADDITION 5: Efficient Data Formats ===
-apt-get install -y \
+apt-get install -y --no-install-recommends \
   libhdf5-dev \
   liblz4-dev
-pip3 install --no-cache-dir \
+python3 -m pip install --no-cache-dir \
   h5py==${H5PY_VERSION} \
   zarr==${ZARR_VERSION}
 ${JULIA_HOME}/bin/julia -e '
@@ -15563,7 +16048,17 @@ cat > /etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml << 'EOF'
 EOF
 
 # Set environment variable to use this config
-echo 'export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml' >> /etc/profile.d/fastdds.sh
+mkdir -p /etc/profile.d
+FASTDDS_PROFILE="/etc/profile.d/fastdds.sh"
+FASTDDS_EXPORT='export FASTRTPS_DEFAULT_PROFILES_FILE=/etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml'
+if [ -f "${FASTDDS_PROFILE}" ]; then
+    if ! grep -Fx "${FASTDDS_EXPORT}" "${FASTDDS_PROFILE}" >/dev/null 2>&1; then
+        printf '%s\n' "${FASTDDS_EXPORT}" >> "${FASTDDS_PROFILE}"
+    fi
+else
+    printf '%s\n' "${FASTDDS_EXPORT}" > "${FASTDDS_PROFILE}"
+fi
+chmod 644 "${FASTDDS_PROFILE}"
 echo "✓ Fast-DDS configured"
 
 # === ADDITION 7: Helper Scripts Directory ===
@@ -15573,7 +16068,7 @@ mkdir -p /opt/scripts
 # Python-Julia bridge helpers (detailed later)
 
 #===============================================================================
-# BLOCK 24: RUST TOOLCHAIN INSTALLATION
+# BLOCK 37: RUST TOOLCHAIN INSTALLATION
 #===============================================================================
 # Purpose: Install Rust compiler and cargo package manager
 # Self-contained: Yes (complete with rustup installation)
@@ -15581,14 +16076,14 @@ mkdir -p /opt/scripts
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 24.1: Initialize Rust installation ---
+#--- Sub-block 37.1: Initialize Rust installation ---
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
 echo
 echo "Installing Rust Toolchain via rustup"
 echo
 
-#--- Sub-block 24.2: Create Rust directories ---
+#--- Sub-block 37.2: Create Rust directories ---
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
 # CRITICAL: Create directories BEFORE setting environment variables
@@ -15601,7 +16096,7 @@ chmod -R 755 /opt/rust
 export RUSTUP_HOME=/opt/rust/rustup
 export CARGO_HOME=/opt/rust/cargo
 
-#--- Sub-block 24.3: Install Rust toolchain via rustup ---
+#--- Sub-block 37.3: Install Rust toolchain via rustup ---
 # Purpose: Install Rust compiler and package manager
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
@@ -15659,7 +16154,7 @@ echo
 # Set build flags for generic x86-64 compatibility
 export RUSTFLAGS="-C target-cpu=x86-64 -C opt-level=2"
 
-#--- Sub-block 24.4: Rust tool installation function ---
+#--- Sub-block 37.4: Rust tool installation function ---
 # Purpose: Reusable function for cargo install with error tracking
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Populates INSTALLED_TOOLS and FAILED_TOOLS
@@ -15720,7 +16215,7 @@ install_rust_tool() {
   fi
 }
 
-#--- Sub-block 24.4.0: Binary fallback installation function ---
+#--- Sub-block 37.5: Binary fallback installation function ---
 # Purpose: Download pre-compiled binaries if cargo install fails
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Binary in /opt/rust/tools/bin
@@ -15728,32 +16223,81 @@ install_prebuilt_binary() {
   local tool_name="${1:-}"
   local binary_url="${2:-}"
   local binary_name="${3:-}"
-  
+  local tmp_binary="/tmp/${binary_name}"
+
   # Validate required parameters
   if [ -z "${tool_name}" ] || [ -z "${binary_url}" ] || [ -z "${binary_name}" ]; then
     echo "ERROR: install_prebuilt_binary called with missing parameters" >&2
     return 1
   fi
-  
+
   echo "==> Attempting binary fallback for ${tool_name}..."
-  
-  # Ensure target directory exists
-  mkdir -p /opt/rust/tools/bin || return 1
-  
-  if curl -fsSL -o "/tmp/${binary_name}" "${binary_url}"; then
-    chmod +x "/tmp/${binary_name}"
-    mv "/tmp/${binary_name}" "/opt/rust/tools/bin/${binary_name}"
-    echo "✓ ${tool_name} installed from pre-built binary"
-    INSTALLED_TOOLS="${INSTALLED_TOOLS} ${tool_name}"
-    return 0
-  else
-    echo "✗ ${tool_name} binary fallback also failed"
-    FAILED_TOOLS="${FAILED_TOOLS} ${tool_name}"
+
+  if ! curl --fail --location --silent --show-error \
+    --retry 5 --retry-delay 2 --retry-connrefused \
+    --output "${tmp_binary}" "${binary_url}"; then
+    echo "✗ ${tool_name} binary fallback download failed"
+    rm -f "${tmp_binary}"
+    add_tool_to_failed "${tool_name}"
     return 1
   fi
+
+  if ! chmod +x "${tmp_binary}"; then
+    echo "✗ ${tool_name} binary fallback chmod failed"
+    rm -f "${tmp_binary}"
+    add_tool_to_failed "${tool_name}"
+    return 1
+  fi
+
+  if install -m 0755 -D "${tmp_binary}" "/opt/rust/tools/bin/${binary_name}"; then
+    echo "✓ ${tool_name} installed from pre-built binary"
+    INSTALLED_TOOLS="${INSTALLED_TOOLS} ${tool_name}"
+    rm -f "${tmp_binary}"
+    return 0
+  fi
+
+  echo "✗ ${tool_name} binary fallback install failed"
+  rm -f "${tmp_binary}"
+  add_tool_to_failed "${tool_name}"
+  return 1
 }
 
-#--- Sub-block 24.4.1: Initialize tracking and install tools ---
+#--- Sub-block 37.6: Helper to update failure tracker ---
+# Purpose: Remove successfully re-installed tools from FAILED_TOOLS
+remove_tool_from_failed() {
+  local tool="${1:-}"
+  local entry
+  local updated=""
+
+  [ -z "${tool}" ] && return 0
+
+  for entry in ${FAILED_TOOLS}; do
+    if [ "${entry}" != "${tool}" ]; then
+      updated="${updated} ${entry}"
+    fi
+  done
+
+  FAILED_TOOLS="${updated# }"
+}
+
+# Purpose: Add tools to FAILED_TOOLS only once
+add_tool_to_failed() {
+  local tool="${1:-}"
+  local entry
+
+  [ -z "${tool}" ] && return 0
+
+  for entry in ${FAILED_TOOLS}; do
+    if [ "${entry}" = "${tool}" ]; then
+      return 0
+    fi
+  done
+
+  FAILED_TOOLS="${FAILED_TOOLS} ${tool}"
+  FAILED_TOOLS="${FAILED_TOOLS# }"
+}
+
+#--- Sub-block 37.7: Initialize tracking and install tools ---
 # Purpose: Track successful/failed installations and install all Rust tools
 # Dependencies: install_rust_tool function above
 # Outputs: Rust binaries in /opt/rust/tools/bin
@@ -15765,39 +16309,51 @@ FAILED_TOOLS=""
 # zellij - with binary fallback if compilation fails
 if ! install_rust_tool "zellij" "${ZELLIJ_VERSION}" "terminal multiplexer" "5-7"; then
   echo "[warn] zellij compilation failed, trying pre-built binary..."
-  # Remove zellij from FAILED_TOOLS since we're attempting binary fallback
-  FAILED_TOOLS=$(echo "${FAILED_TOOLS}" | sed 's/ zellij//g' | sed 's/zellij //g')
-  
-  # Try downloading the tarball first, then extract
-  ZELLIJ_TARBALL="zellij-x86_64-unknown-linux-musl.tar.gz"
-  if curl -fsSL -o "/tmp/${ZELLIJ_TARBALL}" \
-      "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/${ZELLIJ_TARBALL}"; then
-    echo "✓ Downloaded zellij tarball, extracting..."
-    if tar -xzf "/tmp/${ZELLIJ_TARBALL}" -C /tmp 2>/dev/null; then
-      # Find the zellij binary in extracted directory
-      ZELLIJ_BIN=$(find /tmp -maxdepth 3 -type f -name "zellij" 2>/dev/null | head -1)
-      if [ -n "${ZELLIJ_BIN}" ] && [ -f "${ZELLIJ_BIN}" ]; then
-        chmod +x "${ZELLIJ_BIN}"
-        mv "${ZELLIJ_BIN}" "/opt/rust/tools/bin/zellij"
-        rm -rf /tmp/zellij-* /tmp/${ZELLIJ_TARBALL} 2>/dev/null
-        if [ -x "/opt/rust/tools/bin/zellij" ]; then
-          echo "✓ zellij installed from pre-built binary (v${ZELLIJ_VERSION})"
-          INSTALLED_TOOLS="${INSTALLED_TOOLS} zellij"
+  remove_tool_from_failed "zellij"
+
+  ZELLIJ_FALLBACK_SUCCESS=false
+  ZELLIJ_TARBALL_PATH=""
+  ZELLIJ_TMP_DIR=""
+
+  if ! ZELLIJ_TARBALL_PATH=$(mktemp "/tmp/zellij.${ZELLIJ_VERSION}.XXXXXX.tar.gz"); then
+    echo "✗ Failed to allocate temporary file for zellij tarball"
+  else
+    if curl --fail --location --silent --show-error \
+      --retry 5 --retry-delay 2 --retry-connrefused \
+      --output "${ZELLIJ_TARBALL_PATH}" \
+      "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz"; then
+      echo "✓ Downloaded zellij tarball, extracting..."
+      if ZELLIJ_TMP_DIR=$(mktemp -d "/tmp/zellij.${ZELLIJ_VERSION}.XXXXXX"); then
+        if tar -xzf "${ZELLIJ_TARBALL_PATH}" -C "${ZELLIJ_TMP_DIR}" 2>/dev/null; then
+          ZELLIJ_BIN=""
+          ZELLIJ_BIN=$(find "${ZELLIJ_TMP_DIR}" -maxdepth 3 -type f -name "zellij" -print -quit 2>/dev/null)
+          if [ -n "${ZELLIJ_BIN}" ] && [ -f "${ZELLIJ_BIN}" ]; then
+            if install -m 0755 -D "${ZELLIJ_BIN}" "/opt/rust/tools/bin/zellij"; then
+              echo "✓ zellij installed from pre-built binary (v${ZELLIJ_VERSION})"
+              INSTALLED_TOOLS="${INSTALLED_TOOLS} zellij"
+              ZELLIJ_FALLBACK_SUCCESS=true
+            else
+              echo "✗ Failed to install zellij binary into /opt/rust/tools/bin"
+            fi
+          else
+            echo "✗ zellij binary not found in extracted tarball"
+          fi
         else
-          echo "✗ zellij binary not executable after installation"
-          FAILED_TOOLS="${FAILED_TOOLS} zellij"
+          echo "✗ Failed to extract zellij tarball"
         fi
       else
-        echo "✗ zellij binary not found in extracted tarball"
-        FAILED_TOOLS="${FAILED_TOOLS} zellij"
+        echo "✗ Failed to create temporary extraction directory for zellij"
       fi
     else
-      echo "✗ Failed to extract zellij tarball"
-      FAILED_TOOLS="${FAILED_TOOLS} zellij"
+      echo "✗ zellij binary download failed - skipping"
     fi
-  else
-    echo "✗ zellij binary download failed - skipping"
-    FAILED_TOOLS="${FAILED_TOOLS} zellij"
+  fi
+
+  rm -f "${ZELLIJ_TARBALL_PATH:-}"
+  rm -rf "${ZELLIJ_TMP_DIR:-}"
+
+  if [ "${ZELLIJ_FALLBACK_SUCCESS}" = false ]; then
+    add_tool_to_failed "zellij"
   fi
 fi
 echo ""
@@ -15852,41 +16408,45 @@ if [ "$OX_INSTALLED" = false ]; then
   # Confirmed from GitHub release page: ox_0.7.7-1_amd64.deb
   # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox_0.7.7-1_amd64.deb
   OX_DEB_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox_${OX_VERSION}-1_amd64.deb"
-  
-  if wget -q "${OX_DEB_URL}" -O "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+  remove_tool_from_failed "ox"
+  OX_DEB_PATH="/tmp/ox_${OX_VERSION}.deb"
+  DPKG_SUCCESS=false
+
+  if curl --fail --location --silent --show-error \
+    --retry 5 --retry-delay 2 --retry-connrefused \
+    --output "${OX_DEB_PATH}" "${OX_DEB_URL}"; then
     # Try dpkg first, if it fails due to dependencies, fix and retry
-    if dpkg -i "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+    if dpkg -i "${OX_DEB_PATH}" >/dev/null 2>&1; then
       DPKG_SUCCESS=true
     else
       # Fix dependencies and retry
-      if apt-get install -f -y >/dev/null 2>&1 && dpkg -i "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null; then
+      if DEBIAN_FRONTEND=${DEBIAN_FRONTEND:-noninteractive} apt-get install -f -y >/dev/null 2>&1 &&
+        dpkg -i "${OX_DEB_PATH}" >/dev/null 2>&1; then
         DPKG_SUCCESS=true
-      else
-        DPKG_SUCCESS=false
       fi
     fi
-    
-    if [ "${DPKG_SUCCESS:-false}" = true ]; then
+
+    if [ "${DPKG_SUCCESS}" = true ]; then
       # Verify installation
       if command -v ox >/dev/null 2>&1 || [ -x "/usr/bin/ox" ]; then
         echo "✓ ox ${OX_VERSION} installed from Debian package"
         INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
         OX_INSTALLED=true
-        rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
       else
         echo "[warn] Debian package installed but binary not found, trying raw binary..."
         OX_INSTALLED=false
-        rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
       fi
     else
       echo "[warn] Debian package installation failed, trying raw binary..."
       OX_INSTALLED=false
-      rm -f "/tmp/ox_${OX_VERSION}.deb" 2>/dev/null || true
     fi
+    rm -f "${OX_DEB_PATH}" 2>/dev/null
   else
     echo "[warn] Debian package download failed, trying raw binary..."
     OX_INSTALLED=false
   fi
+
+  rm -f "${OX_DEB_PATH}" 2>/dev/null
 fi
 
 # Method 3: Try pre-built binary from GitHub releases if Debian package failed
@@ -15895,67 +16455,70 @@ if [ "$OX_INSTALLED" = false ]; then
   # Confirmed from GitHub release page: binary name is "ox"
   # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox
   OX_BINARY_URL="https://github.com/curlpipe/ox/releases/download/${OX_VERSION}/ox"
-  
-  if curl -fsSL -o "/tmp/ox" "${OX_BINARY_URL}" 2>/dev/null; then
-    # Verify downloaded file exists and is not empty
-    if [ -f "/tmp/ox" ] && [ -s "/tmp/ox" ]; then
-      # Check if it's a valid binary
-      if file "/tmp/ox" 2>/dev/null | grep -qE "(ELF|executable|binary)"; then
-        if chmod +x "/tmp/ox" 2>/dev/null; then
-          if mkdir -p /opt/rust/tools/bin 2>/dev/null; then
-            if mv "/tmp/ox" "/opt/rust/tools/bin/ox" 2>/dev/null; then
-              # Final verification
-              if [ -x "/opt/rust/tools/bin/ox" ]; then
-                echo "✓ ox ${OX_VERSION} installed from pre-built binary"
-                INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
-                OX_INSTALLED=true
-              else
-                echo "✗ ox binary not executable after installation"
-                FAILED_TOOLS="${FAILED_TOOLS} ox"
-              fi
+  remove_tool_from_failed "ox"
+  OX_BINARY_TEMP=""
+  OX_FAILURE_SUMMARY_PRINTED=false
+
+  if OX_BINARY_TEMP=$(mktemp "/tmp/ox.${OX_VERSION}.XXXXXX"); then
+    if curl --fail --location --silent --show-error \
+      --retry 5 --retry-delay 2 --retry-connrefused \
+      --output "${OX_BINARY_TEMP}" "${OX_BINARY_URL}"; then
+      if [ -s "${OX_BINARY_TEMP}" ]; then
+        if file "${OX_BINARY_TEMP}" 2>/dev/null | grep -qE "(ELF|executable|binary)"; then
+          if install -m 0755 -D "${OX_BINARY_TEMP}" "/opt/rust/tools/bin/ox"; then
+            if [ -x "/opt/rust/tools/bin/ox" ]; then
+              echo "✓ ox ${OX_VERSION} installed from pre-built binary"
+              INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
+              OX_INSTALLED=true
             else
-              echo "✗ Failed to move ox binary"
-              rm -f "/tmp/ox"
-              FAILED_TOOLS="${FAILED_TOOLS} ox"
+              echo "✗ ox binary not executable after installation"
+              add_tool_to_failed "ox"
             fi
           else
-            echo "✗ Failed to create /opt/rust/tools/bin directory"
-            rm -f "/tmp/ox"
-            FAILED_TOOLS="${FAILED_TOOLS} ox"
+            echo "✗ Failed to install ox binary into /opt/rust/tools/bin"
+            add_tool_to_failed "ox"
           fi
         else
-          echo "✗ Failed to make ox binary executable"
-          rm -f "/tmp/ox"
-          FAILED_TOOLS="${FAILED_TOOLS} ox"
+          echo "✗ Downloaded file is not a valid binary"
+          add_tool_to_failed "ox"
         fi
       else
-        echo "✗ Downloaded file is not a valid binary"
-        rm -f "/tmp/ox"
-        FAILED_TOOLS="${FAILED_TOOLS} ox"
+        echo "✗ ox binary download failed - file is empty or missing"
+        add_tool_to_failed "ox"
       fi
     else
-      echo "✗ ox binary download failed - file is empty or missing"
-      rm -f "/tmp/ox"
-      FAILED_TOOLS="${FAILED_TOOLS} ox"
+      OX_FAILURE_SUMMARY_PRINTED=true
+      echo "✗ ox ${OX_VERSION} installation failed from all methods"
+      echo "  Tried:"
+      echo "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}"
+      echo "    2. Debian package: ${OX_DEB_URL}"
+      echo "    3. Binary: ${OX_BINARY_URL}"
+      echo "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}"
+      add_tool_to_failed "ox"
     fi
   else
+    echo "✗ Failed to allocate temporary file for ox binary download"
+    add_tool_to_failed "ox"
+  fi
+
+  rm -f "${OX_BINARY_TEMP:-}"
+fi
+
+if [ "$OX_INSTALLED" = false ]; then
+  if [ "${OX_FAILURE_SUMMARY_PRINTED}" = false ]; then
     echo "✗ ox ${OX_VERSION} installation failed from all methods"
     echo "  Tried:"
     echo "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}"
     echo "    2. Debian package: ${OX_DEB_URL}"
     echo "    3. Binary: ${OX_BINARY_URL}"
     echo "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}"
-    FAILED_TOOLS="${FAILED_TOOLS} ox"
   fi
-fi
-
-if [ "$OX_INSTALLED" = false ]; then
   echo "  Note: ox is a lightweight text editor - optional tool"
 fi
 echo ""
 
 # CREATE SYMLINKS
-#--- Sub-block 24.4: Create Rust tool symlinks ---
+#--- Sub-block 37.8: Create Rust tool symlinks ---
 # Purpose: Link installed cargo binaries to system path
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
@@ -15992,7 +16555,7 @@ done
 echo ""
 
 # CLEANUP
-#--- Sub-block 24.5: Clean up Rust build artifacts ---
+#--- Sub-block 37.9: Clean up Rust build artifacts ---
 # Purpose: Remove cargo cache to save space
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
@@ -16018,7 +16581,7 @@ echo "✓ Build artifacts removed"
 echo ""
 
 # ENVIRONMENT SETUP
-#--- Sub-block 24.6: Create Rust environment profile ---
+#--- Sub-block 37.10: Create Rust environment profile ---
 # Purpose: Add Rust to system PATH for all sessions
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: /etc/profile.d/rust.sh
@@ -16034,7 +16597,7 @@ echo "✓ Rust environment configured (/etc/profile.d/rust.sh)"
 echo ""
 
 # INSTALLATION SUMMARY
-#--- Sub-block 24.7: Rust installation summary ---
+#--- Sub-block 37.11: Rust installation summary ---
 # Purpose: Report installation results
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: Rust binaries in /opt/rust/tools/bin
@@ -16079,12 +16642,13 @@ else
   mkdir -p /opt/rust/tools/bin 2>/dev/null || true
 fi
 
-#--- Sub-block 24.8: Configure Rust tool aliases ---
+#--- Sub-block 37.12: Configure Rust tool aliases ---
 # Purpose: Set up convenient aliases for compiled Rust tools
 # Dependencies: Block 24 (cargo install complete)
 # Outputs: Shell aliases in /etc/bash.bashrc
 echo "==> Configuring Rust tool aliases..."
-cat >> /etc/bash.bashrc << 'RUSTALIASES'
+if ! grep -Fq "# Modern Rust-based tool aliases (compiled from source)" /etc/bash.bashrc 2>/dev/null; then
+  cat >> /etc/bash.bashrc << 'RUSTALIASES'
 
 # Modern Rust-based tool aliases (compiled from source)
 alias cat='bat --paging=never'
@@ -16115,10 +16679,13 @@ if [ -d "/root/.local/bin" ]; then
   fi
 fi
 RUSTALIASES
+else
+  echo "  Rust tool aliases already configured in /etc/bash.bashrc"
+fi
 
 echo "✓ Rust tool aliases configured"
 
-#--- Sub-block: Add /root/.local/bin to system-wide PATH ---
+#--- Sub-block 37.13: Add /root/.local/bin to system-wide PATH ---
 # Purpose: Ensure zoxide is available in all shell sessions
 # Dependencies: zoxide installation (Block 23)
 # Outputs: System-wide PATH configuration
@@ -16127,7 +16694,14 @@ cat > /etc/profile.d/zoxide-path.sh << 'EOF'
 #!/bin/sh
 # Add /root/.local/bin to PATH for zoxide
 if [ -d "/root/.local/bin" ]; then
-    export PATH="/root/.local/bin:${PATH}"
+    case ":${PATH}:" in
+        *:/root/.local/bin:*)
+            # Already present
+            ;;
+        *)
+            export PATH="/root/.local/bin:${PATH}"
+            ;;
+    esac
 fi
 EOF
 chmod +x /etc/profile.d/zoxide-path.sh
@@ -16135,7 +16709,10 @@ echo "✓ System-wide PATH configuration for zoxide created"
 
 # ZELLIJ CONFIGURATION
 mkdir -p /etc/zellij || { echo "✗ Failed to create /etc/zellij directory"; exit 1; }
-cat > /etc/zellij/config.kdl << 'EOF'
+if ! cat <<'EOF' > /etc/zellij/config.kdl; then
+    echo "✗ Failed to write /etc/zellij/config.kdl" >&2
+    exit 1
+fi
 // Zellij configuration for ROS 2 multi-workspace development
 
 // Keybindings
@@ -16171,7 +16748,10 @@ EOF
 
 # OX EDITOR CONFIGURATION
 mkdir -p /etc/ox || { echo "✗ Failed to create /etc/ox directory"; exit 1; }
-cat > /etc/ox/config.ron << 'EOX'
+if ! cat <<'EOX' > /etc/ox/config.ron; then
+    echo "✗ Failed to write /etc/ox/config.ron" >&2
+    exit 1
+fi
 Config(
     general: General(
         line_number_padding_right: 2,
@@ -16189,40 +16769,43 @@ Config(
     macros: {
         "python": "#!/usr/bin/env python3\n",
         "julia": "#!/usr/bin/env julia\n",
-
-#--- Sub-block: Final system configuration ---
-# Purpose: Complete environment setup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
         "bash": "#!/bin/bash\n",
     },
 )
 EOX
 
-#--- Sub-block: Section continuation (5885) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # ROS MULTI-WORKSPACE LAUNCHER (Zellij version)
-cat > /usr/local/bin/ros_multiterm_zellij << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij; then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij" >&2
+  exit 1
+fi
 #!/bin/bash
+set -euo pipefail
+
 # Launch Zellij session with multiple ROS environments
 
-#--- Sub-block: System configuration ---
+#--- Sub-block 37.14: System configuration ---
 # Purpose: Final system setup
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-#--- Sub-block: Code section 5733 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 SESSION="ros_multi"
+if ! layout_file="$(mktemp -t ros_layout.XXXXXX.kdl)"; then
+    echo "✗ Failed to allocate temporary layout file" >&2
+    exit 1
+fi
 
-# Create Zellij layout
-cat > /tmp/ros_layout.kdl << 'LAYOUT'
+cleanup() {
+    rm -f "${layout_file}"
+}
+trap cleanup EXIT INT TERM
+
+if ! cat <<'LAYOUT' > "${layout_file}"; then
+    echo "✗ Failed to create Zellij layout file" >&2
+    exit 1
+fi
 layout {
     default_tab_template {
         pane size=1 borderless=true {
@@ -16267,16 +16850,8 @@ layout {
         }
     }
 
-#--- Sub-block: Section continuation (5941) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 5782 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
     tab name="Monitor" {
         pane split_direction="vertical" {
             pane {
@@ -16290,28 +16865,33 @@ layout {
 }
 LAYOUT
 
-if [ ! -f /tmp/ros_layout.kdl ]; then
-  echo "✗ Failed to create Zellij layout file" >&2
-  exit 1
+if [ ! -s "${layout_file}" ]; then
+    echo "✗ Failed to create Zellij layout file" >&2
+    exit 1
 fi
 
 # Launch Zellij with layout
 if command -v zellij >/dev/null 2>&1; then
-  zellij --layout /tmp/ros_layout.kdl attach -c "${SESSION}" || {
-    echo "✗ Failed to launch Zellij session" >&2
-    exit 1
-  }
+    if ! zellij --layout "${layout_file}" attach -c "${SESSION}"; then
+        echo "✗ Failed to launch Zellij session" >&2
+        exit 1
+    fi
 else
-  echo "Error: zellij not found. Please install zellij first." >&2
-  exit 1
+    echo "Error: zellij not found. Please install zellij first." >&2
+    exit 1
 fi
 EOF
-chmod +x /usr/local/bin/ros_multiterm_zellij
+chmod +x /usr/local/bin/ros_multiterm_zellij || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij" >&2; exit 1; }
 
 # ALTERNATIVE: TMUX LAUNCHER (keep both options)
-cat > /usr/local/bin/ros_multiterm_tmux << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_tmux; then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_tmux" >&2
+  exit 1
+fi
 #!/bin/bash
 # Launch tmux session with multiple ROS environments
+
+set -euo pipefail
 
 SESSION="ros_multi"
 
@@ -16341,10 +16921,6 @@ tmux new-window -t "${SESSION}:2" -n 'Bridge' 2>/dev/null || true
 tmux send-keys -t "${SESSION}:2" "echo 'Start domain bridge when ready'" C-m 2>/dev/null || true
 tmux send-keys -t "${SESSION}:2" "python3 /opt/scripts/domain_bridge.py" C-m 2>/dev/null || true
 
-#--- Sub-block: Section continuation (5987) ---
-# Purpose: Implementation details
-# Dependencies: Block 8.5 (Julia installation)
-# Outputs: Julia packages, environments
 
 # Window 3: Julia processing
 tmux new-window -t "${SESSION}:3" -n 'Julia' 2>/dev/null || true
@@ -16352,10 +16928,6 @@ tmux send-keys -t "${SESSION}:3" "echo 'Julia server: julia /opt/scripts/julia_v
 tmux send-keys -t "${SESSION}:3" "julia" C-m 2>/dev/null || true
 
 
-#--- Sub-block: Code section 5830 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 24 (Rust toolchain)
-# Outputs: Rust binaries in /opt/rust/tools/bin
 # Window 4: Monitoring (split pane)
 tmux new-window -t "${SESSION}:4" -n 'Monitor' 2>/dev/null || true
 tmux send-keys -t "${SESSION}:4" 'btm' C-m 2>/dev/null || true
@@ -16363,17 +16935,21 @@ tmux split-window -h -t "${SESSION}:4" 2>/dev/null || true
 tmux send-keys -t "${SESSION}:4.1" 'nvtop' C-m 2>/dev/null || true
 
 # Attach to session
-tmux attach-session -t "${SESSION}" || {
+if ! tmux attach-session -t "${SESSION}"; then
   echo "✗ Failed to attach to tmux session ${SESSION}" >&2
   exit 1
-}
+fi
 EOF
-chmod +x /usr/local/bin/ros_multiterm_tmux
+chmod +x /usr/local/bin/ros_multiterm_tmux || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_tmux" >&2; exit 1; }
 
 # Create convenience alias
-cat > /usr/local/bin/ros_multiterm << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm; then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm" >&2
+  exit 1
+fi
 #!/bin/bash
 # Default to Zellij, fallback to tmux
+set -euo pipefail
 if command -v zellij >/dev/null 2>&1; then
   exec /usr/local/bin/ros_multiterm_zellij "$@"
 elif command -v tmux >/dev/null 2>&1; then
@@ -16383,7 +16959,7 @@ else
   exit 1
 fi
 EOF
-chmod +x /usr/local/bin/ros_multiterm
+chmod +x /usr/local/bin/ros_multiterm || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm" >&2; exit 1; }
 
 # CLEANUP RUST BUILD ARTIFACTS
 # Remove cargo cache to save space
@@ -16398,7 +16974,7 @@ fi
 # ZENOH INSTALLATION (with error checking)
 
 #===============================================================================
-# BLOCK 25: ROBOTICS MIDDLEWARE - ZENOH
+# BLOCK 38: ROBOTICS MIDDLEWARE - ZENOH
 #===============================================================================
 # Purpose: Install Zenoh for ROS 2 multi-version bridging
 # Self-contained: Yes
@@ -16406,7 +16982,7 @@ fi
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 25.1: Download and install Zenoh ---
+#--- Sub-block 38.1: Download and install Zenoh ---
 # Critical: Protocol for ROS 2 inter-version communication
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -16458,8 +17034,8 @@ if [ "${ZENOH_DOWNLOAD_SUCCESS}" = true ]; then
         PLUGIN_COUNT=$(find "${ZENOH_PLUGINS_DIR}" -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l)
         if [ "${PLUGIN_COUNT}" -gt 0 ]; then
           echo "✓ Zenoh plugins installed: ${PLUGIN_COUNT} plugin(s)"
-          # Make plugins executable and set library path
-          chmod +x "${ZENOH_PLUGINS_DIR}"/*.so 2>/dev/null || true
+          # Normalize plugin permissions
+          find "${ZENOH_PLUGINS_DIR}" -type f -name "*.so" -exec chmod 644 {} + 2>/dev/null || true
         fi
       else
         echo "✗ Failed to install zenohd binary"
@@ -16489,7 +17065,7 @@ else
   echo "  You can install manually later if needed"
 fi
 
-#--- Sub-block 25.1.1: Download and install Zenoh ROS 2 DDS Bridge ---
+#--- Sub-block 38.2: Download and install Zenoh ROS 2 DDS Bridge ---
 # Purpose: Install ROS 2 DDS bridge plugin for Zenoh
 # Dependencies: Successful Zenoh installation (but can be installed independently)
 # Outputs: DDS bridge plugin and binaries
@@ -16500,13 +17076,13 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
   ZENOH_ROS2DDS_FILE="${ZENOH_ROS2DDS_FILE:-}"
   ZENOH_ROS2DDS_URL="${ZENOH_ROS2DDS_URL:-}"
   ZENOH_ROS2DDS_INSTALLED=false
+  ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=false
   
   if [ -z "${ZENOH_ROS2DDS_FILE}" ] || [ -z "${ZENOH_ROS2DDS_URL}" ]; then
     echo "✗ Zenoh ROS2DDS configuration variables not set"
     echo "  Skipping ROS2DDS bridge installation"
   else
     # Downloading Zenoh ROS2DDS bridge with retry logic...
-    ZENOH_ROS2DDS_DOWNLOAD_SUCCESS=false
     for attempt in 1 2 3; do
       echo "Attempt ${attempt}/3: Downloading Zenoh ROS 2 DDS Bridge..."
       if wget -q --show-progress --timeout=60 --tries=3 "${ZENOH_ROS2DDS_URL}" && [ -f "${ZENOH_ROS2DDS_FILE}" ]; then
@@ -16551,7 +17127,7 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
         mkdir -p "${ZENOH_PLUGINS_DIR}" || { echo "✗ Failed to create plugins directory"; }
         if cp "${ROS2DDS_PLUGIN}" "${ZENOH_PLUGINS_DIR}/" 2>/dev/null; then
           PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}")
-          chmod +x "${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}" 2>/dev/null || true
+          chmod 644 "${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}" 2>/dev/null || true
           echo "✓ Zenoh ROS 2 DDS plugin installed"
           ZENOH_ROS2DDS_INSTALLED=true
         else
@@ -16589,7 +17165,7 @@ else
 fi
 cd /
 
-#--- Sub-block 25.2: Configure Zenoh router ---
+#--- Sub-block 38.3: Configure Zenoh router ---
 # Purpose: Setup Zenoh router configuration and management scripts
 # Dependencies: Successful Zenoh installation
 # Outputs: Environment variables, configuration
@@ -16598,13 +17174,16 @@ cd /
 if [ "${ZENOH_INSTALLED}" = true ]; then
   echo "==> Configuring Zenoh"
   mkdir -p /etc/zenoh || { echo "✗ Failed to create /etc/zenoh directory"; exit 1; }
-# Zenoh Router Configuration
-cat > /etc/zenoh/zenoh-router.json5 << 'EOF'
+  # Zenoh Router Configuration
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-router.json5; then
+    echo "✗ Failed to write /etc/zenoh/zenoh-router.json5" >&2
+    exit 1
+  fi
 // Zenoh router configuration for ROS 2 multi-version bridge
 {
   // Router mode
 
-#--- Sub-block: Verification continuation ---
+#--- Sub-block 38.4: Verification continuation ---
 # Purpose: Additional validation checks
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -16653,23 +17232,22 @@ cat > /etc/zenoh/zenoh-router.json5 << 'EOF'
 }
 EOF
 
-#--- Sub-block: Section continuation (6129) ---
-# Purpose: Implementation details
+
+
+#--- Code section 5964 ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 
-
-#--- Sub-block: Code section 5964 ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: Environment setup ---
+#--- Sub-block 38.5: Environment setup ---
 # Purpose: Environment variables and paths
 # Purpose: Continuing implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-# Zenoh-DDS Bridge Configuration (Humble domain)
-cat > /etc/zenoh/zenoh-bridge-humble.json5 << 'EOF'
+  # Zenoh-DDS Bridge Configuration (Humble domain)
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-humble.json5; then
+    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-humble.json5" >&2
+    exit 1
+  fi
 // Bridge ROS 2 Humble (Domain 1) to Zenoh
 {
   mode: "client",
@@ -16677,7 +17255,7 @@ cat > /etc/zenoh/zenoh-bridge-humble.json5 << 'EOF'
     endpoints: ["tcp/localhost:7447"]
   },
 
-#--- Sub-block: Environment finalization ---
+#--- Sub-block 38.6: Environment finalization ---
 # Purpose: Complete environment setup
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -16701,8 +17279,11 @@ cat > /etc/zenoh/zenoh-bridge-humble.json5 << 'EOF'
 }
 EOF
 
-# Zenoh-DDS Bridge Configuration (Jazzy domain)
-cat > /etc/zenoh/zenoh-bridge-jazzy.json5 << 'EOF'
+  # Zenoh-DDS Bridge Configuration (Jazzy domain)
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-jazzy.json5; then
+    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-jazzy.json5" >&2
+    exit 1
+  fi
 // Bridge ROS 2 Jazzy (Domain 2) to Zenoh
 {
   mode: "client",
@@ -16726,16 +17307,8 @@ cat > /etc/zenoh/zenoh-bridge-jazzy.json5 << 'EOF'
 }
 EOF
 
-#--- Sub-block: Section continuation (6185) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 6017 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 8.5 (Julia installation)
-# Outputs: Julia packages, environments
 # ZENOH JULIA BINDINGS (Optional, but useful)
 if [ -n "${JULIA_HOME:-}" ] && [ -x "${JULIA_HOME}/bin/julia" ]; then
   "${JULIA_HOME}/bin/julia" -e '
@@ -16753,135 +17326,151 @@ fi
 
 # ZENOH MANAGEMENT SCRIPTS
 # Zenoh startup script
-cat > /usr/local/bin/zenoh_start << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/zenoh_start; then
+  echo "✗ Failed to write /usr/local/bin/zenoh_start" >&2
+  exit 1
+fi
 #!/bin/bash
 # Start Zenoh router and bridges
 
+set -euo pipefail
+
+if ! command -v zenohd >/dev/null 2>&1; then
+  echo "✗ zenohd not found. Install Zenoh before running this script." >&2
+  exit 1
+fi
+
 echo "Starting Zenoh infrastructure..."
 
-# Set plugin search directory if plugins are installed
-PLUGIN_COUNT=$(find /opt/zenoh/plugins -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l)
+# Determine plugin availability
+PLUGIN_COUNT=0
+if [ -d "/opt/zenoh/plugins" ]; then
+  PLUGIN_COUNT=$(find /opt/zenoh/plugins -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l | tr -d '[:space:]')
+fi
+
+PLUGIN_ARGS=()
 if [ -d "/opt/zenoh/plugins" ] && [ "${PLUGIN_COUNT}" -gt 0 ]; then
   export ZENOH_PLUGIN_SEARCH_DIR="/opt/zenoh/plugins"
-  PLUGIN_OPT="--plugin-search-dir ${ZENOH_PLUGIN_SEARCH_DIR}"
-else
-  PLUGIN_OPT=""
+  PLUGIN_ARGS+=(--plugin-search-dir "${ZENOH_PLUGIN_SEARCH_DIR}")
+  echo "  Using Zenoh plugins directory: ${ZENOH_PLUGIN_SEARCH_DIR} (${PLUGIN_COUNT} plugin(s))"
 fi
+
+ROUTER_LOG="/tmp/zenoh-router.log"
 
 # Start Zenoh router in background
 echo "  Starting Zenoh router on port 7447..."
-if [ -n "${PLUGIN_OPT}" ]; then
-  zenohd "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
-else
-  zenohd --config /etc/zenoh/zenoh-router.json5 > /tmp/zenoh-router.log 2>&1 &
-fi
+zenohd "${PLUGIN_ARGS[@]}" --config /etc/zenoh/zenoh-router.json5 > "${ROUTER_LOG}" 2>&1 &
 ROUTER_PID=$!
 sleep 2
 
 # Check if router started
 if ! ps -p "${ROUTER_PID}" > /dev/null 2>&1; then
   echo "  ✗ Failed to start Zenoh router"
-  cat /tmp/zenoh-router.log 2>/dev/null || true
+  cat "${ROUTER_LOG}" 2>/dev/null || true
   exit 1
 fi
 echo "  ✓ Zenoh router started (PID: ${ROUTER_PID})"
 
-# Start Humble bridge (if zenoh-bridge-ros2dds is available)
-if [ -d "/conda/envs/ros2_humble" ]; then
-  # Try zenoh-bridge-ros2dds first, fallback to zenoh-bridge-dds for compatibility
-  BRIDGE_CMD=""
-  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
-    BRIDGE_CMD="zenoh-bridge-ros2dds"
-  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
-    BRIDGE_CMD="zenoh-bridge-dds"
-  fi
-  
-  if [ -n "${BRIDGE_CMD}" ]; then
-    echo "  Starting Zenoh ROS 2 DDS bridge for Humble (Domain 1)..."
-    if [ -n "${PLUGIN_OPT}" ]; then
-      "${BRIDGE_CMD}" "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
-    else
-      "${BRIDGE_CMD}" --config /etc/zenoh/zenoh-bridge-humble.json5 > /tmp/zenoh-humble.log 2>&1 &
-    fi
-    HUMBLE_PID=$!
-    sleep 1
-    if ps -p "${HUMBLE_PID}" > /dev/null 2>&1; then
-      echo "  ✓ Humble bridge started (PID: ${HUMBLE_PID})"
-    else
-      echo "  ✗ Failed to start Humble bridge"
-      cat /tmp/zenoh-humble.log 2>/dev/null || true
-    fi
-  else
-    echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Humble bridge"
+start_bridge() {
+  local bridge_name="$1"
+  local bridge_config="$2"
+  local log_path="$3"
+
+  if ! command -v zenoh-bridge-ros2dds >/dev/null 2>&1 && ! command -v zenoh-bridge-dds >/dev/null 2>&1; then
+    echo "  ⚠ No Zenoh bridge binary found - skipping ${bridge_name} bridge"
     echo "    Note: Bridge functionality requires zenoh-plugin-ros2dds installation"
+    return 0
   fi
+
+  local bridge_cmd
+  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
+    bridge_cmd="zenoh-bridge-ros2dds"
+  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
+    bridge_cmd="zenoh-bridge-dds"
+  else
+    bridge_cmd=""
+  fi
+
+  if [ -z "${bridge_cmd}" ]; then
+    echo "  ⚠ Unable to determine bridge command for ${bridge_name}"
+    return 0
+  fi
+
+  echo "  Starting Zenoh ROS 2 DDS bridge for ${bridge_name}..."
+  local bridge_args=()
+  if [ "${#PLUGIN_ARGS[@]}" -gt 0 ]; then
+    bridge_args+=("${PLUGIN_ARGS[@]}")
+  fi
+  bridge_args+=(--config "${bridge_config}")
+
+  "${bridge_cmd}" "${bridge_args[@]}" > "${log_path}" 2>&1 &
+  local bridge_pid=$!
+  sleep 1
+  if ps -p "${bridge_pid}" > /dev/null 2>&1; then
+    echo "  ✓ ${bridge_name} bridge started (PID: ${bridge_pid})"
+  else
+    echo "  ✗ Failed to start ${bridge_name} bridge"
+    cat "${log_path}" 2>/dev/null || true
+  fi
+}
+
+if [ -d "/conda/envs/ros2_humble" ]; then
+  start_bridge "Humble (Domain 1)" "/etc/zenoh/zenoh-bridge-humble.json5" "/tmp/zenoh-humble.log"
 fi
 
-#--- Sub-block: Section continuation (6235) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 6064 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# Start Jazzy bridge (if zenoh-bridge-ros2dds is available)
 if [ -d "/conda/envs/ros2_jazzy" ] || ([ -n "${ROS_DISTRO:-}" ] && [ -d "/opt/ros/${ROS_DISTRO}" ]); then
-  # Try zenoh-bridge-ros2dds first, fallback to zenoh-bridge-dds for compatibility
-  BRIDGE_CMD=""
-  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
-    BRIDGE_CMD="zenoh-bridge-ros2dds"
-  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
-    BRIDGE_CMD="zenoh-bridge-dds"
-  fi
-  
-  if [ -n "${BRIDGE_CMD}" ]; then
-    echo "  Starting Zenoh ROS 2 DDS bridge for Jazzy (Domain 2)..."
-    if [ -n "${PLUGIN_OPT}" ]; then
-      "${BRIDGE_CMD}" "${PLUGIN_OPT}" --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
-    else
-      "${BRIDGE_CMD}" --config /etc/zenoh/zenoh-bridge-jazzy.json5 > /tmp/zenoh-jazzy.log 2>&1 &
-    fi
-    JAZZY_PID=$!
-    sleep 1
-    if ps -p "${JAZZY_PID}" > /dev/null 2>&1; then
-      echo "  ✓ Jazzy bridge started (PID: ${JAZZY_PID})"
-    else
-      echo "  ✗ Failed to start Jazzy bridge"
-      cat /tmp/zenoh-jazzy.log 2>/dev/null || true
-    fi
-  else
-    echo "  ⚠ zenoh-bridge-ros2dds/zenoh-bridge-dds not found - skipping Jazzy bridge"
-    echo "    Note: Bridge functionality requires zenoh-plugin-ros2dds installation"
-  fi
+  start_bridge "Jazzy (Domain 2)" "/etc/zenoh/zenoh-bridge-jazzy.json5" "/tmp/zenoh-jazzy.log"
 fi
 
 echo "Zenoh infrastructure ready!"
 echo "  Router: http://localhost:8000 (REST API)"
 echo "  Logs: /tmp/zenoh*.log"
 EOF
-chmod +x /usr/local/bin/zenoh_start
+chmod +x /usr/local/bin/zenoh_start || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
 
 # Zenoh stop script
-cat > /usr/local/bin/zenoh_stop << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/zenoh_stop; then
+  echo "✗ Failed to write /usr/local/bin/zenoh_stop" >&2
+  exit 1
+fi
 #!/bin/bash
 # Stop all Zenoh processes
 
+set -euo pipefail
+
 echo "Stopping Zenoh infrastructure..."
-pkill -f zenohd
-pkill -f zenoh-bridge-ros2dds
-pkill -f zenoh-bridge-dds
-pkill -f zenoh-bridge
+pids_terminated=false
+if pkill -f zenohd >/dev/null 2>&1; then
+  pids_terminated=true
+fi
+if pkill -f zenoh-bridge-ros2dds >/dev/null 2>&1; then
+  pids_terminated=true
+fi
+if pkill -f zenoh-bridge-dds >/dev/null 2>&1; then
+  pids_terminated=true
+fi
+if pkill -f zenoh-bridge >/dev/null 2>&1; then
+  pids_terminated=true
+fi
+
+if [ "${pids_terminated}" = false ]; then
+  echo "  No Zenoh processes were running"
+fi
 echo "✓ Zenoh stopped"
 EOF
-chmod +x /usr/local/bin/zenoh_stop
+chmod +x /usr/local/bin/zenoh_stop || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_stop" >&2; exit 1; }
 
 # Zenoh status script
-cat > /usr/local/bin/zenoh_status << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/zenoh_status; then
+  echo "✗ Failed to write /usr/local/bin/zenoh_status" >&2
+  exit 1
+fi
 #!/bin/bash
 # Check Zenoh status
+
+set -euo pipefail
 
 echo "Zenoh Infrastructure Status:"
 echo "----------------------------"
@@ -16893,25 +17482,17 @@ else
   echo "✗ Zenoh Router: STOPPED"
 fi
 
-#--- Sub-block: Section continuation (6285) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 6111 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # Check Humble bridge
-if pgrep -f 'zenoh-bridge.*humble\|zenoh-bridge-ros2dds.*humble' > /dev/null 2>&1; then
+if pgrep -f 'zenoh-bridge.*zenoh-bridge-humble\.json5' > /dev/null 2>&1; then
   echo "✓ Humble Bridge: RUNNING (Domain 1 -> /humble namespace)"
 else
   echo "✗ Humble Bridge: STOPPED"
 fi
 
 # Check Jazzy bridge
-if pgrep -f 'zenoh-bridge.*jazzy\|zenoh-bridge-ros2dds.*jazzy' > /dev/null 2>&1; then
+if pgrep -f 'zenoh-bridge.*zenoh-bridge-jazzy\.json5' > /dev/null 2>&1; then
   echo "✓ Jazzy Bridge: RUNNING (Domain 2 -> /jazzy namespace)"
 else
   echo "✗ Jazzy Bridge: STOPPED"
@@ -16922,11 +17503,14 @@ echo "  Router: /tmp/zenoh-router.log"
 echo "  Humble: /tmp/zenoh-humble.log"
 echo "  Jazzy: /tmp/zenoh-jazzy.log"
 EOF
-chmod +x /usr/local/bin/zenoh_status
+chmod +x /usr/local/bin/zenoh_status || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_status" >&2; exit 1; }
 
 # ZENOH PYTHON UTILITIES
 # ZENOH TOPIC BRIDGE SCRIPT
-cat > /opt/scripts/zenoh_topic_bridge.py << 'EOF'
+if ! cat <<'EOF' > /opt/scripts/zenoh_topic_bridge.py; then
+  echo "✗ Failed to write /opt/scripts/zenoh_topic_bridge.py" >&2
+  exit 1
+fi
 #!/usr/bin/env python3
 # Zenoh topic bridge for ROS 2 Humble <-> Jazzy communication
 
@@ -16934,12 +17518,12 @@ import sys
 try:
     import zenoh
 except ImportError:
-    #--- Sub-block: Helper scripts generation ---
+    #--- Sub-block 38.7: Helper scripts generation ---
     # Purpose: Create utility and monitoring scripts
     # Dependencies: None (foundational)
     # Outputs: Environment variables, configuration
     print(" Zenoh-Python package not installed")
-    print("Install with: pip3 install eclipse-zenoh")
+    print("Install with: python3 -m pip install eclipse-zenoh")
     sys.exit(1)
 
 class ZenohTopicBridge:
@@ -16949,10 +17533,6 @@ class ZenohTopicBridge:
         self.session = zenoh.open(config)
         print("✓ Connected to Zenoh router")
 
-#--- Sub-block: Section continuation (6331) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
     def bridge_topic(self, from_topic: str, to_topic: str):
         """Bridge a topic from one namespace to another"""
@@ -16961,12 +17541,12 @@ class ZenohTopicBridge:
             self.session.put(to_topic, sample.payload)
             print(f"Bridged: {from_topic} -> {to_topic}")
 
-        #--- Sub-block: Utility scripts ---
+        #--- Sub-block 38.8: Utility scripts ---
         # Purpose: Helper scripts creation
         # Dependencies: None (foundational)
         # Outputs: Environment variables, configuration
 
-        #--- Sub-block: Code section 6161 ---
+        #--- Code section 6161 ---
         # Purpose: Continuing implementation
         # Dependencies: None (foundational)
         # Outputs: Environment variables, configuration
@@ -16974,7 +17554,7 @@ class ZenohTopicBridge:
         subscriber = self.session.declare_subscriber(from_topic, callback)
         print(f"Bridge active: {from_topic} -> {to_topic}")
 
-        #--- Sub-block: Script generation ---
+        #--- Sub-block 38.9: Script generation ---
         # Purpose: Create additional helper scripts
         # Dependencies: None (foundational)
         # Outputs: Environment variables, configuration
@@ -16997,22 +17577,39 @@ if __name__ == "__main__":
     bridge.bridge_topic('/jazzy/cmd_vel', '/humble/cmd_vel')
     bridge.run()
 EOF
-chmod +x /opt/scripts/zenoh_topic_bridge.py
+chmod +x /opt/scripts/zenoh_topic_bridge.py || { echo "✗ Failed to set executable bit on /opt/scripts/zenoh_topic_bridge.py" >&2; exit 1; }
 echo "✓ Zenoh topic bridge script created"
 
 # UPDATE ZELLIJ LAYOUT WITH ZENOH
 # Update the Zellij launcher to include Zenoh
-cat > /usr/local/bin/ros_multiterm_zellij_zenoh << 'EOF'
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij_zenoh; then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij_zenoh" >&2
+  exit 1
+fi
 #!/bin/bash
 # Launch Zellij session with Zenoh-enabled ROS environments
 
+set -euo pipefail
+
 SESSION="ros_multi_zenoh"
+if ! layout_file="$(mktemp -t ros_zenoh_layout.XXXXXX.kdl)"; then
+  echo "✗ Failed to allocate temporary Zenoh layout file" >&2
+  exit 1
+fi
+
+cleanup() {
+  rm -f "${layout_file}"
+}
+trap cleanup EXIT INT TERM
 
 # Start Zenoh infrastructure first
 zenoh_start
 
 # Create Zellij layout
-cat > /tmp/ros_zenoh_layout.kdl << 'LAYOUT'
+if ! cat <<'LAYOUT' > "${layout_file}"; then
+  echo "✗ Failed to create Zellij Zenoh layout file" >&2
+  exit 1
+fi
 layout {
     default_tab_template {
         pane size=1 borderless=true {
@@ -17077,17 +17674,16 @@ layout {
 LAYOUT
 
 
-#--- Sub-block: Code section 6262 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # Launch Zellij with layout
-zellij --layout /tmp/ros_zenoh_layout.kdl attach -c $SESSION
+if ! zellij --layout "${layout_file}" attach -c "${SESSION}"; then
+  echo "✗ Failed to launch Zellij Zenoh session" >&2
+  exit 1
+fi
 EOF
-chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh
+chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
 
 # CLEANUP
-#--- Sub-block 24.5: Clean up Rust build artifacts ---
+#--- Sub-block 38.10: Clean up Rust build artifacts ---
 # Purpose: Remove cargo cache to save space
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
@@ -17109,7 +17705,7 @@ echo "  - 3) Optionally create a desktop file for menus"
 
 
 #===============================================================================
-# BLOCK 26: FINAL SYSTEM VERIFICATION
+# BLOCK 39: FINAL SYSTEM VERIFICATION
 #===============================================================================
 # Purpose: Verify all critical symlinks and installations
 # Self-contained: Yes
@@ -17117,7 +17713,7 @@ echo "  - 3) Optionally create a desktop file for menus"
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 26.1: Verify TurboVNC and VirtualGL symlinks ---
+#--- Sub-block 39.1: Verify TurboVNC and VirtualGL symlinks ---
 # Critical: Ensure remote desktop binaries are accessible
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -17125,20 +17721,26 @@ echo "  - 3) Optionally create a desktop file for menus"
 echo "==> Final verification of TurboVNC/VirtualGL symlinks..."
 
 # TurboVNC binaries
-TURBOVNC_BINS="vncserver Xvnc vncpasswd vncconnect vncviewer webserver tvncconfig"
-for binary in $TURBOVNC_BINS; do
-  if [ ! -L "/usr/local/bin/$binary" ] && [ -x "/opt/TurboVNC/bin/$binary" ]; then
-    ln -sf "/opt/TurboVNC/bin/$binary" "/usr/local/bin/$binary"
-    echo "  ✓ Created missing symlink: ${binary}"
+TURBOVNC_BINS=(vncserver Xvnc vncpasswd vncconnect vncviewer webserver tvncconfig)
+for binary in "${TURBOVNC_BINS[@]}"; do
+  if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/TurboVNC/bin/${binary}" ]; then
+    if ln -sf "/opt/TurboVNC/bin/${binary}" "/usr/local/bin/${binary}"; then
+      echo "  ✓ Created missing symlink: ${binary}"
+    else
+      echo "  ✗ Failed to create symlink for ${binary}" >&2
+    fi
   fi
 done
 
 # VirtualGL binaries (comprehensive list)
-VIRTUALGL_BINS="vglrun vglclient vglconfig vglconnect vglgenkey vgllogin vglserver_config glxinfo glxspheres64 eglinfo eglxinfo eglxspheres64 cpustat nettest tcbench"
-for binary in $VIRTUALGL_BINS; do
-  if [ ! -L "/usr/local/bin/$binary" ] && [ -x "/opt/VirtualGL/bin/$binary" ]; then
-    ln -sf "/opt/VirtualGL/bin/$binary" "/usr/local/bin/$binary"
-    echo "  ✓ Created missing symlink: ${binary}"
+VIRTUALGL_BINS=(vglrun vglclient vglconfig vglconnect vglgenkey vgllogin vglserver_config glxinfo glxspheres64 eglinfo eglxinfo eglxspheres64 cpustat nettest tcbench)
+for binary in "${VIRTUALGL_BINS[@]}"; do
+  if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/VirtualGL/bin/${binary}" ]; then
+    if ln -sf "/opt/VirtualGL/bin/${binary}" "/usr/local/bin/${binary}"; then
+      echo "  ✓ Created missing symlink: ${binary}"
+    else
+      echo "  ✗ Failed to create symlink for ${binary}" >&2
+    fi
   fi
 done
 
@@ -17157,7 +17759,7 @@ declare -A CRITICAL_BINS=(
 for binary in "${!CRITICAL_BINS[@]}"; do
   expected="${CRITICAL_BINS[$binary]}"
   if [ -L "/usr/local/bin/${binary}" ]; then
-    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}")
+    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}" 2>/dev/null || true)
     if [ -n "${actual}" ] && [ -x "${actual}" ]; then
       echo "  ✓ ${binary} -> ${actual} [OK]"
     else
@@ -17168,16 +17770,8 @@ for binary in "${!CRITICAL_BINS[@]}"; do
   fi
 done
 
-#--- Sub-block: Section continuation (6526) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 6340 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo "✓ Symlink verification complete"
 
 # Cache is already unified in ${CONTAINER_CACHE_ROOT}/ - no need for complex harvesting
@@ -17214,26 +17808,22 @@ echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>
 # === FINAL CACHE PRESERVATION ===
 # Reverting cache file permissions to normal ===
 if command -v chattr >/dev/null 2>&1; then
-    chattr -i "${CONTAINER_APT_CACHE}"/*.deb 2>/dev/null || true
-    echo "chattr -i command executed successfully"
+    if compgen -G "${CONTAINER_APT_CACHE}/"*.deb > /dev/null; then
+        chattr -i "${CONTAINER_APT_CACHE}/"*.deb 2>/dev/null || true
+        echo "chattr -i command executed successfully"
+    else
+        echo "No cached .deb files require chattr adjustment"
+    fi
 else
     echo "WARNING: chattr command not available - cannot revert file permissions"
 fi
 
-#--- Sub-block: Section continuation (6571) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 # Show monitoring summary and aggregated cache summary before preservation
 display_cache_monitoring_summary
 cache_summary
 # Add detailed monitoring before any cache operations
 
-#--- Sub-block: Code section 6386 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo "  » DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
 echo "  Container cache directory contents:"
 find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
@@ -17280,16 +17870,8 @@ echo "  Pip wheels: $(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/de
 echo "  Julia packages: $(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
 echo "=========================================================================="
 
-#--- Sub-block: Section continuation (6624) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 
-#--- Sub-block: Code section 6432 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # ===============================================================
 # Final Installation Verification
 # ===============================================================
@@ -17333,10 +17915,6 @@ for script in start_vnc_xfce.sh test_virtualgl.sh vgl_benchmark.sh vgl_info.sh v
   fi
 done
 
-#--- Sub-block: Section continuation (6666) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 echo ""
 echo "=========================================="
@@ -17345,17 +17923,18 @@ echo "=========================================="
 
 # ===============================================================
 
-#--- Sub-block: Code section 6477 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
 # VNC server selection and comparison tool
 # ===============================================================
 echo "==> Creating VNC server selection tool..."
 
-cat > /usr/local/bin/vnc_select.sh << 'VNCSELECT'
+if ! cat <<'VNCSELECT' > /usr/local/bin/vnc_select.sh; then
+  echo "✗ Failed to write /usr/local/bin/vnc_select.sh" >&2
+  exit 1
+fi
 #!/usr/bin/env bash
 # VNC Server Selection and Comparison Tool
+
+set -euo pipefail
 
 cat << 'INFO'
 ========================================
@@ -17389,10 +17968,6 @@ Available VNC servers in this container:
    - Container-optimized
    - Command: start_kasmvnc.sh
 
-#--- Sub-block: Section continuation (6715) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 5. x11vnc (Screen Sharing)
    - Can attach to existing X session
@@ -17401,12 +17976,8 @@ Available VNC servers in this container:
 
 
 
-#--- Sub-block: Final cleanup ---
+#--- Sub-block 39.2: Final cleanup ---
 # Purpose: Post-installation cleanup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block: Code section 6522 ---
-# Purpose: Continuing implementation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 ========================================
@@ -17414,7 +17985,7 @@ RECOMMENDATION
 ========================================
 
 
-#--- Sub-block: Final cleanup operations ---
+#--- Sub-block 39.3: Final cleanup operations ---
 # Purpose: Post-installation cleanup tasks
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
@@ -17463,18 +18034,10 @@ if [ $# -gt 0 ]; then
   esac
 fi
 VNCSELECT
-chmod +x /usr/local/bin/vnc_select.sh
-
-#--- Sub-block: Section continuation (6774) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+chmod +x /usr/local/bin/vnc_select.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/vnc_select.sh" >&2; exit 1; }
 
 
-#--- Sub-block: Code section 6573 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+
 echo "✓ VNC selection tool created"
 
 # ===============================================================
@@ -17482,9 +18045,14 @@ echo "✓ VNC selection tool created"
 # ===============================================================
 echo "==> Creating network optimization script..."
 
-cat > /usr/local/bin/optimize_network.sh << 'NETOPT'
+if ! cat <<'NETOPT' > /usr/local/bin/optimize_network.sh; then
+  echo "✗ Failed to write /usr/local/bin/optimize_network.sh" >&2
+  exit 1
+fi
 #!/usr/bin/env bash
 # Optimize network for remote desktop (run on host/container with permissions)
+
+set -euo pipefail
 
 echo "Optimizing TCP for remote desktop..."
 
@@ -17514,38 +18082,54 @@ Then run: sudo sysctl -p
 EOF
 
 
-#--- Sub-block: Section continuation (6816) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 echo ""
 echo "Note: These optimizations require host-level changes"
 NETOPT
-chmod +x /usr/local/bin/optimize_network.sh
+chmod +x /usr/local/bin/optimize_network.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/optimize_network.sh" >&2; exit 1; }
 
 echo "✓ Network optimization guide created"
 
 
-#--- Sub-block: Code section 6618 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # ===============================================================
 # Create Unified Remote Desktop Launcher
 # ===============================================================
 echo "==> Creating unified remote desktop launcher..."
 
 
-#--- Sub-block 26.4: Create unified remote desktop launcher ---
+#--- Sub-block 39.4: Create unified remote desktop launcher ---
 # Purpose: Interactive menu for launching VNC/noVNC sessions
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
-cat > /usr/local/bin/remote_desktop.sh << 'RDLAUNCH'
+if ! cat <<'RDLAUNCH' > /usr/local/bin/remote_desktop.sh; then
+  echo "✗ Failed to write /usr/local/bin/remote_desktop.sh" >&2
+  exit 1
+fi
 #!/usr/bin/env bash
 # Unified Remote Desktop Launcher
 
-show_menu() {
-  cat << EOF
+set -euo pipefail
+
+# Ensure helper scripts exist before invocation and surface failures.
+invoke_helper() {
+  local executable="${1:?executable name required}"
+  shift
+
+  if ! command -v "${executable}" >/dev/null 2>&1; then
+    printf 'Required helper "%s" is not available in PATH.\n' "${executable}" >&2
+    return 0
+  fi
+
+  if ! "${executable}" "$@"; then
+    local rc=$?
+    printf 'Helper "%s" exited with status %s.\n' "${executable}" "${rc}" >&2
+  fi
+
+  return 0
+}
+
+# Display the interactive menu of remote desktop options.
+print_menu() {
+  cat <<'EOF'
 
 ========================================
 Remote Desktop Launcher
@@ -17576,70 +18160,134 @@ UTILITIES:
 
 ========================================
 EOF
-  read -p "Select option: " choice
-  echo ""
-  handle_choice "$choice"
 }
 
-#--- Sub-block: Section continuation (6874) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
+# Prompt the operator to press Enter before returning to the menu.
+prompt_continue() {
+  local _discard=""
+
+  if ! read -r -p "Press Enter to continue..." _discard; then
+    printf 'Input aborted; exiting.\n' >&2
+    return 1
+  fi
+
+  return 0
+}
 
 handle_choice() {
-  case "${1}" in
-    1) start_vnc_xfce.sh ;;
-    2) start_vnc_ultrahq.sh ;;
-    3) start_vnc_lowbw.sh ;;
-    4) start_vnc_tigervnc.sh ;;
-    5) read -p "Display number (default 1): " disp
-       start_x11vnc.sh "${disp:-1}" ;;
-    6) start_kasmvnc.sh ;;
-    7) start_xpra.sh ;;
-    8) start_sunshine.sh ;;
-    9) vncserver -list 2>/dev/null || true
-       echo ""
-       if command -v pgrep >/dev/null 2>&1; then
-           pgrep -af "vnc|xpra|sunshine" 2>/dev/null || true
-       else
-           ps aux 2>/dev/null | grep -E "vnc|xpra|sunshine" | grep -v grep || true
-       fi ;;
-   10) vncserver -kill :1 2>/dev/null || true
-       pkill -f vnc || true
-       pkill -f xpra || true
-       echo "All VNC servers killed" ;;
-   11) test_virtualgl.sh ;;
-   12) vgl_benchmark.sh ;;
-   13) read -p "Output filename (default: screen_recording.mp4): " fname
-       record_screen.sh 1 "${fname:-screen_recording.mp4}" ;;
-    0) exit 0 ;;
-    *) echo "Invalid option" ;;
+  local selection="${1:-}"
+
+  case "${selection}" in
+    1) invoke_helper start_vnc_xfce.sh ;;
+    2) invoke_helper start_vnc_ultrahq.sh ;;
+    3) invoke_helper start_vnc_lowbw.sh ;;
+    4) invoke_helper start_vnc_tigervnc.sh ;;
+    5)
+      local disp=""
+      if ! read -r -p "Display number (default 1): " disp; then
+        printf 'Input aborted; returning to menu.\n' >&2
+        return 2
+      fi
+      invoke_helper start_x11vnc.sh "${disp:-1}"
+      ;;
+    6) invoke_helper start_kasmvnc.sh ;;
+    7) invoke_helper start_xpra.sh ;;
+    8) invoke_helper start_sunshine.sh ;;
+    9)
+      if command -v vncserver >/dev/null 2>&1; then
+        vncserver -list 2>/dev/null || true
+      else
+        printf 'vncserver is not available in PATH.\n' >&2
+      fi
+      printf '\n'
+      if command -v pgrep >/dev/null 2>&1; then
+        pgrep -af 'vnc|xpra|sunshine' 2>/dev/null || true
+      else
+        ps aux 2>/dev/null | grep -E 'vnc|xpra|sunshine' | grep -v grep || true
+      fi
+      ;;
+    10)
+      if command -v vncserver >/dev/null 2>&1; then
+        vncserver -kill :1 2>/dev/null || true
+      fi
+      if command -v pkill >/dev/null 2>&1; then
+        pkill -f vnc || true
+        pkill -f xpra || true
+      else
+        printf 'pkill not available; please terminate sessions manually if needed.\n' >&2
+      fi
+      printf 'All VNC-related servers requested to terminate.\n'
+      ;;
+    11) invoke_helper test_virtualgl.sh ;;
+    12) invoke_helper vgl_benchmark.sh ;;
+    13)
+      local fname=""
+      if ! read -r -p "Output filename (default: screen_recording.mp4): " fname; then
+        printf 'Input aborted; returning to menu.\n' >&2
+        return 2
+      fi
+      invoke_helper record_screen.sh 1 "${fname:-screen_recording.mp4}"
+      ;;
+    0)
+      printf 'Exiting remote desktop launcher.\n'
+      return 1
+      ;;
+    *)
+      printf 'Invalid option.\n'
+      return 2
+      ;;
   esac
 
-  #--- Sub-block: Code section 6693 ---
-  # Purpose: Continuing implementation
-  # Dependencies: System (Container runtime)
-  # Outputs: Configured system components
-  read -p "Press Enter to continue..."
-  show_menu
+  return 0
+}
+
+main() {
+  local choice=""
+
+  while true; do
+    print_menu
+
+    if ! read -r -p "Select option: " choice; then
+      printf 'Input aborted; exiting.\n' >&2
+      return 0
+    fi
+
+    printf '\n'
+
+    if handle_choice "${choice}"; then
+      if ! prompt_continue; then
+        break
+      fi
+    else
+      local rc=$?
+
+      case "${rc}" in
+        1) break ;;
+        2) continue ;;
+        *) if ! prompt_continue; then break; fi ;;
+      esac
+    fi
+  done
+
+  return 0
 }
 
 # Check if running in container
 if [ -f /.singularity.d/Singularity ]; then
-  echo "Running inside Singularity container"
+  printf 'Running inside Singularity container\n'
 else
-  echo "Warning: Should be run inside container"
+  printf 'Warning: Should be run inside container\n'
 fi
 
-show_menu
+main "$@"
 RDLAUNCH
-chmod +x /usr/local/bin/remote_desktop.sh
+chmod +x /usr/local/bin/remote_desktop.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/remote_desktop.sh" >&2; exit 1; }
 
 echo "✓ Unified launcher created: remote_desktop.sh"
 
 # ===============================================================
 
-#--- Sub-block 26.3: Create performance benchmark suite ---
+#--- Sub-block 39.5: Create performance benchmark suite ---
 # Purpose: Comprehensive remote desktop performance testing
 # Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
 # Outputs: GPU libraries, CUDA toolkit
@@ -17647,102 +18295,197 @@ echo "✓ Unified launcher created: remote_desktop.sh"
 # ===============================================================
 echo "==> Creating performance benchmark suite..."
 
-cat > /usr/local/bin/benchmark_all.sh << 'BENCH'
+if ! cat <<'BENCH' > /usr/local/bin/benchmark_all.sh; then
+  echo "✗ Failed to write /usr/local/bin/benchmark_all.sh" >&2
+  exit 1
+fi
 #!/usr/bin/env bash
 # Comprehensive Remote Desktop Performance Benchmark
 
-echo "=========================================="
-echo "Remote Desktop Performance Benchmark"
-echo "=========================================="
-echo ""
+set -euo pipefail
 
-# System Info
-echo "SYSTEM INFORMATION:"
-if [ -r /proc/cpuinfo ]; then
-  echo "  CPU: $(grep "model name" /proc/cpuinfo | head -1 | cut -d':' -f2 | xargs)"
-fi
-if command -v nproc >/dev/null 2>&1; then
-  echo "  Cores: $(nproc)"
-fi
-if command -v free >/dev/null 2>&1; then
-  echo "  Memory: $(free -h | grep Mem | awk '{print $2}')"
-fi
+# Print the benchmark header banner.
+print_header() {
+  printf '==========================================\n'
+  printf 'Remote Desktop Performance Benchmark\n'
+  printf '==========================================\n\n'
+}
 
-if command -v nvidia-smi >/dev/null 2>&1; then
-  gpu_name=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
-  gpu_vram=$(timeout 5 nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || echo "")
-  if [ -n "${gpu_name}" ]; then
-    echo "  GPU: ${gpu_name}"
+# Display CPU, memory, and GPU inventory details.
+report_system_info() {
+  printf 'SYSTEM INFORMATION:\n'
+
+  if [ -r /proc/cpuinfo ]; then
+    local cpu_model=""
+    cpu_model=$(awk -F':' '/^model name/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo || true)
+    if [ -n "${cpu_model}" ]; then
+      printf '  CPU: %s\n' "${cpu_model}"
+    fi
   fi
-  if [ -n "${gpu_vram}" ]; then
-    echo "  VRAM: ${gpu_vram} MB"
-  fi
-fi
-echo ""
 
-# VirtualGL Performance
-echo "VIRTUALGL PERFORMANCE:"
-if [ -n "${DISPLAY}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxspheres64 >/dev/null 2>&1; then
-  echo "  Testing GPU rendering..."
+  if command -v nproc >/dev/null 2>&1; then
+    printf '  Cores: %s\n' "$(nproc)"
+  fi
+
+  if command -v free >/dev/null 2>&1; then
+    local total_mem=""
+    total_mem=$(free -h | awk '/^Mem:/ {print $2; exit}' || true)
+    if [ -n "${total_mem}" ]; then
+      printf '  Memory: %s\n' "${total_mem}"
+    fi
+  fi
+
+  report_gpu_info
+  printf '\n'
+}
+
+# Collect GPU model and memory using nvidia-smi when present.
+report_gpu_info() {
+  if ! command -v nvidia-smi >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local gpu_name=""
+  local gpu_vram=""
+
   if command -v timeout >/dev/null 2>&1; then
-    timeout 10s vglrun glxspheres64 2>&1 | grep "frames" | tail -1 || echo "  ⚠ GPU test failed or incomplete"
+    gpu_name=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+    gpu_vram=$(timeout 5 nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
   else
-    vglrun glxspheres64 2>&1 | grep "frames" | tail -1 || echo "  ⚠ GPU test failed or incomplete"
+    gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
+    gpu_vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
   fi
-else
-  echo "  ⚠ DISPLAY not set or vglrun/glxspheres64 not available"
-fi
-echo ""
 
-# CPU Performance
-echo "CPU PERFORMANCE:"
-if command -v sysbench >/dev/null 2>&1; then
-  echo "  Running CPU benchmark..."
-  cores=$(nproc 2>/dev/null || echo "1")
-  sysbench cpu --threads="${cores}" --time=10 run 2>&1 | grep "events per second" || echo "  ⚠ CPU benchmark failed"
-else
-  echo "  ⚠ sysbench not available"
-fi
-echo ""
+  if [ -n "${gpu_name}" ]; then
+    printf '  GPU: %s\n' "${gpu_name}"
+  fi
 
-#--- Sub-block: Section continuation (6965) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+  if [ -n "${gpu_vram}" ]; then
+    printf '  VRAM: %s MB\n' "${gpu_vram}"
+  fi
+}
 
-# Disk I/O
-echo "DISK I/O:"
-if command -v dd >/dev/null 2>&1; then
-  dd if=/dev/zero of=/tmp/testfile bs=1M count=1024 conv=fdatasync 2>&1 | grep copied || echo "  ⚠ Disk I/O test failed"
-  rm -f /tmp/testfile 2>/dev/null || true
-else
-  echo "  ⚠ dd not available"
-fi
-echo ""
+# Exercise VirtualGL rendering if the stack is available.
+run_virtualgl_benchmark() {
+  printf 'VIRTUALGL PERFORMANCE:\n'
 
-#--- Sub-block: Code section 6761 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# Network (if available)
-echo "NETWORK:"
-if command -v ping >/dev/null 2>&1; then
-  ping -c 4 8.8.8.8 2>&1 | grep -E "rtt|avg" || echo "  Network test skipped or failed"
-else
-  echo "  ⚠ ping not available"
-fi
-echo ""
+  if [ -z "${DISPLAY:-}" ] || ! command -v vglrun >/dev/null 2>&1 || ! command -v glxspheres64 >/dev/null 2>&1; then
+    printf '  ⚠ DISPLAY not set or vglrun/glxspheres64 not available\n\n'
+    return 0
+  fi
 
-echo "=========================================="
-echo "Benchmark Complete"
-echo "=========================================="
+  printf '  Testing GPU rendering...\n'
+  local result=""
+
+  if command -v timeout >/dev/null 2>&1; then
+    result=$(timeout 10s vglrun glxspheres64 2>&1 | grep 'frames' | tail -1 || true)
+  else
+    result=$(vglrun glxspheres64 2>&1 | grep 'frames' | tail -1 || true)
+  fi
+
+  if [ -n "${result}" ]; then
+    printf '  %s\n\n' "${result}"
+  else
+    printf '  ⚠ GPU test failed or incomplete\n\n'
+  fi
+}
+
+# Run sysbench CPU test when available.
+run_cpu_benchmark() {
+  printf 'CPU PERFORMANCE:\n'
+
+  if ! command -v sysbench >/dev/null 2>&1; then
+    printf '  ⚠ sysbench not available\n\n'
+    return 0
+  fi
+
+  printf '  Running CPU benchmark...\n'
+  local cores="1"
+  cores=$(nproc 2>/dev/null || printf '1\n')
+
+  local sb_output=""
+  sb_output=$(sysbench cpu --threads="${cores}" --time=10 run 2>&1 || true)
+
+  local events=""
+  events=$(printf '%s\n' "${sb_output}" | grep 'events per second' || true)
+
+  if [ -n "${events}" ]; then
+    printf '  %s\n\n' "${events}"
+  else
+    printf '  ⚠ CPU benchmark failed\n\n'
+  fi
+}
+
+# Measure disk throughput using a temporary file that is always cleaned up.
+run_disk_benchmark() {
+  printf 'DISK I/O:\n'
+
+  if ! command -v dd >/dev/null 2>&1; then
+    printf '  ⚠ dd not available\n\n'
+    return 0
+  fi
+
+  local tmp_file=""
+  tmp_file=$(mktemp /tmp/benchmark.dd.XXXXXX)
+
+  local dd_output=""
+  if dd_output=$(dd if=/dev/zero of="${tmp_file}" bs=1M count=256 conv=fdatasync 2>&1); then
+    local copied_line=""
+    copied_line=$(printf '%s\n' "${dd_output}" | grep 'copied' || true)
+    if [ -n "${copied_line}" ]; then
+      printf '  %s\n\n' "${copied_line}"
+    else
+      printf '  ⚠ Disk I/O test failed to capture throughput\n\n'
+    fi
+  else
+    printf '  ⚠ Disk I/O test failed\n\n'
+  fi
+
+  rm -f "${tmp_file}" 2>/dev/null || true
+}
+
+# Issue a short latency probe to a public endpoint when tools permit.
+run_network_check() {
+  printf 'NETWORK:\n'
+
+  if ! command -v ping >/dev/null 2>&1; then
+    printf '  ⚠ ping not available\n\n'
+    return 0
+  fi
+
+  local ping_output=""
+  ping_output=$(ping -c 4 8.8.8.8 2>&1 || true)
+
+  local summary=""
+  summary=$(printf '%s\n' "${ping_output}" | grep -E 'rtt|round-trip' || true)
+
+  if [ -n "${summary}" ]; then
+    printf '  %s\n\n' "${summary}"
+  else
+    printf '  ⚠ Network test skipped or failed\n\n'
+  fi
+}
+
+main() {
+  print_header
+  report_system_info
+  run_virtualgl_benchmark
+  run_cpu_benchmark
+  run_disk_benchmark
+  run_network_check
+  printf '==========================================\n'
+  printf 'Benchmark Complete\n'
+  printf '==========================================\n'
+}
+
+main "$@"
 BENCH
-chmod +x /usr/local/bin/benchmark_all.sh
+chmod +x /usr/local/bin/benchmark_all.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/benchmark_all.sh" >&2; exit 1; }
 
 echo "✓ Benchmark suite created"
 
 #===============================================================================
-# BLOCK 25: DOCUMENTATION AND USER GUIDES
+# BLOCK 40: DOCUMENTATION AND USER GUIDES
 #===============================================================================
 # Purpose: Create comprehensive user documentation for the container
 # Self-contained: Yes (complete documentation generation)
@@ -17750,12 +18493,15 @@ echo "✓ Benchmark suite created"
 # Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-#--- Sub-block 25.1: VirtualGL user guide ---
+#--- Sub-block 40.1: VirtualGL user guide ---
 # Critical: Comprehensive guide for GPU-accelerated applications
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
-mkdir -p /usr/local/share/doc
-cat > /usr/local/share/doc/virtualgl-guide.txt << 'GUIDE'
+mkdir -p /usr/local/share/doc || { echo "✗ Failed to create /usr/local/share/doc" >&2; exit 1; }
+if ! cat <<'GUIDE' > /usr/local/share/doc/virtualgl-guide.txt; then
+  echo "✗ Failed to write /usr/local/share/doc/virtualgl-guide.txt" >&2
+  exit 1
+fi
 ========================================
 VirtualGL Usage Guide
 ========================================
@@ -17794,10 +18540,6 @@ Performance Tools:
   nettest          - Network performance test
   tcbench          - TCP benchmark
 
-#--- Sub-block: Section continuation (7036) ---
-# Purpose: Implementation details
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
 
 CONVENIENT ALIASES
 ------------------
@@ -17810,10 +18552,6 @@ CONVENIENT ALIASES
   vgl <command>    - Shortcut for vglrun
 
 
-#--- Sub-block: Code section 6833 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
-# Outputs: GPU libraries, CUDA toolkit
 USAGE EXAMPLES
 --------------
 # Launch application with GPU:
@@ -17853,12 +18591,8 @@ For more info:
   vgl_info.sh
 ========================================
 GUIDE
-chmod 644 /usr/local/share/doc/virtualgl-guide.txt
+chmod 644 /usr/local/share/doc/virtualgl-guide.txt || { echo "✗ Failed to set permissions on /usr/local/share/doc/virtualgl-guide.txt" >&2; exit 1; }
 
-#--- Sub-block: Section continuation (7092) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
 echo "✓ User guide created: /usr/local/share/doc/virtualgl-guide.txt"
 

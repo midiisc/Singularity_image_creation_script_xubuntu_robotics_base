@@ -75,6 +75,8 @@ export XPRA_HTML5_VERSION="18"  # Latest from GitHub: https://github.com/Xpra-or
 # Development Tools
 export YQ_VER="v4.48.1"
 export JULIA_LTS_VER="1.10.5"
+export LIBCXXWRAP_JULIA_VERSION="0.14.5"  # Latest stable release tag: v0.14.5
+export CXXWRAP_JL_VERSION="0.17.3"        # Latest stable release tag: v0.17.3
 
 # SLAM/Robotics Libraries
 export CERES_VERSION="2.2.0"
@@ -86,6 +88,7 @@ export OPENCV_VERSION="4.12.0"
 # Linear Algebra and Deep Learning
 export OPENBLAS_VERSION="v0.3.30"  # Latest stable version with DYNAMIC_ARCH support
 export PYTORCH_VERSION="v2.6.0"    # Compatible with CUDA 12.6 and Ubuntu 24.04
+export ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"  # Toggle PyTorch source build (temporary default: disabled)
 
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"

@@ -32,6 +32,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/audit-config.json"
 AUDIT_REPORT="${SCRIPT_DIR}/.audit-report.txt"
+CODE_CHECK_MANUAL="${PROJECT_ROOT}/docs/Code_check_prompt_manual.txt"
 FAILED=0
 SHOW_INLINE_CORRECTIONS=true  # Show corrections directly in code
 SKIP_REPORT_FILE=false  # Set to true to skip report file generation
@@ -114,11 +115,22 @@ is_excluded() {
 
 # Get staged shell scripts
 get_staged_shell_scripts() {
-    git diff --cached --name-only --diff-filter=ACM | \
-        grep -E '\.(sh|bash)$' | \
-        while read -r file; do
-            [ -f "${file}" ] && echo "${file}"
-        done
+    local staged
+    if ! staged=$(git diff --cached --name-only --diff-filter=ACM 2>/dev/null); then
+        return
+    fi
+    if [ -z "${staged}" ]; then
+        return
+    fi
+    echo "${staged}" | while IFS= read -r file; do
+        case "${file}" in
+            *.sh|*.bash)
+                [ -f "${file}" ] && echo "${file}"
+                ;;
+            *)
+                ;;
+        esac
+    done
 }
 
 # Check if shellcheck is available
@@ -622,6 +634,23 @@ ${diff_content}
 \`\`\`
 
 ---END DIFF---
+
+## Review Instructions
+
+Follow the full workflow defined in the attached checklist manual. Split the analysis into ~500-line chunks (±50) that respect natural boundaries (functions/classes), add 10–20 line overlaps, maintain a symbol table (variables/functions/exported values with scope), update/resolved entries as soon as safe usage is confirmed, and carry forward only active dependencies to avoid memory saturation. Ensure each declaration exists exactly once ahead of first use with meaningful defaults or guards.
+
+EOF
+
+    if [ -f "${CODE_CHECK_MANUAL}" ]; then
+        {
+            echo "## Checklist Manual (Authoritative Reference)"
+            echo ""
+            cat "${CODE_CHECK_MANUAL}"
+            echo ""
+        } >> "${prompt_file}"
+    fi
+
+    cat >> "${prompt_file}" <<'EOF'
 
 ## 3. Systematic Multi‑Stage Reasoning Flow
 
