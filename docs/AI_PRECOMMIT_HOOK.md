@@ -25,7 +25,7 @@ The hook runs two consecutive stages:
 
 ## Configuration
 
-Set the following environment variables (e.g., in your shell profile or via `direnv`):
+Set the following environment variables (e.g., in your shell profile or via `direnv`). For convenience, `scripts/hooks/pre-commit.env.example` can be copied to `.git/hooks/pre-commit.env` and customised; the example pins `SKIP_AI_REVIEW=0` so the AI review always runs unless you explicitly override it.
 
 | Variable | Purpose | Default / Notes |
 |----------|---------|-----------------|
@@ -61,6 +61,8 @@ export AI_REVIEW_SECONDARY_PROVIDER="cursor"
 ```
 
 ## Bypass and fallback options
+
+- **Default behaviour:** `SKIP_AI_REVIEW` is treated as `0` (runs the review) unless you set it otherwise.
 
 - **Temporarily skip AI review:** `SKIP_AI_REVIEW=1 git commit`
 - **Skip all pre-commit checks:** `git commit --no-verify`

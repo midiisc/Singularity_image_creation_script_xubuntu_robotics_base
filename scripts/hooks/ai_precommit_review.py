@@ -812,8 +812,10 @@ def detect_provider(explicit_provider: str, api_url: str) -> str:
 def main(argv: List[str]) -> int:
     args = parse_args(argv)
 
-    if os.getenv("SKIP_AI_REVIEW") == "1":
-        print("AI review skipped due to SKIP_AI_REVIEW=1.")
+    skip_flag = str(os.getenv("SKIP_AI_REVIEW", "0")).strip().lower()
+    if skip_flag in {"1", "true", "yes"}:
+        print("AI review skipped due to SKIP_AI_REVIEW being set.")
+        return 0
         return 0
 
     primary_api_url_env = os.getenv("AI_REVIEW_API_URL", "")
