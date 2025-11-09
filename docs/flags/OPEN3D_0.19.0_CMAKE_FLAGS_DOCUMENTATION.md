@@ -1,10 +1,16 @@
 # Open3D 0.19.0 CMake Configuration Flags - Complete Documentation
 
 **Source:** Open3D v0.19.0 (GitHub: isl-org/Open3D)  
-**Generated:** 2024  
+**Commit:** `1e7b17438687a0b0c1e5a7187321ac7044afe275`  
+**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
 **CMake Minimum Version:** 3.24
 
 This document provides an exhaustive list of all supported CMake configuration flags, variables, and options in Open3D 0.19.0.
+
+> **2025 Audit Highlights**
+> - Library-Analysis-Tool traversed 75 `CMakeLists.txt`, 511 headers, and 13 helper scripts for tag `v0.19.0`.  
+> - No new configurable flags were introduced since the previous revision; key toggles (`BUILD_SHARED_LIBS`, `BUILD_EXAMPLES`, `BUILD_GUI`, `BUILD_ISPC_MODULE`, `BUILD_TENSORFLOW_OPS`, `BUILD_PYTHON_MODULE`, etc.) retain their documented defaults.  
+> - Dependency scan confirms the optional integrations with CUDA, ROCm, SYCL/oneAPI, Vulkan, ISPC, TensorFlow/PyTorch ML ops, and RealSense/Azure sensor backends exactly as summarised below.
 
 ---
 

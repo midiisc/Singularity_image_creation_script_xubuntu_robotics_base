@@ -1,0 +1,157 @@
+You will be given a Bash script segment for audit and correction, specified by a line range or a distinct code block that may differ from earlier reviews.
+
+When responding, follow each checklist item explicitly, indicating pass/fail (and corrections, if needed) before moving to the next item. Do not skip or merge items.
+
+Adhere to established industry best practices for Bash scripting (POSIX compliance when feasible, defensive programming, minimal privilege exposure, deterministic cleanup). Treat each checklist item as a gate intended to enforce these standards.
+
+Step 1 – Context Review
+1. Confirm the provided code block boundaries (line range or identifier).
+2. Note any visible dependencies on earlier/later script sections that may influence this block.
+3. If the supplied slice exceeds ~500 lines or mixes multiple logical units, split it before proceeding. Aim for 400–600 line chunks, respect natural boundaries (functions, classes), and include a 10–20 line overlap so context is preserved. Document the chosen splits. Track any symbols (functions, globals, exported variables) that originate in an earlier chunk but are referenced later, capturing their scope (local/global/exported) so you explicitly carry their context forward during review. As soon as a definition is confirmed and safe usage verified, mark it resolved in your tracking table so only active dependencies are carried forward, minimizing retained context and memory overhead.
+4. Identify the logical blocks that form self-contained operations (functions, guarded sections, case arms, long loops). Confirm each block is clearly delineated with surrounding whitespace, consistent indentation, and an opening comment that states its purpose and any preconditions or context carried in from earlier chunks. Add or refresh comments when the intent is unclear, and note the updates in your summary.
+   - Example split for a 1,200-line file:
+     - Chunk A: lines 1–520 (covers `configure_env()` definition)
+     - Chunk B: lines 501–1,020 (overlap retains tail of `configure_env()` and head of `init_cache()`)
+     - Chunk C: lines 1,001–1,200 (overlap carries `init_cache()` context)
+   - Symbol table sketch:
+     - `GLOBAL_CACHE_DIR` (global, declared 42, first use 108, chunk B) → active
+     - `install_packages_resilient` (function, declared 360, first use 420, chunk B) → resolved after verifying keyword usage
+     - `LOCAL_TMP` (local, declared 615 inside `init_cache`, resolved at line 640) → resolved
+
+Step 2 – Sequential Audit Checklist
+For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. State whether the block satisfies the requirement. If it fails, correct the code, explain the fix, and mark it as resolved.
+Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project’s resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
+Whenever you perform this replacement, include a short note in the review explicitly comparing the before/after approach and confirm that the helper function guards multi-arch and held-package cases.
+Maintain a running symbol table covering variables, functions, and exported values encountered so far. For each usage, ensure a single declaration exists before first use (pulling the definition earlier if required), eliminate redundant redeclarations encountered in later chunks, assign meaningful defaults to variables at their declaration site to avoid unbound-value failures downstream, and mark entries resolved once safe usage is verified so the table stays lean. Document any adjustments you make.
+As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Update or add comments where intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
+   - Example replacements:
+     - Before: `if dpkg -l | grep -q "^ii.*libfoo-dev"; then`
+       After: `if dpkg_resolve_installed_package "libfoo-dev" >/dev/null; then`
+     - Before: `pkg_version=$(dpkg -l | awk '/^ii\s+mytool/{print $3; exit}')`
+       After: `pkg_version=$(dpkg_get_installed_version "mytool" || true)`
+   - Tools to verify replacements: `grep` for lingering `dpkg -l`, `shellcheck` (SC2143) to catch unquoted pipe patterns.
+
+A. Structure & Syntax
+- A1. Shebang compatibility, POSIX/Bash feature alignment.
+- A2. Syntax correctness, indentation, formatting, line wrapping.
+- A3. Avoidance of deprecated or non-portable constructs unless justified.
+- A4. Declaration order: functions and variables are defined before first use (or accompanied by guards) to avoid relying on implicit forward declarations.
+- A5. Favor POSIX-safe command patterns; when Bash-specific constructs are required, document the justification and ensure degradations are gracefully handled.
+
+B. Shell Options & Execution Controls
+- B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
+- B2. Documentation of intentional relaxations (e.g., `set +e`, `|| true`) and local scoping for risky sections.
+
+C. Variables & Defaults
+- C1. Detection/handling of unbound variables with `${var:-default}` or `${var:?message}` as appropriate.
+- C2. Correct use of `local`, `readonly`, `declare -r`, exported variables, and avoidance of unintended global state.
+- C3. Safe handling of arrays, indexes, and `IFS` mutations (restore defaults after use).
+- C4. Each variable is declared once, with an explicit, meaningful default or guard. Later redeclarations are removed in favor of the carried-forward definition, and usages reference the original declaration.
+  - Example: Replace `FOO=${FOO:-}` + repeated assignments with a single `FOO="${FOO:-/opt/default}"` near the declaration, then update later sections to reuse `FOO`.
+  - Suggested commands: `grep -R "FOO="`; `rg --fixed-strings "local FOO"` to detect duplicates.
+
+D. Quoting & Expansion Safety
+- D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
+- D2. Verification of `read` usage (`read -r`, IFS settings) and word-splitting safeguards.
+
+E. Here-docs & Here-strings
+- E1. Use of quoted delimiters (`<<'EOF'`) where literal content is intended.
+- E2. Assurance that heredocs do not leak variables unexpectedly or leave temp files.
+- E3. Use of `<<-` when tab-stripping is needed and documented.
+
+F. Logic & Flow Control
+- F1. Correct conditional expressions (`[[` vs `[`], `(( ))`), loops, and arithmetic.
+- F2. Correct treatment of exit codes (`$?`, `||/&&`, negated commands).
+- F3. Safe handling of subshells, command groups, and background jobs (`wait`, exit check).
+
+G. Functions & Modularization
+- G1. Proper function definitions, parameter handling (`$@`, `$*`, shifts), defaulting, and return semantics.
+- G2. Ensuring functions do not leak state (globals, directory changes, shell options).
+- G3. Proper use of `trap` within functions and restoration of environment on exit.
+- G4. Functions grouped logically; helper functions declared ahead of dependents or referenced safely via sourcing order checks.
+- G5. Each function is defined exactly once before first use; if discovered later in the file, relocate the definition earlier and remove duplicates, updating references to match the retained definition.
+  - Example: Move `init_cache()` definition (found at line 900) above its first invocation at line 450; replace the later duplicate with comments pointing to the canonical definition.
+  - Suggested commands: `ctags -x --c-kinds=f script.sh` or `rg "^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)"` to inventory functions.
+
+H. Error Handling & Observability
+- H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
+- H2. `trap` handlers clean up resources (temp files, mounts, jobs) and re-raise signals when appropriate.
+- H3. Logging differentiates stdout/stderr where helpful; optional scoped `set -x` toggles documented.
+
+I. Timeouts, Retries, & Robustness
+- I1. Long-running operations (e.g., `ldconfig`, package managers, service checks) wrapped with `timeout`, retries, or backoff.
+- I2. Graceful degradation/fallback behavior documented when timeouts or partial failures occur.
+- I3. Handling of transient network or IO failures, including retries and validation of results.
+  - Tools: `grep -n "curl"` / `grep -n "wget"` to confirm retry flags; ensure `timeout` or `retry` loops exist.
+
+J. Edge Cases & Resiliency
+- J1. Input validation, file/directory existence checks, and permissions (`umask`) where relevant.
+- J2. Safe temporary resource management (`mktemp`, secure paths).
+- J3. Handling of empty/whitespace-only data, concurrency hazards, and race conditions.
+  - Suggested pattern: wrap `read` loops with `while IFS= read -r line || [ -n "$line" ]; do ...; done`.
+
+K. Security Posture
+- K1. Protection against injection (no unsafe eval, sanitized inputs).
+- K2. Safe path handling, avoidance of world-writable directories, deliberate permission settings.
+- K3. Explicit management of file descriptors (e.g., `exec {fd}`) when opened manually.
+  - Example: Replace `TMP_DIR=/tmp/foo` with `TMP_DIR=$(mktemp -d -t foo.XXXXXX)` and `trap 'rm -rf "${TMP_DIR}"' EXIT`.
+
+L. Performance & Maintainability
+- L1. Avoid needless subshells, command substitutions in tight loops, prefer built-ins (`printf` over `echo -e`).
+- L2. Clear comments for intentional complexity, avoidance of duplicated logic.
+- L3. Readability: consistent naming, structure, modularization, and comment density that explains non-trivial control flow. Refresh stale comments or insert concise summaries when logic evolves.
+- L4. Evaluate opportunities to extract reusable functions or helpers that improve efficiency, clarity, and testability.
+- L5. Respect local context: ensure comments adjacent to blocks reflect actual behavior, nested scopes are visually separated, and reviewers can follow control flow without scanning distant sections. Treat mismatched or missing comments as defects to be corrected.
+- L6. When documenting updates, call out the self-contained blocks you touched (e.g., loop, trap handler, function) and confirm their comments, whitespace, and readability were brought in line with project conventions.
+
+M. Environment & Dependencies
+- M1. Validation that required external commands/binaries exist (`command -v`, `hash`) and version-sensitive behavior is documented.
+- M2. Verification of environment assumptions (shell, OS, distro, architecture, locale, `LANG`, `LC_ALL`, `PATH`, proxy settings).
+- M3. Safe handling of configuration files, credentials, and secrets (no accidental logging, enforce permissions).
+- M4. Package detection/checking uses resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) instead of brittle parsing of `dpkg -l` or similar command output; replace and verify during the audit.
+ - M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
+ - M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
+  - Tooling tips: `rg --json "dpkg -l"` to locate legacy patterns; run `shellcheck` (SC2143, SC2145) to catch unsafe parsing.
+
+Helper Reference – Robust Package Checks
+----------------------------------------
+- Preferred presence check:
+  - `if dpkg_resolve_installed_package "pkg-name" >/dev/null; then ...`
+- Preferred version retrieval:
+  - `pkg_version=$(dpkg_get_installed_version "pkg-name" || true)`
+  - Follow with a guard for empty values when the version is optional.
+- When converting legacy patterns (example below), note the original command in your response and confirm the helper handles held packages, multi-arch names, and exit-code semantics.
+  - Legacy: `dpkg -l | grep "^ii.*libfoo-dev" | awk '{print $3}'`
+  - Replacement: `pkg_version=$(dpkg_get_installed_version "libfoo-dev" || true)`
+
+N. Resource Management & Cleanup
+- N1. Proper creation and teardown of temporary directories/files (`mktemp`, `trap` cleanup).
+- N2. Release of file descriptors, mounts, network interfaces, or background jobs on success and failure paths.
+- N3. Consideration of resource limits (disk, memory, FD ulimit) and fallback strategies if limits are reached.
+- N4. Detection of potential memory/resource leaks (e.g., orphaned background processes, uncontrolled job growth) and mitigation via supervision or explicit termination.
+- N5. Cleanup of transient variables and state to avoid junk accumulation (unset or reuse safely after use).
+  - Example commands: `pgrep -f script_name` to ensure no stray processes remain; `lsof` to verify file descriptors closed.
+
+O. Testing, Validation & Graceful Degradation
+- O1. Built-in validation checks (self-tests, sanity checks) before performing irreversible actions.
+- O2. Optional dry-run or verbose mode behavior reviewed for correctness and safety.
+- O3. Documentation of manual verification steps when automation cannot fully guarantee success.
+
+Step 3 – Corrections Summary
+1. List each correction with the corresponding checklist ID(s) (e.g., “C1, D1: Added default guard for `$FOO` and quoted expansion”). Reference line numbers for clarity.
+2. Provide the corrected Bash code snippet for the audited block.
+3. Present this summary directly in the chat response; do not create or modify any additional files to capture it.
+4. If the block was split into multiple chunks, enumerate the chunk line ranges you reviewed (including overlaps), list the shared symbols (functions, globals, exported variables) whose context was carried across chunks, and confirm each chunk satisfied the checklist.
+5. Call out any declaration relocations, duplicate removals, or new default assignments made to satisfy the symbol tracking requirements.
+6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`) so the audit trail shows how issues were validated.
+
+Step 4 – Finalization
+1. Confirm explicitly that every checklist item from A1 through L4 has been evaluated and passes after corrections.
+2. Confirm that items M1 through O3 have been evaluated and pass.
+3. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
+4. State: “Block fully audited and corrected.”
+5. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
+6. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation.
+
+Customization Reminder
+- Replace the placeholder code block and line numbers before issuing the prompt to the reviewing agent.

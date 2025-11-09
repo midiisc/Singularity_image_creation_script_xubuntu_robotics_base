@@ -87,8 +87,11 @@ export OPENCV_VERSION="4.12.0"
 
 # Linear Algebra and Deep Learning
 export OPENBLAS_VERSION="v0.3.30"  # Latest stable version with DYNAMIC_ARCH support
+export SUITESPARSE_VERSION="v7.12.1"
+export SUITESPARSE_INSTALL_PREFIX="/usr/local"
 export PYTORCH_VERSION="v2.6.0"    # Compatible with CUDA 12.6 and Ubuntu 24.04
-export ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"  # Toggle PyTorch source build (temporary default: disabled)
+export ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"      # Legacy source build toggle (remains disabled)
+export ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-true}"  # Default: install CUDA+MKL wheels
 
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"
@@ -121,10 +124,23 @@ export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
 # GPU/CUDA
 export NVIDIA_KEYRING_VER="1.1-1"
 export CUDA_VERSION="12.6"
-export CUDA_MAJOR="12"
-export CUDNN_VER="9.14.0.64-1"  # CUDA 12.x compatible version (preferred, but may not be available)
+export CUDA_MAJOR="${CUDA_VERSION%%.*}"
+export CUDA_MINOR="${CUDA_VERSION#${CUDA_MAJOR}.}"
+export CUDA_PKG_SUFFIX="${CUDA_VERSION//./-}"
+export CUDA_META_PACKAGE="cuda-${CUDA_PKG_SUFFIX}"
+export CUDA_TOOLKIT_PACKAGE="cuda-toolkit-${CUDA_PKG_SUFFIX}"
+export CUDA_RUNTIME_PACKAGE="cuda-runtime-${CUDA_PKG_SUFFIX}"
+export CUDA_DEMO_PACKAGE="cuda-demo-suite-${CUDA_PKG_SUFFIX}"
+export CUDA_DRIVER_BRANCH="560"
+export CUDA_DRIVER_PACKAGE="nvidia-open-${CUDA_DRIVER_BRANCH}"
+export CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/${BASE_OS_CODENAME}/x86_64"
+export CUDA_REPO_PIN_PRIORITY="600"
+export CUDNN_VER="9.15.0.57-1"  # CUDA 12.x compatible version (preferred, but may not be available)
+export CUDA_CUDNN_PACKAGE="libcudnn9-cuda-${CUDA_MAJOR}"
+export CUDA_CUDNN_DEV_PACKAGE="libcudnn9-dev-cuda-${CUDA_MAJOR}"
 # Note: Available cuDNN versions vary by repository. Common versions:
-#   - 9.14.0.64-1 (CUDA 13/12) - may not be available in all repositories
+#   - 9.15.0.57-1 (CUDA 12.x) - preferred when available
+#   - 9.14.0.64-1 (CUDA 13/12) - alternate fallback
 #   - 9.10.2.21-1 (CUDA 11)
 # If specific version not found, fallback logic will automatically install latest compatible version
 # The script checks version availability before attempting installation to avoid errors
@@ -168,6 +184,8 @@ export DRAKE_KEY_URL="https://drake-apt.csail.mit.edu/drake.asc"
 # NVIDIA
 export NVIDIA_KEYRING_DEB="cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb"
 export NVIDIA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${NVIDIA_KEYRING_DEB}"
+export INTEL_ONEAPI_GPG_KEY_URL="https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+export INTEL_ONEAPI_APT_SOURCE="deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main"
 
 # Zenoh
 # Using standalone variant for container builds (self-contained, no system dependencies)

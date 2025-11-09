@@ -2,8 +2,15 @@
 
 **Version:** 3.12.6  
 **Source Repository:** https://github.com/colmap/colmap  
+**Commit:** `4d5b60e19ad268072adaf1267d21fa38a9a828ca`  
+**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
 **Documentation Generated:** From source code analysis  
 **CMake Minimum Version:** 3.12
+
+> **2025 Audit Highlights**
+> - Library-Analysis-Tool inspected 26 `CMakeLists.txt`, 268 headers, and 16 shell scripts in the 3.12.6 release.  
+> - No new configurable options were identified; established switches such as `CUDA_ENABLED`, `CUDA_ARCHS`, `GUI_ENABLED`, `GRPC_ENABLED`, and `COLMAP_BUILD_TESTS` remain the controlling flags.  
+> - Dependency scan reiterates the optional integrations with CUDA, Qt, gRPC, and OpenMP, with no additional mandatory packages.
 
 ---
 

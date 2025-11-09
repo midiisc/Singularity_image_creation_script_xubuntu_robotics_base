@@ -1,8 +1,8 @@
 # g2o (General Graph Optimization) - Comprehensive CMake Flags Documentation
 
-**Version:** Latest (2024-12-28 git commit)  
+**Version:** `master` (commit `faca4c3bb21d106cc6b3c2ab08992a91956699e2`, generated 2025-11-09)  
 **Source Repository:** https://github.com/RainerKuemmerle/g2o  
-**Documentation Generated:** From source code analysis  
+**Documentation Generated:** From source code analysis (Library-Analysis-Tool)  
 **CMake Minimum Version:** 3.14
 
 ---
@@ -285,6 +285,7 @@
   -DG2O_BUILD_LINKED_APPS=ON
   ```
 - **Note:** Only available if `G2O_BUILD_APPS=ON`.
+- **Behavior:** Adds `G2O_DISABLE_DYNAMIC_LOADING_OF_LIBRARIES` so binaries link statically against plugin code instead of loading at runtime.
 
 ### `G2O_BUILD_EXAMPLES`
 - **Type:** `OPTION` (ON/OFF)
@@ -350,7 +351,7 @@
   ```cmake
   -DG2O_USE_LOGGING=ON
   ```
-- **Note:** Requires spdlog 1.6+. Uses `find_package(spdlog)`.
+- **Note:** Requires `spdlog` ≥ 1.6. Accepts either `spdlog::spdlog` or `spdlog::spdlog_header_only`; if neither target exists, logging stays disabled.
 
 ### `BUILD_CODE_COVERAGE`
 - **Type:** `OPTION` (ON/OFF)
@@ -361,6 +362,12 @@
   -DBUILD_CODE_COVERAGE=ON
   ```
 - **Note:** Only works with GCC or Clang.
+
+### Autodiff Integration (`g2o_ceres_ad`)
+- **Type:** Interface library (always built)
+- **Description:** Provides Ceres-style automatic differentiation helpers used by `g2o::core`.
+- **Usage:** Link against `g2o::g2o_ceres_ad` to reuse the autodiff headers installed under `include/g2o/autodiff`.
+- **Note:** No CMake option toggles this component; it is built whenever the core library is built.
 
 ---
 
@@ -376,7 +383,7 @@ g2o respects standard CMake variables:
 ### Compilers
 - `CMAKE_C_COMPILER`: C compiler
 - `CMAKE_CXX_COMPILER`: C++ compiler
-- `CMAKE_CXX_STANDARD`: C++ standard (g2o requires C++11+)
+- `CMAKE_CXX_STANDARD`: C++ standard (core enforces C++17 via `target_compile_features`)
 - `CMAKE_CXX_STANDARD_REQUIRED`: Require C++ standard
 
 ### Compiler Flags
@@ -410,6 +417,10 @@ g2o uses standard CMake `find_package()` for dependencies. These variables can h
 ### CSparse (if `G2O_USE_CSPARSE=ON`)
 - Uses `find_package(CSparse)`
 
+### Google Benchmark (if `G2O_BUILD_BENCHMARKS=ON`)
+- Uses `find_package(benchmark)`
+- Provides the `benchmark::benchmark` target for linking benchmark executables.
+
 ### OpenGL (if `G2O_USE_OPENGL=ON`)
 - Uses `find_package(OpenGL)`
 - Prefers GLVND (`OpenGL_GL_PREFERENCE="GLVND"`)
@@ -424,9 +435,11 @@ g2o uses standard CMake `find_package()` for dependencies. These variables can h
 ### spdlog (if `G2O_USE_LOGGING=ON`)
 - Uses `find_package(spdlog 1.6)`
 - **Required Version:** 1.6+
+- **Targets:** Accepts `spdlog::spdlog` or `spdlog::spdlog_header_only`
 
-### benchmark (if `G2O_BUILD_BENCHMARKS=ON`)
-- Uses `find_package(benchmark)`
+### Autodiff (`g2o_ceres_ad`)
+- Always built; installs headers under `include/g2o/autodiff`
+- Consumers can link the interface target `g2o::g2o_ceres_ad` to reuse autodiff helpers
 
 ---
 
@@ -511,9 +524,11 @@ cmake .. \
 
 6. **Eigen Version:** g2o requires Eigen3 (via `find_package(Eigen3 REQUIRED NO_MODULE)`).
 
-7. **Build Type:** Default is Release. Debug builds are available but may be slower.
+7. **Core Standard:** `g2o::core` advertises `cxx_std_17`; downstream targets must compile with C++17 or newer.
 
-8. **Subdirectory Usage:** When used as subdirectory, `G2O_BUILD_APPS` and `G2O_BUILD_EXAMPLES` default to OFF.
+8. **Build Type:** Default is Release. Debug builds are available but may be slower.
+
+9. **Subdirectory Usage:** When used as subdirectory, `G2O_BUILD_APPS` and `G2O_BUILD_EXAMPLES` default to OFF.
 
 ---
 
@@ -538,6 +553,6 @@ The following flags are **NOT** supported by g2o:
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** Generated from g2o latest source code (2024-12-28)
+**Document Version:** 1.1  
+**Last Updated:** Generated from g2o master (`faca4c3b`, 2025-11-09)
 

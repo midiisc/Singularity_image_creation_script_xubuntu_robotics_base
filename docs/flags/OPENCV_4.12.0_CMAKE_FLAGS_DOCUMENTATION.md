@@ -3,8 +3,15 @@
 **Version:** 4.12.0  
 **Source Repository:** https://github.com/opencv/opencv  
 **Contrib Repository:** https://github.com/opencv/opencv_contrib  
+**Commit:** `49486f61fb25722cbcf586b7f4320921d46fb38e`  
+**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
 **Documentation Generated:** From source code analysis  
 **CMake Minimum Version:** 3.5
+
+> **2025 Audit Highlights**
+> - Library-Analysis-Tool scanned 118 `CMakeLists.txt`, 1,735 headers, and 16 helper scripts in the 4.12.0 tag.  
+> - No new top-level `option()` entries were introduced; feature gates such as `OPENCV_ENABLE_NONFREE`, `WITH_CUDA`, `WITH_OPENCL`, `BUILD_opencv_*`, and `OPENCV_DNN_OPENVINO` retain their documented defaults.  
+> - Dependency scan continues to report the same optional integrations (Intel TBB, CUDA, cuDNN, OpenVINO, FFmpeg, GStreamer, Vulkan, etc.) with no additional mandatory packages.
 
 ---
 

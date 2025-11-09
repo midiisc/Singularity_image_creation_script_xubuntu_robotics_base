@@ -77,6 +77,15 @@ source "${CONFIG_FILE}"
 
 echo "✓ Configuration loaded from ${CONFIG_FILE}"
 
+# Consolidate build flag defaults for MKL migration artifacts
+DEFAULT_OPENBLAS_BUILD_FLAGS="DYNAMIC_ARCH=1 DYNAMIC_OLDER=1 TARGET=GENERIC USE_OPENMP=1 USE_TLS=1 NO_AFFINITY=1 NUM_THREADS=64 GEMM_MULTITHREAD_THRESHOLD=50 BUILD_LAPACK_DEPRECATED=1 NO_WARMUP=1 BINARY=64 CC=gcc FC=gfortran HOSTCC=gcc"
+OPENBLAS_BUILD_FLAGS="${OPENBLAS_BUILD_FLAGS:-${DEFAULT_OPENBLAS_BUILD_FLAGS}}"
+OPENBLAS_INSTALL_PREFIX="${OPENBLAS_INSTALL_PREFIX:-/usr/local}"
+DEFAULT_SUITESPARSE_CMAKE_FLAGS="-DSUITESPARSE_USE_OPENMP=ON -DSUITESPARSE_USE_CUDA=ON -DSUITESPARSE_CUDA_ARCHITECTURES=86 -DSUITESPARSE_USE_STRICT=ON -DSUITESPARSE_USE_FORTRAN=ON -DCHOLMOD_USE_CUDA=ON -DSPQR_USE_CUDA=ON -DGRAPHBLAS_USE_CUDA=OFF -DBLA_VENDOR=Intel10_64lp -DBLA_SIZEOF_INTEGER=4"
+SUITESPARSE_CMAKE_FLAGS="${SUITESPARSE_CMAKE_FLAGS:-${DEFAULT_SUITESPARSE_CMAKE_FLAGS}}"
+SUITESPARSE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX:-/usr/local}"
+export OPENBLAS_BUILD_FLAGS OPENBLAS_INSTALL_PREFIX SUITESPARSE_CMAKE_FLAGS
+
 #===============================================================================
 # BLOCK 3: HOST DEPENDENCY VALIDATION AND INSTALLATION
 #===============================================================================
@@ -2526,6 +2535,11 @@ From: ${BASE_IMAGE}
     export PATH=${JULIA_HOME}/bin:\$PATH
     export DOWNLOADER=aria2c
     export APT_FAST_OPTS="--summary-interval=1 --console-log-level=notice --check-certificate=false --max-connection-per-server=16 --split=16 --min-split-size=2M --timeout=30"
+    export OPENBLAS_INSTALL_PREFIX=${OPENBLAS_INSTALL_PREFIX}
+    export OPENBLAS_BUILD_FLAGS="${OPENBLAS_BUILD_FLAGS}"
+    export SUITESPARSE_CMAKE_FLAGS="${SUITESPARSE_CMAKE_FLAGS}"
+    export SUITESPARSE_INSTALL_PREFIX=${SUITESPARSE_INSTALL_PREFIX}
+    export LD_LIBRARY_PATH=${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH:-}
 
 # === %setup Section ===
 %setup -c /bin/bash
@@ -3828,11 +3842,6 @@ if [ -x /usr/bin/apptainer ]; then
         log_warning "Cache harvest failed, but continuing..."
     fi
 
-    log_with_timestamp "--------- Verify Harvest ---------"
-    if [ -f "${SIF_PATH}" ]; then
-        /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -l /container_cache 2>/dev/null | wc -l | awk '\''{print "[info] cache dirs inside image:", $1}'\''' 2>/dev/null || true
-        /usr/bin/apptainer exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"' 2>/dev/null || true
-    fi
 elif [ -x /usr/bin/singularity ]; then
     log_with_timestamp "Using Singularity for cache harvest..."
     # Validate SIF_PATH exists before attempting harvest
@@ -3845,11 +3854,6 @@ elif [ -x /usr/bin/singularity ]; then
         log_warning "Cache harvest failed, but continuing..."
     fi
 
-    log_with_timestamp "--------- Verify Harvest ---------"
-    if [ -f "${SIF_PATH}" ]; then
-        /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -l /container_cache 2>/dev/null | wc -l | awk '\''{print "[info] cache dirs inside image:", $1}'\''' 2>/dev/null || true
-        /usr/bin/singularity exec "${SIF_PATH}" bash -lc 'ls -lh /container_cache/apt/archives/*.deb 2>/dev/null | head || echo "[warn] no .deb files harvested"' 2>/dev/null || true
-    fi
 else
     log_warning "Neither apptainer nor singularity found, skipping cache harvest."
 fi

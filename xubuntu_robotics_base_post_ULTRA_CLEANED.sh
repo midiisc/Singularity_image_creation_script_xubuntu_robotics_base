@@ -597,6 +597,59 @@ run_ldconfig_refresh() {
   ldconfig "$@"
 }
 
+ensure_cuda_repository_configured() {
+  local keyring_pkg="cuda-keyring"
+  local keyring_deb="${NVIDIA_KEYRING_DEB:-cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb}"
+  local install_needed=false
+
+  if dpkg-query -W -f='${Status}\n' "${keyring_pkg}" 2>/dev/null | grep -q "install ok installed"; then
+      return 0
+  fi
+
+  local cached_path=""
+  if [ -n "${CONTAINER_DEB_CACHE:-}" ]; then
+      mkdir -p "${CONTAINER_DEB_CACHE}" || true
+      cached_path="${CONTAINER_DEB_CACHE}/${keyring_deb}"
+  fi
+
+  local tmp_path="/tmp/${keyring_deb}"
+  local keyring_url="${CUDA_REPO_URL}/${keyring_deb}"
+
+  if [ -n "${cached_path}" ] && [ -f "${cached_path}" ]; then
+      echo "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
+      if dpkg -i "${cached_path}"; then
+          install_needed=true
+      else
+          echo "[WARN] Cached CUDA keyring install failed, attempting fresh download..."
+      fi
+  fi
+
+  if [ "${install_needed}" != true ]; then
+      echo "[INFO] Downloading NVIDIA CUDA keyring from ${keyring_url}"
+      if curl -fsSL "${keyring_url}" -o "${tmp_path}" && dpkg -i "${tmp_path}"; then
+          install_needed=true
+          if [ -n "${cached_path}" ]; then
+              cp -f "${tmp_path}" "${cached_path}" 2>/dev/null || true
+          fi
+      else
+          rm -f "${tmp_path}"
+          echo "✗ Failed to install NVIDIA CUDA repository keyring from ${keyring_url}" >&2
+          return 1
+      fi
+      rm -f "${tmp_path}"
+  fi
+
+  if [ -n "${CUDA_REPO_PIN_PRIORITY:-}" ]; then
+      cat > /etc/apt/preferences.d/cuda-repository-pin <<EOF
+Package: *
+Pin: origin developer.download.nvidia.com
+Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}
+EOF
+  fi
+
+  return 0
+}
+
 # Export function for parallel execution with xargs
 export -f test_mirror
 
@@ -2033,6 +2086,32 @@ apt-get install -y --no-install-recommends \
     xxd
 debug_glibc "After installing file & text utilities"
 
+#--- Sub-block 10.13a: Install advanced search and productivity CLI tools ---
+# Critical: Provide modern search and navigation utilities early in the build
+# Dependencies: Block 6 (APT configuration)
+# Outputs: Installed packages, initial command aliases
+echo "==> Installing advanced search and productivity CLI tools..."
+apt-get install -y --no-install-recommends \
+    ripgrep \
+    fd-find \
+    fzf \
+    silversearcher-ag \
+    ack \
+    bat
+
+# Ensure consistent command names regardless of Debian/Ubuntu packaging quirks
+if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+    ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+    echo "✓ Created /usr/local/bin/fd symlink to fdfind"
+fi
+
+if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+    ln -sf "$(command -v batcat)" /usr/local/bin/bat
+    echo "✓ Created /usr/local/bin/bat symlink to batcat"
+fi
+
+debug_glibc "After installing advanced search & productivity CLI tools"
+
 #--- Sub-block 10.14: Install development and system tools ---
 # Critical: Git, rsync, monitoring tools
 # Dependencies: Block 6 (APT configuration)
@@ -2097,7 +2176,7 @@ echo "✓ Essential tools installed and verified"
 monitor_cache "After essential tools installation"
 
 #--- Sub-block 10.19: Install SSHFS (Rust tools compiled from source later) ---
-# Critical: SSHFS for remote filesystems; Rust tools compiled in Block 24
+# Critical: SSHFS for remote filesystems; Rust tools compiled in Block 24 (baseline apt packages installed earlier for immediate availability)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 # Note: bat, eza, ripgrep, fd, bottom, procs compiled from source for optimization
@@ -2292,6 +2371,149 @@ echo "✓ APT-aria wrapper and symlinks configured successfully"
 echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + caching"
 
 #===============================================================================
+# BLOCK 12A: INTEL oneAPI MKL INSTALLATION
+#===============================================================================
+# Purpose: Install Intel MKL using the official oneAPI APT repository prior to
+#          compiling OpenBLAS and SuiteSparse. Ensures MKLROOT, headers, and
+#          libraries are available for downstream builds.
+# Dependencies: Block 11 (APT caching/aliasing), config.sh variables
+# Outputs: Intel MKL toolchain installed, environment hooks configured
+#-------------------------------------------------------------------------------
+
+echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}BLOCK 12A: Intel oneAPI MKL Installation${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+: "${INTEL_ONEAPI_GPG_KEY_URL:?INTEL_ONEAPI_GPG_KEY_URL must be set in config.sh}"
+: "${INTEL_ONEAPI_APT_SOURCE:?INTEL_ONEAPI_APT_SOURCE must be set in config.sh}"
+
+ONEAPI_KEYRING="/usr/share/keyrings/oneapi-archive-keyring.gpg"
+ONEAPI_SOURCE_LIST="/etc/apt/sources.list.d/oneAPI.list"
+
+if dpkg -l 2>/dev/null | grep -q "^ii\s\+intel-oneapi-mkl"; then
+    echo -e "${GREEN}✓ Intel oneAPI MKL already installed; skipping installation${NC}"
+else
+    echo -e "${YELLOW}[12A.1] Configuring Intel oneAPI APT repository...${NC}"
+    if [ ! -f "${ONEAPI_KEYRING}" ]; then
+        echo "  Importing Intel oneAPI GPG key..."
+        curl -fsSL "${INTEL_ONEAPI_GPG_KEY_URL}" | gpg --dearmor | tee "${ONEAPI_KEYRING}" >/dev/null
+    else
+        echo "  ✓ oneAPI keyring already present (${ONEAPI_KEYRING})"
+    fi
+
+    if [ ! -f "${ONEAPI_SOURCE_LIST}" ] || ! grep -q "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
+        echo "  Adding Intel oneAPI repository entry..."
+        printf "%s\n" "${INTEL_ONEAPI_APT_SOURCE}" > "${ONEAPI_SOURCE_LIST}"
+    else
+        echo "  ✓ oneAPI repository already configured (${ONEAPI_SOURCE_LIST})"
+    fi
+
+    echo "  Updating package indices for Intel oneAPI repository..."
+    apt-get update
+
+    echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages...${NC}"
+    if apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel; then
+        echo -e "  ${GREEN}✓ Intel oneAPI MKL packages installed successfully${NC}"
+        sync || true
+        monitor_cache "After Intel oneAPI MKL installation"
+    else
+        echo -e "  ${RED}✗ Failed to install Intel oneAPI MKL packages${NC}"
+        exit 1
+    fi
+fi
+
+echo -e "${YELLOW}[12A.3] Configuring Intel MKL environment...${NC}"
+MKL_ENV_SCRIPT="/opt/intel/oneapi/mkl/latest/env/vars.sh"
+if [ ! -f "${MKL_ENV_SCRIPT}" ]; then
+    echo -e "  ${RED}✗ Expected MKL environment script not found at ${MKL_ENV_SCRIPT}${NC}"
+    exit 1
+fi
+
+# Source MKL environment for current build session
+source "${MKL_ENV_SCRIPT}"
+
+# Ensure MKLROOT is exported
+if [ -z "${MKLROOT:-}" ]; then
+    MKLROOT="/opt/intel/oneapi/mkl/latest"
+    export MKLROOT
+fi
+echo "  ✓ MKLROOT resolved to ${MKLROOT}"
+
+# Persist MKL environment for future sessions
+rm -f /etc/profile.d/intel-oneapi-mkl.sh 2>/dev/null || true
+cat > /etc/profile.d/intel-mkl.sh <<'EOF'
+#!/bin/bash
+# Intel MKL environment setup (auto-generated)
+
+MKLROOT=/opt/intel/oneapi/mkl/latest
+export MKLROOT
+
+if [ -f "${MKLROOT}/env/vars.sh" ]; then
+    # shellcheck disable=SC1090
+    . "${MKLROOT}/env/vars.sh" >/dev/null 2>&1
+fi
+
+export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"
+export LIBRARY_PATH="${MKLROOT}/lib/intel64:${LIBRARY_PATH:-}"
+export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}"
+export PKG_CONFIG_PATH="${MKLROOT}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+
+export MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-32}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
+
+BLAS_LAPACK_STRING="-L${MKLROOT}/lib/intel64 -lmkl_intel_lp64 -lmkl_core -lmkl_gnu_thread -lgomp -lpthread -lm -ldl"
+export BLAS_LIBRARIES="${BLAS_LIBRARIES:-${BLAS_LAPACK_STRING}}"
+export LAPACK_LIBRARIES="${LAPACK_LIBRARIES:-${BLAS_LAPACK_STRING}}"
+
+if [ -n "${PS1:-}" ]; then
+    echo "✅ Intel MKL environment configured"
+    echo "   MKLROOT: ${MKLROOT}"
+    echo "   MKL Threading: ${MKL_THREADING_LAYER}"
+    echo "   OMP Threads: ${OMP_NUM_THREADS}"
+fi
+EOF
+chmod +x /etc/profile.d/intel-mkl.sh
+# shellcheck disable=SC1091
+source /etc/profile.d/intel-mkl.sh
+
+touch /etc/environment
+if ! grep -q "^MKLROOT=" /etc/environment 2>/dev/null; then
+    echo "MKLROOT=${MKLROOT}" >> /etc/environment
+else
+    sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment
+fi
+
+run_ldconfig_refresh
+echo -e "${GREEN}✓ Intel MKL installation and environment configuration complete${NC}"
+
+MKL_LIB_DIR="${MKLROOT}/lib/intel64"
+MKL_INCLUDE_DIR="${MKLROOT}/include"
+
+if [ ! -d "${MKL_LIB_DIR}" ]; then
+    echo -e "  ${RED}✗ Expected MKL library directory missing at ${MKL_LIB_DIR}${NC}"
+    exit 1
+fi
+
+if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
+    echo -e "  ${RED}✗ Expected MKL include directory missing at ${MKL_INCLUDE_DIR}${NC}"
+    exit 1
+fi
+
+MKL_BLAS_LIBRARIES="${MKL_LIB_DIR}/libmkl_intel_lp64.so;${MKL_LIB_DIR}/libmkl_core.so;${MKL_LIB_DIR}/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
+MKL_LINK_FLAGS="-Wl,--start-group ${MKL_LIB_DIR}/libmkl_intel_lp64.so ${MKL_LIB_DIR}/libmkl_core.so ${MKL_LIB_DIR}/libmkl_gnu_thread.so -Wl,--end-group -lgomp -lpthread -lm -ldl"
+
+export MKL_LIB_DIR MKL_INCLUDE_DIR MKL_BLAS_LIBRARIES MKL_LINK_FLAGS
+export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
+export LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
+
+case ":${CMAKE_PREFIX_PATH:-}:" in
+    *":${MKLROOT}:"*) ;;
+    *) export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}" ;;
+esac
+
+#===============================================================================
 # BLOCK 12: OPENBLAS COMPILATION AND INSTALLATION
 #===============================================================================
 # Purpose: Compile and install OpenBLAS with DYNAMIC_ARCH=1 for maximum performance
@@ -2398,13 +2620,19 @@ echo ""
 # Purpose: Download OpenBLAS from official repository
 # Dependencies: Block 6.12B.2 (git, wget, curl), config.sh (OPENBLAS_VERSION)
 # Outputs: OpenBLAS source code
-# Note: OPENBLAS_VERSION is defined in config.sh (default: v0.3.30)
+# Note: OPENBLAS_VERSION is defined in config.sh
 echo -e "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
-# Use version from config.sh (with fallback if not set)
-OPENBLAS_VERSION="${OPENBLAS_VERSION:-v0.3.30}"
+: "${OPENBLAS_VERSION:?OPENBLAS_VERSION must be set in config.sh}"
+: "${SUITESPARSE_VERSION:?SUITESPARSE_VERSION must be set in config.sh}"
 OPENBLAS_REPO_URL="https://github.com/OpenMathLib/OpenBLAS.git"
 OPENBLAS_SOURCE_DIR="/tmp/openblas_build"
-OPENBLAS_INSTALL_PREFIX="/usr/local"
+OPENBLAS_BUILD_FLAGS_DEFAULT="DYNAMIC_ARCH=1 DYNAMIC_OLDER=1 TARGET=GENERIC USE_OPENMP=1 USE_TLS=1 NO_AFFINITY=1 NUM_THREADS=64 GEMM_MULTITHREAD_THRESHOLD=50 BUILD_LAPACK_DEPRECATED=1 NO_WARMUP=1 BINARY=64 CC=gcc FC=gfortran HOSTCC=gcc"
+OPENBLAS_BUILD_FLAGS="${OPENBLAS_BUILD_FLAGS:-${OPENBLAS_BUILD_FLAGS_DEFAULT}}"
+SUITESPARSE_SOURCE_DIR="/tmp/suitesparse_build"
+SUITESPARSE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX:-/usr/local}"
+SUITESPARSE_CMAKE_FLAGS_DEFAULT="-DSUITESPARSE_USE_OPENMP=ON -DSUITESPARSE_USE_CUDA=ON -DSUITESPARSE_CUDA_ARCHITECTURES=86 -DSUITESPARSE_USE_STRICT=ON -DSUITESPARSE_USE_FORTRAN=ON -DCHOLMOD_USE_CUDA=ON -DSPQR_USE_CUDA=ON -DGRAPHBLAS_USE_CUDA=OFF -DBLA_VENDOR=Intel10_64lp -DBLA_SIZEOF_INTEGER=4 -DSUITESPARSE_ENABLE_PROJECTS=all -DSUITESPARSE_ENABLE_UNIT_TESTS=OFF"
+SUITESPARSE_CMAKE_FLAGS="${SUITESPARSE_CMAKE_FLAGS:-${SUITESPARSE_CMAKE_FLAGS_DEFAULT}}"
+OPENBLAS_INSTALL_PREFIX="${OPENBLAS_INSTALL_PREFIX:-/usr/local}"
 TARBALL_NAME="OpenBLAS-${OPENBLAS_VERSION#v}.tar.gz"
 TARBALL_URL="https://github.com/OpenMathLib/OpenBLAS/releases/download/${OPENBLAS_VERSION}/${TARBALL_NAME}"
 
@@ -2490,11 +2718,25 @@ echo ""
 # Outputs: Compiled OpenBLAS library
 echo -e "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
 echo "  Build flags:"
-echo "    DYNAMIC_ARCH=1 (runtime CPU detection - supports multiple architectures)"
-echo "    USE_OPENMP=1 (OpenMP threading)"
-echo "    TARGET=GENERIC (safe base target)"
-echo "    NO_AFFINITY=1 (disable CPU affinity)"
-echo "    NUM_THREADS=64 (support for systems with up to 64 threads)"
+for flag in ${OPENBLAS_BUILD_FLAGS}; do
+    case "${flag}" in
+        DYNAMIC_ARCH=1) echo "    DYNAMIC_ARCH=1 (runtime CPU detection - supports multiple architectures)";;
+        DYNAMIC_OLDER=1) echo "    DYNAMIC_OLDER=1 (include legacy CPU targets for portability)";;
+        TARGET=GENERIC) echo "    TARGET=GENERIC (safe base target)";;
+        USE_OPENMP=1) echo "    USE_OPENMP=1 (OpenMP threading)";;
+        USE_TLS=1) echo "    USE_TLS=1 (thread-local storage for thread buffers)";;
+        NO_AFFINITY=1) echo "    NO_AFFINITY=1 (disable CPU affinity)";;
+        NUM_THREADS=64) echo "    NUM_THREADS=64 (support for systems with up to 64 threads)";;
+        GEMM_MULTITHREAD_THRESHOLD=50) echo "    GEMM_MULTITHREAD_THRESHOLD=50 (reduce multithreading overhead for small GEMMs)";;
+        BUILD_LAPACK_DEPRECATED=1) echo "    BUILD_LAPACK_DEPRECATED=1 (retain deprecated LAPACK APIs)";;
+        NO_WARMUP=1) echo "    NO_WARMUP=1 (skip warmup passes)";;
+        BINARY=64) echo "    BINARY=64 (build 64-bit binaries)";;
+        CC=gcc) echo "    CC=gcc";;
+        FC=gfortran) echo "    FC=gfortran";;
+        HOSTCC=gcc) echo "    HOSTCC=gcc";;
+        *) ;;
+    esac
+done
 echo ""
 
 # Get number of CPU cores for parallel build
@@ -2509,19 +2751,7 @@ make clean >/dev/null 2>&1 || true
 
 # Compile OpenBLAS with optimal flags
 # Reference: http://www.openmathlib.org/OpenBLAS/docs/install/
-if make -j"${BUILD_JOBS}" \
-    DYNAMIC_ARCH=1 \
-    TARGET=GENERIC \
-    USE_OPENMP=1 \
-    NO_AFFINITY=1 \
-    NUM_THREADS=64 \
-    GEMM_MULTITHREAD_THRESHOLD=50 \
-    BUILD_LAPACK_DEPRECATED=1 \
-    NO_WARMUP=1 \
-    BINARY=64 \
-    CC=gcc \
-    FC=gfortran \
-    HOSTCC=gcc \
+if make -j"${BUILD_JOBS}" ${OPENBLAS_BUILD_FLAGS} \
     2>&1 | tee /tmp/openblas_build.log; then
     echo ""
     echo -e "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
@@ -2541,18 +2771,7 @@ echo -e "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...
 # Important: Pass all build flags to make install (per official documentation)
 if make install \
     PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
-    DYNAMIC_ARCH=1 \
-    TARGET=GENERIC \
-    USE_OPENMP=1 \
-    NO_AFFINITY=1 \
-    NUM_THREADS=64 \
-    GEMM_MULTITHREAD_THRESHOLD=50 \
-    BUILD_LAPACK_DEPRECATED=1 \
-    NO_WARMUP=1 \
-    BINARY=64 \
-    CC=gcc \
-    FC=gfortran \
-    HOSTCC=gcc \
+    ${OPENBLAS_BUILD_FLAGS} \
     2>&1 | tee -a /tmp/openblas_build.log; then
     echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
 else
@@ -2827,95 +3046,220 @@ rm -rf "${OPENBLAS_SOURCE_DIR}" /tmp/openblas_build.log
 # Dependencies: Block 6 (APT configuration), Block 6.13 (NVIDIA CUDA)
 # Outputs: Installed packages
 echo "==> Installing NVIDIA cuDNN for CUDA 12.x..."
-# Cache-first approach for NVIDIA keyring
-KEYRING_DEB_NAME="cuda-keyring_1.1-1_all.deb"
-KEYRING_DEB_CACHED_PATH="${CONTAINER_DEB_CACHE}/${KEYRING_DEB_NAME}"
-KEYRING_DEB_TMP_PATH="/tmp/${KEYRING_DEB_NAME}"
 
-KEYRING_INSTALL_SUCCESS=false
-if [ -f "${KEYRING_DEB_CACHED_PATH}" ]; then
-  echo "[INFO] Using cached NVIDIA keyring: ${KEYRING_DEB_CACHED_PATH}"
-  if dpkg -i "${KEYRING_DEB_CACHED_PATH}"; then
-    KEYRING_INSTALL_SUCCESS=true
+CUDA_STACK_ALREADY_PRESENT=false
+if command -v nvcc >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudnn.so'; then
+  NVCC_VERSION_DETECTED=$(nvcc --version 2>/dev/null | awk -F'release ' 'NF>1 {print $2}' | awk '{print $1}' | tr -d 'V,' || echo "")
+  CUDNN_VERSION_DETECTED=$(
+    dpkg-query -W -f='${Version}\n' libcudnn9 2>/dev/null \
+      || dpkg-query -W -f='${Version}\n' "libcudnn9-cuda-${CUDA_MAJOR}" 2>/dev/null \
+      || dpkg-query -W -f='${Version}\n' libcudnn9-cuda 2>/dev/null \
+      || echo ""
+  )
+  if [ -n "${NVCC_VERSION_DETECTED}" ] && [ "${NVCC_VERSION_DETECTED}" = "${CUDA_VERSION}" ] \
+     && [ -n "${CUDNN_VERSION_DETECTED}" ] && [ -n "${CUDNN_VER:-}" ] \
+     && [ "${CUDNN_VERSION_DETECTED}" = "${CUDNN_VER}" ]; then
+    CUDA_STACK_ALREADY_PRESENT=true
+    echo "[INFO] CUDA ${NVCC_VERSION_DETECTED} and cuDNN ${CUDNN_VERSION_DETECTED} already match requested versions; skipping reinstallation."
+  else
+    echo "[INFO] Detected existing CUDA/cuDNN stack but versions do not match requested configuration."
+    echo "       - nvcc reported: ${NVCC_VERSION_DETECTED:-unknown}"
+    echo "       - expected CUDA: ${CUDA_VERSION}"
+    echo "       - cuDNN detected: ${CUDNN_VERSION_DETECTED:-unknown}"
+    echo "       - expected cuDNN: ${CUDNN_VER:-unset}"
   fi
-else
-  echo "[INFO] NVIDIA keyring not found in cache. Downloading..."
-  KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${KEYRING_DEB_NAME}"
-  if curl -fsSL "${KEYRING_URL}" -o "${KEYRING_DEB_TMP_PATH}" && dpkg -i "${KEYRING_DEB_TMP_PATH}"; then
-    KEYRING_INSTALL_SUCCESS=true
-  fi
-  rm -f "${KEYRING_DEB_TMP_PATH}"
 fi
 
-if [ "${KEYRING_INSTALL_SUCCESS:-}" != "true" ]; then
-  echo "✗ Failed to install NVIDIA repository keyring. Aborting GPU library install."
-  export PHASE2_STATUS="FAIL"
-  exit 1
-fi
-
-# 2. Update package list and install cuDNN
-# The container already has curl, gnupg, and ca-certificates from essential tools.
-# We install a specific version of libcudnn9 compatible with the Cuda 12 range.
-# This ensures reproducibility. You can update the version number as needed.
-apt-get update
-# The following command installs the runtime library and the dev library needed for compiling software.
-CUDA_MAJOR="${CUDA_VERSION%%.*}"  # Extract major version (e.g., "12" from "12.6")
-
-# Check if the specific cuDNN version is available before attempting installation
-echo "Checking availability of cuDNN version ${CUDNN_VER}..."
-CUDNN_VERSION_AVAILABLE=false
-# Use -F for fixed-string matching (safer for version strings with special characters)
-if apt-cache policy libcudnn9 2>/dev/null | grep -qF "${CUDNN_VER}"; then
-    CUDNN_VERSION_AVAILABLE=true
-    echo "  ✓ Version ${CUDNN_VER} is available in repository"
-else
-    echo "  ⚠ Version ${CUDNN_VER} not found in repository"
-    echo "  Checking available cuDNN versions..."
-    apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)"
-fi
-
-# Try to install specific version if available, otherwise fall back to latest
-CUDNN_INSTALLED=false
-if [ "${CUDNN_VERSION_AVAILABLE:-}" = "true" ]; then
-    echo "Installing cuDNN version ${CUDNN_VER}..."
-    if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee /tmp/cudnn_install.log; then
-        if [ "${PIPESTATUS[0]}" -eq 0 ]; then
-            CUDNN_INSTALLED=true
-            echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
-        fi
-    fi
-fi
-
-# Fallback to latest compatible version if specific version failed or wasn't available
-if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
-    echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
-    echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
-    if apt-get install -y --no-install-recommends libcudnn9-cuda-${CUDA_MAJOR} libcudnn9-dev-cuda-${CUDA_MAJOR} cuda-toolkit-${CUDA_MAJOR} 2>&1 | tee -a /tmp/cudnn_install.log; then
-        if [ "${PIPESTATUS[0]}" -eq 0 ]; then
-            CUDNN_INSTALLED=true
-            # Detect installed version
-            INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || true)
-            if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || true)
-            fi
-            if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
-            fi
-            if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
-                echo "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
-            else
-                echo "  ✓ Successfully installed latest cuDNN version"
-            fi
-        fi
-    fi
-fi
-
-if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
-    echo "✓ NVIDIA cuDNN installed successfully."
-else
-    echo "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details."
+CUDA_INSTALL_PERFORMED=false
+if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
+  echo "[INFO] Proceeding with CUDA/cuDNN installation via APT..."
+  if ! ensure_cuda_repository_configured; then
+    echo "✗ Failed to configure NVIDIA repository keyring. Aborting GPU library install."
     export PHASE2_STATUS="FAIL"
     exit 1
+  fi
+
+  # Update package list to ensure CUDA repository metadata is available
+  apt-get update
+
+  # Determine the optimal CUDA package set available in Ubuntu 24.04
+  CUDA_VERSION_PREFERRED="${CUDA_VERSION:-12.6}"
+  CUDA_MAJOR="${CUDA_MAJOR:-${CUDA_VERSION_PREFERRED%%.*}}"
+  CUDA_VERSION_SELECTED=""
+  CUDA_PKG_SUFFIX="${CUDA_PKG_SUFFIX:-${CUDA_VERSION_PREFERRED//./-}}"
+  CUDA_META_PACKAGE="${CUDA_META_PACKAGE:-cuda-${CUDA_PKG_SUFFIX}}"
+  CUDA_TOOLKIT_PACKAGE="${CUDA_TOOLKIT_PACKAGE:-cuda-toolkit-${CUDA_PKG_SUFFIX}}"
+  CUDA_RUNTIME_PACKAGE="${CUDA_RUNTIME_PACKAGE:-cuda-runtime-${CUDA_PKG_SUFFIX}}"
+  CUDA_DEMO_PACKAGE="${CUDA_DEMO_PACKAGE:-cuda-demo-suite-${CUDA_PKG_SUFFIX}}"
+  CUDA_DRIVER_PACKAGE="${CUDA_DRIVER_PACKAGE:-}"
+
+  package_available() {
+      local pkg="$1"
+      local candidate
+      candidate=$(apt-cache policy "${pkg}" 2>/dev/null | awk '/Candidate:/ {print $2}')
+      if [ -n "${candidate:-}" ] && [ "${candidate}" != "(none)" ]; then
+          return 0
+      fi
+      return 1
+  }
+
+  append_cuda_package() {
+      local pkg="$1"
+      if [ -z "${pkg:-}" ]; then
+          return
+      fi
+      if [ -z "${CUDA_INSTALL_SEEN[${pkg}]:-}" ]; then
+          CUDA_INSTALL_PACKAGES+=("${pkg}")
+          CUDA_INSTALL_SEEN["${pkg}"]=1
+      fi
+  }
+
+  declare -a CUDA_INSTALL_PACKAGES=()
+  declare -A CUDA_INSTALL_SEEN=()
+
+  if [ -n "${CUDA_META_PACKAGE:-}" ] && package_available "${CUDA_META_PACKAGE}"; then
+      append_cuda_package "${CUDA_META_PACKAGE}"
+      CUDA_VERSION_SELECTED="${CUDA_VERSION_PREFERRED}"
+  fi
+
+  if [ -n "${CUDA_TOOLKIT_PACKAGE:-}" ] && package_available "${CUDA_TOOLKIT_PACKAGE}"; then
+      append_cuda_package "${CUDA_TOOLKIT_PACKAGE}"
+      if [ -z "${CUDA_VERSION_SELECTED}" ]; then
+          CUDA_VERSION_SELECTED="${CUDA_VERSION_PREFERRED}"
+      fi
+  fi
+
+  if [ -n "${CUDA_RUNTIME_PACKAGE:-}" ] && package_available "${CUDA_RUNTIME_PACKAGE}"; then
+      append_cuda_package "${CUDA_RUNTIME_PACKAGE}"
+  fi
+
+  if [ -n "${CUDA_DEMO_PACKAGE:-}" ] && package_available "${CUDA_DEMO_PACKAGE}"; then
+      append_cuda_package "${CUDA_DEMO_PACKAGE}"
+  fi
+
+  if [ -n "${CUDA_DRIVER_PACKAGE:-}" ] && package_available "${CUDA_DRIVER_PACKAGE}"; then
+      append_cuda_package "${CUDA_DRIVER_PACKAGE}"
+  fi
+
+  if [ ${#CUDA_INSTALL_PACKAGES[@]} -eq 0 ]; then
+      declare -a CUDA_VERSION_CANDIDATES=()
+      declare -A CUDA_VERSION_SEEN=()
+
+      add_cuda_candidate() {
+          local ver="$1"
+          if [ -z "${ver}" ]; then
+              return
+          fi
+          if [ -z "${CUDA_VERSION_SEEN[${ver}]:-}" ]; then
+              CUDA_VERSION_CANDIDATES+=("${ver}")
+              CUDA_VERSION_SEEN["${ver}"]=1
+          fi
+      }
+
+      if [[ "${CUDA_VERSION_PREFERRED}" == *.* ]]; then
+          add_cuda_candidate "${CUDA_VERSION_PREFERRED}"
+      fi
+
+      for fallback_version in 12.6 12.5 12.4 12.3 12.2; do
+          if [[ "${fallback_version%%.*}" == "${CUDA_MAJOR}" ]]; then
+              add_cuda_candidate "${fallback_version}"
+          fi
+      done
+
+      for candidate in "${CUDA_VERSION_CANDIDATES[@]}"; do
+          pkg_name="cuda-toolkit-${candidate//./-}"
+          if package_available "${pkg_name}"; then
+              append_cuda_package "${pkg_name}"
+              CUDA_VERSION_SELECTED="${candidate}"
+              break
+          fi
+      done
+  fi
+
+  if [ ${#CUDA_INSTALL_PACKAGES[@]} -eq 0 ]; then
+      fallback_toolkit="cuda-toolkit-${CUDA_MAJOR}"
+      if package_available "${fallback_toolkit}"; then
+          append_cuda_package "${fallback_toolkit}"
+          CUDA_VERSION_SELECTED="${CUDA_VERSION_PREFERRED:-${CUDA_MAJOR}}"
+      else
+          echo "✗ No suitable CUDA toolkit package found in APT repositories for major version ${CUDA_MAJOR}"
+          exit 1
+      fi
+  fi
+
+  if [ -n "${CUDA_VERSION_SELECTED}" ]; then
+      CUDA_VERSION="${CUDA_VERSION_SELECTED}"
+      CUDA_MAJOR="${CUDA_VERSION_SELECTED%%.*}"
+  fi
+
+  echo "Selected CUDA packages: ${CUDA_INSTALL_PACKAGES[*]}"
+  echo "Preferred CUDA version: ${CUDA_VERSION_PREFERRED}"
+  echo "Effective CUDA version target: ${CUDA_VERSION}"
+
+  # Check if the specific cuDNN version is available before attempting installation
+  echo "Checking availability of cuDNN version ${CUDNN_VER}..."
+  CUDNN_VERSION_AVAILABLE=false
+  # Use -F for fixed-string matching (safer for version strings with special characters)
+  if apt-cache policy libcudnn9 2>/dev/null | grep -qF "${CUDNN_VER}"; then
+      CUDNN_VERSION_AVAILABLE=true
+      echo "  ✓ Version ${CUDNN_VER} is available in repository"
+  else
+      echo "  ⚠ Version ${CUDNN_VER} not found in repository"
+      echo "  Checking available cuDNN versions..."
+      apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)"
+  fi
+
+  CUDA_CUDNN_PACKAGE="${CUDA_CUDNN_PACKAGE:-libcudnn9-cuda-${CUDA_MAJOR}}"
+  CUDA_CUDNN_DEV_PACKAGE="${CUDA_CUDNN_DEV_PACKAGE:-libcudnn9-dev-cuda-${CUDA_MAJOR}}"
+
+  # Try to install specific version if available, otherwise fall back to latest
+  CUDNN_INSTALLED=false
+  if [ "${CUDNN_VERSION_AVAILABLE:-}" = "true" ]; then
+      echo "Installing cuDNN version ${CUDNN_VER}..."
+      if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee /tmp/cudnn_install.log; then
+          if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+              CUDNN_INSTALLED=true
+              echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
+          fi
+      fi
+  fi
+
+  # Fallback to latest compatible version if specific version failed or wasn't available
+  if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
+      echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
+      echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
+      if apt-get install -y --no-install-recommends "${CUDA_CUDNN_PACKAGE}" "${CUDA_CUDNN_DEV_PACKAGE}" "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee -a /tmp/cudnn_install.log; then
+          if [ "${PIPESTATUS[0]}" -eq 0 ]; then
+              CUDNN_INSTALLED=true
+              # Detect installed version
+              INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || true)
+              if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || true)
+              fi
+              if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
+              fi
+              if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
+                  echo "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
+              else
+                  echo "  ✓ Successfully installed latest cuDNN version"
+              fi
+          fi
+      fi
+  fi
+
+  if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
+      echo "✓ NVIDIA cuDNN installed successfully."
+      sync || true
+      monitor_cache "After CUDA/cuDNN installation"
+      CUDA_INSTALL_PERFORMED=true
+  else
+      echo "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details."
+      export PHASE2_STATUS="FAIL"
+      exit 1
+  fi
+else
+  echo "[INFO] CUDA/cuDNN installation skipped (already satisfied)."
 fi
 # --- Configuration Step (Fixing the PATH) ---
 echo -e "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment variables for CUDA...${NC}"
@@ -3004,47 +3348,51 @@ debug_glibc "After installing NVIDIA Cuda Toolkit"
 # Rationale: NVIDIA packages are massive; if build fails later, we don't want to re-download
 # Dependencies: CONTAINER_APT_CACHE (configured in Block 6.12)
 # Outputs: NVIDIA packages preserved in persistent cache
-echo "==> IMMEDIATE CACHE SYNC: Preserving NVIDIA packages (~4GB)..."
-echo "[INFO] This intermediate sync ensures NVIDIA packages are saved even if build fails later"
+if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
+  echo "==> IMMEDIATE CACHE SYNC: Preserving NVIDIA packages (~4GB)..."
+  echo "[INFO] This intermediate sync ensures NVIDIA packages are saved even if build fails later"
 
-# Count packages before sync
-NVIDIA_PKG_COUNT_BEFORE=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
-CACHE_SIZE_BEFORE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+  # Count packages before sync
+  NVIDIA_PKG_COUNT_BEFORE=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
+  CACHE_SIZE_BEFORE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
 
-echo "[BEFORE SYNC] Found ${NVIDIA_PKG_COUNT_BEFORE} NVIDIA-related packages in /var/cache/apt/archives"
-echo "[BEFORE SYNC] Container cache size: ${CACHE_SIZE_BEFORE}"
+  echo "[BEFORE SYNC] Found ${NVIDIA_PKG_COUNT_BEFORE} NVIDIA-related packages in /var/cache/apt/archives"
+  echo "[BEFORE SYNC] Container cache size: ${CACHE_SIZE_BEFORE}"
 
-# Sync NVIDIA packages immediately
-if [ -d "/var/cache/apt/archives" ] && [ -d "${CONTAINER_APT_CACHE}" ]; then
-    echo "Copying NVIDIA packages to persistent cache..."
-    
-    # Copy all NVIDIA-related packages (with proper error handling)
-    NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
-    
-    if [ -n "${NVIDIA_FILES:-}" ]; then
-        echo "${NVIDIA_FILES}" | head -20 | while read -r deb_file; do
-            if [ -f "${deb_file:-}" ]; then
-                cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
-            fi
-        done
-        
-        # Show summary
-        NVIDIA_PKG_COUNT_AFTER=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
-        CACHE_SIZE_AFTER=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
-        
-        echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT_AFTER} NVIDIA-related packages"
-        echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE_AFTER}"
-        echo "✓ IMMEDIATE SYNC COMPLETE: NVIDIA packages preserved in ${CONTAINER_APT_CACHE}"
-        echo "   → If build fails later, these ~4GB packages won't need re-downloading"
-    else
-        echo "[INFO] No NVIDIA packages found to sync (may have been installed from cache)"
-    fi
+  # Sync NVIDIA packages immediately
+  if [ -d "/var/cache/apt/archives" ] && [ -d "${CONTAINER_APT_CACHE}" ]; then
+      echo "Copying NVIDIA packages to persistent cache..."
+      
+      # Copy all NVIDIA-related packages (with proper error handling)
+      NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+      
+      if [ -n "${NVIDIA_FILES:-}" ]; then
+          echo "${NVIDIA_FILES}" | head -20 | while read -r deb_file; do
+              if [ -f "${deb_file:-}" ]; then
+                  cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
+              fi
+          done
+          
+          # Show summary
+          NVIDIA_PKG_COUNT_AFTER=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
+          CACHE_SIZE_AFTER=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+          
+          echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT_AFTER} NVIDIA-related packages"
+          echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE_AFTER}"
+          echo "✓ IMMEDIATE SYNC COMPLETE: NVIDIA packages preserved in ${CONTAINER_APT_CACHE}"
+          echo "   → If build fails later, these ~4GB packages won't need re-downloading"
+      else
+          echo "[INFO] No NVIDIA packages found to sync (may have been installed from cache)"
+      fi
+  else
+      echo "[WARN] Cache directories not found, skipping immediate sync"
+  fi
+
+  # Force filesystem sync to ensure data is written to disk
+  sync
 else
-    echo "[WARN] Cache directories not found, skipping immediate sync"
+  echo "[INFO] Skipping NVIDIA cache sync (no new CUDA packages installed in this run)."
 fi
-
-# Force filesystem sync to ensure data is written to disk
-sync
 
 echo "==> Continuing with rest of build process..."
 
@@ -3405,6 +3753,206 @@ Acquire::https::Timeout "30";
 Acquire::ftp::Timeout "30";
 EOF
 # apt-fast environment variables and verification removed - using apt-aria wrapper instead
+
+#--- Sub-block 12C: Build SuiteSparse with MKL + CUDA + OpenMP ---
+# Purpose: Compile and install SuiteSparse after CUDA/MKL provisioning to guarantee linkage
+# Dependencies: CUDA toolkit (Block 13), Intel MKL (Block 6.8), OpenBLAS (optional fallback)
+# Outputs: SuiteSparse installed under ${SUITESPARSE_INSTALL_PREFIX}
+echo -e "${YELLOW}[6.12C.1] Preparing SuiteSparse (MKL + CUDA + OpenMP) build...${NC}"
+
+if [[ -z "${MKLROOT:-}" || ! -d "${MKLROOT}" ]]; then
+    echo "  ✗ MKLROOT not set or directory missing (${MKLROOT:-unset})"
+    echo "  Install Intel oneAPI MKL (Phase 2) before running the orchestration script."
+    exit 1
+fi
+
+if ! command -v nvcc >/dev/null 2>&1; then
+    if [ -f /etc/profile.d/cuda.sh ]; then
+        # Attempt to source environment hooks in case CUDA was installed earlier in the run
+        # but PATH/LD_LIBRARY_PATH are not yet updated in the current shell.
+        # shellcheck disable=SC1091
+        . /etc/profile.d/cuda.sh
+    fi
+fi
+
+if ! command -v nvcc >/dev/null 2>&1; then
+    echo "  ✗ nvcc not found in PATH; CUDA development toolkit is required."
+    exit 1
+fi
+
+CUDA_HOME="$(dirname "$(dirname "$(realpath "$(command -v nvcc)")")")"
+CUDA_INCLUDE_DIR="${CUDA_HOME}/include"
+CUDA_LIB_DIR=""
+for candidate in "${CUDA_HOME}/lib64" "${CUDA_HOME}/targets/x86_64-linux/lib"; do
+    if [[ -d "${candidate}" ]]; then
+        CUDA_LIB_DIR="${candidate}"
+        break
+    fi
+done
+
+if [[ ! -d "${CUDA_INCLUDE_DIR}" ]]; then
+    echo "  ✗ CUDA include directory missing at ${CUDA_INCLUDE_DIR}"
+    exit 1
+fi
+
+if [[ -z "${CUDA_LIB_DIR}" ]]; then
+    echo "  ✗ Could not locate CUDA library directory under ${CUDA_HOME}"
+    exit 1
+fi
+
+declare -a suitesparse_cuda_libs=("libcublas.so" "libcusparse.so" "libcusolver.so" "libcurand.so")
+for cuda_lib in "${suitesparse_cuda_libs[@]}"; do
+    if [[ ! -f "${CUDA_LIB_DIR}/${cuda_lib}" ]]; then
+        found_path="$(find "${CUDA_LIB_DIR}" -maxdepth 1 -name "${cuda_lib}*" -print -quit)"
+        if [[ -n "${found_path}" ]]; then
+            echo "  ✓ Using ${found_path}"
+            declare "FOUND_${cuda_lib//./_}=${found_path}"
+        else
+            echo "  ✗ Required CUDA library ${cuda_lib} not found under ${CUDA_LIB_DIR}"
+            exit 1
+        fi
+    fi
+done
+
+echo "  ✓ CUDA toolkit detected at ${CUDA_HOME}"
+echo "  ✓ MKLROOT detected at ${MKLROOT}"
+
+rm -rf "${SUITESPARSE_SOURCE_DIR}"
+mkdir -p "${SUITESPARSE_SOURCE_DIR}"
+monitor_cache "Before SuiteSparse source fetch"
+
+echo -e "${YELLOW}[6.12C.2] Fetching SuiteSparse source (${SUITESPARSE_VERSION})...${NC}"
+if git clone --depth 1 --branch "${SUITESPARSE_VERSION}" https://github.com/DrTimothyAldenDavis/SuiteSparse.git "${SUITESPARSE_SOURCE_DIR}/src"; then
+    echo "  ✓ SuiteSparse repository cloned"
+else
+    echo "  ✗ Failed to clone SuiteSparse repository"
+    exit 1
+fi
+
+monitor_cache "After SuiteSparse source fetch"
+
+echo -e "${YELLOW}[6.12C.3] Configuring SuiteSparse via CMake...${NC}"
+cmake_build_dir="${SUITESPARSE_SOURCE_DIR}/build"
+rm -rf "${cmake_build_dir}"
+mkdir -p "${cmake_build_dir}"
+pushd "${cmake_build_dir}" >/dev/null
+
+CMAKE_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES:-86}"
+BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
+
+cmake ../src \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
+    -DCMAKE_CXX_FLAGS="-O3 -march=native -fPIC -fopenmp" \
+    -DCMAKE_CUDA_FLAGS="-O3 -fPIC -Xcompiler -fopenmp --ptxas-options=-v" \
+    -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCH}" \
+    -DBUILD_SHARED_LIBS=ON \
+    -DBLA_VENDOR=Intel10_64lp \
+    -DBLAS_LIBRARIES="${BLAS_LIBS}" \
+    -DLAPACK_LIBRARIES="${BLAS_LIBS}" \
+    -DBLA_SIZEOF_INTEGER=4 \
+    ${SUITESPARSE_CMAKE_FLAGS} \
+    -DSUITESPARSE_REQUIRE_BLAS=ON \
+    -DSUITESPARSE_USE_64BIT_BLAS=OFF \
+    -DENABLE_OPENMP=ON \
+    -DENABLE_PTHREADS=ON \
+    -DSUITESPARSE_USE_STRICT=ON \
+    -DSUITESPARSE_C_TO_FORTRAN="(name,NAME) name##_" \
+    -DFORTRAN_C_CALLING_CONVENTION="(name,NAME) name##_" \
+    -DCUDA_TOOLKIT_ROOT_DIR="${CUDA_HOME}" \
+    -DCMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc" \
+    -DCUDA_HOST_COMPILER="${CUDA_HOST_COMPILER:-$(command -v gcc || echo gcc)}" \
+    -DCUBLAS_LIB="${FOUND_libcublas_so:-${CUDA_LIB_DIR}/libcublas.so}" \
+    -DCUBLAS_INCLUDE="${CUDA_INCLUDE_DIR}" \
+    -DCUSPARSE_LIB="${FOUND_libcusparse_so:-${CUDA_LIB_DIR}/libcusparse.so}" \
+    -DCUSPARSE_INCLUDE="${CUDA_INCLUDE_DIR}" \
+    -DCUSOLVER_LIB="${FOUND_libcusolver_so:-${CUDA_LIB_DIR}/libcusolver.so}" \
+    -DCUSOLVER_INCLUDE="${CUDA_INCLUDE_DIR}" \
+    -DCURAND_LIB="${FOUND_libcurand_so:-${CUDA_LIB_DIR}/libcurand.so}" \
+    -DCURAND_INCLUDE="${CUDA_INCLUDE_DIR}" \
+    -DENABLE_CUDA_RUNTIME_CHECKS=ON \
+    -DCUDA_SEPARABLE_COMPILATION=ON \
+    -DCMAKE_PREFIX_PATH="${CUDA_HOME};${MKLROOT}${CMAKE_PREFIX_PATH:+;${CMAKE_PREFIX_PATH}}"
+
+echo -e "${YELLOW}[6.12C.4] Building SuiteSparse...${NC}"
+cmake --build . -j"$(nproc)"
+
+echo -e "${YELLOW}[6.12C.5] Installing SuiteSparse to ${SUITESPARSE_INSTALL_PREFIX}...${NC}"
+if cmake --install .; then
+    echo "  ✓ SuiteSparse installation completed"
+else
+    echo "  ✗ SuiteSparse installation failed"
+    exit 1
+fi
+
+popd >/dev/null
+
+echo -e "${YELLOW}[6.12C.6] Verifying SuiteSparse linkage (MKL + CUDA)...${NC}"
+ldconfig
+
+declare -a suitesparse_targets=("libcholmod.so" "libspqr.so")
+for target_lib in "${suitesparse_targets[@]}"; do
+    full_path="${SUITESPARSE_INSTALL_PREFIX}/lib/${target_lib}"
+    if [[ -f "${full_path}" ]]; then
+        echo "  ✓ ${target_lib} installed"
+        if ldd "${full_path}" | grep -qi "mkl"; then
+            echo "    → Linked against MKL"
+        else
+            echo "    ⚠ ${target_lib} does not appear to link MKL (investigate)"
+        fi
+        if ldd "${full_path}" | grep -qi "cuda"; then
+            echo "    → CUDA dependencies resolved"
+        else
+            echo "    ⚠ ${target_lib} does not show CUDA linkage (verify build flags)"
+        fi
+    else
+        echo "  ✗ ${target_lib} missing in ${SUITESPARSE_INSTALL_PREFIX}/lib"
+        exit 1
+    fi
+done
+
+if [ -f "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" ]; then
+    echo "  ✓ SuiteSparse CMake package config installed"
+else
+    echo "  ⚠ SuiteSparse CMake package config not found (downstream CMake may need hints)"
+fi
+
+echo -e "${YELLOW}[6.12C.7] Protecting SuiteSparse installation via APT pinning...${NC}"
+cat > /etc/apt/preferences.d/suitesparse-protect <<'EOF'
+# Prevent APT from overwriting custom SuiteSparse build
+Package: libsuitesparse-dev libsuitesparseconfig5 libsuitesparseconfig-dev libsuitesparse-amd-dev libsuitesparse-cholmod-dev libsuitesparse-spqr-dev libsuitesparse-umfpack-dev suitesparse
+Pin: release *
+Pin-Priority: -1
+EOF
+echo "  ✓ APT pinning created at /etc/apt/preferences.d/suitesparse-protect"
+
+SuiteSparse_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse"
+if ! grep -q "^SuiteSparse_DIR=" /etc/environment 2>/dev/null; then
+    echo "SuiteSparse_DIR=${SuiteSparse_DIR}" >> /etc/environment
+else
+    sed -i "s|^SuiteSparse_DIR=.*|SuiteSparse_DIR=${SuiteSparse_DIR}|" /etc/environment
+fi
+
+cat > /etc/profile.d/suitesparse.sh <<EOF
+export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
+export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
+EOF
+chmod 0644 /etc/profile.d/suitesparse.sh
+echo "  ✓ Environment hooks added for SuiteSparse"
+
+mkdir -p /var/log
+if [ -f "${cmake_build_dir}/CMakeFiles/CMakeError.log" ]; then
+    cp "${cmake_build_dir}/CMakeFiles/CMakeError.log" /var/log/suitesparse_CMakeError.log || true
+fi
+if [ -f "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" ]; then
+    cp "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" /var/log/suitesparse_CMakeOutput.log || true
+fi
+
+echo -e "  ${GREEN}✓ SuiteSparse build and verification complete${NC}"
+echo ""
+
+monitor_cache "After SuiteSparse build"
+rm -rf "${SUITESPARSE_SOURCE_DIR}"
 
 #===============================================================================
 # BLOCK 14: DRAKE ROBOTICS FRAMEWORK SETUP
@@ -3884,7 +4432,7 @@ PKGS_DESKTOP_ENV="xorg dbus-x11 xserver-xorg-video-dummy x11-xserver-utils xauth
 # Core graphics libraries
 PKGS_CORE_LIBS="libgl1 libglvnd0 libegl1 libgles2 libxext6 libxrender1 libsm6 libxrandr2 libxi6 libxxf86vm1 libxkbfile1 libxinerama1 libxcursor1 libxdamage1 libxss1 libgl1-mesa-dri libdrm-dev"
 # Fonts and utilities
-PKGS_FONTS_UTILS="fontconfig fonts-dejavu fonts-liberation fonts-noto iproute2 iputils-ping net-tools lsof tmux screen htop p7zip-full python3-pip python3-venv whiptail"
+PKGS_FONTS_UTILS="fontconfig fonts-dejavu fonts-liberation fonts-noto iproute2 iputils-ping net-tools lsof tmux screen htop p7zip-full python3-pip python3-venv python3-setuptools python3-wheel python3-dev whiptail"
 # Linear algebra libraries
 # NOTE: libopenblas-dev removed - we compile our own OpenBLAS in BLOCK 6.12B
 # NOTE: liblapack-dev and liblapacke-dev kept - needed for headers and pkg-config files
@@ -4444,6 +4992,9 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #   Result: Ceres uses system glog 0.6.0, COLMAP uses system glog 0.6.0
 #   Benefit: Single glog version, consistent logging, proven compatible
 #   Verified: COLMAP 3.12.6 + Ceres 2.2.0 + glog 0.6.0 = Working combination
+#   MKL linkage: `BLA_VENDOR` and `{BLAS,LAPACK}_LIBRARIES` are the documented knobs
+#   (docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md). No extra MKL cache
+#   variables are passed here.
 #
 cmake .. \
   -G Ninja \
@@ -4457,12 +5008,18 @@ cmake .. \
   -D BUILD_SHARED_LIBS=ON \
   -D MINIGLOG=OFF \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
-  -D BLA_VENDOR=OpenBLAS \
+  -D BLA_VENDOR=Intel10_64lp \
+  -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+  -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+  -D MKL_ROOT="${MKLROOT}" \
+  -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
+  -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}" \
   -D LAPACK=ON \
   -D EIGENMETIS=ON \
   -D EIGENSPARSE=ON \
   -D SUITESPARSE=ON \
-  -D USE_CUDA=ON \
+  -D Ceres_USE_EIGEN_MKL=ON \
+  -D Ceres_ENABLE_CUDA=ON \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_TESTING=OFF \
   -D BUILD_BENCHMARKS=OFF \
@@ -4626,6 +5183,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.11: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
+  # MKL note: g2o inherits MKL-enabled SuiteSparse; see
+  # `docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md` (no BLAS override flags).
+  # MKL note: `docs/flags/GTSAM_4.2.0_CMAKE_FLAGS_DOCUMENTATION.md` documents
+  # MKL integration via `GTSAM_WITH_EIGEN_MKL{,_OPENMP}`; we rely on MKLROOT env
+  # rather than passing undocumented cache entries.
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -4643,7 +5205,13 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
     -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
     -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
-    -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE
+    -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
+    -D BLA_VENDOR=Intel10_64lp \
+    -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+    -D MKL_ROOT="${MKLROOT}" \
+    -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
+    -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}"
 
   #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores
@@ -4729,13 +5297,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.16: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
-  # IMPORTANT: TBB (Threading Building Blocks) is a SEPARATE library from OpenBLAS
-  # - TBB: Intel's threading library for parallel algorithms (separate from OpenBLAS)
-  # - OpenBLAS: Linear algebra library (BLAS/LAPACK implementation)
-  # - They work together but are independent libraries
-  # - "OpenBLAS TBB" means system TBB (compatible with OpenBLAS), NOT MKL TBB
-  # - TBB does NOT point to openblas.so - they are separate libraries
-  # TBB_DIR and TBB_LIBRARIES point to system TBB from libtbb-dev package (not MKL TBB)
+  # IMPORTANT: TBB (Threading Building Blocks) is independent from Intel MKL:
+  # - TBB: Intel's threading library for parallel algorithms (installed via libtbb-dev)
+  # - MKL: Linear algebra implementation (BLAS/LAPACK) provided by Intel oneAPI
+  # - They coexist but are linked separately (MKL via BLA_VENDOR=Intel10_64lp)
+  # - TBB_DIR and TBB_LIBRARIES point to the system TBB package (not MKL's optional TBB build)
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -4745,6 +5311,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D GTSAM_WITH_TBB=ON \
     -D TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
     -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
+    -D GTSAM_WITH_EIGEN_MKL=ON \
+    -D GTSAM_WITH_EIGEN_MKL_OPENMP=ON \
     -D GTSAM_USE_SYSTEM_EIGEN=ON \
     -D GTSAM_BUILD_TESTS=OFF \
     -D GTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
@@ -4762,7 +5330,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_CXX_STANDARD=17 \
     -D CMAKE_CXX_STANDARD_REQUIRED=ON \
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-    -D CMAKE_IGNORE_PATH="/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl"
+    -D BLA_VENDOR=Intel10_64lp \
+    -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+    -D MKL_ROOT="${MKLROOT}" \
+    -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
+    -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}"
 
   #--- Sub-block 17.17: Build and install GTSAM ---
   # Critical: Compile with ninja using half CPU cores
@@ -5381,14 +5954,11 @@ export LIBRARY_PATH="${LIBRARY_PATH}:/usr/lib/x86_64-linux-gnu"
 # Critical: Comprehensive CMake configuration with all features enabled
 # Dependencies: PHASE 1 (Build tools), PHASE 1 (Compilers), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-# IMPORTANT: TBB (Threading Building Blocks) is a SEPARATE library from OpenBLAS
-# - TBB: Intel's threading library for parallel algorithms (separate from OpenBLAS)
-# - OpenBLAS: Linear algebra library (BLAS/LAPACK implementation)
-# - They work together but are independent libraries
-# - "OpenBLAS TBB" means system TBB (compatible with OpenBLAS), NOT MKL TBB
-# - TBB does NOT point to openblas.so - they are separate libraries
-# - TBB_DIR and TBB_LIBRARIES point to system TBB from libtbb-dev package (not MKL TBB)
-# - BLAS_LIBRARIES and BLA_VENDOR point to OpenBLAS (separate from TBB)
+# IMPORTANT: TBB (Threading Building Blocks) remains independent from Intel MKL:
+# - TBB: Installed via libtbb-dev and used for task parallelism inside OpenCV
+# - MKL: Provides BLAS/LAPACK implementations (linked via BLA_VENDOR=Intel10_64lp)
+# - They work together but are linked separately; MKL uses GNU OpenMP threading layer
+# - TBB_DIR and TBB_LIBRARIES point to the system TBB package (not MKL's optional TBB build)
 echo -e "${YELLOW}[Phase 4 | OpenCV] Configuring with Cmake...${NC}"
 
 #===============================================================================
@@ -5447,7 +6017,6 @@ OPENCV_CMAKE_ARGS=(
   "-DCMAKE_CUDA_FLAGS=${OPENCV_CUDA_FLAGS}"
   "-DWITH_CUDA=ON"
   "-DWITH_CUDNN=ON"
-  "-DWITH_OPENBLAS=ON"
   "-DCUDA_ARCH_BIN=${CUDA_ARCH}"
   "-DCUDA_ARCH_PTX=${CUDA_ARCH}"
   "-DOPENCV_DNN_CUDA=ON"
@@ -5463,8 +6032,15 @@ OPENCV_CMAKE_ARGS=(
   "-DWITH_FFMPEG=ON"
   "-DWITH_GSTREAMER=ON"
   "-DWITH_LAPACK=ON"
+  "-DWITH_MKL=ON"
+  "-DMKL_WITH_OPENMP=ON"
+  "-DMKL_USE_STATIC_LIBS=OFF"
   "-DWITH_TIFF=ON"
   "-DWITH_OPENMP=ON"
+  "-DBLA_VENDOR=Intel10_64lp"
+  "-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+  "-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+  "-DMKL_ROOT=${MKLROOT}"
   "-DJlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/"
   "-DLAPACK_ENABLE_LAPACKE=ON"
   "-DWITH_VTK=ON"
@@ -5496,16 +6072,6 @@ OPENCV_CMAKE_ARGS=(
   "-DPYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include"
   "-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
   "-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"
-  "-DBLAS_LIBRARIES=/usr/local/lib/libopenblas.so"
-  "-DBLA_VENDOR=OpenBLAS"
-  "-DLAPACK_LIBRARIES=/usr/local/lib/libopenblas.so;/usr/lib/x86_64-linux-gnu/liblapacke.so.3"
-  "-DLAPACK_LIBRARY=/usr/local/lib/libopenblas.so"
-  "-DLAPACKE_LIBRARY=/usr/lib/x86_64-linux-gnu/liblapacke.so.3"
-  "-DLAPACK_LIBRARY_DEBUG=/usr/local/lib/libopenblas.so"
-  "-DLAPACK_CBLAS_H=/usr/local/include/cblas.h"
-  "-DLAPACK_LAPACKE_H=/usr/include/lapacke.h"
-  "-DOpenBLAS_LIB=/usr/local/lib/libopenblas.so"
-  "-DOpenBLAS_INCLUDE_DIR=/usr/local/include"
   "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
   "-DCMAKE_C_STANDARD=17"
   "-DCMAKE_CXX_STANDARD=17"
@@ -5527,7 +6093,6 @@ OPENCV_CMAKE_ARGS=(
   "-DJulia_LIBRARIES=${JULIA_HOME}/lib/libjulia.so"
   "-DJlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx"
   "-DCMAKE_PREFIX_PATH=/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}"
-  "-DCMAKE_IGNORE_PATH=/root/.julia;/opt/intel;/usr/local/intel;/opt/intel/oneapi;/usr/local/lib/cmake/mkl"
 )
 # Add NVIDIA Video Codec SDK support to OpenCV if SDK is installed
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
@@ -6397,6 +6962,10 @@ echo ""
 echo "⚙️ Running CMake configuration (this may take a few minutes)..."
 
 COLMAP_CMAKE_ARGS=(
+  # MKL note: COLMAP relies on generic CMake BLAS variables; per
+  # `docs/flags/COLMAP_3.12.6_CMAKE_FLAGS_DOCUMENTATION.md` no additional MKL
+  # cache variables are available, so we stick to `BLA_VENDOR` and explicit
+  # BLAS/LAPACK library lists.
   -G "Ninja"
   "-DCMAKE_BUILD_TYPE=Release"
   "-DCMAKE_INSTALL_PREFIX=/usr/local"
@@ -6426,6 +6995,9 @@ COLMAP_CMAKE_ARGS=(
   "-Dgflags_DIR=/usr/lib/x86_64-linux-gnu/cmake/gflags"
   "-Dglog_ROOT=/usr"
   "-Dgflags_ROOT=/usr"
+  "-DBLA_VENDOR=Intel10_64lp"
+  "-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+  "-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
 )
 COLMAP_CMAKE_LOG="/tmp/colmap_cmake.log"
 
@@ -7614,7 +8186,7 @@ rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
 echo "✓ JAX CUDA installation complete"
 
 #===============================================================================
-# BLOCK 26: PYTORCH COMPILATION WITH OPENBLAS
+# BLOCK 26A: LEGACY PYTORCH SOURCE BUILD (OPENBLAS)
 #===============================================================================
 # Purpose: Compile PyTorch from source with OpenBLAS and CUDA support
 #          Uses optimal flags from test_pytorch_compilation.sh
@@ -7640,14 +8212,19 @@ echo "✓ JAX CUDA installation complete"
 #   - Test script: scripts/tests/test_pytorch_compilation.sh
 #   - GCC recommendation: GCC 10 preferred for CUDA 12.6 + PyTorch
 #-------------------------------------------------------------------------------
-
-if [ "${ENABLE_PYTORCH_BUILD:-false}" != true ]; then
-  echo "Skipping PyTorch compilation (ENABLE_PYTORCH_BUILD=${ENABLE_PYTORCH_BUILD:-false})"
-else
 echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}BLOCK 13C: PyTorch Compilation with OpenBLAS${NC}"
+echo -e "${BLUE}BLOCK 26A: PyTorch Source Build (legacy / opt-in)${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+
+ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"
+if [ "${ENABLE_PYTORCH_BUILD}" != true ]; then
+  echo "Skipping PyTorch source compilation (ENABLE_PYTORCH_BUILD=${ENABLE_PYTORCH_BUILD})."
+  echo "  → CUDA-enabled PyTorch wheels are installed in Block 26B by default."
+  echo ""
+else
+  echo -e "${YELLOW}[26A] PyTorch source build enabled; compiling from OpenBLAS baseline...${NC}"
+  echo ""
 
 #--- Sub-block 26.1: Verify OpenBLAS installation ---
 # Purpose: Verify our compiled OpenBLAS is available and usable
@@ -8325,6 +8902,82 @@ fi
 echo ""
 fi
 
+#===============================================================================
+# BLOCK 26B: PYTORCH INSTALLATION (CUDA + MKL)
+#===============================================================================
+# Purpose: Install upstream PyTorch binaries built against CUDA 12.6 and Intel MKL.
+# Self-contained: Yes (installs wheels and verifies linkage)
+# Dependencies:
+#   - Block 12A: Intel oneAPI MKL environment configured
+#   - Block 13: CUDA/cuDNN toolkit installed
+# Outputs: PyTorch + torchvision + torchaudio with CUDA/MKL support
+#-------------------------------------------------------------------------------
+
+ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-${ENABLE_PYTORCH_BUILD:-true}}"
+if [ "${ENABLE_PYTORCH_INSTALL}" != true ]; then
+  echo "Skipping PyTorch installation (ENABLE_PYTORCH_INSTALL=${ENABLE_PYTORCH_INSTALL})"
+else
+  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${BLUE}BLOCK 26B: PyTorch Installation (CUDA 12.6 + MKL)${NC}"
+  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+
+  echo -e "${YELLOW}[26B.1] Preparing Python environment for PyTorch...${NC}"
+  if ! python3 -m pip install --upgrade pip setuptools wheel; then
+      echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
+      exit 1
+  fi
+
+  echo -e "${YELLOW}[26B.2] Installing PyTorch CUDA 12.6 wheels with MKL backend...${NC}"
+  if ! python3 -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126; then
+      echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+      exit 1
+  fi
+
+  echo -e "${YELLOW}[26B.3] Verifying PyTorch CUDA/MKL linkage...${NC}"
+  if python3 - <<'PY' 2>/tmp/pytorch_verify.log; then
+import torch
+import io
+from contextlib import redirect_stdout
+
+buf = io.StringIO()
+with redirect_stdout(buf):
+    torch.__config__.show()
+config_output = buf.getvalue()
+print(config_output, end="")
+
+cuda_version = torch.version.cuda or "unknown"
+print(f"CUDA build version: {cuda_version}")
+if cuda_version != "unknown" and not str(cuda_version).startswith("12.6"):
+    raise SystemExit(f"Unexpected CUDA toolkit version reported by PyTorch: {cuda_version}")
+
+if not torch.backends.mkl.is_available() and "MKL" not in config_output:
+    raise SystemExit("Intel MKL backend not detected in PyTorch build")
+
+if hasattr(torch.backends, "mkldnn"):
+    print(f"MKLDNN available: {torch.backends.mkldnn.is_available()}")
+
+cpu_matmul = torch.mm(torch.randn(128, 128), torch.randn(128, 128)).sum().item()
+print(f"CPU matmul checksum: {cpu_matmul}")
+
+print(f"PyTorch version: {torch.__version__}")
+print(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
+PY
+  then
+      echo -e "  ${GREEN}✓ PyTorch MKL/CUDA verification succeeded${NC}"
+  else
+      echo -e "  ${RED}✗ PyTorch verification failed${NC}"
+      sed 's/^/    /' /tmp/pytorch_verify.log || true
+      exit 1
+  fi
+
+  rm -f /tmp/pytorch_verify.log 2>/dev/null || true
+  echo -e "${GREEN}✓ PyTorch installation complete${NC}"
+  echo "  • torch $(python3 -c 'import torch; print(torch.__version__)')"
+  echo "  • torchvision $(python3 -c 'import torchvision; print(torchvision.__version__)')"
+  echo "  • torchaudio $(python3 -c 'import torchaudio; print(torchaudio.__version__)')"
+fi
+
 #--- Sub-block 26.12: Install Open3D dependencies ---
 # Purpose: Install requirements for Open3D compilation (GCC/G++ toolchain)
 # Reference: https://www.open3d.org/docs/release/compilation.html
@@ -8870,67 +9523,34 @@ else
     echo "⚠ find_dependencies.cmake not found, cannot patch C++ library detection"
 fi
 
-# Patch to force Open3D to use system OpenBLAS and prevent building from source
-# CRITICAL: This prevents the "openblas/lib/libopenblas.a missing" error
+# Patch to force Open3D to use system BLAS (Intel MKL) and prevent building from source
+# CRITICAL: This prevents the bundled third-party OpenBLAS build from overriding MKL
 # NOTE: Open3D uses USE_SYSTEM_BLAS (NOT USE_SYSTEM_OPENBLAS - that flag doesn't exist)
 # Reference: OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md
-echo "Patching Open3D to use system OpenBLAS (prevent bundled build)..."
+echo "Patching Open3D to prefer system BLAS (Intel MKL) and skip bundled build..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
-    # Force USE_SYSTEM_BLAS=ON to use system OpenBLAS instead of building from source
+    # Force USE_SYSTEM_BLAS=ON to use system-provided BLAS instead of building from source
     # This patch ensures that even if find_package(BLAS) fails initially, 
     # we still prefer system libraries over building from source
-    # Open3D will call find_package(BLAS) which respects BLA_VENDOR=OpenBLAS and BLAS_LIBRARIES
+    # Open3D will call find_package(BLAS) which respects BLA_VENDOR=Intel10_64lp and BLAS_LIBRARIES
     sed -i 's/if (USE_SYSTEM_BLAS)/if (TRUE)  # Patched: Force USE_SYSTEM_BLAS always/g' \
         3rdparty/find_dependencies.cmake 2>/dev/null || true
-    echo "✓ OpenBLAS patch applied (will use system OpenBLAS via USE_SYSTEM_BLAS=ON)"
-    echo "  CMake will use find_package(BLAS) with BLA_VENDOR=OpenBLAS"
+    echo "✓ System BLAS patch applied (USE_SYSTEM_BLAS=ON for Intel MKL)"
+    echo "  CMake will use find_package(BLAS) with BLA_VENDOR=Intel10_64lp"
 else
-    echo "⚠ find_dependencies.cmake not found, skipping OpenBLAS patch"
+    echo "⚠ find_dependencies.cmake not found, skipping system BLAS patch"
 fi
 
-# Verify system OpenBLAS is available before proceeding
-echo "Verifying system OpenBLAS installation..."
-OPENBLAS_SO_LIB=""
-if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ]; then
-    OPENBLAS_SO_LIB="/usr/lib/x86_64-linux-gnu/libopenblas.so"
-    echo "✓ System OpenBLAS shared library found: ${OPENBLAS_SO_LIB}"
-elif [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so.0" ]; then
-    OPENBLAS_SO_LIB="/usr/lib/x86_64-linux-gnu/libopenblas.so.0"
-    echo "✓ System OpenBLAS shared library found: ${OPENBLAS_SO_LIB}"
-else
-    echo "⚠ WARNING: System OpenBLAS shared library not found in expected location"
-    echo "  Searching for OpenBLAS libraries..."
-    OPENBLAS_SEARCH=$(find /usr/lib* -name "libopenblas.so*" 2>/dev/null | head -1 || echo "")
-    if [ -n "${OPENBLAS_SEARCH}" ]; then
-        OPENBLAS_SO_LIB="${OPENBLAS_SEARCH}"
-        echo "  Found OpenBLAS library: ${OPENBLAS_SO_LIB}"
-    else
-        echo "  ⚠ No OpenBLAS libraries found - Open3D may build from source or fail"
-    fi
-fi
-
-# Prepare BLAS_LIBRARIES flag if OpenBLAS library found
+# Prepare MKL BLAS/LAPACK flags for Open3D
+echo "Configuring Open3D to use Intel MKL for BLAS/LAPACK..."
 BLAS_LIBRARIES_FLAG=""
 LAPACK_LIBRARIES_FLAG=""
-if [ -n "${OPENBLAS_SO_LIB:-}" ]; then
-    BLAS_LIBRARIES_FLAG="-DBLAS_LIBRARIES=${OPENBLAS_SO_LIB}"
-    # OpenBLAS includes LAPACK, so use same library for LAPACK
-    LAPACK_LIBRARIES_FLAG="-DLAPACK_LIBRARIES=${OPENBLAS_SO_LIB}"
-    echo "  Will use BLAS_LIBRARIES=${OPENBLAS_SO_LIB} in CMake configuration"
-    echo "  Will use LAPACK_LIBRARIES=${OPENBLAS_SO_LIB} in CMake configuration"
-fi
-
-# Verify OpenBLAS headers
-OPENBLAS_HEADER_DIR=""
-if [ -f "/usr/include/x86_64-linux-gnu/cblas.h" ]; then
-    OPENBLAS_HEADER_DIR="/usr/include/x86_64-linux-gnu"
-    echo "✓ OpenBLAS headers found at ${OPENBLAS_HEADER_DIR}"
-elif [ -f "/usr/include/cblas.h" ]; then
-    OPENBLAS_HEADER_DIR="/usr/include"
-    echo "✓ OpenBLAS headers found at ${OPENBLAS_HEADER_DIR}"
+if [ -n "${MKL_BLAS_LIBRARIES:-}" ]; then
+    BLAS_LIBRARIES_FLAG="-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+    LAPACK_LIBRARIES_FLAG="-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+    echo "  BLAS/LAPACK libraries: ${MKL_BLAS_LIBRARIES}"
 else
-    echo "⚠ WARNING: OpenBLAS headers not found"
-    echo "  This may cause compilation issues"
+    echo "  ⚠ MKL_BLAS_LIBRARIES not set; BLAS/LAPACK arguments will be omitted"
 fi
 
 # Verify LAPACKE is available (required for Open3D when using system BLAS)
@@ -9486,10 +10106,7 @@ elif [ -z "${CUDA_VERSION:-}" ]; then
 fi
 
 # Enhanced include path with OpenBLAS headers if found
-ENHANCED_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include;/usr/local/include"
-if [ -n "${OPENBLAS_HEADER_DIR:-}" ]; then
-    ENHANCED_INCLUDE_PATH="${ENHANCED_INCLUDE_PATH};${OPENBLAS_HEADER_DIR}"
-fi
+ENHANCED_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include;/usr/local/include;${MKL_INCLUDE_DIR}"
 
 # Debug: Display key configuration variables
 echo ""
@@ -9637,9 +10254,9 @@ cmake .. \
     -DUSE_SYSTEM_VTK=OFF \
     -DUSE_BLAS=ON \
     -DUSE_SYSTEM_BLAS=ON \
-    -DBLA_VENDOR=OpenBLAS \
-    ${BLAS_LIBRARIES_FLAG:+${BLAS_LIBRARIES_FLAG} }\
-    ${LAPACK_LIBRARIES_FLAG:+${LAPACK_LIBRARIES_FLAG} }\
+    -DBLA_VENDOR=Intel10_64lp \
+    ${BLAS_LIBRARIES_FLAG:+ "${BLAS_LIBRARIES_FLAG}" }\
+    ${LAPACK_LIBRARIES_FLAG:+ "${LAPACK_LIBRARIES_FLAG}" }\
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DCMAKE_CUDA_STANDARD=17 \
     -DCMAKE_CUDA_FLAGS="${OPEN3D_CUDA_FLAGS_VALUE}" \
@@ -16709,10 +17326,7 @@ echo "✓ System-wide PATH configuration for zoxide created"
 
 # ZELLIJ CONFIGURATION
 mkdir -p /etc/zellij || { echo "✗ Failed to create /etc/zellij directory"; exit 1; }
-if ! cat <<'EOF' > /etc/zellij/config.kdl; then
-    echo "✗ Failed to write /etc/zellij/config.kdl" >&2
-    exit 1
-fi
+if ! cat <<'EOF' > /etc/zellij/config.kdl
 // Zellij configuration for ROS 2 multi-workspace development
 
 // Keybindings
@@ -16745,13 +17359,14 @@ mouse_mode true
 // Copy on select
 copy_on_select true
 EOF
+then
+    echo "✗ Failed to write /etc/zellij/config.kdl" >&2
+    exit 1
+fi
 
 # OX EDITOR CONFIGURATION
 mkdir -p /etc/ox || { echo "✗ Failed to create /etc/ox directory"; exit 1; }
-if ! cat <<'EOX' > /etc/ox/config.ron; then
-    echo "✗ Failed to write /etc/ox/config.ron" >&2
-    exit 1
-fi
+if ! cat <<'EOX' > /etc/ox/config.ron
 Config(
     general: General(
         line_number_padding_right: 2,
@@ -16773,13 +17388,14 @@ Config(
     },
 )
 EOX
+then
+    echo "✗ Failed to write /etc/ox/config.ron" >&2
+    exit 1
+fi
 
 
 # ROS MULTI-WORKSPACE LAUNCHER (Zellij version)
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij; then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij
 #!/bin/bash
 set -euo pipefail
 
@@ -16881,13 +17497,14 @@ else
     exit 1
 fi
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/ros_multiterm_zellij || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij" >&2; exit 1; }
 
 # ALTERNATIVE: TMUX LAUNCHER (keep both options)
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_tmux; then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_tmux" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_tmux
 #!/bin/bash
 # Launch tmux session with multiple ROS environments
 
@@ -16940,13 +17557,14 @@ if ! tmux attach-session -t "${SESSION}"; then
   exit 1
 fi
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_tmux" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/ros_multiterm_tmux || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_tmux" >&2; exit 1; }
 
 # Create convenience alias
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm; then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm
 #!/bin/bash
 # Default to Zellij, fallback to tmux
 set -euo pipefail
@@ -16959,6 +17577,10 @@ else
   exit 1
 fi
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/ros_multiterm || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm" >&2; exit 1; }
 
 # CLEANUP RUST BUILD ARTIFACTS
@@ -17175,10 +17797,7 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
   echo "==> Configuring Zenoh"
   mkdir -p /etc/zenoh || { echo "✗ Failed to create /etc/zenoh directory"; exit 1; }
   # Zenoh Router Configuration
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-router.json5; then
-    echo "✗ Failed to write /etc/zenoh/zenoh-router.json5" >&2
-    exit 1
-  fi
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-router.json5
 // Zenoh router configuration for ROS 2 multi-version bridge
 {
   // Router mode
@@ -17231,6 +17850,10 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
   }
 }
 EOF
+  then
+    echo "✗ Failed to write /etc/zenoh/zenoh-router.json5" >&2
+    exit 1
+  fi
 
 
 
@@ -17244,10 +17867,7 @@ EOF
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
   # Zenoh-DDS Bridge Configuration (Humble domain)
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-humble.json5; then
-    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-humble.json5" >&2
-    exit 1
-  fi
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-humble.json5
 // Bridge ROS 2 Humble (Domain 1) to Zenoh
 {
   mode: "client",
@@ -17278,12 +17898,13 @@ EOF
   }
 }
 EOF
-
-  # Zenoh-DDS Bridge Configuration (Jazzy domain)
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-jazzy.json5; then
-    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-jazzy.json5" >&2
+  then
+    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-humble.json5" >&2
     exit 1
   fi
+
+  # Zenoh-DDS Bridge Configuration (Jazzy domain)
+  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-jazzy.json5
 // Bridge ROS 2 Jazzy (Domain 2) to Zenoh
 {
   mode: "client",
@@ -17306,6 +17927,10 @@ EOF
   }
 }
 EOF
+  then
+    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-jazzy.json5" >&2
+    exit 1
+  fi
 
 
 
@@ -17326,10 +17951,7 @@ fi
 
 # ZENOH MANAGEMENT SCRIPTS
 # Zenoh startup script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_start; then
-  echo "✗ Failed to write /usr/local/bin/zenoh_start" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/zenoh_start
 #!/bin/bash
 # Start Zenoh router and bridges
 
@@ -17428,13 +18050,14 @@ echo "Zenoh infrastructure ready!"
 echo "  Router: http://localhost:8000 (REST API)"
 echo "  Logs: /tmp/zenoh*.log"
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/zenoh_start" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/zenoh_start || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
 
 # Zenoh stop script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_stop; then
-  echo "✗ Failed to write /usr/local/bin/zenoh_stop" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/zenoh_stop
 #!/bin/bash
 # Stop all Zenoh processes
 
@@ -17460,13 +18083,14 @@ if [ "${pids_terminated}" = false ]; then
 fi
 echo "✓ Zenoh stopped"
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/zenoh_stop" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/zenoh_stop || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_stop" >&2; exit 1; }
 
 # Zenoh status script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_status; then
-  echo "✗ Failed to write /usr/local/bin/zenoh_status" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/zenoh_status
 #!/bin/bash
 # Check Zenoh status
 
@@ -17503,14 +18127,15 @@ echo "  Router: /tmp/zenoh-router.log"
 echo "  Humble: /tmp/zenoh-humble.log"
 echo "  Jazzy: /tmp/zenoh-jazzy.log"
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/zenoh_status" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/zenoh_status || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_status" >&2; exit 1; }
 
 # ZENOH PYTHON UTILITIES
 # ZENOH TOPIC BRIDGE SCRIPT
-if ! cat <<'EOF' > /opt/scripts/zenoh_topic_bridge.py; then
-  echo "✗ Failed to write /opt/scripts/zenoh_topic_bridge.py" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /opt/scripts/zenoh_topic_bridge.py
 #!/usr/bin/env python3
 # Zenoh topic bridge for ROS 2 Humble <-> Jazzy communication
 
@@ -17577,15 +18202,16 @@ if __name__ == "__main__":
     bridge.bridge_topic('/jazzy/cmd_vel', '/humble/cmd_vel')
     bridge.run()
 EOF
+then
+  echo "✗ Failed to write /opt/scripts/zenoh_topic_bridge.py" >&2
+  exit 1
+fi
 chmod +x /opt/scripts/zenoh_topic_bridge.py || { echo "✗ Failed to set executable bit on /opt/scripts/zenoh_topic_bridge.py" >&2; exit 1; }
 echo "✓ Zenoh topic bridge script created"
 
 # UPDATE ZELLIJ LAYOUT WITH ZENOH
 # Update the Zellij launcher to include Zenoh
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij_zenoh; then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij_zenoh" >&2
-  exit 1
-fi
+if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij_zenoh
 #!/bin/bash
 # Launch Zellij session with Zenoh-enabled ROS environments
 
@@ -17680,6 +18306,10 @@ if ! zellij --layout "${layout_file}" attach -c "${SESSION}"; then
   exit 1
 fi
 EOF
+then
+  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij_zenoh" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
 
 # CLEANUP
@@ -17927,10 +18557,7 @@ echo "=========================================="
 # ===============================================================
 echo "==> Creating VNC server selection tool..."
 
-if ! cat <<'VNCSELECT' > /usr/local/bin/vnc_select.sh; then
-  echo "✗ Failed to write /usr/local/bin/vnc_select.sh" >&2
-  exit 1
-fi
+if ! cat <<'VNCSELECT' > /usr/local/bin/vnc_select.sh
 #!/usr/bin/env bash
 # VNC Server Selection and Comparison Tool
 
@@ -18034,6 +18661,10 @@ if [ $# -gt 0 ]; then
   esac
 fi
 VNCSELECT
+then
+  echo "✗ Failed to write /usr/local/bin/vnc_select.sh" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/vnc_select.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/vnc_select.sh" >&2; exit 1; }
 
 
@@ -18045,10 +18676,7 @@ echo "✓ VNC selection tool created"
 # ===============================================================
 echo "==> Creating network optimization script..."
 
-if ! cat <<'NETOPT' > /usr/local/bin/optimize_network.sh; then
-  echo "✗ Failed to write /usr/local/bin/optimize_network.sh" >&2
-  exit 1
-fi
+if ! cat <<'NETOPT' > /usr/local/bin/optimize_network.sh
 #!/usr/bin/env bash
 # Optimize network for remote desktop (run on host/container with permissions)
 
@@ -18085,6 +18713,10 @@ EOF
 echo ""
 echo "Note: These optimizations require host-level changes"
 NETOPT
+then
+  echo "✗ Failed to write /usr/local/bin/optimize_network.sh" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/optimize_network.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/optimize_network.sh" >&2; exit 1; }
 
 echo "✓ Network optimization guide created"
@@ -18100,10 +18732,7 @@ echo "==> Creating unified remote desktop launcher..."
 # Purpose: Interactive menu for launching VNC/noVNC sessions
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
-if ! cat <<'RDLAUNCH' > /usr/local/bin/remote_desktop.sh; then
-  echo "✗ Failed to write /usr/local/bin/remote_desktop.sh" >&2
-  exit 1
-fi
+if ! cat <<'RDLAUNCH' > /usr/local/bin/remote_desktop.sh
 #!/usr/bin/env bash
 # Unified Remote Desktop Launcher
 
@@ -18281,6 +18910,10 @@ fi
 
 main "$@"
 RDLAUNCH
+then
+  echo "✗ Failed to write /usr/local/bin/remote_desktop.sh" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/remote_desktop.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/remote_desktop.sh" >&2; exit 1; }
 
 echo "✓ Unified launcher created: remote_desktop.sh"
@@ -18295,10 +18928,7 @@ echo "✓ Unified launcher created: remote_desktop.sh"
 # ===============================================================
 echo "==> Creating performance benchmark suite..."
 
-if ! cat <<'BENCH' > /usr/local/bin/benchmark_all.sh; then
-  echo "✗ Failed to write /usr/local/bin/benchmark_all.sh" >&2
-  exit 1
-fi
+if ! cat <<'BENCH' > /usr/local/bin/benchmark_all.sh
 #!/usr/bin/env bash
 # Comprehensive Remote Desktop Performance Benchmark
 
@@ -18480,6 +19110,10 @@ main() {
 
 main "$@"
 BENCH
+then
+  echo "✗ Failed to write /usr/local/bin/benchmark_all.sh" >&2
+  exit 1
+fi
 chmod +x /usr/local/bin/benchmark_all.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/benchmark_all.sh" >&2; exit 1; }
 
 echo "✓ Benchmark suite created"
@@ -18498,10 +19132,7 @@ echo "✓ Benchmark suite created"
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 mkdir -p /usr/local/share/doc || { echo "✗ Failed to create /usr/local/share/doc" >&2; exit 1; }
-if ! cat <<'GUIDE' > /usr/local/share/doc/virtualgl-guide.txt; then
-  echo "✗ Failed to write /usr/local/share/doc/virtualgl-guide.txt" >&2
-  exit 1
-fi
+if ! cat <<'GUIDE' > /usr/local/share/doc/virtualgl-guide.txt
 ========================================
 VirtualGL Usage Guide
 ========================================
@@ -18591,6 +19222,10 @@ For more info:
   vgl_info.sh
 ========================================
 GUIDE
+then
+  echo "✗ Failed to write /usr/local/share/doc/virtualgl-guide.txt" >&2
+  exit 1
+fi
 chmod 644 /usr/local/share/doc/virtualgl-guide.txt || { echo "✗ Failed to set permissions on /usr/local/share/doc/virtualgl-guide.txt" >&2; exit 1; }
 
 

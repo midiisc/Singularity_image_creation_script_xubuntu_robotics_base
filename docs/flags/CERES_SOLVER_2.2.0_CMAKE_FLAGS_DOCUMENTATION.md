@@ -2,7 +2,8 @@
 
 **Version:** 2.2.0  
 **Source Repository:** https://github.com/ceres-solver/ceres-solver  
-**Documentation Generated:** From source code analysis  
+**Source Commit:** 85331393dc0dff09f6fb9903ab0c4bfa3e134b01  
+**Documentation Generated:** From source code analysis (recursive scan of `cmake/` and top-level build scripts)  
 **CMake Minimum Version:** 3.16...3.27
 
 ---
@@ -143,6 +144,7 @@
   -DSUITESPARSE=ON
   ```
 - **Note:** Requires SuiteSparse 4.5.6+ with CHOLMOD and SPQR components. Optional METIS component for partitioning.
+- **Finder override:** Set `SuiteSparse_NO_CMAKE=ON` to force Ceres to use its bundled `FindSuiteSparse.cmake` when packaging or cross-compiling.
 - **Dependencies:** Automatically searches for SuiteSparse via `find_package(SuiteSparse)`.
 
 ### `EIGENSPARSE`
@@ -277,6 +279,17 @@
   ```
 - **Note:** Useful for debugging. May significantly slow down builds.
 
+### `COMMON_SANITIZER_COMPILE_OPTIONS`
+- **Type:** `CACHE STRING`
+- **Default:** `"-g -fno-omit-frame-pointer -fno-optimize-sibling-calls"`
+- **Defined in:** `cmake/EnableSanitizer.cmake`
+- **Description:** Additional compiler flags automatically appended whenever any sanitizer is enabled via `SANITIZERS`.
+- **Usage:**
+  ```cmake
+  -DCOMMON_SANITIZER_COMPILE_OPTIONS="-g -fno-omit-frame-pointer"
+  ```
+- **Note:** Override when the host toolchain mandates different instrumentation flags (e.g., cross-compiling or using non-Clang sanitizers).
+
 ### `CMAKE_POSITION_INDEPENDENT_CODE`
 - **Type:** `BOOL`
 - **Default:** `ON` (hardcoded in Ceres)
@@ -339,6 +352,14 @@
   ```
 - **Note:** Android only. Prevents +200MB library file sizes.
 
+### iOS Toolchain Cache Variables (from `cmake/iOS.cmake`)
+- `IOS_PLATFORM` (`CACHE STRING`, defaults to `OS` unless derived from `CMAKE_OSX_ARCHITECTURES`): Selects `OS`, `SIMULATOR`, or `SIMULATOR64` and drives SDK/architecture detection.
+- `IOS_DEPLOYMENT_TARGET` (`CACHE STRING`, defaults to the detected SDK version): Minimum iOS version. Values `>=11.0` automatically drop 32-bit architectures.
+- `CMAKE_OSX_ARCHITECTURES` (`CACHE STRING`): Populated with the architecture list resolved from `IOS_PLATFORM` (e.g., `armv7;armv7s;arm64` or `x86_64`).
+- `CMAKE_OSX_DEPLOYMENT_TARGET` (`CACHE STRING`, forced empty): Must remain empty so the toolchain injects min-version flags explicitly.
+- `CMAKE_FIND_ROOT_PATH` (`CACHE STRING`): Forced to `${CMAKE_IOS_DEVELOPER_ROOT};${CMAKE_OSX_SYSROOT};${CMAKE_PREFIX_PATH}` to keep dependency discovery inside the chosen SDK.
+- **Automatic toggles when `IOS=TRUE`:** Ceres flips `MINIGLOG=ON`, `LAPACK=OFF`, and `BUILD_EXAMPLES=OFF` because the iOS toolchain cannot rely on system glog/SuiteSparse or sample binaries.
+
 ---
 
 ## Standard CMake Variables
@@ -381,8 +402,10 @@ Ceres uses standard CMake `find_package()` for dependencies. These variables can
 
 ### glog (if `MINIGLOG=OFF`)
 - `glog_DIR`: Directory containing `glogConfig.cmake` (CMake-built glog)
-- `GLOG_INCLUDE_DIR`: Include directory for glog
-- `GLOG_LIBRARY`: Library file for glog
+- `GLOG_PREFER_EXPORTED_GLOG_CMAKE_CONFIGURATION`: Defaults to `TRUE` unless include/library hints are provided; set `OFF` to force the legacy finder path.
+- `GLOG_INCLUDE_DIR_HINTS` / `GLOG_LIBRARY_DIR_HINTS`: Semicolon-separated hint lists searched before system defaults.
+- `GLOG_INCLUDE_DIR`: Include directory for glog (overrides discovery when set).
+- `GLOG_LIBRARY`: Library file for glog (overrides discovery when set).
 
 ### gflags (if `GFLAGS=ON`)
 - `gflags_DIR`: Directory containing `gflagsConfig.cmake`
@@ -394,12 +417,16 @@ Ceres uses standard CMake `find_package()` for dependencies. These variables can
 
 ### SuiteSparse (if `SUITESPARSE=ON`)
 - `SuiteSparse_DIR`: Directory containing `SuiteSparseConfig.cmake`
+- `SuiteSparse_NO_CMAKE`: Force use of the bundled `FindSuiteSparse.cmake` instead of an installed package config.
+- `SuiteSparse_FIND_COMPONENTS`: Override component list (`AMD;CAMD;CCOLAMD;CHOLMOD;COLAMD;SPQR;Config` plus implicit dependencies).
+- `SuiteSparse_<component>_INCLUDE_DIR` / `SuiteSparse_<component>_LIBRARY`: Cache entries emitted per component; set manually when packaging or cross-compiling.
 - **Required Version:** 4.5.6+
 - **Required Components:** CHOLMOD, SPQR
 - **Optional Components:** Partition (METIS)
 
 ### METIS (if `EIGENMETIS=ON`)
 - `METIS_DIR`: Directory containing `METISConfig.cmake`
+- `METIS_LIBRARY` / `METIS_LIBRARY_DEBUG`: Cache FILEPATH overrides for release/debug libraries used by the bundled finder.
 
 ### CUDA (if `USE_CUDA=ON`)
 - `CUDAToolkit_ROOT`: Root directory of CUDA toolkit (CMake 3.17+)
@@ -408,6 +435,14 @@ Ceres uses standard CMake `find_package()` for dependencies. These variables can
 ### benchmark (if `BUILD_BENCHMARKS=ON`)
 - `benchmark_DIR`: Directory containing `benchmarkConfig.cmake`
 - **Required Version:** 1.3+
+
+### Accelerate Sparse (if `ACCELERATESPARSE=ON` on Apple platforms)
+- `AccelerateSparse_INCLUDE_DIR`: Override include discovery for the Accelerate framework (`Accelerate.h`).
+- `AccelerateSparse_LIBRARY`: Override the framework/library path used for linking.
+
+### Sphinx (if `BUILD_DOCUMENTATION=ON`)
+- `Sphinx_BUILD_EXECUTABLE`: Path to `sphinx-build`; set when it is outside `PATH`.
+- `Sphinx_FIND_COMPONENTS`: Add entries such as `sphinx_rtd_theme` to enforce theme availability checks.
 
 ---
 
@@ -502,6 +537,7 @@ cmake .. \
 6. **Build Performance:** Debug builds have terrible performance. Always use `Release` builds for production.
 
 7. **iOS/macOS:** `ENABLE_BITCODE` and Eigen optimizations are mutually exclusive on Clang.
+8. **Finder Overrides:** Use the `*_DIR`, `*_INCLUDE_DIR`, and `*_LIBRARY` cache variables (or their hint counterparts) to direct CMake toward staged dependencies when cross-compiling or packaging.
 
 ---
 
@@ -531,6 +567,6 @@ The following flags are **NOT** supported by Ceres Solver 2.2.0:
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** Generated from Ceres Solver 2.2.0 source code
+**Document Version:** 1.1  
+**Last Updated:** 2025-11-09 (full repository rescan)
 

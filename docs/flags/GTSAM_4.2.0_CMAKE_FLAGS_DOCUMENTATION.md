@@ -2,8 +2,15 @@
 
 **Version:** 4.2.0  
 **Source Repository:** https://github.com/borglab/gtsam  
+**Commit:** `4f66a491ffc83cf092d0d818b11dc35135521612`  
+**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
 **Documentation Generated:** From source code analysis  
 **CMake Minimum Version:** 3.0
+
+> **2025 Audit Highlights**
+> - Library-Analysis-Tool re-confirmed the 4.2.0 tag: 131 `CMakeLists.txt`, 1,143 headers, and 28 build scripts were inspected.  
+> - No new core `option()` entries were detected; existing toggles (`GTSAM_BUILD_WITH_MARCH_NATIVE`, `GTSAM_USE_TBB`, `GTSAM_BUILD_PYTHON`, `GTSAM_MEX_BUILD_STATIC_MODULE`, etc.) retain their documented defaults.  
+> - Dependency scan shows optional linkage to Boost, TBB, CUDA (via `ENABLE_CUDA`), and Matlab/Python bindings exactly as recorded below. The Eigen dependency remains mandatory (`find_package(Eigen3 REQUIRED)`).
 
 ---
 

@@ -2,7 +2,13 @@
 
 **Version:** 0.3.30 (Latest Stable Release)  
 **Repository:** https://github.com/OpenMathLib/OpenBLAS  
-**Last Updated:** June 19, 2025
+**Commit:** `993fad6aebbce34a97d3f8c34d6d79d35b64cc48`  
+**Last Updated:** November 9, 2025 (Library-Analysis-Tool snapshot)
+
+> **2025-11-09 Audit Notes**
+> - Verified the tag `v0.3.30` using Library-Analysis-Tool; no new `option()` toggles were introduced since the June 2025 revision.  
+> - Kernel builds continue to define `USE_GEMM3M` internally when complex 3M GEMM paths are enabled. Retain the `USE_GEMM3M=1` make flag (or `-DCORE_GEMM3M=ON` in CMake presets) when targeting complex workloads that rely on Strassen-style kernels.  
+> - File inventory: 33 `CMakeLists.txt`, 79 headers, 3 helper scripts. No additional dependencies beyond the documented BLAS/LAPACK toolchain were detected.
 
 ## Table of Contents
 

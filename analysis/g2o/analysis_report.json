@@ -1,0 +1,31 @@
+{
+  "analysis_metadata": {
+    "generated_at_utc": "2025-11-09T08:55:36Z",
+    "repository": "https://github.com/RainerKuemmerle/g2o.git",
+    "analyzed_ref": "master",
+    "head_commit": "faca4c3bb21d106cc6b3c2ab08992a91956699e2",
+    "library_id": "g2o",
+    "library_config_version": "",
+    "detected_version": "set(G2O_LIB_VERSION   "0.2.0" CACHE STRING "g2o library version")",
+    "mode": "full"
+  },
+  "file_statistics": {
+    "cmake_files": 73,
+    "headers": 294,
+    "scripts": 3,
+    "configure_scripts": 0,
+    "makefiles": 2
+  },
+  "artefacts": {
+    "report_markdown": "analysis_report.md",
+    "cmake_flags": "cmake_flags.md",
+    "cpp_defines": "cpp_defines.md",
+    "dependencies": "dependencies.md",
+    "documentation": "flags_documentation.md"
+  },
+  "next_steps": [
+    "Review generated Markdown files",
+    "Feed documentation into Advanced Library Documentation prompt",
+    "Trigger downstream build/test automation as needed"
+  ]
+}
