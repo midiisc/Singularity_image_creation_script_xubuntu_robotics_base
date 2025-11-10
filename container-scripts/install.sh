@@ -171,6 +171,14 @@ install_file() {
         # Don't fail installation if chmod fails, but warn
     fi
     
+    # Make Python scripts executable if they're in /opt/scripts/ or /usr/local/bin/
+    # (Python scripts are installed with 0644 but need to be executable)
+    if [[ "${file_type}" == "python-scripts" ]] && [[ "${target_file}" =~ ^/(opt/scripts|usr/local/bin)/ ]]; then
+        if ! chmod +x "${target_file}"; then
+            echo -e "${YELLOW}Warning: Failed to make Python script executable: ${target_file}${NC}" >&2
+        fi
+    fi
+    
     echo -e "${GREEN}✓ Installed: ${source_file} -> ${target_file} (${permissions})${NC}"
     return 0
 }

@@ -16,9 +16,11 @@ from enum import Enum
 class FileType(Enum):
     """File type categories."""
     SHELL_SCRIPT = "shell-scripts"
+    PYTHON_SCRIPT = "python-scripts"
     JSON_CONFIG = "json-configs"
     CONFIG_FILE = "config-files"
     LAYOUT_CONFIG = "layout-configs"
+    DOCS = "docs"
     OTHER = "other"
 
 
@@ -137,6 +139,18 @@ class ComprehensiveHeredocExtractor:
         """Detect file type from target path and content."""
         target_lower = target_path.lower()
         content_start = content.strip()[:200]
+        content_lower = content_start.lower()
+        
+        # Python scripts - check shebang first
+        if content.strip().startswith('#!'):
+            if 'python' in content[:50]:
+                return FileType.PYTHON_SCRIPT
+            if 'bash' in content[:50] or 'sh' in content[:50]:
+                return FileType.SHELL_SCRIPT
+        
+        # Python scripts by target path
+        if target_lower.endswith('.py'):
+            return FileType.PYTHON_SCRIPT
         
         # JSON files
         if target_lower.endswith(('.json', '.json5')):
@@ -147,20 +161,36 @@ class ComprehensiveHeredocExtractor:
                 if not any(re.search(pattern, content_start) for pattern in [r'set -[euo]', r'\[\[ ', r'if \[ ', r'#!/']):
                     return FileType.JSON_CONFIG
         
+        # APT preferences files
+        if '/etc/apt/preferences.d/' in target_path:
+            # Check if it's a preferences file (Package: Pin: Pin-Priority:)
+            if re.search(r'Package:\s*\S+|Pin:\s*\S+|Pin-Priority:\s*-?\d+', content_start, re.IGNORECASE):
+                return FileType.CONFIG_FILE
+        
+        # APT config files
+        if '/etc/apt/apt.conf.d/' in target_path or '/etc/dpkg/dpkg.cfg.d/' in target_path:
+            return FileType.CONFIG_FILE
+        
+        # Environment config files
+        if target_path.endswith('/etc/environment') or 'LD_LIBRARY_PATH' in content_start or 'PKG_CONFIG_PATH' in content_start:
+            return FileType.CONFIG_FILE
+        
+        # Documentation files
+        if '/usr/local/share/doc/' in target_path or '/usr/share/doc/' in target_path:
+            if 'guide' in target_lower or 'readme' in target_lower or '===' in content_start:
+                return FileType.DOCS
+        
         # Config files
-        if target_lower.endswith(('.conf', '.pc', '.kdl', '.ron', '.yaml', '.yml')):
+        if target_lower.endswith(('.conf', '.pc', '.kdl', '.ron', '.yaml', '.yml', '.pref')):
             return FileType.CONFIG_FILE
         
         # Layout configs (Zellij, Tmux layouts)
         if 'layout' in target_lower or 'LAYOUT' in content[:100]:
             return FileType.LAYOUT_CONFIG
         
-        # Shell scripts (default for .sh files and scripts with shebang)
+        # Shell scripts (default for .sh files)
         if target_lower.endswith(('.sh', '.bash')):
             return FileType.SHELL_SCRIPT
-        if content.strip().startswith('#!'):
-            if 'bash' in content[:50] or 'sh' in content[:50]:
-                return FileType.SHELL_SCRIPT
         
         # Check for shell script patterns
         shell_patterns = [
@@ -175,6 +205,17 @@ class ComprehensiveHeredocExtractor:
         for pattern in shell_patterns:
             if re.search(pattern, content):
                 return FileType.SHELL_SCRIPT
+        
+        # Check for Python patterns (import statements, class definitions)
+        python_patterns = [
+            r'^import\s+\w+',
+            r'^from\s+\w+\s+import',
+            r'^class\s+\w+',
+            r'^def\s+\w+\s*\(',
+        ]
+        for pattern in python_patterns:
+            if re.search(pattern, content_start, re.MULTILINE):
+                return FileType.PYTHON_SCRIPT
         
         return FileType.OTHER
     
@@ -229,7 +270,7 @@ class ComprehensiveHeredocExtractor:
             name_part = base_name.replace('_', '-')
         
         # Determine extension: use existing extension if valid, otherwise get from file type
-        if existing_ext and existing_ext in ['sh', 'bash', 'json', 'json5', 'conf', 'kdl', 'ron', 'yaml', 'yml', 'pc', 'cmake', 'toml', 'pre', 'desktop', 'xml', 'txt']:
+        if existing_ext and existing_ext in ['sh', 'bash', 'py', 'json', 'json5', 'conf', 'kdl', 'ron', 'yaml', 'yml', 'pc', 'cmake', 'toml', 'pref', 'desktop', 'xml', 'txt']:
             ext = existing_ext
         else:
             ext = self._get_extension(target_path, file_type)
@@ -250,18 +291,25 @@ class ComprehensiveHeredocExtractor:
         if path_obj.suffix:
             ext = path_obj.suffix[1:]  # Remove leading dot
             # Validate extension is reasonable
-            if ext in ['sh', 'bash', 'json', 'json5', 'conf', 'kdl', 'ron', 'yaml', 'yml', 'pc', 'cmake', 'toml', 'pre', 'desktop', 'xml']:
+            if ext in ['sh', 'bash', 'py', 'json', 'json5', 'conf', 'kdl', 'ron', 'yaml', 'yml', 'pc', 'cmake', 'toml', 'pref', 'desktop', 'xml', 'txt']:
                 return ext
         
         # Fall back to file type-based extension
         if file_type == FileType.SHELL_SCRIPT:
             return 'sh'
+        if file_type == FileType.PYTHON_SCRIPT:
+            return 'py'
         if file_type == FileType.JSON_CONFIG:
             return 'json'
         if file_type == FileType.CONFIG_FILE:
+            # Check if it's an APT preferences file
+            if '/etc/apt/preferences.d/' in target_path:
+                return 'pref'
             return 'conf'
         if file_type == FileType.LAYOUT_CONFIG:
             return 'kdl'
+        if file_type == FileType.DOCS:
+            return 'txt'
         
         # Last resort: check if base name suggests an extension
         base_name = path_obj.name.lower()
@@ -271,6 +319,8 @@ class ComprehensiveHeredocExtractor:
             return 'xml'
         if '.desktop' in base_name:
             return 'desktop'
+        if '.pref' in base_name or 'preferences' in base_name or 'protect' in base_name:
+            return 'pref'
         
         return 'txt'  # Default fallback
     

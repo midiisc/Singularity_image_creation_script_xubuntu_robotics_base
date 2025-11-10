@@ -28,7 +28,7 @@ class Provider(str):
     ANTHROPIC = "anthropic"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-CODE_MANUAL_PATH = REPO_ROOT / "docs" / "Code_check_prompt_manual.txt"
+CODE_MANUAL_PATH = REPO_ROOT / "prompts" / "Code_check_prompt_manual.txt"
 CACHE_DIR = REPO_ROOT / ".git" / ".ai-review-cache"
 
 ALLOWED_SUFFIXES = {
