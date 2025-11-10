@@ -1,0 +1,5 @@
+# Prevent APT from installing system OpenBLAS packages
+# Our custom-compiled OpenBLAS should be used instead
+Package: libopenblas-dev libopenblas64-dev libopenblas0-pthread libopenblas0-serial libopenblas0
+Pin: release *
+Pin-Priority: -1

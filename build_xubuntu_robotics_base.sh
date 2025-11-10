@@ -2491,6 +2491,9 @@ From: ${BASE_IMAGE}
     container_cache/debs /container_cache/debs
     xubuntu_robotics_base_post_ULTRA_CLEANED.sh /container_post_script.sh
     config.sh /container_config.sh
+    # MKL/CUDA verification scripts for HPC validation (from container-scripts)
+    container-scripts/verification-tools/verify-mkl-env.sh /usr/local/bin/verify-mkl-env.sh
+    container-scripts/verification-tools/verify-cuda-mkl-linkage.sh /usr/local/bin/verify-cuda-mkl-linkage.sh
 
 # === %labels Section ===
 %labels
@@ -2737,6 +2740,9 @@ From: ${BASE_IMAGE}
     # Make the script executable and run it
     chmod +x /container_post_script.sh
     /container_post_script.sh
+    
+    # Ensure verification scripts are executable
+    chmod +x /usr/local/bin/verify-mkl-env.sh /usr/local/bin/verify-cuda-mkl-linkage.sh 2>/dev/null || true
 
 # === %test Section ===
 %test

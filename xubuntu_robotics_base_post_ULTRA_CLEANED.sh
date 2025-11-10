@@ -3416,7 +3416,7 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
       NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
       
       if [ -n "${NVIDIA_FILES:-}" ]; then
-          echo "${NVIDIA_FILES}" | head -20 | while read -r deb_file; do
+          echo "${NVIDIA_FILES}" | while read -r deb_file; do
               if [ -f "${deb_file:-}" ]; then
                   cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
               fi
@@ -4512,7 +4512,14 @@ PKGS_LINALG="libeigen3-dev liblapack-dev liblapacke-dev libblas-dev gfortran"
 # CPU parallelism libraries
 PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
-PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev"
+# NOTE: SuiteSparse dependencies (built in Block 6.12C):
+#   - libgmp-dev, libmpfr-dev: Required by SPEX (GNU GMP v6.1.2+, MPFR v4.0.2+)
+#   - libnuma-dev: Required for NUMA-aware memory management in CUDA builds
+#   - libpthread-stubs0-dev: Required for pthread compatibility
+#   - libmetis-dev: Required for graph partitioning (CHOLMOD)
+#   - CUDA libraries (libcublas, libcusparse, libcusolver, libcurand): Provided by CUDA toolkit (Block 13)
+#   - libnpp: Installed via ensure_cuda_companion_package in Block 13
+PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev libgmp-dev libmpfr-dev libnuma-dev libpthread-stubs0-dev"
 # Core dependencies
 # NOTE: Using Ubuntu's libgoogle-glog-dev (0.6.0-2.1build1 with compatibility patches for COLMAP)
 # NOTE: apt-get install will upgrade if different version exists, or skip if already correct version
@@ -5186,12 +5193,17 @@ if ! clone_with_retry "https://github.com/cvg/pyceres.git" "/tmp/pyceres" "v${PY
 else
     cd /tmp/pyceres || exit 1
   echo "Building PyCeres from source (linking against compiled Ceres)..."
-
+  
+  # MKL note: PyCeres must inherit MKL/CUDA configuration from compiled Ceres
+  # Pass MKL and CUDA flags to ensure PyCeres bindings use the same Ceres configuration
+  # Reference: docs/MKL_MIGRATION_PLAN.md Phase 4.7
   export SKBUILD_CONFIGURE_OPTIONS="\
 -DWITH_TESTS=OFF \
 -DWITH_BENCHMARKS=OFF \
 -DWITH_PYTEST=OFF \
--DCeres_DIR=/usr/local/lib/cmake/Ceres"
+-DCeres_DIR=/usr/local/lib/cmake/Ceres \
+-DCeres_USE_EIGEN_MKL=ON \
+-DCeres_ENABLE_CUDA=ON"
 
   if python3 -m pip install \
         --no-deps \
@@ -13311,10 +13323,11 @@ fi
 # Outputs: Python packages, conda environments
 printf '%s\n' "${YELLOW}Configuring system-wide environment for Conda...${NC}"
 if [ -d "${MINIFORGE_HOME}/bin" ]; then
-  if cat <<'EOF' >/etc/profile.d/conda.sh; then
+  if cat <<'EOF' >/etc/profile.d/conda.sh
 #!/bin/sh
 # Prepend conda binaries to the PATH
 EOF
+  then
     if chmod +x /etc/profile.d/conda.sh; then
       printf '%s\n' "${GREEN}✓ Conda PATH configured successfully.${NC}"
     else
@@ -14364,10 +14377,7 @@ setup_vnc_config() {
   # Create xstartup script with VirtualGL integration
   # Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
   # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-  if ! cat > "${HOME}/.vnc/xstartup" << 'XSTART'; then
-    echo "Failed to create ${HOME}/.vnc/xstartup" >&2
-    exit 1
-  fi
+  if ! cat > "${HOME}/.vnc/xstartup" << 'XSTART'
 #!/bin/sh
 # Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
 # Official documentation:
@@ -14439,12 +14449,16 @@ fi
 # Start XFCE4
 exec /usr/bin/startxfce4
 XSTART
-
-  if ! chmod +x "${HOME}/.vnc/xstartup"; then
-    echo "Failed to set execute permission on ${HOME}/.vnc/xstartup" >&2
+then
+    if ! chmod +x "${HOME}/.vnc/xstartup"; then
+        echo "Failed to set execute permission on ${HOME}/.vnc/xstartup" >&2
+        exit 1
+    fi
+    echo "✓ VNC configuration created"
+else
+    echo "Failed to create ${HOME}/.vnc/xstartup" >&2
     exit 1
-  fi
-  echo "✓ VNC configuration created"
+fi
 }
 
 # --- Start VNC server ---
@@ -17595,10 +17609,7 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-if ! cat <<'LAYOUT' > "${layout_file}"; then
-    echo "✗ Failed to create Zellij layout file" >&2
-    exit 1
-fi
+if ! cat <<'LAYOUT' > "${layout_file}"
 layout {
     default_tab_template {
         pane size=1 borderless=true {
@@ -17657,6 +17668,12 @@ layout {
     }
 }
 LAYOUT
+then
+    : # File created successfully
+else
+    echo "✗ Failed to create Zellij layout file" >&2
+    exit 1
+fi
 
 if [ ! -s "${layout_file}" ]; then
     echo "✗ Failed to create Zellij layout file" >&2
@@ -18412,10 +18429,7 @@ trap cleanup EXIT INT TERM
 zenoh_start
 
 # Create Zellij layout
-if ! cat <<'LAYOUT' > "${layout_file}"; then
-  echo "✗ Failed to create Zellij Zenoh layout file" >&2
-  exit 1
-fi
+if ! cat <<'LAYOUT' > "${layout_file}"
 layout {
     default_tab_template {
         pane size=1 borderless=true {
@@ -18478,6 +18492,12 @@ layout {
     }
 }
 LAYOUT
+then
+    : # File created successfully
+else
+    echo "✗ Failed to create Zellij Zenoh layout file" >&2
+    exit 1
+fi
 
 
 # Launch Zellij with layout

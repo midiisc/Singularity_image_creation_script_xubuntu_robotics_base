@@ -32,3 +32,6 @@ __pycache__/
 .cursor/.audit-report.txt
 
 RESTORE_TEST_FILES.md
+tmp/
+*.pyc
+__pycache__/
