@@ -276,6 +276,62 @@ When modifying the build:
 3. Update this README if adding new software
 4. Document any new dependencies or requirements
 
+## 🤖 AI Agent Protocols
+
+This repository enforces strict AI agent behavior rules to maintain a clean, efficient workflow.
+
+### ⚠️ Source of Truth
+
+**All rules are centrally defined in `.cursor/rules/*.mdc` files**, which are automatically enforced by Cursor IDE.
+
+- **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Mandatory pre-work verification checklist (READ FIRST)
+- **`.cursor/rules/001-agent-behavior.mdc`** - AI behavior rules (file creation, planning, code review)
+- **`.cursor/rules/002-repository-workflow.mdc`** - Repository workflow rules (git, branches, files)
+
+**These files are the single source of truth and are STRICTLY ENFORCED. To update rules, edit the `.mdc` files directly.**
+
+### Quick Reference
+
+**Behavior Rules** (See `.cursor/rules/001-agent-behavior.mdc`):
+- No automatic file creation for summaries/plans/documentation
+- Inline responses only (files only when explicitly requested)
+- First plan, then execute approach
+- Chunked code review protocol
+
+**Workflow Rules** (See `.cursor/rules/002-repository-workflow.mdc`):
+- Beta branch only (never create new branches)
+- Core files only (strict file editing restrictions)
+- No git operations without explicit user approval
+- Mandatory verification checklist before completing work
+
+### Configuration
+
+**Repository-Level Rules**:
+- Located in `.cursor/rules/*.mdc` files (source of truth)
+- Applied automatically to all AI agents working in this repository
+- Rules are enforced by Cursor IDE
+
+**Global Settings**:
+- Configure global rules in Cursor Settings → Rules → User Rules
+- See `docs/GLOBAL_CURSOR_SETTINGS.md` for setup instructions
+- Global rules apply to all repositories
+- Repository rules can override global rules for specific behavior
+
+### Documentation
+
+For more information:
+- **Rule Files (Source of Truth)**: `.cursor/rules/*.mdc` (automatically enforced by Cursor IDE)
+- **Global Settings**: `docs/GLOBAL_CURSOR_SETTINGS.md` (setup instructions for all repositories)
+
+### Requesting Files
+
+To get the AI to create a file, use explicit phrases:
+- "create a file named X"
+- "write this to a file"
+- "save as filename.ext"
+- "export to file"
+- "generate documentation file"
+
 ## 📖 Documentation
 
 For detailed usage instructions:

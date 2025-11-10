@@ -21,30 +21,54 @@
 - Handles package conflicts gracefully
 **Location**: `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` lines 3079-3097
 
-#### 3. Branch Management System
-**Implementation**: Strict two-branch workflow
+#### 3. Centralized Rules System with Strict Enforcement
+**Implementation**: Comprehensive rules system with automatic enforcement and mandatory verification
 **Details**:
-- Beta branch for all development work
-- Main branch only when explicitly instructed
-- No new branches unless requested
-- Agent instructions for compliance
-**Location**: `AGENT_INSTRUCTIONS.md`
+- **Mandatory Pre-Work**: `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Mandatory verification checklist (READ FIRST)
+- **Behavior Rules**: `.cursor/rules/001-agent-behavior.mdc` - File creation, planning, code review protocols
+- **Workflow Rules**: `.cursor/rules/002-repository-workflow.mdc` - Git workflow, branch management, file editing
+- **Automatic Enforcement**: Cursor IDE automatically loads and enforces rules (`alwaysApply: true`)
+- **Single Source of Truth**: All rules centralized in `.mdc` files (no duplication)
+- **Mandatory Verification**: Pre-work checklists required before any action
+- **Strict Language**: Rules use "YOU MUST", "STRICTLY ENFORCED", "ABSOLUTELY MANDATORY" language
+- **Beta branch**: Default working branch for all development
+- **Main branch**: Only when explicitly instructed
+- **No new branches**: Forbidden unless explicitly requested
+- **Git operations**: Require explicit user approval (never automatic)
+- **Violation Protocol**: Stop, explain, ask permission, wait for confirmation
+**Location**: `.cursor/rules/*.mdc` files (automatically enforced by Cursor IDE, processed alphabetically)
 
-#### 4. Repository Cleanup
-**Implementation**: Removed all non-functional files
+#### 4. Repository Cleanup & Minimal Structure
+**Implementation**: Removed all non-functional and duplicate files
 **Details**:
 - Deleted 9 patch files
-- Kept only 7 core functional files
-- Maintained minimal repository structure
+- Removed duplicate documentation (AGENT_INSTRUCTIONS.md, redundant READMEs)
+- Centralized all rules in `.cursor/rules/*.mdc` files
+- Kept only essential functional files and minimal documentation
+- Maintained single source of truth for all rules
 **Status**: Complete
 
-#### 5. Spec Kit Documentation
-**Implementation**: Comprehensive documentation system
+#### 5. Pre-Commit Audit System
+**Implementation**: Comprehensive shell script audit system
 **Details**:
-- Constitution, specify, clarify, plan, tasks, analyze, implement
-- Build specifications and software versions
-- Hardware requirements and configuration templates
-**Location**: `spec_kit/` directory
+- **10 check categories**: Syntax, ShellCheck, variable expansion, security, Cursor AI analysis
+- **Automatic enforcement**: Runs on every commit via git hook
+- **Cursor AI integration**: 8-pass semantic audit with automatic rules generation
+- **Configuration**: `.cursor/audit-config.json` for customization
+- **Reports**: Generated audit reports and prompt files for review
+**Location**: `.cursor/pre-commit-audit.sh`, `.git/hooks/pre-commit`
+**Status**: Complete
+
+#### 6. Documentation System
+**Implementation**: Comprehensive, centralized documentation system
+**Details**:
+- **Spec Kit**: Constitution, specify, clarify, plan, tasks, analyze, implement
+- **Build Specifications**: Software versions, hardware requirements, configuration templates
+- **Rules Documentation**: `docs/GLOBAL_CURSOR_SETTINGS.md` for global settings
+- **Repository README**: Quick reference and overview
+- **Audit Documentation**: `.cursor/README.md`, `.cursor/setup-audit-for-other-projects.md`
+- **Single Source of Truth**: All rules in `.cursor/rules/*.mdc`, all documentation references these
+**Location**: `spec_kit/`, `docs/`, `.cursor/`, `README.md`
 
 ### Implementation Details
 
@@ -54,14 +78,48 @@
    - Dpkg status cleanup (lines 3079-3097)
    - Error handling improvements throughout
 
-2. **`AGENT_INSTRUCTIONS.md`**
-   - Complete workflow instructions
-   - Branch management rules
-   - File editing guidelines
-   - Verification checklist
+2. **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`**
+   - Mandatory pre-work verification checklist (READ FIRST)
+   - Rule awareness verification
+   - Branch verification checklist
+   - File operations verification
+   - Git operations verification
+   - Workflow principles verification
+   - Automatically enforced by Cursor IDE (processed first)
 
-3. **`spec_kit/` directory**
-   - 7 documentation files
+3. **`.cursor/rules/001-agent-behavior.mdc`**
+   - AI behavior rules (source of truth)
+   - File creation protocols (strictly enforced)
+   - Planning approach (first plan, then execute, inline only)
+   - Code review protocol (chunked reviews, inline only)
+   - Mandatory verification checklist
+   - Violation consequences
+   - Automatically enforced by Cursor IDE
+
+4. **`.cursor/rules/002-repository-workflow.mdc`**
+   - Workflow rules (source of truth)
+   - Git workflow and branch management (strictly enforced)
+   - File editing restrictions (core files only)
+   - Commit process (requires user approval, never automatic)
+   - Mandatory verification checklist
+   - Violation consequences
+   - Automatically enforced by Cursor IDE
+
+5. **`.cursor/pre-commit-audit.sh`**
+   - Comprehensive shell script audit
+   - 10 check categories
+   - Cursor AI integration
+   - Automatic report generation
+
+6. **`docs/GLOBAL_CURSOR_SETTINGS.md`**
+   - Global Cursor IDE settings guide
+   - Setup instructions for all repositories
+   - Rules creation and maintenance guidelines
+   - Troubleshooting and verification
+
+7. **`spec_kit/` directory**
+   - Comprehensive documentation system
+   - Constitution, specifications, plans, tasks
    - Configuration templates
    - Complete specifications
 
@@ -85,11 +143,12 @@
 #### For Bug Fixes
 1. **Clarify**: Understand the problem
 2. **Analyze**: Identify root cause
-3. **Plan**: Create fix strategy
-4. **Implement**: Apply the fix
+3. **Plan**: Create fix strategy (present inline, not as file)
+4. **Implement**: Apply the fix to core files only
 5. **Test**: Verify fix works
-6. **Document**: Update documentation
-7. **Commit**: Push to beta branch
+6. **Audit**: Run pre-commit audit (automatic)
+7. **Document**: Update documentation if needed
+8. **Commit**: Get user approval, then push to beta branch
 
 ### Implementation Standards
 

@@ -17,13 +17,19 @@
 ### 3. Branch Management
 **Problem**: New branches created automatically by agents
 **Root Cause**: No clear workflow instructions for agents
-**Solution**: Created strict agent instructions and workflow
+**Solution**: Created centralized rules system (`.cursor/rules/*.mdc`) automatically enforced by Cursor IDE
 **Status**: ✅ Resolved
 
 ### 4. Repository Bloat
 **Problem**: Multiple patch files and non-functional files
 **Root Cause**: Temporary fixes created as separate files
-**Solution**: Integrated all fixes into core files, removed patch files
+**Solution**: Integrated all fixes into core files, removed patch files, centralized documentation
+**Status**: ✅ Resolved
+
+### 5. Rules Duplication
+**Problem**: Rules duplicated across multiple files (AGENT_INSTRUCTIONS.md, README, etc.)
+**Root Cause**: No single source of truth for rules
+**Solution**: Centralized all rules in `.cursor/rules/*.mdc` files, removed duplicate documentation
 **Status**: ✅ Resolved
 
 ## Current Clarifications
@@ -46,11 +52,18 @@
 - **Error Handling**: Non-fatal failures, continues build
 - **Verification**: Checks dpkg database integrity
 
-### Agent Instructions
-- **Mandatory**: Read AGENT_INSTRUCTIONS.md before any work
-- **Verification**: Check branch, files, and commit process
-- **Forbidden**: Creating new branches, adding non-core files
-- **Required**: Work on beta branch, edit core files only
+### Agent Instructions & Rules System
+- **Source of Truth**: `.cursor/rules/*.mdc` files (automatically enforced by Cursor IDE)
+  - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Mandatory pre-work verification checklist (READ FIRST)
+  - `.cursor/rules/001-agent-behavior.mdc` - AI behavior rules (file creation, planning, code review)
+  - `.cursor/rules/002-repository-workflow.mdc` - Workflow rules (git, branches, files, commits)
+- **Automatic Enforcement**: Rules are automatically loaded and enforced by Cursor IDE (`alwaysApply: true`)
+- **Mandatory**: All AI agents MUST follow rules (no manual configuration needed, strictly enforced)
+- **Verification**: Check branch, files, and commit process before completing work (mandatory checklist)
+- **Forbidden**: Creating new branches, adding non-core files, git operations without approval
+- **Required**: Work on beta branch, edit core files only, get explicit user approval for git operations
+- **Strict Adherence**: Rules are STRICTLY ENFORCED with mandatory verification checklists
+- **Documentation**: See `docs/GLOBAL_CURSOR_SETTINGS.md` for global settings, `README.md` for quick reference
 
 ## Pending Clarifications
 - None currently identified

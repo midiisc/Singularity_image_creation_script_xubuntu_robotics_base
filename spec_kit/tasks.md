@@ -5,9 +5,12 @@
 ### Repository Management
 - [x] Clean up unnecessary branches (cursor/* branches)
 - [x] Establish two-branch workflow (main/beta)
-- [x] Create agent instructions
+- [x] Create centralized rules system (`.cursor/rules/*.mdc`)
 - [x] Remove non-functional patch files
+- [x] Remove duplicate documentation files
 - [x] Create spec kit documentation structure
+- [x] Implement pre-commit audit system
+- [x] Centralize all rules (single source of truth)
 
 ### Build System Fixes
 - [x] Fix OpenCV APT protection mechanism
@@ -28,7 +31,10 @@
 - [x] Software versions
 - [x] Hardware requirements
 - [x] Configuration templates
-- [x] Agent workflow instructions
+- [x] Centralized rules system documentation
+- [x] Global Cursor settings documentation
+- [x] Pre-commit audit documentation
+- [x] Updated spec kit files
 
 ## Current Tasks (In Progress)
 - [ ] User testing and validation

@@ -3098,6 +3098,17 @@ fi
 CUDA_INSTALL_PERFORMED=false
 if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   echo "[INFO] Proceeding with CUDA/cuDNN installation via APT..."
+  
+  # CRITICAL: Configure APT cache options to ensure packages are cached in /container_cache/apt/archives
+  # This ensures packages are preserved even if build fails later
+  APT_CACHE_OPTS="-o Dir::Cache::Archives=${CONTAINER_APT_CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
+  
+  # Verify APT cache directory exists and is accessible
+  mkdir -p "${CONTAINER_APT_CACHE}" || {
+      echo "ERROR: Failed to create APT cache directory: ${CONTAINER_APT_CACHE}"
+      exit 1
+  }
+  
   if ! ensure_cuda_repository_configured; then
     echo "✗ Failed to configure NVIDIA repository keyring. Aborting GPU library install."
     export PHASE2_STATUS="FAIL"
@@ -3105,7 +3116,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   fi
 
   # Update package list to ensure CUDA repository metadata is available
-  apt-get update
+  # Use APT cache configuration to ensure all operations use the persistent cache
+  apt-get ${APT_CACHE_OPTS} update
 
   # Determine the optimal CUDA package set available in Ubuntu 24.04
   CUDA_VERSION_PREFERRED="${CUDA_VERSION:-12.6}"
@@ -3268,11 +3280,20 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   CUDA_CUDNN_PACKAGE="${CUDA_CUDNN_PACKAGE:-libcudnn9-cuda-${CUDA_MAJOR}}"
   CUDA_CUDNN_DEV_PACKAGE="${CUDA_CUDNN_DEV_PACKAGE:-libcudnn9-dev-cuda-${CUDA_MAJOR}}"
 
+  # Check for cached NVIDIA packages before downloading
+  echo "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
+  CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+  if [ "${CACHED_NVIDIA_PKGS}" -gt 0 ]; then
+      echo "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - will reuse if available"
+  else
+      echo "  ℹ No cached NVIDIA packages found - will download fresh"
+  fi
+
   # Try to install specific version if available, otherwise fall back to latest
   CUDNN_INSTALLED=false
   if [ "${CUDNN_VERSION_AVAILABLE:-}" = "true" ]; then
       echo "Installing cuDNN version ${CUDNN_VER}..."
-      if apt-get install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee /tmp/cudnn_install.log; then
+      if apt-get ${APT_CACHE_OPTS} install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee /tmp/cudnn_install.log; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
               echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
@@ -3284,7 +3305,7 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
       echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
       echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
-      if apt-get install -y --no-install-recommends "${CUDA_CUDNN_PACKAGE}" "${CUDA_CUDNN_DEV_PACKAGE}" "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee -a /tmp/cudnn_install.log; then
+      if apt-get ${APT_CACHE_OPTS} install -y --no-install-recommends "${CUDA_CUDNN_PACKAGE}" "${CUDA_CUDNN_DEV_PACKAGE}" "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee -a /tmp/cudnn_install.log; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
               # Detect installed version
@@ -3398,56 +3419,60 @@ fi
 
 debug_glibc "After installing NVIDIA Cuda Toolkit"
 
-#--- Sub-block 13.7: IMMEDIATE cache sync for NVIDIA packages ---
-# Critical: Preserve large NVIDIA packages (~4GB) immediately to survive build failures
-# Purpose: Sync NVIDIA .deb files from /var/cache/apt/archives to container cache NOW
-# Rationale: NVIDIA packages are massive; if build fails later, we don't want to re-download
+#--- Sub-block 13.7: Verify NVIDIA packages are cached correctly ---
+# Critical: Verify NVIDIA packages are in the persistent cache location
+# Purpose: Confirm packages are in /container_cache/apt/archives for future builds
+# Rationale: NVIDIA packages are massive; we need to verify they're cached correctly
 # Dependencies: CONTAINER_APT_CACHE (configured in Block 6.12)
-# Outputs: NVIDIA packages preserved in persistent cache
+# Outputs: Verification that NVIDIA packages are cached
 if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
-  echo "==> IMMEDIATE CACHE SYNC: Preserving NVIDIA packages (~4GB)..."
-  echo "[INFO] This intermediate sync ensures NVIDIA packages are saved even if build fails later"
+  echo "==> VERIFYING NVIDIA PACKAGE CACHE: Checking cached packages..."
+  echo "[INFO] Packages should be in ${CONTAINER_APT_CACHE} (configured APT cache directory)"
 
-  # Count packages before sync
-  NVIDIA_PKG_COUNT_BEFORE=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
-  CACHE_SIZE_BEFORE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+  # Count packages in the configured APT cache directory
+  NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+  CACHE_SIZE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
 
-  echo "[BEFORE SYNC] Found ${NVIDIA_PKG_COUNT_BEFORE} NVIDIA-related packages in /var/cache/apt/archives"
-  echo "[BEFORE SYNC] Container cache size: ${CACHE_SIZE_BEFORE}"
+  echo "[CACHE CHECK] Found ${NVIDIA_PKG_COUNT} NVIDIA-related packages in ${CONTAINER_APT_CACHE}"
+  echo "[CACHE CHECK] Container cache size: ${CACHE_SIZE}"
 
-  # Sync NVIDIA packages immediately
-  if [ -d "/var/cache/apt/archives" ] && [ -d "${CONTAINER_APT_CACHE}" ]; then
-      echo "Copying NVIDIA packages to persistent cache..."
-      
-      # Copy all NVIDIA-related packages (with proper error handling)
-      NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
-      
-      if [ -n "${NVIDIA_FILES:-}" ]; then
-          echo "${NVIDIA_FILES}" | while read -r deb_file; do
-              if [ -f "${deb_file:-}" ]; then
-                  cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
-              fi
-          done
-          
-          # Show summary
-          NVIDIA_PKG_COUNT_AFTER=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f 2>/dev/null | wc -l)
-          CACHE_SIZE_AFTER=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
-          
-          echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT_AFTER} NVIDIA-related packages"
-          echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE_AFTER}"
-          echo "✓ IMMEDIATE SYNC COMPLETE: NVIDIA packages preserved in ${CONTAINER_APT_CACHE}"
-          echo "   → If build fails later, these ~4GB packages won't need re-downloading"
-      else
-          echo "[INFO] No NVIDIA packages found to sync (may have been installed from cache)"
+  # Also check /var/cache/apt/archives as a fallback (in case APT didn't use the configured cache)
+  if [ -d "/var/cache/apt/archives" ]; then
+      VAR_CACHE_COUNT=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+      if [ "${VAR_CACHE_COUNT}" -gt 0 ]; then
+          echo "[WARN] Found ${VAR_CACHE_COUNT} NVIDIA packages in /var/cache/apt/archives (should be in ${CONTAINER_APT_CACHE})"
+          echo "[INFO] Syncing packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
+          NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+          if [ -n "${NVIDIA_FILES:-}" ]; then
+              echo "${NVIDIA_FILES}" | while read -r deb_file; do
+                  if [ -f "${deb_file:-}" ]; then
+                      # Only copy if not already in cache (avoid duplicates)
+                      deb_name=$(basename "${deb_file}")
+                      if [ ! -f "${CONTAINER_APT_CACHE}/${deb_name}" ]; then
+                          cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
+                      fi
+                  fi
+              done
+              # Re-count after sync
+              NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+              CACHE_SIZE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+              echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT} NVIDIA-related packages"
+              echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE}"
+          fi
       fi
+  fi
+
+  if [ "${NVIDIA_PKG_COUNT}" -gt 0 ]; then
+      echo "✓ NVIDIA PACKAGES CACHED: ${NVIDIA_PKG_COUNT} package(s) in ${CONTAINER_APT_CACHE}"
+      echo "   → These packages will be reused in future builds (no re-download needed)"
   else
-      echo "[WARN] Cache directories not found, skipping immediate sync"
+      echo "⚠ WARNING: No NVIDIA packages found in cache - they may need to be re-downloaded in future builds"
   fi
 
   # Force filesystem sync to ensure data is written to disk
   sync
 else
-  echo "[INFO] Skipping NVIDIA cache sync (no new CUDA packages installed in this run)."
+  echo "[INFO] Skipping NVIDIA cache verification (no new CUDA packages installed in this run)."
 fi
 
 echo "==> Continuing with rest of build process..."
@@ -3830,9 +3855,57 @@ Acquire::ftp::Timeout "30";
 EOF
 # apt-fast environment variables and verification removed - using apt-aria wrapper instead
 
+#--- Sub-block 12B.1: Install GMP and MPFR (required by SPEX in SuiteSparse) ---
+# Critical: SPEX (part of SuiteSparse) requires GMP >= 6.1.2 and MPFR >= 4.0.2
+# Dependencies: Block 6 (APT configuration)
+# Outputs: Installed packages (libgmp-dev, libmpfr-dev)
+echo -e "${YELLOW}[6.12B.1] Installing GMP and MPFR (required by SPEX)...${NC}"
+echo "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
+if ! apt-get install -y libgmp-dev libmpfr-dev; then
+    echo "  ✗ Failed to install GMP/MPFR packages"
+    exit 1
+fi
+
+# Verify GMP version meets requirement (>= 6.1.2)
+if command -v pkg-config >/dev/null 2>&1; then
+    GMP_VERSION=$(pkg-config --modversion gmp 2>/dev/null || echo "0.0.0")
+    echo "  ✓ GMP version: ${GMP_VERSION}"
+    # Basic version check (compare major.minor)
+    GMP_MAJOR=$(echo "${GMP_VERSION}" | cut -d. -f1)
+    GMP_MINOR=$(echo "${GMP_VERSION}" | cut -d. -f2)
+    if [ "${GMP_MAJOR}" -lt 6 ] || ([ "${GMP_MAJOR}" -eq 6 ] && [ "${GMP_MINOR}" -lt 1 ]); then
+        echo "  ⚠ WARNING: GMP version ${GMP_VERSION} may be below required 6.1.2"
+        echo "    SPEX may fail to build. Consider upgrading GMP if build fails."
+    else
+        echo "  ✓ GMP version ${GMP_VERSION} meets requirement (>= 6.1.2)"
+    fi
+else
+    echo "  ⚠ pkg-config not available, skipping GMP version check"
+fi
+
+# Verify MPFR version meets requirement (>= 4.0.2)
+if command -v pkg-config >/dev/null 2>&1; then
+    MPFR_VERSION=$(pkg-config --modversion mpfr 2>/dev/null || echo "0.0.0")
+    echo "  ✓ MPFR version: ${MPFR_VERSION}"
+    # Basic version check (compare major.minor)
+    MPFR_MAJOR=$(echo "${MPFR_VERSION}" | cut -d. -f1)
+    MPFR_MINOR=$(echo "${MPFR_VERSION}" | cut -d. -f2)
+    if [ "${MPFR_MAJOR}" -lt 4 ] || ([ "${MPFR_MAJOR}" -eq 4 ] && [ "${MPFR_MINOR}" -lt 1 ]); then
+        echo "  ⚠ WARNING: MPFR version ${MPFR_VERSION} may be below required 4.0.2"
+        echo "    SPEX may fail to build. Consider upgrading MPFR if build fails."
+    else
+        echo "  ✓ MPFR version ${MPFR_VERSION} meets requirement (>= 4.0.2)"
+    fi
+else
+    echo "  ⚠ pkg-config not available, skipping MPFR version check"
+fi
+
+echo "  ✓ GMP and MPFR installed successfully"
+echo ""
+
 #--- Sub-block 12C: Build SuiteSparse with MKL + CUDA + OpenMP ---
 # Purpose: Compile and install SuiteSparse after CUDA/MKL provisioning to guarantee linkage
-# Dependencies: CUDA toolkit (Block 13), Intel MKL (Block 6.8), OpenBLAS (optional fallback)
+# Dependencies: CUDA toolkit (Block 13), Intel MKL (Block 6.8), GMP/MPFR (Sub-block 12B.1), OpenBLAS (optional fallback)
 # Outputs: SuiteSparse installed under ${SUITESPARSE_INSTALL_PREFIX}
 echo -e "${YELLOW}[6.12C.1] Preparing SuiteSparse (MKL + CUDA + OpenMP) build...${NC}"
 

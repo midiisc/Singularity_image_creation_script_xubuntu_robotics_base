@@ -1,0 +1,205 @@
+---
+name: Repository Workflow Rules
+description: Git workflow and repository management rules - SOURCE OF TRUTH for workflow enforcement
+version: "1.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🚨 MANDATORY - READ FIRST - REPOSITORY WORKFLOW RULES
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**YOU MUST READ AND STRICTLY ADHERE TO ALL RULES IN THIS FILE.**
+
+**This file is AUTOMATICALLY ENFORCED by Cursor IDE. These rules are MANDATORY and NON-NEGOTIABLE.**
+
+**VIOLATION OF THESE RULES IS STRICTLY PROHIBITED. You MUST follow these rules without exception.**
+
+## 🔴 BEFORE STARTING ANY WORK - MANDATORY VERIFICATION
+
+**YOU MUST complete this checklist BEFORE performing ANY action:**
+
+- [ ] **I have read and understand ALL rules in this file**
+- [ ] **I have verified I'm on beta branch** (`git branch --show-current`)
+- [ ] **I understand that ONLY beta branch is allowed** (never create new branches)
+- [ ] **I understand that ONLY core files can be modified** (see list below)
+- [ ] **I understand that git operations REQUIRE explicit user approval**
+- [ ] **I will NOT run git add/commit/push without explicit user permission**
+- [ ] **I will NOT create new files unless explicitly requested**
+- [ ] **I will NOT create new branches under any circumstances**
+
+**IF YOU ARE UNSURE ABOUT ANY ACTION, YOU MUST ASK THE USER FIRST.**
+
+## ⚠️ SOURCE OF TRUTH - Repository Workflow Rules
+
+**This file is the single source of truth for all repository workflow rules.**  
+**All other files reference this file. To update rules, edit this file only.**
+
+## 🚨 MANDATORY WORKFLOW - STRICTLY ENFORCED FOR ALL AGENTS
+
+### GIT WORKFLOW
+
+#### Branch Rules - STRICTLY ENFORCED
+- **ONLY 2 BRANCHES ALLOWED**: `main` and `beta`
+- **ALWAYS work on `beta` branch** - NEVER create new branches
+- **NO `cursor/*` branches** - This is absolutely forbidden
+- **NO pull requests** - All changes go directly to beta branch
+- **MAIN BRANCH**: Only when explicitly instructed (e.g., "commit to main" or "merge beta to main")
+- **BETA TO MAIN**: User will explicitly say when to merge beta commits to main
+
+#### BEFORE STARTING ANY WORK - MANDATORY STEPS (NO EXCEPTIONS)
+
+**YOU MUST perform these steps BEFORE making ANY changes. THIS IS MANDATORY.**
+
+1. **Check current branch**: `git branch --show-current`
+   - **MUST be `beta`** - If not, you MUST switch immediately
+   
+2. **If not on beta, switch to beta**: `git checkout beta`
+   - **DO NOT proceed until you are on beta branch**
+   
+3. **Pull latest changes**: `git pull origin beta`
+   - **MUST pull latest changes before starting work**
+   
+4. **Verify you're on beta branch**: `git status`
+   - **CONFIRM you are on beta branch before proceeding**
+
+**IF YOU ARE ON THE WRONG BRANCH, YOU MUST STOP AND SWITCH TO BETA BEFORE PROCEEDING.**
+
+**DO NOT SKIP THESE STEPS. THEY ARE MANDATORY.**
+
+#### Editing Rules - STRICTLY ENFORCED
+
+**ONLY edit these core files** (no exceptions):
+- `build_xubuntu_robotics_base.sh`
+- `config.sh`
+- `create_writable_overlay.sh`
+- `run_on_best_node.sh`
+- `setup_conda_environments.sh`
+- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- `README.md`
+
+**ABSOLUTE PROHIBITIONS**:
+- ❌ **NO new files** unless explicitly requested by user
+- ❌ **NO patch scripts** - All fixes go into core files
+- ❌ **NO workflow files** - Keep repository clean
+- ❌ **NO temporary files** - Repository must stay minimal and clutter-free
+- ❌ **NO documentation files** (unless explicitly requested)
+- ❌ **NO analysis files** (unless explicitly requested)
+- ❌ **ALL modifications** must be done on core files only
+
+**Before creating or modifying ANY file, ask yourself**:
+1. Is this file in the allowed core files list? → Proceed
+2. Did the user explicitly request this file? → Proceed
+3. Is this a source/config/test file for implementation? → Proceed (but verify with user if unsure)
+4. Otherwise → DO NOT CREATE OR MODIFY
+
+#### Git Operations - NEVER WITHOUT EXPLICIT PERMISSION - ABSOLUTELY MANDATORY
+
+**🚨 CRITICAL - ABSOLUTELY MANDATORY**: You MUST NEVER run git commands without explicit user approval.
+
+**VIOLATION OF THIS RULE IS STRICTLY PROHIBITED.**
+
+- ❌ **NEVER run `git add`** without user saying "add", "stage", "commit", or similar
+- ❌ **NEVER run `git commit`** without user explicitly saying "commit", "commit this", "save changes", or similar
+- ❌ **NEVER run `git push`** without user explicitly saying "push", "push this", "push to beta", or similar
+- ❌ **NEVER run `git checkout`** to create new branches (only to switch to beta)
+- ❌ **NEVER run `git branch`** to create new branches
+
+**Allowed git operations (with context)**:
+- ✅ `git branch --show-current` - To check current branch
+- ✅ `git status` - To check repository status
+- ✅ `git checkout beta` - To switch to beta branch (when not on beta)
+- ✅ `git pull origin beta` - To pull latest changes (before starting work)
+
+**When user explicitly requests commit/push**:
+1. Add changes: `git add -A` (only after user approval)
+2. Commit with clear message: `git commit -m "fix: Description of changes"` (only after user approval)
+3. Push to beta branch (DEFAULT): `git push origin beta` (only after user approval)
+4. ONLY if explicitly instructed, push to main
+
+#### Commit Process - USER APPROVAL REQUIRED
+
+**Before committing, you MUST**:
+1. Verify you're on beta branch
+2. Verify only core files are modified
+3. Verify no new files were created (unless explicitly requested)
+4. Get explicit user approval for commit/push
+
+**Commit message format**:
+- Use clear, descriptive messages
+- Format: `"fix: Description of changes"` or `"feat: Description of changes"`
+- Be specific about what was changed
+
+#### BETA TO MAIN WORKFLOW
+
+- **DEFAULT**: All commits go to beta branch
+- **MAIN COMMITS**: Only when user explicitly says "commit to main" or "merge beta to main"
+- **END OF DAY**: User will explicitly instruct when to merge beta commits to main
+- **VERIFICATION**: User will verify changes before main branch updates
+
+#### Forbidden Actions - ABSOLUTELY PROHIBITED
+
+❌ Creating new branches
+❌ Creating pull requests
+❌ Adding non-core files
+❌ Creating patch scripts
+❌ Working on any branch other than beta
+❌ Creating temporary files
+❌ Adding workflow files
+❌ Committing to main without explicit instruction
+❌ Running git commit without user approval
+❌ Running git push without user approval
+❌ Running git add without user approval (unless user explicitly requested commit)
+❌ Creating any file not in the core files list (unless explicitly requested)
+
+#### Repository Principles
+
+- **MINIMAL**: Keep repository clutter-free
+- **CORE FILES ONLY**: All work on essential files
+- **NO BLOAT**: No unnecessary files or branches
+- **CLEAN COMMITS**: Direct, purposeful changes
+- **USER APPROVAL**: Never commit/push without explicit user permission
+
+#### VERIFICATION CHECKLIST - BEFORE COMPLETING WORK
+
+Before finishing any task, verify:
+- [ ] Working on beta branch (checked with `git branch --show-current`)
+- [ ] Only core files modified (verified with `git status`)
+- [ ] No new files created (unless explicitly requested)
+- [ ] Changes ready for commit (but NOT committed without user approval)
+- [ ] No new branches created
+- [ ] Repository remains minimal and clean
+- [ ] User has been asked for approval before any git operations
+
+#### MANDATORY ENFORCEMENT PROTOCOL - STRICTLY ENFORCED
+
+**If you need to violate any rule (WHICH IS STRONGLY DISCOURAGED):**
+
+1. **STOP IMMEDIATELY** - Do not proceed with the action
+2. **EXPLAIN WHY** - Clearly explain why you think the rule should be violated
+3. **ASK USER FOR EXPLICIT PERMISSION** - Wait for explicit user approval
+4. **WAIT FOR CONFIRMATION** - Do not proceed until user explicitly confirms
+5. **ONLY PROCEED AFTER EXPLICIT APPROVAL** - User must explicitly say "yes", "proceed", "approve", etc.
+
+**EXAMPLES OF WHEN TO ASK (MANDATORY):**
+- User asks to create a new file → **VERIFY** it's allowed or **ASK** for permission
+- User asks to commit → **VERIFY** branch and files, then **ASK** for explicit approval
+- User asks to work on main → **EXPLAIN** this violates rules, **ASK** for explicit permission
+- Uncertain about a file → **ASK** user if it's allowed
+- Any git operation → **REQUIRE** explicit user approval before executing
+
+**YOU MUST NEVER ASSUME PERMISSION. EXPLICIT APPROVAL IS REQUIRED.**
+
+## 🔴 VIOLATION CONSEQUENCES
+
+**If you violate these rules:**
+1. **STOP immediately** - Do not complete the violating action
+2. **EXPLAIN the violation** - Clearly state what rule was violated
+3. **ASK for explicit permission** - Request user approval
+4. **WAIT for confirmation** - Do not proceed until explicitly approved
+
+**THESE RULES ARE AUTOMATICALLY ENFORCED. VIOLATIONS WILL BE DETECTED.**
+
+## REMEMBER: BETA BRANCH ONLY, CORE FILES ONLY, NO NEW BRANCHES, MINIMAL REPO, USER APPROVAL FOR GIT OPERATIONS - STRICTLY ENFORCED

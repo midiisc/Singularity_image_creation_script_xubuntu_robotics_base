@@ -23,17 +23,35 @@ This document defines the fundamental principles and rules governing this reposi
 - **No Workflow Files**: Keep repository clean
 
 ### Development Workflow
-1. Work on beta branch
-2. Edit core files only
-3. Commit with clear messages
-4. Push to beta branch
-5. Wait for explicit instruction for main branch
+1. **Verify branch**: Check you're on beta branch (`git branch --show-current`)
+2. **Pull latest**: `git pull origin beta`
+3. **Edit core files only**: Only modify allowed core files
+4. **Run audit**: Pre-commit audit runs automatically (or run manually)
+5. **Get approval**: Never commit/push without explicit user approval
+6. **Commit**: Clear, descriptive commit messages
+7. **Push to beta**: Default branch (only if explicitly approved)
+8. **Main branch**: Only when explicitly instructed by user
+
+### Rules System - Strictly Enforced
+- **Source of Truth**: `.cursor/rules/*.mdc` files (automatically enforced by Cursor IDE)
+- **Mandatory Pre-Work**: `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` (READ FIRST, verification checklist)
+- **Behavior Rules**: `.cursor/rules/001-agent-behavior.mdc` (file creation, planning, code review)
+- **Workflow Rules**: `.cursor/rules/002-repository-workflow.mdc` (git, branches, files, commits)
+- **Automatic Enforcement**: Cursor IDE loads and enforces rules automatically (`alwaysApply: true`)
+- **Mandatory Verification**: Pre-work checklists required before any action
+- **Strict Language**: Rules use "YOU MUST", "STRICTLY ENFORCED", "ABSOLUTELY MANDATORY"
+- **No Duplication**: Rules defined once, referenced elsewhere
+- **Violation Protocol**: Stop, explain, ask permission, wait for confirmation
+- **Documentation**: `docs/GLOBAL_CURSOR_SETTINGS.md` for global settings
 
 ### Quality Standards
 - **Clean Code**: Well-documented, maintainable
 - **Error Handling**: Robust, non-fatal failures
 - **Verification**: Test before committing
 - **Documentation**: Clear, concise specifications
+- **Audit Compliance**: All code must pass pre-commit audit
+- **Rules Compliance**: All AI agents must follow `.cursor/rules/*.mdc` rules
+- **User Approval**: Never commit/push without explicit user approval
 
 ## Violations
 Any violation of these principles requires immediate correction and explanation.

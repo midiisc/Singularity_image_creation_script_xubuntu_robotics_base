@@ -1,0 +1,116 @@
+---
+name: MANDATORY READ FIRST - All Agents
+description: MANDATORY pre-work verification and rules reminder - MUST READ BEFORE ANY WORK
+version: "1.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🚨 MANDATORY - READ THIS FIRST - ALL AI AGENTS
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**YOU ARE WORKING IN A REPOSITORY WITH STRICTLY ENFORCED RULES.**
+
+**THESE RULES ARE AUTOMATICALLY ENFORCED BY CURSOR IDE. YOU MUST FOLLOW THEM WITHOUT EXCEPTION.**
+
+**VIOLATION OF THESE RULES IS STRICTLY PROHIBITED.**
+
+## 🔴 MANDATORY PRE-WORK VERIFICATION CHECKLIST
+
+**BEFORE PERFORMING ANY ACTION, YOU MUST COMPLETE THIS CHECKLIST:**
+
+### Rule Awareness
+- [ ] **I have read `.cursor/rules/001-agent-behavior.mdc`** (behavior rules)
+- [ ] **I have read `.cursor/rules/002-repository-workflow.mdc`** (workflow rules)
+- [ ] **I understand ALL rules are MANDATORY and STRICTLY ENFORCED**
+- [ ] **I understand violations are PROHIBITED**
+
+### Branch Verification
+- [ ] **I have checked current branch**: `git branch --show-current`
+- [ ] **I am on `beta` branch** (if not, I MUST switch immediately)
+- [ ] **I have pulled latest changes**: `git pull origin beta`
+- [ ] **I understand I MUST NOT create new branches**
+
+### File Operations
+- [ ] **I understand ONLY core files can be modified** (see workflow rules)
+- [ ] **I understand I MUST NOT create documentation/summary/plan files without explicit request**
+- [ ] **I understand I MUST respond INLINE in chat unless explicitly asked to create a file**
+- [ ] **I understand I MUST ask user before creating any non-core file**
+
+### Git Operations
+- [ ] **I understand git operations REQUIRE explicit user approval**
+- [ ] **I understand I MUST NOT run `git add` without explicit user permission**
+- [ ] **I understand I MUST NOT run `git commit` without explicit user permission**
+- [ ] **I understand I MUST NOT run `git push` without explicit user permission**
+- [ ] **I understand I MUST verify branch and files before any git operation**
+
+### Workflow Principles
+- [ ] **I understand plans must be presented INLINE, not as files**
+- [ ] **I understand code reviews must be CHUNKED and INLINE**
+- [ ] **I understand I MUST get user approval before committing**
+- [ ] **I understand I MUST verify all checklist items before completing work**
+
+## 🚨 IF YOU ARE UNSURE
+
+**IF YOU ARE UNSURE ABOUT ANY ACTION:**
+1. **STOP immediately**
+2. **READ the relevant rule file** (`.cursor/rules/001-agent-behavior.mdc` or `.cursor/rules/002-repository-workflow.mdc`)
+3. **ASK the user for clarification**
+4. **WAIT for explicit confirmation before proceeding**
+
+**DO NOT ASSUME. DO NOT GUESS. ASK FIRST.**
+
+## 📋 REQUIRED RULE FILES
+
+**YOU MUST BE FAMILIAR WITH THESE FILES:**
+
+1. **`.cursor/rules/001-agent-behavior.mdc`**
+   - File creation restrictions
+   - Planning approach (inline only)
+   - Code review protocol (chunked, inline)
+   - Response mode (inline in chat)
+
+2. **`.cursor/rules/002-repository-workflow.mdc`**
+   - Branch management (beta only)
+   - File editing restrictions (core files only)
+   - Git operations (require user approval)
+   - Verification checklist
+
+## 🔴 ENFORCEMENT REMINDER
+
+**THESE RULES ARE:**
+- ✅ **AUTOMATICALLY ENFORCED** by Cursor IDE
+- ✅ **MANDATORY** - No exceptions
+- ✅ **NON-NEGOTIABLE** - Must be followed
+- ✅ **STRICTLY MONITORED** - Violations will be detected
+
+**YOU HAVE BEEN WARNED. FOLLOW THE RULES.**
+
+## 📚 QUICK REFERENCE
+
+**Before creating a file:**
+- Is it a core file? → Check workflow rules
+- Is it documentation/summary/plan? → Require explicit user request
+- Unsure? → ASK USER FIRST
+
+**Before git operation:**
+- Verify branch (must be beta)
+- Verify files (core files only)
+- Get explicit user approval
+- Never assume permission
+
+**Before completing work:**
+- Verify all checklist items
+- Verify branch and files
+- Verify user approval obtained
+- Verify no rules violated
+
+---
+
+**THIS FILE SERVES AS A REMINDER. THE ACTUAL RULES ARE IN:**
+- `.cursor/rules/001-agent-behavior.mdc`
+- `.cursor/rules/002-repository-workflow.mdc`
+
+**READ THOSE FILES FOR COMPLETE RULES.**
