@@ -42,6 +42,8 @@ GENERIC_PACKAGES=(
     "libpthread-stubs0-dev"
     "libnuma-dev"
     "pkg-config"
+    "libgmp-dev"
+    "libmpfr-dev"
 )
 
 declare -a candidate_versions=()
@@ -80,6 +82,8 @@ for candidate in "${candidate_versions[@]}"; do
             "libpthread-stubs0-dev"
             "libnuma-dev"
             "pkg-config"
+            "libgmp-dev"
+            "libmpfr-dev"
         )
         if install_packages "CUDA companion packages ${candidate}" "${VERSIONED_PACKAGES[@]}"; then
             CUDA_VERSION_FOR_INSTALL="${candidate}"
@@ -147,6 +151,18 @@ for lib_base in "libcublas" "libcusparse" "libcusolver" "libcurand"; do
         echo "⚠️  ${lib_base}.so not discovered; ensure CUDA libraries are in LD_LIBRARY_PATH."
     fi
 done
+
+if pkg-config --exists gmp; then
+    echo "✅ GMP detected via pkg-config (version $(pkg-config --modversion gmp))"
+else
+    echo "⚠️  GMP not found via pkg-config; SuiteSparse may fail to configure"
+fi
+
+if pkg-config --exists mpfr; then
+    echo "✅ MPFR detected via pkg-config (version $(pkg-config --modversion mpfr))"
+else
+    echo "⚠️  MPFR not found via pkg-config; SuiteSparse components relying on MPFR may fail"
+fi
 
 for dir in "thrust" "cub"; do
     if [ -d "${CUDA_HOME}/include/${dir}" ]; then

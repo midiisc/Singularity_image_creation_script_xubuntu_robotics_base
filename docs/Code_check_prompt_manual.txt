@@ -7,8 +7,12 @@ Adhere to established industry best practices for Bash scripting (POSIX complian
 Step 1 – Context Review
 1. Confirm the provided code block boundaries (line range or identifier).
 2. Note any visible dependencies on earlier/later script sections that may influence this block.
-3. If the supplied slice exceeds ~500 lines or mixes multiple logical units, split it before proceeding. Aim for 400–600 line chunks, respect natural boundaries (functions, classes), and include a 10–20 line overlap so context is preserved. Document the chosen splits. Track any symbols (functions, globals, exported variables) that originate in an earlier chunk but are referenced later, capturing their scope (local/global/exported) so you explicitly carry their context forward during review. As soon as a definition is confirmed and safe usage verified, mark it resolved in your tracking table so only active dependencies are carried forward, minimizing retained context and memory overhead.
-4. Identify the logical blocks that form self-contained operations (functions, guarded sections, case arms, long loops). Confirm each block is clearly delineated with surrounding whitespace, consistent indentation, and an opening comment that states its purpose and any preconditions or context carried in from earlier chunks. Add or refresh comments when the intent is unclear, and note the updates in your summary.
+3. If the supplied slice exceeds ~500 lines or mixes multiple logical units, split it before proceeding. Aim for 500-line chunks +/- 75 lines, respect natural boundaries (functions, classes), and include a 10–20 line overlap so context is preserved. Document the chosen splits. Track any symbols (functions, globals, exported variables) that originate in an earlier chunk but are referenced later, capturing their scope (local/global/exported) so you explicitly carry their context forward during review. As soon as a definition is confirmed and safe usage verified, mark it resolved in your tracking table so only active dependencies are carried forward, minimizing retained context and memory overhead.
+3a. Maintain a Declaration & Usage Table for the entire review. Treat this table as a live database that persists through all chunks: every time you encounter or modify a symbol, update the table before continuing the audit.
+3b. The table must, at minimum, include the following columns: `symbol`, `kind (function|variable|trap)`, `scope (global|local|exported)`, `default/initial value`, `declaration line`, `first-use line`, `current status (active|resolved)`, and `notes (guards, relocation rationale, cleanup)`. Track additional metadata (e.g., `readonly`, `array`, `positional parameters`) when present. Use a consistently formatted Markdown table so the structure can be parsed and diffed reliably.
+3c. Immediately verify that each entry has a single authoritative declaration preceding first use; if not, relocate or guard the declaration, document the change in the table, and keep the entry marked `active` until the fix is made.
+3d. Whenever an entry transitions to `resolved`, record the line range or chunk responsible and briefly justify the resolution. If the symbol spans multiple chunks, carry the active entry forward and annotate the chunk-overlap row with `carried forward`.
+4. Identify the logical blocks that form self-contained operations (functions, guarded sections, case arms, long loops). Confirm each block is clearly delineated with surrounding whitespace, consistent indentation, and an opening comment that states its purpose and any preconditions or context carried in from earlier chunks. Add or refresh comments when the intent is unclear, ensuring they conform to the relevant industry documentation style for the language (e.g., Bash header comments, Google style docstrings, Doxygen). Note the updates in your summary.
    - Example split for a 1,200-line file:
      - Chunk A: lines 1–520 (covers `configure_env()` definition)
      - Chunk B: lines 501–1,020 (overlap retains tail of `configure_env()` and head of `init_cache()`)
@@ -17,13 +21,26 @@ Step 1 – Context Review
      - `GLOBAL_CACHE_DIR` (global, declared 42, first use 108, chunk B) → active
      - `install_packages_resilient` (function, declared 360, first use 420, chunk B) → resolved after verifying keyword usage
      - `LOCAL_TMP` (local, declared 615 inside `init_cache`, resolved at line 640) → resolved
+5. For any compilation or source-build logic encountered, inventory the prerequisite packages, toolchain components, and compiler/linker flags by consulting the canonical documentation stored under `docs/flags/`, the relevant upstream project documentation (official website, tagged git release notes), and other trusted sources. Capture any deltas between the script and the documented requirements in your notes.
+6. Derive the expected version constraints from those sources and compare them against what is available in this workstation’s Ubuntu 24.04 APT cache (e.g., via `apt-cache policy`, `apt-cache madison`). Highlight mismatches, determine whether pinning or alternate installation steps are necessary, and recommend corrections when versions are unavailable or insufficient.
+7. Cross-review the execution plans documented in `docs/` (e.g., `MKL_MIGRATION_PLAN.md`, `planning/` subplans) to confirm the sequencing in the audited script aligns with the agreed order of operations and that no critical step is missing. Call out any divergence or missing guardrails in your audit notes.
+8. When context about the baseline Singularity or Docker image is required, refer to `docs/BASE_IMAGE_ANALYSIS.md` to confirm starting package state, library availability, and previously validated assumptions before recommending changes.
+9. Align every version, URL, tunable parameter, and related metadata (including links, inline comments, and echoed/logged output) with the centralized configuration in `config.sh`. Prefer reading the exported variables from that file instead of hard-coding values; when introducing a new version or override, update `config.sh` first and reference it from the audited block so the repository maintains a single source of truth across code, documentation, and terminal messaging.
+
+Symbol Tracking Protocol (Reference Template)
+--------------------------------------------
+| symbol | kind | scope | default/init | decl line | first use | status | notes |
+|--------|------|-------|--------------|-----------|-----------|--------|-------|
+| EXAMPLE_VAR | variable | global | `/opt/default` | 42 | 108 | active | awaiting guard for empty input |
+| configure_env | function | global | `n/a` | 120 | 215 | resolved | verified docstring and logging |
 
 Step 2 – Sequential Audit Checklist
-For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. State whether the block satisfies the requirement. If it fails, correct the code, explain the fix, and mark it as resolved.
+For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. Record an explicit PASS/FAIL decision for every checklist row (no omissions) alongside supporting evidence in your notes or table. If it fails, correct the code, explain the fix, and mark it as resolved.
+Throughout this phase, keep the Declaration & Usage Table current—log every variable/function touchpoint, flag use-before-declaration, insert default guards, and document when entries are resolved or relocated.
 Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project’s resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
 Whenever you perform this replacement, include a short note in the review explicitly comparing the before/after approach and confirm that the helper function guards multi-arch and held-package cases.
 Maintain a running symbol table covering variables, functions, and exported values encountered so far. For each usage, ensure a single declaration exists before first use (pulling the definition earlier if required), eliminate redundant redeclarations encountered in later chunks, assign meaningful defaults to variables at their declaration site to avoid unbound-value failures downstream, and mark entries resolved once safe usage is verified so the table stays lean. Document any adjustments you make.
-As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Update or add comments where intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
+As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Precede each function or long block with an industry-standard docstring-style header (e.g., Bash comment paragraph describing purpose, inputs, side effects, and exit semantics). Update or add comments when the intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
    - Example replacements:
      - Before: `if dpkg -l | grep -q "^ii.*libfoo-dev"; then`
        After: `if dpkg_resolve_installed_package "libfoo-dev" >/dev/null; then`
@@ -77,6 +94,7 @@ H. Error Handling & Observability
 - H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
 - H2. `trap` handlers clean up resources (temp files, mounts, jobs) and re-raise signals when appropriate.
 - H3. Logging differentiates stdout/stderr where helpful; optional scoped `set -x` toggles documented.
+- H4. All log lines must be human-readable: include severity or context tags (e.g., `INFO`, `WARN`, `ERROR`), avoid dumping opaque command output without framing, and prefer declarative language over raw variable expansions. Confirm that logging helpers format timestamps, colors, or JSON payloads consistently when used.
 
 I. Timeouts, Retries, & Robustness
 - I1. Long-running operations (e.g., `ldconfig`, package managers, service checks) wrapped with `timeout`, retries, or backoff.
@@ -144,14 +162,15 @@ Step 3 – Corrections Summary
 4. If the block was split into multiple chunks, enumerate the chunk line ranges you reviewed (including overlaps), list the shared symbols (functions, globals, exported variables) whose context was carried across chunks, and confirm each chunk satisfied the checklist.
 5. Call out any declaration relocations, duplicate removals, or new default assignments made to satisfy the symbol tracking requirements.
 6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`) so the audit trail shows how issues were validated.
+7. Include the final Declaration & Usage Table (or a summarized extract) showing each variable/function, its default value, declaration/first-use lines, and resolution status (active/resolved), highlighting any reorderings or guards you introduced. Provide it in the same column order specified in Step 1 and note any entries that remain active for subsequent chunks.
 
 Step 4 – Finalization
 1. Confirm explicitly that every checklist item from A1 through L4 has been evaluated and passes after corrections.
 2. Confirm that items M1 through O3 have been evaluated and pass.
 3. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
 4. State: “Block fully audited and corrected.”
-5. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
-6. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation.
+5. Reaffirm that no new files were created for the purpose of this review, that all symbols now have a single declaration positioned before first use, and that the Declaration & Usage Table has been fully reconciled.
+6. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation. Reference any automated logging/verifier commands you executed to validate human-readable output formatting.
 
 Customization Reminder
 - Replace the placeholder code block and line numbers before issuing the prompt to the reviewing agent.

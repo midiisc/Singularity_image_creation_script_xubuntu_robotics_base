@@ -307,6 +307,9 @@ else
     echo "ℹ Logging disabled (not running in container build environment)"
 fi
 
+# After configuration and logging setup, restore fail-fast behavior.
+set -e
+
 #===============================================================================
 # BLOCK 1: INITIALIZATION AND CONFIGURATION
 #===============================================================================
@@ -689,10 +692,12 @@ probe_and_set_mirrors() {
   
   # Create temporary file for probe results with error checking
   local probe_results_file
-  probe_results_file="$(mktemp 2>/dev/null || echo "/tmp/mirror_probe_$$.tmp")"
-  if [ ! -f "${probe_results_file}" ]; then
-    echo "[error] Failed to create temporary file for probe results"
-    return 1
+  if ! probe_results_file="$(mktemp 2>/dev/null)"; then
+    probe_results_file="/tmp/mirror_probe_$$.tmp"
+    if ! : > "${probe_results_file}"; then
+      echo "[error] Failed to create temporary file for probe results"
+      return 1
+    fi
   fi
   PROBE_RESULTS="${probe_results_file}"
   export CODENAME PROBE_RESULTS  # Export for subshell access
@@ -1971,6 +1976,7 @@ if command -v chattr >/dev/null 2>&1 && [ -d "${CONTAINER_APT_CACHE:-/container_
     # Use find to safely handle glob expansion and avoid errors when no files exist
     find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} \; 2>/dev/null || true
     # Count protected files for confirmation
+    local protected_count
     protected_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
     if [ "${protected_count}" -gt 0 ]; then
         echo "✓ Pre-seeded cache files are now protected (${protected_count} files)."
@@ -2017,7 +2023,8 @@ apt-get install -y --no-install-recommends \
     locales \
     bc \
     procps \
-    findutils
+    findutils \
+    coreutils
 # Verify procps (includes pgrep) is available
 if ! command -v pgrep >/dev/null 2>&1; then
     echo "⚠ WARNING: pgrep not found after procps installation, installing procps-ng as fallback..."
@@ -2154,16 +2161,26 @@ command -v unzip || { echo "unzip install failed"; exit 1; }
 command -v bzip2 || { echo "bzip2 install failed"; exit 1; }
 command -v git || { echo "git install failed"; exit 1; }
 command -v jq || { echo "jq install failed"; exit 1; }
-command -v aptitude || { echo "aptitude install failed"; exit 1; }
+if ! command -v aptitude >/dev/null 2>&1; then
+    echo "⚠ aptitude not available after optional install attempt (continuing without it)"
+fi
 
 #--- Sub-block 10.18: Check optional package managers ---
 # Purpose: Report availability of optional tools
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Checking for advanced package managers..."
-command -v nala >& /dev/null && echo "✓ nala available" || echo "Δ nala not available"
+if command -v nala >/dev/null 2>&1; then
+    echo "✓ nala available"
+else
+    echo "Δ nala not available"
+fi
 # apt-fast removed - using apt-aria wrapper instead
-command -v synaptic >& /dev/null && echo "✓ synaptic available" || echo "Δ synaptic not available"
+if command -v synaptic >/dev/null 2>&1; then
+    echo "✓ synaptic available"
+else
+    echo "Δ synaptic not available"
+fi
 if dpkg_resolve_installed_package "apt-utils" >/dev/null; then
     echo "✓ apt-utils package is installed"
 else
@@ -2587,6 +2604,7 @@ echo ""
 # Note: Installing comprehensive prerequisites for both OpenBLAS and PyTorch compilation
 echo -e "${YELLOW}[6.12B.2] Installing build prerequisites for OpenBLAS and PyTorch...${NC}"
 apt-get update -o Acquire::Retries=3
+# Note: `binutils` provides the `strings` utility used during OpenBLAS DYNAMIC_ARCH verification
 apt-get install -y --no-install-recommends \
     build-essential \
     gcc \
@@ -2595,6 +2613,7 @@ apt-get install -y --no-install-recommends \
     make \
     cmake \
     ninja-build \
+    binutils \
     libomp-dev \
     liblapack-dev \
     liblapacke-dev \
@@ -3114,6 +3133,33 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       fi
   }
 
+  ensure_cuda_companion_package() {
+      local base_pkg="$1"
+      if [ -z "${base_pkg:-}" ]; then
+          return
+      fi
+
+      local appended=false
+      if [ -n "${CUDA_VERSION_SELECTED:-}" ]; then
+          local suffix="${CUDA_VERSION_SELECTED//./-}"
+          if package_available "${base_pkg}-${suffix}"; then
+              append_cuda_package "${base_pkg}-${suffix}"
+              appended=true
+          fi
+      fi
+
+      if [ "${appended}" != true ] && [ -n "${CUDA_MAJOR:-}" ]; then
+          if package_available "${base_pkg}-${CUDA_MAJOR}"; then
+              append_cuda_package "${base_pkg}-${CUDA_MAJOR}"
+              appended=true
+          fi
+      fi
+
+      if [ "${appended}" != true ] && package_available "${base_pkg}"; then
+          append_cuda_package "${base_pkg}"
+      fi
+  }
+
   declare -a CUDA_INSTALL_PACKAGES=()
   declare -A CUDA_INSTALL_SEEN=()
 
@@ -3191,6 +3237,10 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       CUDA_VERSION="${CUDA_VERSION_SELECTED}"
       CUDA_MAJOR="${CUDA_VERSION_SELECTED%%.*}"
   fi
+
+  # Ensure CUDA companion developer libraries used by SuiteSparse (libnpp) are installed.
+  ensure_cuda_companion_package "libnpp"
+  ensure_cuda_companion_package "libnpp-dev"
 
   echo "Selected CUDA packages: ${CUDA_INSTALL_PACKAGES[*]}"
   echo "Preferred CUDA version: ${CUDA_VERSION_PREFERRED}"
@@ -3424,28 +3474,32 @@ early_verify_cached_files() {
 
     # Verify Miniforge installer
     if [ -f "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
-    echo "Verifying Miniforge installer..."
-    if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
-      echo "✓ Miniforge SHA256 verified"
-    else
-      echo "✗ Miniforge SHA256 verification failed - file corrupted during copy!"
+        echo "Verifying Miniforge installer..."
+        if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
+            echo "✓ Miniforge SHA256 verified"
+        else
+            echo "✗ Miniforge SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" "${MINIFORGE_URL}"
-      if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
-        echo "✓ Miniforge re-downloaded and verified"
-      else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  DOWNLOAD FAILED: Miniforge re-download failed"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: ${MINIFORGE_SH}"
-        echo "  Expected location: ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
-        echo "  Source URL: ${MINIFORGE_URL}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ Miniforge re-download also failed - aborting build"
+            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" "${MINIFORGE_URL}"; then
+                if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
+                    echo "✓ Miniforge re-downloaded and verified"
+                else
+                    echo ""
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  DOWNLOAD FAILED: Miniforge re-download failed"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  File name: ${MINIFORGE_SH}"
+                    echo "  Expected location: ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
+                    echo "  Source URL: ${MINIFORGE_URL}"
+                    echo ""
+                    echo "  You may manually download this file and place it at:"
+                    echo "    ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "✗ Miniforge re-download also failed - aborting build"
+                    exit 1
+                fi
+            else
+                echo "✗ Miniforge re-download attempt failed due to network error"
                 exit 1
             fi
         fi
@@ -3453,28 +3507,32 @@ early_verify_cached_files() {
 
     # Verify Micromamba
     if [ -f "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
-    echo "Verifying Micromamba..."
-    if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
-      echo "✓ Micromamba SHA256 verified"
-    else
-      echo "✗ Micromamba SHA256 verification failed - file corrupted during copy!"
+        echo "Verifying Micromamba..."
+        if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
+            echo "✓ Micromamba SHA256 verified"
+        else
+            echo "✗ Micromamba SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" "${MICROMAMBA_URL}"
-      if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
-        echo "✓ Micromamba re-downloaded and verified"
-      else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  DOWNLOAD FAILED: Micromamba re-download failed"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: micromamba-linux-64"
-        echo "  Expected location: ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
-        echo "  Source URL: ${MICROMAMBA_URL}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ Micromamba re-download also failed - aborting build"
+            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" "${MICROMAMBA_URL}"; then
+                if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
+                    echo "✓ Micromamba re-downloaded and verified"
+                else
+                    echo ""
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  DOWNLOAD FAILED: Micromamba re-download failed"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  File name: micromamba-linux-64"
+                    echo "  Expected location: ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
+                    echo "  Source URL: ${MICROMAMBA_URL}"
+                    echo ""
+                    echo "  You may manually download this file and place it at:"
+                    echo "    ${CONTAINER_BIN_CACHE}/micromamba-linux-64"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "✗ Micromamba re-download also failed - aborting build"
+                    exit 1
+                fi
+            else
+                echo "✗ Micromamba re-download attempt failed due to network error"
                 exit 1
             fi
         fi
@@ -3483,28 +3541,32 @@ early_verify_cached_files() {
 
     # Verify yq
     if [ -f "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
-    echo "Verifying yq..."
-    if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
-      echo "✓ yq SHA256 verified"
-    else
-      echo "✗ yq SHA256 verification failed - file corrupted during copy!"
+        echo "Verifying yq..."
+        if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
+            echo "✓ yq SHA256 verified"
+        else
+            echo "✗ yq SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" "${YQ_URL}"
-      if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
-        echo "✓ yq re-downloaded and verified"
-      else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  DOWNLOAD FAILED: yq re-download failed"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: yq_linux_amd64"
-        echo "  Expected location: ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
-        echo "  Source URL: ${YQ_URL}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ yq re-download also failed - aborting build"
+            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" "${YQ_URL}"; then
+                if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
+                    echo "✓ yq re-downloaded and verified"
+                else
+                    echo ""
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  DOWNLOAD FAILED: yq re-download failed"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "  File name: yq_linux_amd64"
+                    echo "  Expected location: ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
+                    echo "  Source URL: ${YQ_URL}"
+                    echo ""
+                    echo "  You may manually download this file and place it at:"
+                    echo "    ${CONTAINER_BIN_CACHE}/yq_linux_amd64"
+                    echo "═══════════════════════════════════════════════════════════════"
+                    echo "✗ yq re-download also failed - aborting build"
+                    exit 1
+                fi
+            else
+                echo "✗ yq re-download attempt failed due to network error"
                 exit 1
             fi
         fi
@@ -3524,24 +3586,28 @@ early_verify_cached_files() {
         else
       echo "✗ Julia SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      curl -fsSL -o "${julia_file}" "${julia_url}"
-      if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
-        echo "✓ Julia re-downloaded and SHA256 verified"
-      else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  DOWNLOAD FAILED: Julia re-download failed"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: $(basename "${julia_file}")"
-        echo "  Expected location: ${julia_file}"
-        echo "  Source URL: ${julia_url}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${julia_file}"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ Julia re-download also failed - aborting build"
+      if curl -fsSL -o "${julia_file}" "${julia_url}"; then
+        if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
+          echo "✓ Julia re-downloaded and SHA256 verified"
+        else
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  DOWNLOAD FAILED: Julia re-download failed"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  File name: $(basename "${julia_file}")"
+          echo "  Expected location: ${julia_file}"
+          echo "  Source URL: ${julia_url}"
+          echo ""
+          echo "  You may manually download this file and place it at:"
+          echo "    ${julia_file}"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "✗ Julia re-download also failed - aborting build"
                 exit 1
-            fi
+        fi
+      else
+        echo "✗ Julia re-download attempt failed due to network error"
+            exit 1
+      fi
         fi
 
         # gzip integrity check
@@ -3550,24 +3616,28 @@ early_verify_cached_files() {
         else
       echo "✗ Julia gzip integrity check failed - archive is corrupted!"
             echo "  Attempting to re-download..."
-      curl -fsSL -o "${julia_file}" "${julia_url}"
-      if gzip -t "${julia_file}" 2>/dev/null; then
-        echo "✓ Julia re-downloaded and gzip integrity verified"
-      else
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  DOWNLOAD FAILED: Julia re-download failed (gzip integrity)"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: $(basename "${julia_file}")"
-        echo "  Expected location: ${julia_file}"
-        echo "  Source URL: ${julia_url}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${julia_file}"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ Julia re-download also failed - aborting build"
+      if curl -fsSL -o "${julia_file}" "${julia_url}"; then
+        if gzip -t "${julia_file}" 2>/dev/null; then
+          echo "✓ Julia re-downloaded and gzip integrity verified"
+        else
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  DOWNLOAD FAILED: Julia re-download failed (gzip integrity)"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  File name: $(basename "${julia_file}")"
+          echo "  Expected location: ${julia_file}"
+          echo "  Source URL: ${julia_url}"
+          echo ""
+          echo "  You may manually download this file and place it at:"
+          echo "    ${julia_file}"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "✗ Julia re-download also failed - aborting build"
                 exit 1
-            fi
+        fi
+      else
+        echo "✗ Julia re-download attempt failed due to network error"
+            exit 1
+      fi
         fi
     fi
 
@@ -3840,6 +3910,8 @@ pushd "${cmake_build_dir}" >/dev/null
 CMAKE_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES:-86}"
 BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
 
+# Note: SPEX Python bindings remain enabled (default). Python headers and tooling are available from earlier phases
+# (Block 24 installs python3-dev/pybind11-dev), so no additional SuiteSparse overrides are necessary here.
 cmake ../src \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
@@ -4261,9 +4333,9 @@ install_packages_resilient() {
     fi
     
     # Check if package is already installed (optimize: call dpkg -s only once)
-    local dpkg_status
-    dpkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
-    if [ $? -eq 0 ] && echo "${dpkg_status}" | grep -q "Status: install ok installed"; then
+    local pkg_status
+    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
+    if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
       echo -e "  ✓ ${pkg}: Already installed"
       continue
     fi
@@ -4286,8 +4358,8 @@ install_packages_resilient() {
     else
       # Installation failed - check if it's actually installed now (race condition or dependency resolution)
       # Re-check dpkg status (may have been installed as dependency)
-      dpkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
-      if [ $? -eq 0 ] && echo "${dpkg_status}" | grep -q "Status: install ok installed"; then
+      pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
+      if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
         echo -e "  ✓ ${pkg}: Installed (via dependency)"
       else
         echo -e "  ✗ ${pkg}: Installation failed"
@@ -4367,8 +4439,8 @@ install_and_verify_group() {
     
     # Check package status (optimize: single dpkg call)
     local pkg_status
-    pkg_status=$(dpkg -s "${pkg}" 2>/dev/null)
-    if [ $? -eq 0 ] && echo "${pkg_status}" | grep -q "Status: install ok installed"; then
+    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
+    if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
       echo -e "  - ${pkg}: ${GREEN}OK${NC}"
     else
       echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
@@ -5866,7 +5938,6 @@ OPENCV_CORE_PACKAGES=(
   cmake
   ninja-build
   pkg-config
-  libopenblas-dev
   liblapacke-dev
   gfortran
   libtbb-dev
@@ -7113,7 +7184,23 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
                 echo "    Ceres library path not found or invalid"
             fi
             echo "  System Ceres packages:"
-            dpkg -l | grep libceres | sed 's/^/    /' || echo "    None (expected)"
+            ceres_pkg_list=("libceres-dev" "libceres3" "libceres2" "libceres" "ceres-solver")
+            ceres_pkg_found="false"
+            for ceres_pkg in "${ceres_pkg_list[@]}"; do
+                if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
+                    ceres_pkg_found="true"
+                    ceres_pkg_version=$(dpkg_get_installed_version "${ceres_pkg}" 2>/dev/null || true)
+                    if [ -n "${ceres_pkg_version:-}" ]; then
+                        printf '    %s (version: %s)\n' "${resolved_pkg}" "${ceres_pkg_version}"
+                    else
+                        printf '    %s\n' "${resolved_pkg}"
+                    fi
+                fi
+            done
+            if [ "${ceres_pkg_found}" != "true" ]; then
+                echo "    None (expected)"
+            fi
+            unset ceres_pkg ceres_pkg_found ceres_pkg_list ceres_pkg_version resolved_pkg
         else
             echo "✓ No Ceres-specific errors detected"
         fi
@@ -7411,13 +7498,31 @@ fi
 # Also install jupyter_packaging which is needed for Open3D's pip package installation
 echo "Installing jupyter_packaging (required for Open3D pip package installation)..."
 # Use --break-system-packages flag for externally-managed environments
-if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
-    # Installation completed, verify it's importable
-    sleep 1  # Give Python a moment to register the new module
-    if python3 -c "import jupyter_packaging" 2>/dev/null; then
-        JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-        echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
-    else
+JUPYTER_PACKAGING_LOG=$(mktemp -t jupyter_packaging_install.XXXXXX)
+if [ -z "${JUPYTER_PACKAGING_LOG:-}" ]; then
+    echo "  ✗ ERROR: Failed to create temporary log for jupyter_packaging installation"
+    exit 1
+fi
+
+set +e
+python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" >"${JUPYTER_PACKAGING_LOG}" 2>&1
+jupyter_packaging_status=$?
+set -e
+
+if [ "${jupyter_packaging_status}" -eq 0 ]; then
+    grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)" "${JUPYTER_PACKAGING_LOG}" || true
+else
+    echo "  ⚠ pip reported an error installing jupyter_packaging (log follows)"
+    sed 's/^/    /' "${JUPYTER_PACKAGING_LOG}"
+fi
+
+# Installation completed, verify it's importable
+sleep 1  # Give Python a moment to register the new module
+if python3 -c "import jupyter_packaging" 2>/dev/null; then
+    JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
+    echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
+else
+    if [ "${jupyter_packaging_status}" -eq 0 ]; then
         echo "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
         # Try to refresh Python's import cache
         python3 -c "import sys; sys.path.insert(0, ''); import importlib; importlib.invalidate_caches()" 2>/dev/null || true
@@ -7426,19 +7531,18 @@ if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packag
         if python3 -c "import jupyter_packaging" 2>/dev/null; then
             JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
             echo "  ✓ jupyter_packaging now importable (version: ${JUPYTER_PACKAGING_VER})"
+        else
+            echo "  ⚠ jupyter_packaging still not importable (may affect Open3D pip package build)"
+            echo "  Review pip output above for diagnostics"
         fi
-    fi
-else
-    # Installation may have succeeded but check anyway
-    sleep 1
-    if python3 -c "import jupyter_packaging" 2>/dev/null; then
-        JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-        echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
     else
         echo "  ⚠ jupyter_packaging installation failed or not importable (may affect Open3D pip package build)"
-        echo "  Will retry installation before Open3D Python package build"
+        echo "  Review pip output above for diagnostics"
     fi
 fi
+
+rm -f "${JUPYTER_PACKAGING_LOG}"
+unset JUPYTER_PACKAGING_LOG jupyter_packaging_status
 
 # Verify Jupyter packages were installed
 echo "Verifying Jupyter packages installation..."
@@ -7898,10 +8002,11 @@ def test_imports():
         print(f"  ✓ jaxlib version: {jaxlib.__version__}")
         
         # Check for version alignment (critical for JAX stability)
-        jax_base = jax.__version__.split('+')[0] if '+' in jax.__version__ else jax.__version__
-        jaxlib_base = jaxlib.__version__.split('+')[0].split('.')[0:2] if '+' in jaxlib.__version__ else jaxlib.__version__.split('.')[0:2]
-        jaxlib_base = '.'.join(jaxlib_base)
-        if jax_base.startswith(jaxlib_base) or jaxlib_base.startswith(jax_base.split('.')[0:2][0]):
+        jax_base_stripped = jax.__version__.split('+')[0]
+        jaxlib_base_stripped = jaxlib.__version__.split('+')[0]
+        jax_base_major_minor = '.'.join(jax_base_stripped.split('.')[:2])
+        jaxlib_major_minor = '.'.join(jaxlib_base_stripped.split('.')[:2])
+        if jax_base_major_minor and jaxlib_major_minor and jax_base_major_minor == jaxlib_major_minor:
             print(f"  ✓ Version alignment: jax {jax.__version__} matches jaxlib {jaxlib.__version__}")
         else:
             print(f"  ⚠ Version mismatch: jax {jax.__version__} vs jaxlib {jaxlib.__version__}")
@@ -8905,7 +9010,7 @@ fi
 #===============================================================================
 # BLOCK 26B: PYTORCH INSTALLATION (CUDA + MKL)
 #===============================================================================
-# Purpose: Install upstream PyTorch binaries built against CUDA 12.6 and Intel MKL.
+# Purpose: Install upstream PyTorch binaries built against the configured CUDA version and Intel MKL.
 # Self-contained: Yes (installs wheels and verifies linkage)
 # Dependencies:
 #   - Block 12A: Intel oneAPI MKL environment configured
@@ -8917,26 +9022,82 @@ ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-${ENABLE_PYTORCH_BUILD:-true}}
 if [ "${ENABLE_PYTORCH_INSTALL}" != true ]; then
   echo "Skipping PyTorch installation (ENABLE_PYTORCH_INSTALL=${ENABLE_PYTORCH_INSTALL})"
 else
+  PYTORCH_TARGET_CUDA_VERSION="${CUDA_VERSION:-${CUDA_VERSION_SELECTED:-${CUDA_VERSION_PREFERRED:-${CUDA_MAJOR:-}}}}"
+  if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ] && [ -n "${CUDA_VERSION:-}" ]; then
+      PYTORCH_TARGET_CUDA_VERSION="${CUDA_VERSION}"
+  fi
+  if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ] && [ -n "${CUDA_MAJOR:-}" ] && [ -n "${CUDA_MINOR:-}" ]; then
+      PYTORCH_TARGET_CUDA_VERSION="${CUDA_MAJOR}.${CUDA_MINOR}"
+  fi
+  if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ]; then
+      PYTORCH_TARGET_CUDA_VERSION="12.6"
+  fi
+  PYTORCH_CUDA_SUFFIX="$(echo "${PYTORCH_TARGET_CUDA_VERSION}" | tr -d '.')"
+  if ! [[ "${PYTORCH_CUDA_SUFFIX}" =~ ^[0-9]+$ ]]; then
+      echo -e "  ${RED}✗ Unable to derive CUDA wheel suffix from version '${PYTORCH_TARGET_CUDA_VERSION}'${NC}"
+      exit 1
+  fi
+  PYTORCH_PIP_INDEX_URL="https://download.pytorch.org/whl/cu${PYTORCH_CUDA_SUFFIX}"
+  export EXPECTED_TORCH_CUDA_VERSION="${PYTORCH_TARGET_CUDA_VERSION}"
+
   echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "${BLUE}BLOCK 26B: PyTorch Installation (CUDA 12.6 + MKL)${NC}"
+  echo -e "${BLUE}BLOCK 26B: PyTorch Installation (CUDA ${PYTORCH_TARGET_CUDA_VERSION} + MKL)${NC}"
   echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
 
   echo -e "${YELLOW}[26B.1] Preparing Python environment for PyTorch...${NC}"
-  if ! python3 -m pip install --upgrade pip setuptools wheel; then
-      echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
-      exit 1
+  set +e
+  python3 -m pip install --upgrade --ignore-installed pip setuptools wheel >/tmp/pip_upgrade.log 2>&1
+  pip_upgrade_status=$?
+  set -e
+  if [ "${pip_upgrade_status}" -ne 0 ]; then
+      if grep -q "externally-managed-environment" /tmp/pip_upgrade.log 2>/dev/null; then
+          echo "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
+          if ! python3 -m pip install --upgrade --ignore-installed --break-system-packages pip setuptools wheel >>/tmp/pip_upgrade.log 2>&1; then
+              echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
+              sed 's/^/    /' /tmp/pip_upgrade.log || true
+              rm -f /tmp/pip_upgrade.log
+              exit 1
+          fi
+      else
+          echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
+          sed 's/^/    /' /tmp/pip_upgrade.log || true
+          rm -f /tmp/pip_upgrade.log
+          exit 1
+      fi
   fi
+  rm -f /tmp/pip_upgrade.log
+  unset pip_upgrade_status
 
-  echo -e "${YELLOW}[26B.2] Installing PyTorch CUDA 12.6 wheels with MKL backend...${NC}"
-  if ! python3 -m pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126; then
-      echo -e "  ${RED}✗ PyTorch installation failed${NC}"
-      exit 1
+  echo -e "${YELLOW}[26B.2] Installing PyTorch CUDA ${PYTORCH_TARGET_CUDA_VERSION} wheels with MKL backend...${NC}"
+  set +e
+  python3 -m pip install --no-cache-dir --ignore-installed torch torchvision torchaudio --index-url "${PYTORCH_PIP_INDEX_URL}" >/tmp/pytorch_install.log 2>&1
+  pytorch_install_status=$?
+  set -e
+  if [ "${pytorch_install_status}" -ne 0 ]; then
+      if grep -q "externally-managed-environment" /tmp/pytorch_install.log 2>/dev/null; then
+          echo "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
+          if ! python3 -m pip install --no-cache-dir --ignore-installed --break-system-packages torch torchvision torchaudio --index-url "${PYTORCH_PIP_INDEX_URL}" >>/tmp/pytorch_install.log 2>&1; then
+              echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+              sed 's/^/    /' /tmp/pytorch_install.log || true
+              rm -f /tmp/pytorch_install.log
+              exit 1
+          fi
+      else
+          echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+          sed 's/^/    /' /tmp/pytorch_install.log || true
+          rm -f /tmp/pytorch_install.log
+          exit 1
+      fi
   fi
+  rm -f /tmp/pytorch_install.log
+  unset pytorch_install_status
 
   echo -e "${YELLOW}[26B.3] Verifying PyTorch CUDA/MKL linkage...${NC}"
-  if python3 - <<'PY' 2>/tmp/pytorch_verify.log; then
+set +e
+python3 - <<'PY' 2>/tmp/pytorch_verify.log
 import torch
+import os
 import io
 from contextlib import redirect_stdout
 
@@ -8948,8 +9109,9 @@ print(config_output, end="")
 
 cuda_version = torch.version.cuda or "unknown"
 print(f"CUDA build version: {cuda_version}")
-if cuda_version != "unknown" and not str(cuda_version).startswith("12.6"):
-    raise SystemExit(f"Unexpected CUDA toolkit version reported by PyTorch: {cuda_version}")
+expected_cuda = os.environ.get("EXPECTED_TORCH_CUDA_VERSION", "").strip()
+if expected_cuda and cuda_version != "unknown" and not str(cuda_version).startswith(expected_cuda):
+    raise SystemExit(f"Unexpected CUDA toolkit version reported by PyTorch (expected {expected_cuda}, got {cuda_version})")
 
 if not torch.backends.mkl.is_available() and "MKL" not in config_output:
     raise SystemExit("Intel MKL backend not detected in PyTorch build")
@@ -8963,13 +9125,16 @@ print(f"CPU matmul checksum: {cpu_matmul}")
 print(f"PyTorch version: {torch.__version__}")
 print(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
 PY
-  then
+verify_status=$?
+set -e
+  if [ "${verify_status}" -eq 0 ]; then
       echo -e "  ${GREEN}✓ PyTorch MKL/CUDA verification succeeded${NC}"
   else
       echo -e "  ${RED}✗ PyTorch verification failed${NC}"
       sed 's/^/    /' /tmp/pytorch_verify.log || true
       exit 1
   fi
+  unset verify_status
 
   rm -f /tmp/pytorch_verify.log 2>/dev/null || true
   echo -e "${GREEN}✓ PyTorch installation complete${NC}"
@@ -9104,8 +9269,8 @@ LLVM14_PACKAGES=(
     "libunwind-14-dev"
 )
 if install_packages_resilient "LLVM-14 libc++" "${LLVM14_PACKAGES[@]}"; then
-    if { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+-14-dev"; } && \
-       { dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+abi-14-dev"; }; then
+    if dpkg_resolve_installed_package "libc++-14-dev" >/dev/null 2>&1 && \
+       dpkg_resolve_installed_package "libc++abi-14-dev" >/dev/null 2>&1; then
         LLVM14_INSTALLED=true
         echo "✓ LLVM-14 libc++ packages installed successfully"
     else
@@ -9167,31 +9332,31 @@ if ! install_packages_resilient "Open3D optional packages" "${OPEN3D_OPTIONAL_PA
 fi
 
 # Check which optional packages were installed
-if dpkg -l 2>/dev/null | grep -q "^ii.*libflann-dev"; then
+if dpkg_resolve_installed_package "libflann-dev" >/dev/null 2>&1; then
     echo "✓ FLANN installed (point cloud nearest neighbor search)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libpcl-dev"; then
+if dpkg_resolve_installed_package "libpcl-dev" >/dev/null 2>&1; then
     echo "✓ PCL installed (Point Cloud Library)"
 else
     echo "ℹ PCL not available (may require universe repo - optional)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libnetcdf-dev"; then
+if dpkg_resolve_installed_package "libnetcdf-dev" >/dev/null 2>&1; then
     echo "✓ NetCDF installed (scientific data formats)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libfmt-dev"; then
+if dpkg_resolve_installed_package "libfmt-dev" >/dev/null 2>&1; then
     echo "✓ fmt installed (C++ formatting library - enables USE_SYSTEM_FMT=ON)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libassimp-dev"; then
+if dpkg_resolve_installed_package "libassimp-dev" >/dev/null 2>&1; then
     echo "✓ Assimp installed (3D model loading - enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*pybind11-dev"; then
+if dpkg_resolve_installed_package "pybind11-dev" >/dev/null 2>&1; then
     echo "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libtbb-dev"; then
+if dpkg_resolve_installed_package "libtbb-dev" >/dev/null 2>&1; then
     echo "✓ TBB installed (System Threading Building Blocks from libtbb-dev - not MKL TBB)"
     echo "  This ensures OpenBLAS compatibility and enables USE_SYSTEM_TBB=ON"
 fi
-if dpkg -l 2>/dev/null | grep -q "^ii.*libspdlog-dev"; then
+if dpkg_resolve_installed_package "libspdlog-dev" >/dev/null 2>&1; then
     echo "✓ spdlog installed (C++ logging library)"
 fi
 
@@ -9211,13 +9376,13 @@ fi
 
 # Check LLVM-14 packages (stable on Ubuntu 24.04 Noble)
 # NOTE: LLVM-11 not available on Noble. LLVM-14 is more stable than LLVM-18
-if dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+-14-dev"; then
+if dpkg_resolve_installed_package "libc++-14-dev" >/dev/null 2>&1; then
     echo "✓ LLVM-14 libc++ development package installed"
 else
     echo "⚠ WARNING: libc++-14-dev not installed (libunwind conflict possible with Python exceptions)"
     VERIFY_ERROR=1
 fi
-if dpkg -l 2>/dev/null | grep -E -q "^ii.*libc\+\+abi-14-dev"; then
+if dpkg_resolve_installed_package "libc++abi-14-dev" >/dev/null 2>&1; then
     echo "✓ LLVM-14 libc++abi development package installed"
 else
     echo "⚠ WARNING: libc++abi-14-dev not installed (libunwind conflict possible)"
@@ -9227,7 +9392,7 @@ fi
 # Check GLFW3
 if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake" ]; then
     echo "✓ GLFW3 CMake config found"
-elif dpkg -l 2>/dev/null | grep -q "^ii.*libglfw3-dev"; then
+elif dpkg_resolve_installed_package "libglfw3-dev" >/dev/null 2>&1; then
     echo "✓ libglfw3-dev package installed"
 else
     echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
@@ -9236,7 +9401,7 @@ fi
 
 # Check OpenBLAS (CRITICAL - required to prevent build errors)
 if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
-   (dpkg -l 2>/dev/null | grep -q "^ii.*libopenblas-dev"); then
+   dpkg_resolve_installed_package "libopenblas-dev" >/dev/null 2>&1; then
     echo "✓ OpenBLAS development package installed"
 else
     echo "⚠ WARNING: libopenblas-dev may not be installed correctly"
@@ -9244,14 +9409,17 @@ else
 fi
 
 # Check OpenMP (optional but recommended for parallel operations)
-if (ldconfig -p 2>/dev/null | grep -q libomp) || (dpkg -l 2>/dev/null | grep -q "^ii.*libomp"); then
+if (ldconfig -p 2>/dev/null | grep -q libomp) || \
+   dpkg_resolve_installed_package "libomp-dev" >/dev/null 2>&1 || \
+   dpkg_resolve_installed_package "libomp5" >/dev/null 2>&1; then
     echo "✓ OpenMP library installed"
 else
     echo "⚠ WARNING: OpenMP not found (parallel operations may be limited)"
 fi
 
 # Check FLANN (optional - used for nearest neighbor searches)
-if (dpkg -l 2>/dev/null | grep -q "^ii.*libflann-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
+if dpkg_resolve_installed_package "libflann-dev" >/dev/null 2>&1 || \
+   [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
     echo "✓ FLANN library installed"
 else
     echo "ℹ FLANN not found (optional - may be in universe repo)"
@@ -10502,9 +10670,8 @@ if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
     echo "  This may cause ninja install-pip-package to fail"
     echo "  Will fall back to alternative installation methods if needed"
     # Try one more time with user site-packages enabled
-    local user_site
     user_site=$(python3 -m site --user-site 2>/dev/null || echo '')
-    if PYTHONPATH="${PYTHONPATH:-}:${user_site}" python3 -c "import jupyter_packaging" 2>/dev/null; then
+    if [ -n "${user_site}" ] && PYTHONPATH="${PYTHONPATH:-}:${user_site}" python3 -c "import jupyter_packaging" 2>/dev/null; then
         echo "  ✓ jupyter_packaging found in user site-packages, updating PYTHONPATH"
         export PYTHONPATH="${PYTHONPATH}:${user_site}"
     fi
@@ -10568,10 +10735,10 @@ verify_open3d_installation() {
                     echo "  [Diagnostic] This may be a Python path issue"
                 fi
             fi
-        elif echo "${IMPORT_ERROR}" | grep -qE "libOpen3D|libopen3d|undefined symbol"; then
+        elif echo "${import_error}" | grep -qE "libOpen3D|libopen3d|undefined symbol"; then
             # Library loading issue
             echo "  [Diagnostic] Open3D import failed due to library loading issue"
-            echo "  [Diagnostic] Error: ${IMPORT_ERROR}"
+            echo "  [Diagnostic] Error: ${import_error}"
             echo "  [Diagnostic] Check LD_LIBRARY_PATH and ensure C++ libraries are accessible"
         fi
         return 1
@@ -10872,8 +11039,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                     break
                 fi
             else
-                PIP_EXIT_CODE_DIR="${PIPESTATUS[0]}"
-                echo "  ⚠ python3 -m pip install failed for ${PKG_DIR} (exit code: ${PIP_EXIT_CODE_DIR})"
+                echo "  ⚠ python3 -m pip install failed for ${PKG_DIR} (exit code: ${PIP_INSTALL_DIR_EXIT})"
             fi
         fi
     done
@@ -11038,8 +11204,7 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 echo "⚠ Wheel installed but verification failed"
             fi
         else
-            PIP_EXIT_CODE="${PIPESTATUS[0]}"
-            echo "⚠ python3 -m pip install failed (exit code: ${PIP_EXIT_CODE})"
+            echo "⚠ python3 -m pip install failed (exit code: ${PIP_INSTALL_EXIT})"
         fi
     else
         echo "  No wheel found in ephemeral pip cache directories"
@@ -11328,9 +11493,9 @@ echo "To enable Open3D ML features for deep learning on point clouds, meshes, an
 echo "3D data, you can rebuild Open3D with PyTorch support:"
 echo ""
 echo "  1. Install PyTorch (via Conda or pip):"
-echo "     conda install pytorch torchvision torchaudio pytorch-cuda=12.6 -c pytorch -c nvidia"
+echo "     conda install pytorch torchvision torchaudio pytorch-cuda=${CUDA_VERSION} -c pytorch -c nvidia"
 echo "     OR"
-echo "     python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126"
+echo "     python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu${CUDA_VERSION//./}"
 echo ""
 echo "  2. Rebuild Open3D with ML support:"
 echo "     cd /tmp && git clone https://github.com/isl-org/Open3D.git"
@@ -11835,10 +12000,10 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   if command -v pgrep >/dev/null 2>&1; then
     vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1)
     if [ -n "${vnc_cmd}" ]; then
-      vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1)
+      vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
     fi
   else
-    vnc_display=$(ps aux 2>/dev/null | grep -o 'Xvnc.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+    vnc_display=$(ps aux 2>/dev/null | grep -oE 'Xvnc.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
   fi
   
   # Method 2: Check for vncserver processes
@@ -11846,10 +12011,10 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
     if command -v pgrep >/dev/null 2>&1; then
       vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1)
       if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(echo "${vnc_cmd}" | grep -o ':[0-9]' | head -1)
+        vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
       fi
     else
-      vnc_display=$(ps aux 2>/dev/null | grep -o 'vncserver.*:[0-9]' | head -1 | grep -o ':[0-9]' | head -1)
+      vnc_display=$(ps aux 2>/dev/null | grep -oE 'vncserver.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
     fi
   fi
   
@@ -11904,7 +12069,7 @@ set -euo pipefail
 
 readonly VGLSERVER_CONFIG="/opt/VirtualGL/bin/vglserver_config"
 
-if [ -x "${VGLSERVER_CONFIG}" ]; then
+  if [ -x "${VGLSERVER_CONFIG}" ]; then
   printf 'Running VirtualGL server configuration...\n'
   printf 'This will set up permissions for VirtualGL to access the 3D X server\n'
   "${VGLSERVER_CONFIG}"
@@ -12051,6 +12216,13 @@ set -euo pipefail
 
 # VirtualGL GPU Benchmark Script
 
+TIMEOUT_BIN=""
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_BIN="$(command -v timeout)"
+else
+  echo "⚠ 'timeout' utility not available; timed benchmark samples will be skipped."
+fi
+
 echo "=========================================="
 echo "VirtualGL GPU Benchmark"
 echo "=========================================="
@@ -12072,11 +12244,12 @@ collect_samples() {
   shift
   local run_output=""
 
-  if command -v timeout >/dev/null 2>&1; then
-    run_output="$(timeout "${duration}" "$@" 2>&1 || true)"
-  else
-    run_output="$("$@" 2>&1 || true)"
+  if [ -z "${TIMEOUT_BIN}" ]; then
+    echo "   ⚠ Skipping '${*}' sample (timeout utility not available)"
+    return 0
   fi
+
+  run_output="$(${TIMEOUT_BIN} "${duration}" "$@" 2>&1 || true)"
 
   printf '%s\n' "${run_output}" | grep -Ei "frames|fps" | tail -3 || true
 }
@@ -12336,13 +12509,17 @@ compare_render() {
     timeout_available="yes"
   fi
 
+  if [ "${timeout_available}" != "yes" ]; then
+    echo "⚠ 'timeout' utility not available; skipping timed FPS comparisons."
+  fi
+
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
       output="$(timeout 5 "${app}" 2>&1 || true)"
+      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
     else
-      output="$("${app}" 2>&1 || true)"
+      echo "   ${app} available but timing skipped (requires 'timeout')"
     fi
-    printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
   else
     echo "Application ${app} not found"
   fi
@@ -12357,10 +12534,10 @@ compare_render() {
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
       output="$(timeout 5 vglrun "${app}" 2>&1 || true)"
+      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
     else
-      output="$(vglrun "${app}" 2>&1 || true)"
+      echo "   ${app} with VirtualGL available but timing skipped (requires 'timeout')"
     fi
-    printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
   else
     echo "Application ${app} not found"
     return 1
@@ -12921,6 +13098,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       if [ "${retry_count}" -lt "${max_retries}" ]; then
         echo "Retrying Miniforge installation..."
         rm -rf "${MINIFORGE_HOME}"
+      fi
     fi
   done
   if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
@@ -13784,6 +13962,61 @@ VERBOSE_MODE="${VERBOSE_MODE:-0}"
 # Security: bind to localhost only (use -nolisten for remote access)
 SECURITY_ARGS="-localhost"
 
+# --- Help Function ---
+show_help() {
+  cat << 'EOF'
+Enhanced TurboVNC + VirtualGL + noVNC Launcher
+
+USAGE:
+  start_vnc_xfce.sh [OPTIONS]
+
+OPTIONS:
+  --vgl-display DISPLAY    Set VGL_DISPLAY (default: auto-detect)
+  --vgl-compress METHOD    Set compression (proxy|jpeg|rgb) (default: proxy)
+  --vgl-readback MODE      Set readback mode (sync|async) (default: sync)
+  --vgl-fps               Enable FPS display (default: disabled)
+  --vgl-verbose           Enable verbose VirtualGL output
+  --vgl-debug             Enable debug mode with detailed logging
+  --vnc-display NUM       Set VNC display number (default: 1)
+  --vnc-geometry SIZE     Set VNC geometry (default: 1920x1080)
+  --vnc-depth BITS        Set color depth (default: 24)
+  --no-vgl                Disable VirtualGL (software rendering)
+  --force-vgl             Force VirtualGL even if not detected
+  --debug                 Enable debug mode
+  --verbose               Enable verbose output
+  --help, -h              Show this help message
+
+ENVIRONMENT VARIABLES:
+  VGL_DISPLAY_AUTO_DETECT=1    Auto-detect VNC display (default: 1)
+  VGL_DISPLAY_FALLBACK=:0      Fallback display (default: :0)
+  VGL_COMPRESS=proxy           Compression method (default: proxy)
+  VGL_READBACK=sync            Readback mode (default: sync)
+  VGL_FPS=0                    FPS display (default: 0)
+  VGL_VERBOSE=0                Verbose output (default: 0)
+  VGL_DEBUG=0                  Debug mode (default: 0)
+  VNC_DISPLAY_NUM=1            VNC display number (default: 1)
+  VNC_GEOM=1920x1080           VNC geometry (default: 1920x1080)
+  VNC_DEPTH=24                 Color depth (default: 24)
+
+EXAMPLES:
+  # Auto-detect everything
+  start_vnc_xfce.sh
+
+  # Specify VNC display and enable debug
+  start_vnc_xfce.sh --vnc-display 2 --vgl-debug
+
+  # Force specific VirtualGL display
+  start_vnc_xfce.sh --vgl-display :2 --vgl-verbose
+
+  # Disable VirtualGL (software rendering)
+  start_vnc_xfce.sh --no-vgl
+
+  # Test different compression
+  start_vnc_xfce.sh --vgl-compress jpeg --vgl-fps
+EOF
+}
+
+
 # --- Command Line Argument Parsing ---
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
@@ -13882,60 +14115,6 @@ parse_arguments() {
         ;;
     esac
   done
-}
-
-# --- Help Function ---
-show_help() {
-  cat << 'EOF'
-Enhanced TurboVNC + VirtualGL + noVNC Launcher
-
-USAGE:
-  start_vnc_xfce.sh [OPTIONS]
-
-OPTIONS:
-  --vgl-display DISPLAY    Set VGL_DISPLAY (default: auto-detect)
-  --vgl-compress METHOD    Set compression (proxy|jpeg|rgb) (default: proxy)
-  --vgl-readback MODE      Set readback mode (sync|async) (default: sync)
-  --vgl-fps               Enable FPS display (default: disabled)
-  --vgl-verbose           Enable verbose VirtualGL output
-  --vgl-debug             Enable debug mode with detailed logging
-  --vnc-display NUM       Set VNC display number (default: 1)
-  --vnc-geometry SIZE     Set VNC geometry (default: 1920x1080)
-  --vnc-depth BITS        Set color depth (default: 24)
-  --no-vgl                Disable VirtualGL (software rendering)
-  --force-vgl             Force VirtualGL even if not detected
-  --debug                 Enable debug mode
-  --verbose               Enable verbose output
-  --help, -h              Show this help message
-
-ENVIRONMENT VARIABLES:
-  VGL_DISPLAY_AUTO_DETECT=1    Auto-detect VNC display (default: 1)
-  VGL_DISPLAY_FALLBACK=:0      Fallback display (default: :0)
-  VGL_COMPRESS=proxy           Compression method (default: proxy)
-  VGL_READBACK=sync            Readback mode (default: sync)
-  VGL_FPS=0                    FPS display (default: 0)
-  VGL_VERBOSE=0                Verbose output (default: 0)
-  VGL_DEBUG=0                  Debug mode (default: 0)
-  VNC_DISPLAY_NUM=1            VNC display number (default: 1)
-  VNC_GEOM=1920x1080           VNC geometry (default: 1920x1080)
-  VNC_DEPTH=24                 Color depth (default: 24)
-
-EXAMPLES:
-  # Auto-detect everything
-  start_vnc_xfce.sh
-
-  # Specify VNC display and enable debug
-  start_vnc_xfce.sh --vnc-display 2 --vgl-debug
-
-  # Force specific VirtualGL display
-  start_vnc_xfce.sh --vgl-display :2 --vgl-verbose
-
-  # Disable VirtualGL (software rendering)
-  start_vnc_xfce.sh --no-vgl
-
-  # Test different compression
-  start_vnc_xfce.sh --vgl-compress jpeg --vgl-fps
-EOF
 }
 
 # --- VirtualGL Display Detection ---
@@ -14520,10 +14699,10 @@ display_connection_info() {
     echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@login.hpc.edu"
     echo ""
     echo "Stage 2 - From Login Node to Compute Node:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@${NODE}"
+    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} ${login_placeholder}@${node}"
     echo ""
     echo "Alternative - Direct Two-Stage Tunnel:"
-    echo "   ssh -J \${USER}@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@${NODE}"
+    echo "   ssh -J ${login_placeholder}@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} ${login_placeholder}@${node}"
     echo ""
     echo "Open browser to: http://localhost:${TURBOVNC_WEB_PORT}"
     echo "   (Requires Java plugin - not recommended for modern browsers)"
@@ -15755,7 +15934,7 @@ if [ -z "${PY3CAIRO_PC_LOCATION:-}" ]; then
         fi
     else
         echo "⚠ py3cairo.pc not found - attempting to reinstall python3-cairo-dev..."
-        apt-get install -y --reinstall python3-cairo-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall python3-cairo-dev 2>/dev/null || echo "  (Reinstall may have failed)"
         # Search again after reinstall
         PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 || echo "")
         if [ -n "${PY3CAIRO_PC_FOUND:-}" ] && [ -f "${PY3CAIRO_PC_FOUND}" ]; then
@@ -15783,7 +15962,7 @@ if [ -z "${PYGOBJECT_PC_LOCATION:-}" ]; then
         fi
     else
         echo "⚠ pygobject-3.0.pc not found - attempting to reinstall python-gi-dev..."
-        apt-get install -y --reinstall python-gi-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall python-gi-dev 2>/dev/null || echo "  (Reinstall may have failed)"
         PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 || echo "")
         if [ -n "${PYGOBJECT_PC_FOUND:-}" ] && [ -f "${PYGOBJECT_PC_FOUND}" ]; then
             PYGOBJECT_PC_LOCATION=$(dirname "${PYGOBJECT_PC_FOUND}" 2>/dev/null || echo "")
@@ -15928,7 +16107,7 @@ else
         if ! apt-get update -qq; then
             echo "⚠ WARNING: apt-get update failed for Xpra repository"
         fi
-        if apt-get install -y --no-install-recommends xpra 2>&1 | tee -a /tmp/xpra_install.log; then
+        if DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xpra 2>&1 | tee -a /tmp/xpra_install.log; then
             echo "✓ Xpra installed from official repository"
             XPRA_INSTALLED=true
         else
@@ -18049,6 +18228,9 @@ fi
 echo "Zenoh infrastructure ready!"
 echo "  Router: http://localhost:8000 (REST API)"
 echo "  Logs: /tmp/zenoh*.log"
+echo ""
+echo "To stop everything: zenoh_stop"
+echo "To check status:   zenoh_status"
 EOF
 then
   echo "✗ Failed to write /usr/local/bin/zenoh_start" >&2
@@ -19056,10 +19238,24 @@ run_disk_benchmark() {
   fi
 
   local tmp_file=""
-  tmp_file=$(mktemp /tmp/benchmark.dd.XXXXXX)
+  if ! tmp_file=$(mktemp /tmp/benchmark.dd.XXXXXX); then
+    printf '  ⚠ Failed to create temp file for disk benchmark\n\n'
+    return 0
+  fi
+
+  trap 'rm -f "${tmp_file}" 2>/dev/null || true' RETURN
 
   local dd_output=""
-  if dd_output=$(dd if=/dev/zero of="${tmp_file}" bs=1M count=256 conv=fdatasync 2>&1); then
+  local dd_status=0
+  local -a dd_cmd=(dd if=/dev/zero of="${tmp_file}" bs=1M count=256 conv=fdatasync)
+
+  if command -v timeout >/dev/null 2>&1; then
+    dd_output=$(timeout 60s "${dd_cmd[@]}" 2>&1) || dd_status=$?
+  else
+    dd_output=$("${dd_cmd[@]}" 2>&1) || dd_status=$?
+  fi
+
+  if [ "${dd_status}" -eq 0 ]; then
     local copied_line=""
     copied_line=$(printf '%s\n' "${dd_output}" | grep 'copied' || true)
     if [ -n "${copied_line}" ]; then
@@ -19072,6 +19268,7 @@ run_disk_benchmark() {
   fi
 
   rm -f "${tmp_file}" 2>/dev/null || true
+  trap - RETURN
 }
 
 # Issue a short latency probe to a public endpoint when tools permit.
