@@ -4010,8 +4010,68 @@ for candidate in \
 done
 
 # Patch GraphBLAS to explicitly link math library
+# CRITICAL FIX: The check_symbol_exists call doesn't link against libm during the check,
+# which can cause it to pass even when linking will fail. We fix this by:
+# 1. Updating check_symbol_exists to use CMAKE_REQUIRED_LIBRARIES
+# 2. Always ensuring libm is linked on Unix systems
 if [ -n "${GRAPHBLAS_CMakeLists}" ] && [ -f "${GRAPHBLAS_CMakeLists}" ]; then
     echo "  → Found GraphBLAS CMakeLists.txt: ${GRAPHBLAS_CMakeLists}"
+    
+    # First, fix the check_symbol_exists call to use CMAKE_REQUIRED_LIBRARIES
+    # This ensures the check actually links against libm, not just checks the header
+    if grep -q "check_symbol_exists.*fmax" "${GRAPHBLAS_CMakeLists}" 2>/dev/null && \
+       ! grep -q "CMAKE_REQUIRED_LIBRARIES.*m" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+        echo "  → Fixing check_symbol_exists to link against libm during check..."
+        cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
+        python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+
+with open(cmake_file, 'r') as f:
+    lines = f.readlines()
+
+# Find the check_symbol_exists line and fix it
+fixed = False
+for i, line in enumerate(lines):
+    # Match: check_symbol_exists ( fmax \"math.h\" NO_LIBM )
+    if re.search(r'check_symbol_exists\s*\(\s*fmax\s+\"math\.h\"\s+NO_LIBM', line):
+        # Check if already fixed
+        if i > 0 and 'CMAKE_REQUIRED_LIBRARIES' in lines[i-1]:
+            print('  ✓ check_symbol_exists already uses CMAKE_REQUIRED_LIBRARIES')
+            sys.exit(0)
+        # Insert CMAKE_REQUIRED_LIBRARIES setup before the check
+        indent = len(line) - len(line.lstrip())
+        lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES \${CMAKE_REQUIRED_LIBRARIES} )\n')
+        lines.insert(i+1, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \"m\" )\n')
+        # Find the closing of check_symbol_exists (next line with if)
+        # Insert restore after the check_symbol_exists line
+        for j in range(i+3, min(i+10, len(lines))):
+            if re.search(r'if\s*\(\s*NOT\s+NO_LIBM', lines[j]):
+                # Insert restore before the if statement
+                indent_if = len(lines[j]) - len(lines[j].lstrip())
+                lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+                fixed = True
+                break
+        if not fixed:
+            # If we couldn't find the if, add restore after check_symbol_exists line
+            lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+            fixed = True
+        break
+
+if fixed:
+    with open(cmake_file, 'w') as f:
+        f.writelines(lines)
+    print('  ✓ Fixed check_symbol_exists to use CMAKE_REQUIRED_LIBRARIES')
+    sys.exit(0)
+else:
+    print('  ⚠ Could not find check_symbol_exists pattern to fix (may already be fixed)')
+    sys.exit(1)
+" "${GRAPHBLAS_CMakeLists}" 2>&1 || echo "  ⚠ Failed to fix check_symbol_exists, will ensure libm is linked directly"
+    fi
+    
+    # Also ensure libm is always linked on Unix (safer approach)
     # Check if GraphBLAS target already links to math library (case-insensitive)
     if ! grep -qiE "(target_link_libraries.*GraphBLAS.*\bm\b|target_link_libraries.*graphblas.*\bm\b)" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
         # Find the GraphBLAS target name (could be GraphBLAS, graphblas, etc.)
