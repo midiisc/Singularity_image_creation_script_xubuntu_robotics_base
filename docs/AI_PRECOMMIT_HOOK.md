@@ -27,6 +27,31 @@ The hook runs two consecutive stages:
 
 Set the following environment variables (e.g., in your shell profile or via `direnv`). For convenience, `scripts/hooks/pre-commit.env.example` can be copied to `.git/hooks/pre-commit.env` and customised; the example pins `SKIP_AI_REVIEW=0` so the AI review always runs unless you explicitly override it.
 
+### Auto-Loading Environment Variables
+
+To automatically load AI review environment variables in all shell sessions, add the following to your shell profile (e.g., `~/.bashrc` for bash or `~/.zshrc` for zsh):
+
+```bash
+# Auto-load AI review environment variables for git pre-commit hook
+# Source: Singularity_image_creation_script_xubuntu_robotics_base/.git/hooks/pre-commit.env
+PRE_COMMIT_ENV="$HOME/Documents/Singularity_image_creation_script_xubuntu_robotics_base/.git/hooks/pre-commit.env"
+if [ -f "$PRE_COMMIT_ENV" ]; then
+    # Source the file with restricted permissions check
+    if [ -r "$PRE_COMMIT_ENV" ]; then
+        # shellcheck disable=SC1090
+        . "$PRE_COMMIT_ENV"
+    fi
+fi
+```
+
+**Benefits:**
+- Environment variables are automatically available in all new shell sessions
+- No need to manually export variables before running git commands
+- Pre-commit hook and shell sessions use the same configuration source
+- Variables persist across terminal sessions
+
+**Note:** Adjust the path in `PRE_COMMIT_ENV` to match your repository location. After adding this to your shell profile, open a new terminal or run `source ~/.bashrc` (or `source ~/.zshrc`) to load the variables.
+
 | Variable | Purpose | Default / Notes |
 |----------|---------|-----------------|
 | `AI_REVIEW_TOKEN` | Primary API token (Claude) | Falls back to `ANTHROPIC_API_KEY`, `CLAUDE_API_KEY`. Required for complex reviews. |
