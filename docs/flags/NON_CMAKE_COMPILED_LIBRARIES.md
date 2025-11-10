@@ -120,7 +120,7 @@ All Rust tools are compiled from source using `cargo install`. These tools **do 
 
 ## Summary
 
-### CMake-Based Libraries (Documented Separately)
+### CMake-Based Libraries (Documented in this directory)
 1. ✅ Ceres Solver 2.2.0 - `CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md`
 2. ✅ g2o (latest) - `G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md`
 3. ✅ GTSAM 4.2.0 - `GTSAM_4.2.0_CMAKE_FLAGS_DOCUMENTATION.md`

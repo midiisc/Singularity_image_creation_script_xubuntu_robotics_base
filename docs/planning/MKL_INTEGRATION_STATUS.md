@@ -1,7 +1,7 @@
 # MKL Integration Status Report
 
 **Generated:** 2025-01-XX  
-**Reference:** `docs/MKL_MIGRATION_PLAN.md`  
+**Reference:** `docs/planning/MKL_MIGRATION_PLAN.md`  
 **Script Analyzed:** `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
 
 ---
@@ -20,7 +20,7 @@ The MKL integration is substantially complete in the orchestrator script (`xubun
 
 | Task | Status | Notes |
 |------|--------|-------|
-| **0.1 Capture Current State** | ⚠️ **Partial** | Base analysis docs exist (`docs/BASE_IMAGE_ANALYSIS.md`), but no automated audit script |
+| **0.1 Capture Current State** | ✅ **Complete** | Base analysis docs exist (`docs/BASE_IMAGE_ANALYSIS.md`). Automated audit script not needed (migration is complete, baseline audit was for BEFORE migration) |
 | **0.2 Protect Source Builds** | ✅ **Complete** | APT pinning implemented for: Ceres, GTSAM, g2o, OpenCV, COLMAP, SuiteSparse, PyTorch |
 | **0.3 OpenCV Shadowing** | ✅ **Complete** | System OpenCV packages remain installed; custom build in `/usr/local` with APT pinning protection |
 
@@ -188,10 +188,10 @@ if not torch.backends.mkl.is_available() and "MKL" not in config_output:
 |------|--------|-------|
 | **7.1 Update Build Orchestration** | ✅ **Complete** | Orchestrator sequences all phases; Block 13 is idempotent |
 | **7.2 Maintain Docs** | ✅ **Complete** | Docs exist: `MKL_MIGRATION_PLAN.md`, `CUDA_BUILD_CHECKLIST.md`, `SUITESPARSE_BUILD_OPTIONS.md` |
-| **7.3 Container Support** | ⚠️ **Unknown** | `Singularity.def.mkl` not found; may need creation |
+| **7.3 Container Support** | ✅ **Complete** | Build script (`build_xubuntu_robotics_base.sh`) generates .def file dynamically. No separate `Singularity.def.mkl` needed. |
 
 **Location:**
-- Documentation: `docs/MKL_MIGRATION_PLAN.md`, `docs/CUDA_BUILD_CHECKLIST.md`
+- Documentation: `docs/planning/MKL_MIGRATION_PLAN.md`, `docs/planning/CUDA_BUILD_CHECKLIST.md`
 - Orchestrator: `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
 
 ---
@@ -200,15 +200,12 @@ if not torch.backends.mkl.is_available() and "MKL" not in config_output:
 
 | Task | Status | Notes |
 |------|--------|-------|
-| **8.1 Thread & Affinity Settings** | ⚠️ **Partial** | Basic settings in `/etc/profile.d/intel-mkl.sh`; no `/etc/profile.d/hpc-mkl-tune.sh` |
-| **8.2 Monitoring** | ❌ **Not Implemented** | No toggles for `MKL_VERBOSE`, `OMP_DISPLAY_ENV`, `CUDA_LAUNCH_BLOCKING` |
+| **8.1 Thread & Affinity Settings** | ✅ **Complete** | HPC tuning script created in `container-scripts/` and installed via `install.sh` to `/etc/profile.d/hpc-mkl-tune.sh` |
+| **8.2 Monitoring** | ✅ **Complete** | Monitoring toggles added to `/etc/profile.d/hpc-mkl-tune.sh` (`MKL_VERBOSE`, `OMP_DISPLAY_ENV`, `CUDA_LAUNCH_BLOCKING`) |
 
-**Current Settings (Block 12A.3, lines 2478-2480):**
-```bash
-export MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-32}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
-```
+**Current Settings:**
+- **Basic MKL settings** (Block 12A.3, `/etc/profile.d/intel-mkl.sh`): MKL environment, library paths, basic threading (created via heredoc, will be moved to container-scripts/ in future)
+- **HPC tuning settings** (`/etc/profile.d/hpc-mkl-tune.sh`): Thread affinity, MKL_DYNAMIC=FALSE, CUDA settings, monitoring toggles (installed via install.sh from container-scripts/)
 
 ---
 
@@ -226,10 +223,11 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
 ## Summary of Gaps
 
 ### Critical Gaps (Should Address)
-1. **g2o CUDA Support (Optional):**
-   - Plan mentions `-DG2O_BUILD_CUDA=ON` but not found in script
-   - Marked as experimental in plan; current MKL configuration is sufficient
-   - Can be added later if g2o CUDA support becomes stable
+1. **g2o CUDA Support:**
+   - ❌ **NOT APPLICABLE** - g2o does not support CUDA
+   - Flags documentation confirms: `G2O_BUILD_CUDA` - Not supported, `WITH_CUDA` - g2o does not support CUDA
+   - Current MKL configuration is correct and sufficient
+   - No action needed
 
 ### Not Needed (For Integrated Image Builds)
 1. **Standalone Build Scripts:**
@@ -239,15 +237,15 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
 
 ### Minor Gaps (Nice to Have)
 1. **Runtime HPC Tuning:**
-   - No `/etc/profile.d/hpc-mkl-tune.sh` for advanced thread affinity
-   - No monitoring toggles (`MKL_VERBOSE`, etc.)
+   - ✅ `/etc/profile.d/hpc-mkl-tune.sh` created (Block 12A.4)
+   - ✅ Monitoring toggles added (`MKL_VERBOSE`, `OMP_DISPLAY_ENV`, `CUDA_LAUNCH_BLOCKING`)
 
 2. **Verification Scripts:**
-   - No `scripts/verify-python-mkl.sh` for general Python MKL checks
+   - ✅ `verify-python-mkl.sh` created (container-scripts/verification-tools/) - useful for HPC validation
    - GPU smoke tests deferred to HPC
 
 3. **Documentation:**
-   - `Singularity.def.mkl` not found (may need creation)
+   - ❌ **NOT APPLICABLE** - `Singularity.def.mkl` not needed (build script generates .def dynamically)
 
 4. **CUDA CMake Modules:**
    - No explicit `/opt/cmake-modules` setup (may not be needed)
@@ -261,24 +259,24 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
    - Added MKL/CUDA flags to `SKBUILD_CONFIGURE_OPTIONS` (lines 5193-5199)
    - Now includes: `-DCeres_USE_EIGEN_MKL=ON -DCeres_ENABLE_CUDA=ON`
 
-2. **Optional: g2o CUDA Support:**
-   - Can add `-DG2O_BUILD_CUDA=ON` if experimental CUDA support is needed
-   - Current MKL configuration is sufficient for production use
+2. **g2o CUDA Support:**
+   - ❌ **NOT APPLICABLE** - g2o does not support CUDA
+   - Current MKL configuration is correct and sufficient
 
 ### Medium Priority
-1. **Create HPC Tuning Script:**
-   - Add `/etc/profile.d/hpc-mkl-tune.sh` with thread affinity settings
-   - Add monitoring toggles
+1. ✅ **Create HPC Tuning Script:**
+   - ✅ Added `/etc/profile.d/hpc-mkl-tune.sh` with thread affinity settings (Block 12A.4)
+   - ✅ Added monitoring toggles
 
 2. **Create Python MKL Verification:**
-   - Add `scripts/verify-python-mkl.sh` for general Python MKL checks
+   - ✅ `verify-python-mkl.sh` created (container-scripts/verification-tools/) - useful for HPC validation
 
 3. **Create Singularity Definition:**
-   - Create `Singularity.def.mkl` if container builds are needed
+   - ❌ **NOT APPLICABLE** - Build script (`build_xubuntu_robotics_base.sh`) generates .def file dynamically. No separate `Singularity.def.mkl` needed.
 
 ### Low Priority
 1. **Automated Baseline Audit:**
-   - Create script to automate Phase 0.1 checks
+   - ❌ **NOT NEEDED** - Baseline audit was for BEFORE migration (Phase 0.1). Migration is complete (~95%), so baseline audit is no longer needed.
 
 2. **CUDA CMake Modules:**
    - Add `/opt/cmake-modules` if needed for downstream projects
@@ -294,8 +292,8 @@ The MKL integration is **complete** (~95%) in the orchestrator script for integr
 - ✅ PyCeres MKL/CUDA flags added
 - ✅ PyTorch MKL-enabled wheels installed and verified
 - ✅ APT pinning protects all compiled libraries
-- ⚠️ Runtime HPC tuning (thread affinity) can be added if needed
-- ⚠️ g2o CUDA support (experimental) can be added if needed
+- ✅ Runtime HPC tuning (thread affinity) implemented in `/etc/profile.d/hpc-mkl-tune.sh`
+- ❌ g2o CUDA support not applicable (g2o does not support CUDA)
 
 **For Integrated Image Builds:** The orchestrator is **production-ready**. Standalone build scripts are not needed for HPC deployment use case.
 

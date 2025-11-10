@@ -45,6 +45,20 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
+      "source": "shell-scripts/block-12-intel-oneapi-mkl-installation/hpc-mkl-tune.sh",
+      "target": "/etc/profile.d/hpc-mkl-tune.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0644",
+      "block": 12,
+      "block_name": "INTEL oneAPI MKL INSTALLATION",
+      "description": "HPC MKL/CUDA runtime tuning script (installed via install.sh, not from heredoc)",
+      "dependencies": [],
+      "line_start": 0,
+      "line_end": 0,
+      "delimiter": "N/A",
+      "file_path": "N/A"
+    },
+    {
       "source": "other/block-12-openblas-compilation-and-installation/environment.txt",
       "target": "/etc/environment",
       "file_type": "other",
@@ -1261,6 +1275,48 @@
       "line_end": 1876,
       "delimiter": "CPS",
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/build_xubuntu_robotics_base.sh"
+    },
+    {
+      "source": "verification-tools/verify-mkl-env.sh",
+      "target": "/usr/local/bin/verify-mkl-env.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION TOOLS",
+      "description": "MKL environment verification script for HPC validation",
+      "dependencies": [],
+      "line_start": null,
+      "line_end": null,
+      "delimiter": null,
+      "file_path": null
+    },
+    {
+      "source": "verification-tools/verify-cuda-mkl-linkage.sh",
+      "target": "/usr/local/bin/verify-cuda-mkl-linkage.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION TOOLS",
+      "description": "CUDA/MKL linkage verification script for HPC validation",
+      "dependencies": [],
+      "line_start": null,
+      "line_end": null,
+      "delimiter": null,
+      "file_path": null
+    },
+    {
+      "source": "verification-tools/verify-python-mkl.sh",
+      "target": "/usr/local/bin/verify-python-mkl.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION_TOOLS",
+      "description": "Python MKL verification script - verifies NumPy/SciPy MKL backend",
+      "dependencies": [],
+      "line_start": 0,
+      "line_end": 0,
+      "delimiter": "N/A",
+      "file_path": "N/A"
     }
   ]
 }

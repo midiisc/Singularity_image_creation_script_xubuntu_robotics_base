@@ -26,7 +26,8 @@ Quick reference for enabling CUDA across the MKL-enabled robotics stack.
 - `-DCMAKE_BUILD_TYPE=Release`
 - `-DCUDA_TOOLKIT_ROOT_DIR=$CUDA_HOME`
 - `-DCMAKE_CUDA_ARCHITECTURES=86`
-- `-DWITH_CUDA=ON` (OpenCV), `-DCUDA_ENABLED=ON` (COLMAP), `-DCeres_ENABLE_CUDA=ON` (Ceres), `-DG2O_BUILD_CUDA=ON` (g2o experimental), `-DBUILD_CUDA_MODULE=ON` (Open3D).
+- `-DWITH_CUDA=ON` (OpenCV), `-DCUDA_ENABLED=ON` (COLMAP), `-DCeres_ENABLE_CUDA=ON` (Ceres), `-DBUILD_CUDA_MODULE=ON` (Open3D).
+- **Note:** g2o does not support CUDA (confirmed in `docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md`). MKL configuration is sufficient.
 - For SuiteSparse: `-DSUITESPARSE_USE_CUDA=ON -DSUITESPARSE_CUDA_ARCHITECTURES=86 -DCUBLAS_LIB=$CUDA_HOME/lib64/libcublas.so -DCUSPARSE_LIB=$CUDA_HOME/lib64/libcusparse.so -DCUSOLVER_LIB=$CUDA_HOME/lib64/libcusolver.so -DCURAND_LIB=$CUDA_HOME/lib64/libcurand.so`.
 
 ## 3. MKL/BLAS Coordination
@@ -56,5 +57,5 @@ Quick reference for enabling CUDA across the MKL-enabled robotics stack.
 - If CMake fails to find CUDA, confirm `FindCUDAToolkit.cmake` is ≥ 3.18 and `CMAKE_PREFIX_PATH` includes `$CUDA_HOME`.
 - For container builds, add `%post` steps to install CUDA/MKL before compiling sources; ensure `nvidia-container-toolkit` runtime configuration is active on the HPC node.
 
-Keep this checklist in sync with `docs/MKL_MIGRATION_PLAN.md` as phases evolve.
+Keep this checklist in sync with `docs/planning/MKL_MIGRATION_PLAN.md` as phases evolve.
 

@@ -6,7 +6,7 @@ The repository ships with a strict, AI-backed git pre-commit hook that builds on
 
 - Hook script: `.git/hooks/pre-commit`
 - AI reviewer: `scripts/hooks/ai_precommit_review.py`
-- Prompt source: `docs/Code_check_prompt_manual.txt`
+- Prompt source: `prompts/Code_check_prompt_manual.txt`
 
 The hook runs two consecutive stages:
 
@@ -17,7 +17,7 @@ The hook runs two consecutive stages:
 
 - Filters staged files with extensions commonly used in this repository (`.sh`, `.py`, `.cpp`, `.yaml`, etc.).
 - Generates unified diffs (`git diff --cached --unified=0`) and splits them into chunks (default 400 diff lines).
-- Builds a strict review prompt using `docs/Code_check_prompt_manual.txt` as the authoritative checklist.
+- Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` as the authoritative checklist.
 - Dynamically routes simple chunks to the secondary model (Cursor/OpenAI) when configured, reserving Claude for complex or long-context reviews.
 - Calls the selected AI model (Claude by default) and expects JSON with `status`, `summary`, and structured `findings`.
 - Rejects the commit when any chunk returns `status: "reject"`; prints the AI feedback for each failing chunk.
@@ -81,7 +81,7 @@ export AI_REVIEW_SECONDARY_PROVIDER="cursor"
 
 ## Maintenance tips
 
-- Update `docs/Code_check_prompt_manual.txt` whenever the review policy evolves; the AI prompt pulls the file verbatim.
+- Update `prompts/Code_check_prompt_manual.txt` whenever the review policy evolves; the AI prompt pulls the file verbatim.
 - When introducing new file types, add their extensions to `ALLOWED_SUFFIXES` in `scripts/hooks/ai_precommit_review.py`.
 - If the API schema diverges from Anthropic’s Claude endpoint, update `call_anthropic_api()` / `extract_review_content()` accordingly. For alternate providers, extend the abstractions in `ai_precommit_review.py`.
 - Tune `AI_REVIEW_COMPLEXITY_*` thresholds if you need Claude to trigger more or less aggressively, or if you want Cursor usage to increase/decrease.

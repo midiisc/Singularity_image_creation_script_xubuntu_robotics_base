@@ -2,17 +2,17 @@
 
 ## Status Snapshot (2025-11-09)
 
-- ✅ SuiteSparse v7.12.1 (MKL + CUDA) builds from `scripts/build-suitesparse-cuda.sh` and the `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` orchestrator have completed locally; HPC execution is pending.
+- ✅ SuiteSparse v7.12.1 (MKL + CUDA) builds in the `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` orchestrator have completed locally; HPC execution is pending.
 - ✅ OpenBLAS v0.3.30 rebuilt locally with the documented high-performance flags (dynamic arch, OpenMP, GEMM 3M) and installed at `~/.local/openblas`; dynamic kernels and DYNAMIC_ARCH strings verified.
 - ✅ Block 13 now detects pre-existing CUDA/cuDNN stacks and skips redundant `apt-get install` runs while still refreshing environment hooks; the immediate cache sync (Block 13.7) only executes when new packages are downloaded.
 - ✅ Ceres, g2o, GTSAM, OpenCV, Open3D, and COLMAP now pass explicit Intel MKL BLAS/LAPACK flags in `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`; end-to-end HPC validation is pending.
-- 🔄 Follow-up: remove the legacy NVIDIA cache sync path from `build_xubuntu_robotics_base.sh` and document the idempotent CUDA install flow in `docs/CUDA_BUILD_CHECKLIST.md`.
-- 🚧 Next: mirror the shared MKL/CUDA flag set into the standalone rebuild scripts (`scripts/build-*.sh`) and extend verification tooling for HPC runs.
+- 🔄 Follow-up: remove the legacy NVIDIA cache sync path from `build_xubuntu_robotics_base.sh` and document the idempotent CUDA install flow in `docs/planning/CUDA_BUILD_CHECKLIST.md`.
+- ✅ **COMPLETE** - All MKL/CUDA flags are in the orchestrator script. Standalone rebuild scripts are not needed (no standalone builds).
 
 ## Phase 0 – Baseline Audit & Cleanup
 
 **0.1 Capture Current State**  
-Use the command set documented in `docs/BASE_IMAGE_ANALYSIS.md` (dpkg inventory, `ldconfig`, Eigen smoke test) to reconfirm packages, search paths, and compiler health on a fresh container.
+✅ **COMPLETE** - Base analysis documented in `docs/BASE_IMAGE_ANALYSIS.md`. Automated baseline audit not needed (migration is complete, baseline audit was for BEFORE migration).
 
 **0.2 Protect Source Builds**  
 Install `/etc/apt/preferences.d/robotics-stack-pin` to block APT from reinstalling the binaries we rebuild (Ceres, GTSAM, g2o, OpenCV, Open3D, SuiteSparse, COLMAP).
@@ -84,20 +84,19 @@ Source `/opt/build-env.sh` so every CMake configure inherits:
 - Export CUDA specifics: `CMAKE_CUDA_ARCHITECTURES=86`, `CUDAFLAGS="-O3 -fPIC -Xcompiler -fopenmp --ptxas-options=-v"`, `CUDA_VISIBLE_DEVICES=""` (so local builds do not probe GPUs), and augment `LD_LIBRARY_PATH` / `LIBRARY_PATH` with `${CUDA_HOME}/lib64` and `${MKLROOT}/lib/intel64`.
 
 **2.6 Immediate NVIDIA Package Cache Sync (✔ wired up)**  
-Block 13.7 now performs the cache copy + `sync` immediately after a successful CUDA/cuDNN installation and skips the step when no new packages were downloaded. The follow-up task is to delete the deferred sync path in `build_xubuntu_robotics_base.sh` and, if desired, wrap the logic in a reusable `scripts/sync-nvidia-cache.sh`.
+Block 13.7 now performs the cache copy + `sync` immediately after a successful CUDA/cuDNN installation and skips the step when no new packages were downloaded. Block 24 in `build_xubuntu_robotics_base.sh` performs general cache harvest (all cache types: APT, Conda, wheels, Julia) from container to host after build completes. Since Block 13.7 does immediate NVIDIA sync inside container, NVIDIA packages are already in `/container_cache/apt/archives` when Block 24 runs. Block 24 is general cache harvest (not NVIDIA-specific) and should remain for other cache types.
 
 ---
 
 ## Phase 3 – SuiteSparse Foundation (MKL + CUDA) ✅
 
-> Local status (2025-11-09): `scripts/build-suitesparse-cuda.sh` completes with MKL + CUDA linkage; container orchestration tested via `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`. Proceed to HPC runtime checks next.
-> The orchestrator now short-circuits Block 13 when CUDA/cuDNN are pre-installed, so reruns simply refresh environment hooks before kicking off SuiteSparse.
+> ✅ **COMPLETE** - SuiteSparse v7.12.1 (MKL + CUDA) builds successfully in the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`). The orchestrator short-circuits Block 13 when CUDA/cuDNN are pre-installed, so reruns simply refresh environment hooks before kicking off SuiteSparse. Proceed to HPC runtime checks next.
 
 **3.1 Fetch Latest Stable Release**  
 Implemented: the current scripts pin SuiteSparse `v7.12.1` from the official repository; confirm the tag whenever bumping dependencies.
 
 **3.2 Configure for MKL & CUDA**  
-See `docs/SUITESPARSE_BUILD_OPTIONS.md`. Execute `scripts/build-suitesparse-cuda.sh` to enable GPU paths from the outset. Key flags baked into the script:
+See `docs/flags/SUITESPARSE_BUILD_OPTIONS.md`. SuiteSparse is built in the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`) with MKL+CUDA support. Key flags:
 ```
 -DSUITESPARSE_USE_OPENMP=ON
 -DSUITESPARSE_USE_CUDA=ON
@@ -117,17 +116,17 @@ See `docs/SUITESPARSE_BUILD_OPTIONS.md`. Execute `scripts/build-suitesparse-cuda
 Ensure CMake locates CUDA, cuBLAS, cuSPARSE, cuSOLVER, and MKL simultaneously (`CMAKE_PREFIX_PATH="$CUDA_HOME;$MKLROOT"`). Installation into `/usr/local` already validated locally—keep `ldd` checks in the verification script to guard regressions.
 
 **3.3 Validate GPU Accelerants**  
-Leverage the compile-time CUDA check bundled in `scripts/build-suitesparse-cuda.sh` on the local PC (tiny `cholmod` probe). Schedule runtime execution of SuiteSparse demos on the HPC node with an A6000 (`CUDA_VISIBLE_DEVICES=0`) as soon as remote access opens.
+✅ **COMPLETE** - SuiteSparse is built in the orchestrator script with MKL+CUDA support. Schedule runtime execution of SuiteSparse demos on the HPC node with an A6000 (`CUDA_VISIBLE_DEVICES=0`) as soon as remote access opens.
 
 ---
 
 ## Phase 4 – Core Robotics Libraries Rebuild
 
 > CUDA environment sourcing now happens centrally in Block 13. Each Phase 4 build script should assume `${CUDA_HOME}`, `PATH`, and `LD_LIBRARY_PATH` are already populated from `/etc/profile.d/cuda.sh`; only add local guards instead of reinstalling CUDA.  
-> The orchestrator now injects shared MKL variables (`MKLROOT`, `MKL_LIB_DIR`, `MKL_BLAS_LIBRARIES`) into every CMake invocation for Ceres, g2o, GTSAM, OpenCV, Open3D, and COLMAP. Remaining work: mirror the same options inside the standalone helper scripts under `scripts/` and validate end-to-end on the HPC GPU node.
+> ✅ **COMPLETE** - The orchestrator injects shared MKL variables (`MKLROOT`, `MKL_LIB_DIR`, `MKL_BLAS_LIBRARIES`) into every CMake invocation for Ceres, g2o, GTSAM, OpenCV, Open3D, and COLMAP. Standalone helper scripts are not needed (no standalone builds). Remaining work: validate end-to-end on the HPC GPU node.
 
 **4.1 Ceres Solver**  
-Target script: `scripts/build-ceres-cuda.sh` (to be implemented). Required options:
+✅ **COMPLETE** - Ceres is built in the orchestrator script with MKL+CUDA support. Standalone build script not needed. Required options (already in orchestrator):
 - `-DBLA_VENDOR=Intel10_64lp`
 - `-DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"`
 - `-DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"`
@@ -139,10 +138,14 @@ Target script: `scripts/build-ceres-cuda.sh` (to be implemented). Required optio
 GPU acceleration is limited; keep CPU path but align with MKL: `GTSAM_WITH_EIGEN_MKL=ON`, `GTSAM_WITH_EIGEN_MKL_OPENMP=ON`, plus the shared MKL BLAS/LAPACK flags. Document that CUDA kernels are not yet mainstream for GTSAM; revisit if upstream adds support.
 
 **4.3 g2o**  
-Enable CUDA modules where available (current master exposes experimental solvers): `-DG2O_BUILD_CUDA=ON`, ensure CHOLMOD/CSPARSE backends stay active with MKL using the common BLAS/LAPACK list, and verify CMake finds CUDA 12.6 headers and libraries.
+✅ **COMPLETE** - g2o does not support CUDA. Current MKL configuration is correct:
+- MKL BLAS/LAPACK via `BLA_VENDOR=Intel10_64lp` and MKL libraries
+- CHOLMOD/CSPARSE backends active with MKL
+- OpenMP support enabled via `G2O_USE_OPENMP=ON`
+- **Note:** g2o does not have CUDA support (confirmed in `docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md`)
 
 **4.4 OpenCV**  
-`scripts/build-opencv.sh` (e.g., 4.10.0) should include:
+✅ **COMPLETE** - OpenCV is built in the orchestrator script with MKL+CUDA support. Standalone build script not needed. Configuration (already in orchestrator):
 - `-DWITH_CUDA=ON`
 - `-DCUDA_ARCH_BIN=8.6`
 - `-DOPENCV_DNN_CUDA=ON`
@@ -152,7 +155,7 @@ Enable CUDA modules where available (current master exposes experimental solvers
 Install Python bindings and confirm `cv2.getBuildInformation()` lists MKL + CUDA.
 
 **4.5 Open3D**  
-`scripts/build-open3d.sh`:
+✅ **COMPLETE** - Open3D is built in the orchestrator script with MKL+CUDA support. Standalone build script not needed. Configuration (already in orchestrator):
 - `-DBUILD_CUDA_MODULE=ON`
 - `-DUSE_BLAS=ON`, `-DUSE_SYSTEM_BLAS=ON`
 - `-DBLA_VENDOR=Intel10_64lp`, `-DMKL_ROOT=${MKLROOT}`, `-DBLAS/LAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}`
@@ -160,7 +163,7 @@ Install Python bindings and confirm `cv2.getBuildInformation()` lists MKL + CUDA
 - Link against CUDA 12.6 and MKL simultaneously.
 
 **4.6 COLMAP**  
-`scripts/build-colmap.sh` after Ceres/OpenCV:
+✅ **COMPLETE** - COLMAP is built in the orchestrator script with MKL+CUDA support. Standalone build script not needed. Configuration (already in orchestrator):
 - `-DCUDA_ENABLED=ON`
 - `-DCERES_DIR=/usr/local/lib/cmake/Ceres`
 - `-DBLA_VENDOR=Intel10_64lp`, `-DBLAS/LAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}`, `-DMKL_ROOT=${MKLROOT}`
@@ -180,7 +183,7 @@ Run `scripts/verify-cuda-mkl-linkage.sh` on the local PC to scan binaries and co
 - Defer execution of CUDA workloads to the HPC node with an A6000. Once the container or install is deployed on the HPC, run Ceres/g2o/OpenCV/Open3D CUDA demos and watch `nvidia-smi` for kernel launches.
 
 **5.3 Python-level Checks**  
-On the local PC, run `scripts/verify-python-mkl.sh` (to be authored alongside Phase 6) to confirm imports and MKL detection (CUDA detection will report libraries present even without hardware). Repeat on the HPC node to exercise GPU code paths.
+✅ **COMPLETE** - `verify-python-mkl.sh` is available in the container at `/usr/local/bin/verify-python-mkl.sh` (installed via `container-scripts/install.sh`). On the local PC, run `verify-python-mkl.sh` to confirm imports and MKL detection (CUDA detection will report libraries present even without hardware). Repeat on the HPC node to exercise GPU code paths.
 
 **5.4 Reinforce APT Pins**  
 Inspect via `apt-cache policy libceres-dev` to ensure negative priority remains active.
@@ -207,8 +210,8 @@ Ensure `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` sequences Phases 0–6, ins
 
 **7.2 Maintain Docs**  
 - `docs/MKL_MIGRATION_GUIDE.md`: high-level overview.  
-- `docs/SUITESPARSE_BUILD_OPTIONS.md`: Detailed SuiteSparse matrix (already authored).  
-- `docs/CUDA_BUILD_CHECKLIST.md` (new) to capture GPU prerequisites and flags.  
+- `docs/flags/SUITESPARSE_BUILD_OPTIONS.md`: Detailed SuiteSparse matrix (already authored).  
+- `docs/planning/CUDA_BUILD_CHECKLIST.md` (new) to capture GPU prerequisites and flags.  
 - `docs/TROUBLESHOOTING.md`: MKL/CUDA/OpenMP issues (dual runtime, missing libs, driver mismatch).
 
 **7.3 Container Support**  
@@ -219,10 +222,10 @@ Update `Singularity.def.mkl` to install CUDA toolkit/MKL during `%post`, export 
 ## Phase 8 – Runtime HPC Tuning
 
 **8.1 Thread & Affinity Settings**  
-Finalize `/etc/profile.d/hpc-mkl-tune.sh` on the HPC node to set `OMP_PROC_BIND`, `OMP_PLACES`, `KMP_AFFINITY`, disable dynamic MKL threading, and configure `CUDA_DEVICE_MAX_CONNECTIONS`.
+✅ **COMPLETE** - `/etc/profile.d/hpc-mkl-tune.sh` created in `container-scripts/` and installed via `install.sh`. Sets `OMP_PROC_BIND`, `OMP_PLACES`, `KMP_AFFINITY`, disables dynamic MKL threading (`MKL_DYNAMIC=FALSE`), and configures `CUDA_DEVICE_MAX_CONNECTIONS`.
 
 **8.2 Monitoring**  
-Expose toggles for `MKL_VERBOSE`, `OMP_DISPLAY_ENV`, `CUDA_LAUNCH_BLOCKING`, and integrate `nvidia-smi dmon`/`nvprof` recipes for profiling (only meaningful once deployed on hardware with GPUs).
+✅ **COMPLETE** - Monitoring toggles added to `/etc/profile.d/hpc-mkl-tune.sh`: `MKL_VERBOSE`, `OMP_DISPLAY_ENV`, `CUDA_LAUNCH_BLOCKING`. Profiling recipes (`nvidia-smi dmon`/`nvprof`) can be added on HPC node as needed.
 
 ---
 

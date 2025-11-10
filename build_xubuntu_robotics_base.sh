@@ -1541,9 +1541,10 @@ log_with_timestamp "Comprehensive cache directory structure created successfully
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 17.1: Define output file names ---
-# Dependencies: None (foundational)
+# Dependencies: config.sh (OUT_DIR, SIF_NAME, DEF_NAME may be set)
 # Outputs: Environment variables, configuration
-OUT_DIR="${PWD}"  # Output in current working directory
+# Note: OUT_DIR defaults are set in config.sh, use current PWD if not set
+OUT_DIR="${OUT_DIR:-${PWD}}"
 # Use SIF_NAME from config.sh if set, otherwise generate from version numbers
 if [ -z "${SIF_NAME:-}" ]; then
     if [ -n "${ROS_DISTRO:-}" ]; then
@@ -2487,13 +2488,12 @@ From: ${BASE_IMAGE}
 %files
     # Critical: Copy centralized configuration into container
     ${CONFIG_FILE} /etc/config.sh
-    container_cache/binaries /container_cache/binaries
-    container_cache/debs /container_cache/debs
-    xubuntu_robotics_base_post_ULTRA_CLEANED.sh /container_post_script.sh
-    config.sh /container_config.sh
-    # MKL/CUDA verification scripts for HPC validation (from container-scripts)
-    container-scripts/verification-tools/verify-mkl-env.sh /usr/local/bin/verify-mkl-env.sh
-    container-scripts/verification-tools/verify-cuda-mkl-linkage.sh /usr/local/bin/verify-cuda-mkl-linkage.sh
+    ${SCRIPT_DIR}/container_cache/binaries /container_cache/binaries
+    ${SCRIPT_DIR}/container_cache/debs /container_cache/debs
+    ${SCRIPT_DIR}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh /container_post_script.sh
+    ${SCRIPT_DIR}/config.sh /container_config.sh
+    # Copy entire container-scripts directory for installation via install.sh
+    ${SCRIPT_DIR}/${CONTAINER_SCRIPTS_DIR} ${CONTAINER_SCRIPTS_INSTALL_PATH}
 
 # === %labels Section ===
 %labels
@@ -2741,8 +2741,26 @@ From: ${BASE_IMAGE}
     chmod +x /container_post_script.sh
     /container_post_script.sh
     
-    # Ensure verification scripts are executable
-    chmod +x /usr/local/bin/verify-mkl-env.sh /usr/local/bin/verify-cuda-mkl-linkage.sh 2>/dev/null || true
+    # Install all container scripts from container-scripts/ directory using install.sh
+    # This installs all extracted files (shell scripts, configs, verification tools, etc.) to their target locations
+    # Source config.sh to get container scripts configuration variables
+    if [ -f /etc/config.sh ]; then
+        source /etc/config.sh
+    fi
+    
+    # Use variables from config.sh (with defaults if not set)
+    CONTAINER_SCRIPTS_PATH="\${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
+    INSTALLER_SCRIPT="\${CONTAINER_SCRIPTS_PATH}/\${CONTAINER_SCRIPTS_INSTALLER:-install.sh}"
+    MANIFEST_FILE="\${CONTAINER_SCRIPTS_PATH}/\${CONTAINER_SCRIPTS_MANIFEST:-MANIFEST.json}"
+    
+    if [ -f "\${INSTALLER_SCRIPT}" ] && [ -f "\${MANIFEST_FILE}" ]; then
+        chmod +x "\${INSTALLER_SCRIPT}"
+        "\${INSTALLER_SCRIPT}" --all || {
+            echo "WARNING: Failed to install some container scripts. Continuing build..."
+        }
+    else
+        echo "WARNING: Container scripts installation files not found at \${CONTAINER_SCRIPTS_PATH}. Some scripts may not be available."
+    fi
 
 # === %test Section ===
 %test

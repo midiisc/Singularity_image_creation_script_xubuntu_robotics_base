@@ -2524,6 +2524,13 @@ export MKL_LIB_DIR MKL_INCLUDE_DIR MKL_BLAS_LIBRARIES MKL_LINK_FLAGS
 export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 export LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 
+#--- Sub-block 12A.4: HPC MKL/CUDA tuning script ---
+# Note: HPC tuning script is installed via install.sh from container-scripts/
+# The script (/etc/profile.d/hpc-mkl-tune.sh) provides runtime optimization settings
+# for HPC workloads (thread affinity, MKL tuning, CUDA settings, monitoring toggles).
+# It will be available after install.sh runs (at end of %post section).
+# These settings are for runtime optimization on HPC nodes, not required during build.
+
 case ":${CMAKE_PREFIX_PATH:-}:" in
     *":${MKLROOT}:"*) ;;
     *) export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}" ;;
@@ -5196,7 +5203,7 @@ else
   
   # MKL note: PyCeres must inherit MKL/CUDA configuration from compiled Ceres
   # Pass MKL and CUDA flags to ensure PyCeres bindings use the same Ceres configuration
-  # Reference: docs/MKL_MIGRATION_PLAN.md Phase 4.7
+  # Reference: docs/planning/MKL_MIGRATION_PLAN.md Phase 4.7
   export SKBUILD_CONFIGURE_OPTIONS="\
 -DWITH_TESTS=OFF \
 -DWITH_BENCHMARKS=OFF \

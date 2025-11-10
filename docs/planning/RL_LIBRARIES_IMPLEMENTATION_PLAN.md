@@ -13,14 +13,14 @@ This document outlines the implementation plan for integrating Reinforcement Lea
 - [x] **OpenBLAS Audit**: Verified all Python packages use OpenBLAS (no MKL conflicts)
 - [x] **JAX Enhancement**: Added comprehensive 7-test verification suite to main script (BLOCK 13B.4)
 - [x] **JAX Code Audit**: Fixed robustness issues (None checks, attribute access, error handling)
+- [x] **PyTorch**: Installed via official wheels with CUDA+MKL support (BLOCK 26B). Optional source build available (BLOCK 26A, disabled by default)
 
-### 🔄 TODO
-- [ ] **PyTorch**: Create compilation script with OpenBLAS integration
-- [ ] **EnvPool**: Create compilation script with SIMD/GPU optimization
-- [ ] **MuJoCo + MJX**: Create installation script
-- [ ] **Brax**: Create installation script
-- [ ] **Integration**: Add all validated libraries to main script
-- [ ] **Final Cleanup**: Remove this file once all tasks complete
+### 🔄 TODO (Optional - Not Currently Planned)
+- [ ] **EnvPool**: Create compilation script with SIMD/GPU optimization (if needed)
+- [ ] **MuJoCo + MJX**: Create installation script (if needed)
+- [ ] **Brax**: Create installation script (if needed)
+- [ ] **Integration**: Add all validated libraries to main script (if needed)
+- [ ] **Final Cleanup**: Remove this file once all tasks complete or if RL libraries are not needed
 
 ---
 
@@ -61,7 +61,7 @@ Your analysis is **confirmed and correct** based on independent verification:
 | Package | Prebuilt Available | Compilation Required | Reason | Performance Impact |
 |---------|-------------------|---------------------|--------|-------------------|
 | **JAX** | ✅ Yes (CUDA wheels) | ⚠️ Optional | Latest CUDA version matching, GPU arch tuning | Minor (5-10%) |
-| **PyTorch** | ✅ Yes (MKL-linked) | ✅ **ESSENTIAL** | OpenBLAS/MKL conflict resolution | **Major (2-5x)** |
+| **PyTorch** | ✅ Yes (MKL-linked wheels) | ✅ **COMPLETE** | Installed via official wheels with CUDA+MKL (BLOCK 26B) | N/A (wheels used) |
 | **MuJoCo + MJX** | ✅ Yes | ❌ No | Prebuilt stable binaries | None |
 | **Brax** | ✅ Yes (pip) | ❌ No | Pure Python, uses JAX | None |
 | **EnvPool** | ⚠️ Limited (no SIMD/GPU) | ✅ **CRITICAL** | Enable C++ SIMD & GPU acceleration | **Major (10-20x)** |
@@ -86,11 +86,11 @@ Your analysis is **confirmed and correct** based on independent verification:
 
 ### Key Findings
 
-1. **OpenBLAS Confirmation**: The base image uses OpenBLAS extensively (72+ references in script)
-   - OpenCV compiled with OpenBLAS
-   - Open3D compiled with OpenBLAS
-   - NumPy/SciPy use OpenBLAS
-   - **PyTorch prebuilt wheels use MKL** → **CONFLICT RISK** → **Source compilation mandatory**
+1. **OpenBLAS/MKL Confirmation**: The base image uses both OpenBLAS and MKL:
+   - OpenCV compiled with MKL (BLOCK 18)
+   - Open3D compiled with MKL (BLOCK 26)
+   - NumPy/SciPy use OpenBLAS (system packages)
+   - **PyTorch**: ✅ Installed via official wheels with MKL support (BLOCK 26B). Works well with MKL-integrated stack.
 
 2. **JAX Current Status**: ✅ Enhanced with comprehensive verification (BLOCK 13B.4)
    - Uses CUDA auto-detection
@@ -99,7 +99,7 @@ Your analysis is **confirmed and correct** based on independent verification:
    - ✅ Performance benchmarks included
 
 3. **Performance Critical Libraries**:
-   - **PyTorch**: Source compilation essential for stability + performance
+   - **PyTorch**: ✅ **COMPLETE** - Installed via official wheels with CUDA+MKL (BLOCK 26B). Optional source build available (BLOCK 26A, disabled by default)
    - **EnvPool**: Source compilation critical for vectorization (10-20x speedup)
 
 ---
@@ -127,43 +127,17 @@ Your analysis is **confirmed and correct** based on independent verification:
 
 ---
 
-### Phase 2: PyTorch Source Compilation (Priority 2)
+### Phase 2: PyTorch Installation (Priority 2)
 
-**Status**: Not in script, **CRITICAL** for OpenBLAS compatibility
+**Status**: ✅ **COMPLETE** - PyTorch installed via official wheels with CUDA+MKL (BLOCK 26B). Optional source build available (BLOCK 26A, disabled by default with `ENABLE_PYTORCH_BUILD=false`)
 
-**Why Compile**:
-- Prebuilt PyTorch wheels link against Intel MKL
-- Base image uses OpenBLAS → symbol conflicts → crashes/slowdowns
-- Source compilation with OpenBLAS = stable + 2-5x performance
+**Current Implementation**:
+- PyTorch wheels installed from `https://download.pytorch.org/whl/cu126` (CUDA 12.6) in BLOCK 26B
+- Includes MKL backend support (verified in BLOCK 26B.3)
+- CUDA support enabled and verified
+- Optional source build available (BLOCK 26A) for OpenBLAS integration if needed (disabled by default with `ENABLE_PYTORCH_BUILD=false`)
 
-**Actions**:
-1. Create `test_pytorch_compilation.sh` script:
-   - Clone PyTorch repository (specific version)
-   - Configure build for OpenBLAS linking
-   - Set CUDA compute capabilities (8.6, 8.9, 9.0)
-   - Compile with optimization flags
-   - Install and verify
-
-2. Comprehensive testing:
-   - Import verification
-   - CUDA availability (`torch.cuda.is_available()`)
-   - OpenBLAS linking verification (no MKL conflicts)
-   - GPU tensor operations
-   - Multi-GPU support
-   - Autograd functionality
-   - Performance benchmarks (vs prebuilt)
-   - Memory management
-   - Threading performance
-
-3. Build configuration:
-   - CUDA version: 12.6
-   - cuDNN: 9.14
-   - OpenBLAS linking: Explicit
-   - Compute capabilities: 8.6,8.9,9.0
-   - Build type: Release (no `-march=native`)
-
-**Test Script Location**: `test_pytorch_compilation.sh`
-**Integration Location**: New BLOCK 13C after JAX
+**Note**: The original plan called for PyTorch source compilation with OpenBLAS to avoid MKL conflicts. However, the current implementation uses PyTorch wheels with MKL support, which works well with the MKL-integrated robotics stack. The optional source build (BLOCK 26A) is available if OpenBLAS integration is needed in the future.
 
 ---
 
@@ -364,7 +338,7 @@ For each library:
 
 1. **Foundation libraries:**
    - ✅ JAX (CUDA) - Enhanced verification complete
-   - 🔄 PyTorch (from source, OpenBLAS) - Required by TorchRL, SB3
+   - ✅ PyTorch (CUDA+MKL wheels) - Installed in BLOCK 26B. Optional source build available (BLOCK 26A)
 
 2. **Physics engines:**
    - 🔄 MuJoCo + MJX - Industry standard

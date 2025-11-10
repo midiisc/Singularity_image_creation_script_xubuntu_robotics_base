@@ -260,8 +260,8 @@ if [ -n "${ROS_DISTRO:-}" ]; then
 else
     ROS_DISTRO_CAPITALIZED="Unknown"
 fi
-export SIF_NAME="${SIF_NAME:-Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.sif}"
-export DEF_NAME="${DEF_NAME:-Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.def}"
+# SIF_NAME and DEF_NAME are defined in BUILD OUTPUT CONFIGURATION section below
+# They are generated dynamically in build script if not set
 
 #===============================================================================
 # CONTAINER-INTERNAL PATHS
@@ -298,6 +298,40 @@ export JULIA_ENVS="${INSTALL_PREFIX}/juliaenvs"
 # Container Build Temporary Directory (used during %post section)
 # Note: This is INSIDE the container, not the host BUILD_TMP_DIR
 export CONTAINER_BUILD_TMPDIR="/tmp/build-temp"
+
+#===============================================================================
+# CONTAINER SCRIPTS CONFIGURATION
+#===============================================================================
+# Paths for container scripts installation system
+# These paths are relative to the repository root (where build script is located)
+
+# Container scripts source directory (on host, relative to SCRIPT_DIR)
+export CONTAINER_SCRIPTS_DIR="container-scripts"
+
+# Container scripts installation path (inside container)
+export CONTAINER_SCRIPTS_INSTALL_PATH="/container-scripts"
+
+# Container scripts manifest file (relative to CONTAINER_SCRIPTS_DIR)
+export CONTAINER_SCRIPTS_MANIFEST="MANIFEST.json"
+
+# Container scripts installer script (relative to CONTAINER_SCRIPTS_DIR)
+export CONTAINER_SCRIPTS_INSTALLER="install.sh"
+
+#===============================================================================
+# BUILD OUTPUT CONFIGURATION
+#===============================================================================
+# Output directory (defaults to current working directory, can be overridden)
+# Set OUT_DIR in environment to override
+export OUT_DIR="${OUT_DIR:-${PWD}}"
+
+# SIF (Singularity Image Format) file name
+# If not set, will be generated from ROS_DISTRO and BASE_OS_VERSION
+# Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base.sif
+export SIF_NAME="${SIF_NAME:-}"
+
+# DEF (Definition) file name
+# If not set, will be generated from SIF_NAME (replace .sif with .def)
+export DEF_NAME="${DEF_NAME:-}"
 
 #===============================================================================
 # UNIFIED LOG ANALYSIS FUNCTION

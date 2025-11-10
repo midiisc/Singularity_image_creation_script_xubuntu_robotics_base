@@ -67,9 +67,11 @@ HPC verification scripts are included in `verification-tools/`:
 - **verify-mkl-env.sh** - Validates MKL environment setup and functionality
 - **verify-cuda-mkl-linkage.sh** - Verifies library linkages (MKL/CUDA/OpenMP)
 
-These scripts are installed to `/usr/local/bin/` in the container and can be run on HPC nodes:
+These scripts are installed to `/usr/local/bin/` in the container via `install.sh` and can be run on HPC nodes:
 
 ```bash
 singularity exec your_image.sif verify-mkl-env.sh
 singularity exec your_image.sif verify-cuda-mkl-linkage.sh
 ```
+
+**Note:** These scripts are only in `container-scripts/verification-tools/` and are installed to the container. They are not needed on the host system (removed from `scripts/` directory to avoid duplication).

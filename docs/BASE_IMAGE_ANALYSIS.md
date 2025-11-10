@@ -4,7 +4,7 @@
 - **Base image:** `osrf/ros:jazzy-desktop-full-noble`
 - **Host OS:** Ubuntu 24.04 (glibc 2.39)
 - **Audit date:** 2025-11-09
-- **Audit tools:** `scripts/audit-baseline.sh`, `ldconfig`, `dpkg`, `Eigen` smoke test
+- **Audit tools:** `ldconfig`, `dpkg`, `Eigen` smoke test (baseline audit script not needed - migration is complete)
 
 ## Executive Summary
 | Component | Status | Notes |
@@ -35,7 +35,7 @@ Excerpt from `dpkg -l`:
 - No `mkl` pkg-config files yet (expected until oneAPI packages are installed).
 
 ## Eigen Compilation Smoke Test
-`scripts/audit-baseline.sh` verifies Eigen headers via:
+Eigen compilation smoke test verifies Eigen headers via:
 ```bash
 g++ -O3 -march=native -I/usr/include/eigen3 test_eigen.cpp
 ```
@@ -47,13 +47,15 @@ The test binary executes successfully (`Eigen OK: …`), confirming the toolchai
 3. **APT pinning required post-install.** Once custom builds are in place, deploy `/etc/apt/preferences.d/robotics-stack-pin` to block the Ubuntu packages from reinstalling on upgrade.
 4. **MKL installation path is clear.** Install via Intel’s oneAPI APT repository (`intel-oneapi-mkl`, `intel-oneapi-mkl-devel`) and source `/opt/intel/oneapi/mkl/latest/env/vars.sh`.
 5. **OpenBLAS optional.** The base image lacks OpenBLAS; if a fallback is desired, it can be installed, but the primary plan is to rely solely on MKL.
-6. **Documentation updates.** Refer to `docs/MKL_MIGRATION_PLAN.md` for phased migration steps; this document stores the consolidated base-image audit.
+6. **Documentation updates.** Refer to `docs/planning/MKL_MIGRATION_PLAN.md` for phased migration steps; this document stores the consolidated base-image audit.
 
 ## Audit Script Usage
-Run at any time to refresh the baseline snapshot:
-```bash
-scripts/audit-baseline.sh
-```
+Baseline audit can be performed manually using:
+- `dpkg -l` for package inventory
+- `ldconfig -p` for library search paths
+- `pkg-config --list-all` for pkg-config entries
+- Eigen compilation smoke test for toolchain verification
+
 Outputs:
 - Package list (BLAS/LAPACK/MKL/OpenCV + key robotics libs)
 - `ldconfig` entries for math/vision libraries
@@ -62,6 +64,6 @@ Outputs:
 
 ## Next Steps
 1. Complete Phase 0 tasks: install pin file, keep baseline log, and proceed to MKL installation.
-2. Follow the phased plan in `docs/MKL_MIGRATION_PLAN.md` to install MKL, rebuild SuiteSparse and robotics libraries, and verify linkage.
+2. Follow the phased plan in `docs/planning/MKL_MIGRATION_PLAN.md` to install MKL, rebuild SuiteSparse and robotics libraries, and verify linkage.
 3. Maintain this document as a snapshot reference until the migration is finalized; update or remove once the new MKL baseline is established.
 

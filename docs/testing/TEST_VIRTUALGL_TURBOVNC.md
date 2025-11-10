@@ -1,39 +1,10 @@
 # VirtualGL and TurboVNC Testing Guide
 
-This guide provides step-by-step instructions to test VirtualGL and TurboVNC after mounting your Singularity image from commit `cb5195dd62162fa47efce3f8d202dfa4538e554f`.
+This guide provides step-by-step instructions to test VirtualGL and TurboVNC in your Singularity image.
 
 ## Quick Fix: Mamba Deprecation Warning
 
-If you see mamba deprecation warnings when starting a shell (related to `/opt/conda/etc/profile.d/mamba.sh`), this is a harmless warning from mamba 2.0+. You have several options:
-
-### Option 1: Quick Workaround (No Image Modification)
-
-The warning occurs because `MAMBA_ROOT_PREFIX` might not be set early enough. Since it's already in the environment section, you can suppress it by ensuring it's set:
-
-```bash
-# Add to your shell startup (inside container)
-export MAMBA_ROOT_PREFIX=/opt/mamba-envs
-```
-
-### Option 2: Permanent Fix (With Writable Overlay)
-
-```bash
-# 1. Create writable overlay if you don't have one
-./create_writable_overlay.sh
-
-# 2. Mount image with overlay
-singularity shell --writable-tmpfs --overlay overlay.img /path/to/your/image.sif
-
-# 3. Remove deprecated file
-mv /opt/conda/etc/profile.d/mamba.sh /opt/conda/etc/profile.d/mamba.sh.deprecated
-exit
-```
-
-### Option 3: Ignore It
-
-The warning is harmless and doesn't affect functionality. You can safely ignore it.
-
-**Note:** This fix is already included in newer builds (after the mamba 2.0+ update). For existing images from earlier commits, use one of the options above.
+If you see mamba deprecation warnings when starting a shell (related to `/opt/conda/etc/profile.d/mamba.sh`), this is a harmless warning from mamba 2.0+. The `MAMBA_ROOT_PREFIX` environment variable is already set in the container's environment section, so the warning should not appear in newer builds. If you see this warning in an older image, you can safely ignore it as it doesn't affect functionality.
 
 ## Prerequisites
 
