@@ -3980,6 +3980,180 @@ fi
 
 monitor_cache "After SuiteSparse source fetch"
 
+# Critical: Patch GraphBLAS/LAGraph to ensure math library linking
+# GraphBLAS doesn't use BLAS, so it won't get -lm from BLAS_LIBRARIES
+# Problem: GraphBLAS builds libgraphblas.so and LAGraph builds liblagraph.so,
+# both need to link against libm, but GraphBLAS's CMakeLists.txt may not
+# explicitly link to the math library.
+echo -e "${YELLOW}[6.12C.2.1] Patching GraphBLAS/LAGraph for math library linking...${NC}"
+
+# Find GraphBLAS CMakeLists.txt (may be in GraphBLAS/ or GraphBLAS/GraphBLAS/)
+GRAPHBLAS_CMakeLists=""
+for candidate in \
+    "${SUITESPARSE_SOURCE_DIR}/src/GraphBLAS/CMakeLists.txt" \
+    "${SUITESPARSE_SOURCE_DIR}/src/GraphBLAS/GraphBLAS/CMakeLists.txt"; do
+    if [ -f "${candidate}" ]; then
+        GRAPHBLAS_CMakeLists="${candidate}"
+        break
+    fi
+done
+
+# Find LAGraph CMakeLists.txt
+LAGRAPH_CMakeLists=""
+for candidate in \
+    "${SUITESPARSE_SOURCE_DIR}/src/LAGraph/CMakeLists.txt" \
+    "${SUITESPARSE_SOURCE_DIR}/src/LAGraph/LAGraph/CMakeLists.txt"; do
+    if [ -f "${candidate}" ]; then
+        LAGRAPH_CMakeLists="${candidate}"
+        break
+    fi
+done
+
+# Patch GraphBLAS to explicitly link math library
+if [ -n "${GRAPHBLAS_CMakeLists}" ] && [ -f "${GRAPHBLAS_CMakeLists}" ]; then
+    echo "  → Found GraphBLAS CMakeLists.txt: ${GRAPHBLAS_CMakeLists}"
+    # Check if GraphBLAS target already links to math library (case-insensitive)
+    if ! grep -qiE "(target_link_libraries.*GraphBLAS.*\bm\b|target_link_libraries.*graphblas.*\bm\b)" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+        # Find the GraphBLAS target name (could be GraphBLAS, graphblas, etc.)
+        # Look for add_library command
+        GRAPHBLAS_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${GRAPHBLAS_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
+        
+        if [ -n "${GRAPHBLAS_TARGET}" ]; then
+            echo "  → GraphBLAS target: ${GRAPHBLAS_TARGET}"
+            # Find where to add the math library link - look for existing target_link_libraries for this target
+            # Add math library linking if not present
+            # We'll add it after the first target_link_libraries call for GraphBLAS, or at the end of target configuration
+            # Use sed to add target_link_libraries with math library
+            # First, check if there's already a target_link_libraries line we can modify
+            if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+                # Add m to existing target_link_libraries line (if not already there)
+                echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
+                # Create a backup and patch using Python
+                cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
+                # Use Python to safely add math library to target_link_libraries
+                python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+target_name = sys.argv[2]
+
+with open(cmake_file, 'r') as f:
+    content = f.read()
+
+# Pattern to find target_link_libraries for GraphBLAS target (multiline aware)
+# Match: target_link_libraries(target_name ...) but not if ' m ' or ' m)' is already there
+pattern = r'(target_link_libraries\s*\(\s*' + re.escape(target_name) + r'(?:\s+[A-Z]+)?[^)]*)(\))'
+
+def add_math_lib(match):
+    libs = match.group(1)
+    closing = match.group(2)
+    # Check if 'm' is already in the libraries list (whole word match)
+    if re.search(r'\\bm\\b', libs):
+        return match.group(0)  # Already has math library
+    # Add ' m' before the closing parenthesis
+    return libs + ' m' + closing
+
+# Replace target_link_libraries calls for GraphBLAS target
+new_content = re.sub(pattern, add_math_lib, content, flags=re.IGNORECASE | re.MULTILINE)
+
+if new_content != content:
+    with open(cmake_file, 'w') as f:
+        f.write(new_content)
+    print(f'  ✓ Added math library to {target_name} target_link_libraries')
+    sys.exit(0)
+else:
+    # If no modification was made, try to add a new target_link_libraries line
+    # Find add_library command for the target
+    add_lib_pattern = r'add_library\s*\(\s*' + re.escape(target_name) + r'[^)]*\)'
+    match = re.search(add_lib_pattern, content, re.IGNORECASE | re.MULTILINE)
+    if match:
+        # Find a good insertion point after add_library (after next blank line or next command)
+        start_pos = match.end()
+        # Look for the next non-comment, non-blank line
+        lines_after = content[start_pos:].split('\n')
+        insert_line = 1
+        for i, line in enumerate(lines_after[:10], 1):  # Check first 10 lines
+            stripped = line.strip()
+            if stripped and not stripped.startswith('#') and not stripped.startswith('target_link_libraries'):
+                insert_line = i
+                break
+        # Insert target_link_libraries after add_library
+        lines = content.split('\n')
+        # Find the line number where add_library ends
+        add_lib_end_line = content[:start_pos].count('\n')
+        # Insert after add_lib_end_line
+        insert_idx = add_lib_end_line + insert_line
+        if insert_idx < len(lines):
+            lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
+            new_content = '\n'.join(lines)
+            with open(cmake_file, 'w') as f:
+                f.write(new_content)
+            print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
+            sys.exit(0)
+        else:
+            print(f'  ⚠ Could not determine insertion point for {target_name}')
+            sys.exit(1)
+    else:
+        print(f'  ⚠ Could not find add_library for {target_name}')
+        sys.exit(1)
+" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1 || echo "  ⚠ Python patch failed, will rely on CMake standard libraries"
+            else
+                echo "  → No existing target_link_libraries found for GraphBLAS, adding one..."
+                # Add a new target_link_libraries line after add_library
+                python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+target_name = sys.argv[2]
+
+with open(cmake_file, 'r') as f:
+    lines = f.readlines()
+
+# Find add_library line for the target
+add_lib_idx = -1
+for i, line in enumerate(lines):
+    if re.search(r'add_library\s*\(\s*' + re.escape(target_name), line, re.IGNORECASE):
+        add_lib_idx = i
+        break
+
+if add_lib_idx >= 0:
+    # Find insertion point (after add_library, before next major command)
+    insert_idx = add_lib_idx + 1
+    # Skip comments and find a good place to insert
+    while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
+        insert_idx += 1
+    # Insert target_link_libraries
+    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)\\n')
+    with open(cmake_file, 'w') as f:
+        f.writelines(lines)
+    print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
+else:
+    print(f'  ⚠ Could not find add_library for {target_name}')
+    sys.exit(1)
+" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1 || echo "  ⚠ Failed to add target_link_libraries, will rely on CMake variables"
+            fi
+        else
+            echo "  ⚠ Could not determine GraphBLAS target name"
+        fi
+    else
+        echo "  ✓ GraphBLAS already links to math library"
+    fi
+else
+    echo "  ⚠ GraphBLAS CMakeLists.txt not found (will rely on CMake standard libraries)"
+fi
+
+# Patch LAGraph similarly
+if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
+    if ! grep -qE "target_link_libraries\s*\(\s*[^)]*LAGraph[^)]*\s+m\s*\)" "${LAGRAPH_CMakeLists}" 2>/dev/null && \
+       ! grep -qE "target_link_libraries\s*\(\s*[^)]*lagraph[^)]*\s+m\s*\)" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+        echo "  → LAGraph CMakeLists.txt found, will use CMAKE_C_STANDARD_LIBRARIES"
+    else
+        echo "  ✓ LAGraph already links to math library"
+    fi
+fi
+
 echo -e "${YELLOW}[6.12C.3] Configuring SuiteSparse via CMake...${NC}"
 cmake_build_dir="${SUITESPARSE_SOURCE_DIR}/build"
 rm -rf "${cmake_build_dir}"
@@ -3992,8 +4166,16 @@ BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/li
 # Note: SPEX Python bindings remain enabled (default). Python headers and tooling are available from earlier phases
 # (Block 24 installs python3-dev/pybind11-dev), so no additional SuiteSparse overrides are necessary here.
 # Critical: GraphBLAS/LAGraph requires explicit math library linking (-lm) for functions like round, log2, asinf, fmax, hypot, etc.
+# GraphBLAS doesn't use BLAS, so it won't get -lm from BLAS_LIBRARIES.
+# Solution: Use multiple approaches to ensure math library is linked:
+# 1. CMAKE_SHARED_LINKER_FLAGS / CMAKE_EXE_LINKER_FLAGS (applied to all shared libraries/executables)
+# 2. Environment variable LDFLAGS (picked up by CMake's compiler detection)
+# 3. CMAKE_REQUIRED_LIBRARIES (forces libm to be linked for all targets during configuration)
+# 4. Direct patching of GraphBLAS CMakeLists.txt (done above)
 # SuiteSparse uses its own CMake variables (SUITESPARSE_USE_CUDA, SUITESPARSE_USE_OPENMP) and auto-detects CUDA libraries.
 # Do not use standard CUDA CMake variables (CUDA_TOOLKIT_ROOT_DIR, CUBLAS_LIB, etc.) as they are ignored.
+export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-lm"
+export CMAKE_REQUIRED_LIBRARIES="${CMAKE_REQUIRED_LIBRARIES:+${CMAKE_REQUIRED_LIBRARIES};}m"
 cmake ../src \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
@@ -4005,6 +4187,7 @@ cmake ../src \
     -DCMAKE_EXE_LINKER_FLAGS="-lm -fopenmp" \
     -DCMAKE_SHARED_LINKER_FLAGS="-lm -fopenmp" \
     -DCMAKE_MODULE_LINKER_FLAGS="-lm -fopenmp" \
+    -DCMAKE_REQUIRED_LIBRARIES="m" \
     -DBUILD_SHARED_LIBS=ON \
     -DBLA_VENDOR=Intel10_64lp \
     -DBLAS_LIBRARIES="${BLAS_LIBS}" \
