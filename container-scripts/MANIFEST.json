@@ -3,7 +3,7 @@
   "description": "Container scripts manifest - maps source files to installation targets",
   "files": [
     {
-      "source": "config-files/block-4-mirror-probing-functions-must-be-early-for-apt-operations/cuda-repository-pin.pref",
+      "source": "config-files/apt-preferences/block-4-mirror-probing-functions-must-be-early-for-apt-operations/cuda-repository-pin.pref",
       "target": "/etc/apt/preferences.d/cuda-repository-pin",
       "file_type": "config-files",
       "permissions": "0644",
@@ -45,7 +45,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-12-openblas-compilation-and-installation/environment.conf",
+      "source": "config-files/environment-config/block-12-openblas-compilation-and-installation/environment.txt",
       "target": "/etc/environment",
       "file_type": "config-files",
       "permissions": "0644",
@@ -59,7 +59,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-12-openblas-compilation-and-installation/openblas-protect.pref",
+      "source": "config-files/apt-preferences/block-12-openblas-compilation-and-installation/openblas-protect.pref",
       "target": "/etc/apt/preferences.d/openblas-protect",
       "file_type": "config-files",
       "permissions": "0644",
@@ -87,7 +87,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf",
+      "source": "config-files/apt-config/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf",
       "target": "/etc/dpkg/dpkg.cfg.d/01-nodoc",
       "file_type": "config-files",
       "permissions": "0644",
@@ -101,7 +101,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-13-nvidia-cuda-cudnn-setup/80-retries.conf",
+      "source": "config-files/apt-config/block-13-nvidia-cuda-cudnn-setup/80-retries.conf",
       "target": "/etc/apt/apt.conf.d/80-retries",
       "file_type": "config-files",
       "permissions": "0644",
@@ -115,7 +115,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref",
+      "source": "config-files/apt-preferences/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref",
       "target": "/etc/apt/preferences.d/suitesparse-protect",
       "file_type": "config-files",
       "permissions": "0644",
@@ -171,7 +171,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-15-firefox-installation/mozillateam.pref",
+      "source": "config-files/apt-preferences/block-15-firefox-installation/mozillateam.pref",
       "target": "/etc/apt/preferences.d/mozillateam.pref",
       "file_type": "config-files",
       "permissions": "0644",
@@ -185,7 +185,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref",
+      "source": "config-files/apt-preferences/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref",
       "target": "/etc/apt/preferences.d/block-system-ceres",
       "file_type": "config-files",
       "permissions": "0644",
@@ -241,7 +241,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-17-phase-3-high-level-dependencies/block-system-gtsam.pref",
+      "source": "config-files/apt-preferences/block-17-phase-3-high-level-dependencies/block-system-gtsam.pref",
       "target": "/etc/apt/preferences.d/block-system-gtsam",
       "file_type": "config-files",
       "permissions": "0644",

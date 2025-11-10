@@ -1,4 +1,0 @@
-# Prevent APT from overwriting custom SuiteSparse build
-Package: libsuitesparse-dev libsuitesparseconfig5 libsuitesparseconfig-dev libsuitesparse-amd-dev libsuitesparse-cholmod-dev libsuitesparse-spqr-dev libsuitesparse-umfpack-dev suitesparse
-Pin: release *
-Pin-Priority: -1

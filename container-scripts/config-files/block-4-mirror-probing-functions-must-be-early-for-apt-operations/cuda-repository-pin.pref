@@ -1,3 +1,0 @@
-Package: *
-Pin: origin developer.download.nvidia.com
-Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}
