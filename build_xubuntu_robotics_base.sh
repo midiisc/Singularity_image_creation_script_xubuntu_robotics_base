@@ -307,6 +307,13 @@ if ! install_host_tool "rsync" "rsync" "rsync file sync tool"; then
     echo "⚠ WARNING: rsync not available (will use cp fallback)" >&2
 fi
 
+# Tool 9: lsof (required for cleanup routines)
+if ! install_host_tool "lsof" "lsof" "lsof file descriptor inspector"; then
+    echo ""
+    echo "ERROR: lsof is required for cleanup routines but could not be installed" >&2
+    exit 1
+fi
+
 echo "✓ Host tool validation and installation complete"
 
 #===============================================================================
@@ -667,7 +674,7 @@ detect_container_system() {
 CONTAINER_CMD=$(detect_container_system)
 
 if [ "${CONTAINER_CMD}" = "none" ]; then
-    log "ERROR: Neither singularity nor apptainer found in system"
+    log_error "Neither singularity nor apptainer found in system"
     exit 1
 fi
 # End if-fi block (self-contained)
@@ -1017,8 +1024,8 @@ comprehensive_cleanup() {
     echo "5. Cleaning session directories..."
     # Critical: Singularity/Apptainer creates session dirs in /tmp
     find /tmp -maxdepth 1 -type d -user "${USER}" \( \
-        -name "${CONTAINER_CMD}-*" -o \
-        -name "${CONTAINER_CMD}-*" \
+        -name "singularity-*" -o \
+        -name "apptainer-*" \
     \) 2>/dev/null | while IFS= read -r session_dir || [ -n "${session_dir}" ]; do
         echo "   Removing session: $(basename "${session_dir}")"
         sudo rm -rf "${session_dir}" 2>/dev/null || true
@@ -1048,12 +1055,16 @@ comprehensive_cleanup() {
                 # Check if process is still running
                 if ! ps -p "${pid}" > /dev/null 2>&1; then
                     echo "   Removing stale PID file (process ${pid} dead): $(basename "${pid_file}")"
-                    rm -f "${pid_file}" 2>/dev/null || true
+                    sudo rm -f "${pid_file}" 2>/dev/null || {
+                        echo "   ⚠ Failed to remove PID file (permission denied): $(basename "${pid_file}")"
+                    }
                 fi
                 # End nested if-fi block
             else
                 echo "   Removing empty PID file: $(basename "${pid_file}")"
-                rm -f "${pid_file}" 2>/dev/null || true
+                sudo rm -f "${pid_file}" 2>/dev/null || {
+                    echo "   ⚠ Failed to remove PID file (permission denied): $(basename "${pid_file}")"
+                }
             fi
             # End if-else block
 
@@ -3206,6 +3217,7 @@ if [ -f "${ARCHITECTURE_FILE}" ]; then
 else
     log_error "Failed to generate BUILD_ARCHITECTURE.md"
 fi
+fi  # End ARCHITECTURE_FILE creation attempt
 fi  # End of BUILD_OUTPUT_DIR check
 
 #--- Sub-block 22.5.5: Generate README.md with instructions ---
@@ -3749,6 +3761,8 @@ For detailed software architecture and library versions, see `BUILD_ARCHITECTURE
 
 README_EOF
 
+    fi
+
 if [ -f "${README_FILE}" ]; then
     log_success "README.md generated: ${README_FILE}"
 else
@@ -3964,11 +3978,11 @@ NC='\033[0m' # No Color
 echo -e "${YELLOW}======================================================================${NC}"
 echo -e "${YELLOW}IMPORTANT: GPU Environment Information${NC}"
 echo -e "${YELLOW}======================================================================${NC}"
-echo -e "${YELLOW}> This container image was built with the NVIDIA CUDA Toolkit 12.2 and${NC}"
-echo -e "${YELLOW}> a compatible cuDNN version baked directly into the image.${NC}"
+echo -e "${YELLOW}> This container image was built with the NVIDIA CUDA Toolkit ${CUDA_VERSION:-unknown}${NC}"
+echo -e "${YELLOW}> and a compatible cuDNN version baked directly into the image.${NC}"
 echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> To use this image with GPU acceleration (--nv), the host machine's${NC}"
-echo -e "${YELLOW}> MUST have an NVIDIA driver that supports CUDA 12.2 or newer.${NC}"
+echo -e "${YELLOW}> MUST have an NVIDIA driver that supports CUDA ${CUDA_VERSION:-unknown} or newer.${NC}"
 echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> Check the host driver's max supported CUDA version with: nvidia-smi${NC}"
 echo -e "${YELLOW}>${NC}"

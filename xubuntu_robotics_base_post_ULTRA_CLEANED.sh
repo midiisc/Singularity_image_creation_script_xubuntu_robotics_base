@@ -1976,7 +1976,6 @@ if command -v chattr >/dev/null 2>&1 && [ -d "${CONTAINER_APT_CACHE:-/container_
     # Use find to safely handle glob expansion and avoid errors when no files exist
     find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} \; 2>/dev/null || true
     # Count protected files for confirmation
-    local protected_count
     protected_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
     if [ "${protected_count}" -gt 0 ]; then
         echo "✓ Pre-seeded cache files are now protected (${protected_count} files)."
@@ -13088,7 +13087,6 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
               fi
             done
           ' sh {} +
-        fi
         fi
       fi
 
