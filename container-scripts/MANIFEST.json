@@ -3,7 +3,7 @@
   "description": "Container scripts manifest - maps source files to installation targets",
   "files": [
     {
-      "source": "config-files/apt-preferences/block-4-mirror-probing-functions-must-be-early-for-apt-operations/cuda-repository-pin.pref",
+      "source": "config-files/apt-preferences/block-4-mirror-probing-early/cuda-repository-pin.pref",
       "target": "/etc/apt/preferences.d/cuda-repository-pin",
       "file_type": "config-files",
       "permissions": "0644",
@@ -17,7 +17,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/apt-wrapper-aria2c-accelerated-downloads.sh",
+      "source": "shell-scripts/block-11-apt-aria-wrapper/apt-wrapper-aria2c-accelerated-downloads.sh",
       "target": "/usr/local/bin/apt-aria",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -31,7 +31,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/intel-mkl-environment-setup.sh",
+      "source": "shell-scripts/block-11-apt-aria-wrapper/intel-mkl-environment-setup.sh",
       "target": "/etc/profile.d/intel-mkl.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -45,7 +45,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/environment-config/block-12-openblas-compilation-and-installation/environment.txt",
+      "source": "config-files/environment-config/block-12-openblas/environment.txt",
       "target": "/etc/environment",
       "file_type": "config-files",
       "permissions": "0644",
@@ -59,7 +59,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-12-openblas-compilation-and-installation/openblas-protect.pref",
+      "source": "config-files/apt-preferences/block-12-openblas/openblas-protect.pref",
       "target": "/etc/apt/preferences.d/openblas-protect",
       "file_type": "config-files",
       "permissions": "0644",
@@ -73,7 +73,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-13-nvidia-cuda-cudnn-setup/cuda.sh",
+      "source": "shell-scripts/block-13-nvidia-cuda/cuda.sh",
       "target": "/etc/profile.d/cuda.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -87,7 +87,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-config/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf",
+      "source": "config-files/apt-config/block-13-nvidia-cuda/01-nodoc.conf",
       "target": "/etc/dpkg/dpkg.cfg.d/01-nodoc",
       "file_type": "config-files",
       "permissions": "0644",
@@ -101,7 +101,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-config/block-13-nvidia-cuda-cudnn-setup/80-retries.conf",
+      "source": "config-files/apt-config/block-13-nvidia-cuda/80-retries.conf",
       "target": "/etc/apt/apt.conf.d/80-retries",
       "file_type": "config-files",
       "permissions": "0644",
@@ -115,7 +115,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref",
+      "source": "config-files/apt-preferences/block-13-nvidia-cuda/suitesparse-protect.pref",
       "target": "/etc/apt/preferences.d/suitesparse-protect",
       "file_type": "config-files",
       "permissions": "0644",
@@ -129,7 +129,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-13-nvidia-cuda-cudnn-setup/suitesparse-library-path-configuration.sh",
+      "source": "shell-scripts/block-13-nvidia-cuda/suitesparse-library-path-configuration.sh",
       "target": "/etc/profile.d/suitesparse.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -143,7 +143,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf",
+      "source": "config-files/block-14-drake/99-drake-insecure.conf",
       "target": "/etc/apt/apt.conf.d/99-drake-insecure.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -157,7 +157,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-14-drake-robotics-framework-setup/drake.sh",
+      "source": "shell-scripts/block-14-drake/drake.sh",
       "target": "/etc/profile.d/drake.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -171,7 +171,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-15-firefox-installation/mozillateam.pref",
+      "source": "config-files/apt-preferences/block-15-firefox/mozillateam.pref",
       "target": "/etc/apt/preferences.d/mozillateam.pref",
       "file_type": "config-files",
       "permissions": "0644",
@@ -185,7 +185,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref",
+      "source": "config-files/apt-preferences/block-16-foundational-libs/block-system-ceres.pref",
       "target": "/etc/apt/preferences.d/block-system-ceres",
       "file_type": "config-files",
       "permissions": "0644",
@@ -199,7 +199,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-16-phase-1-foundational-system-libraries/tmux.conf",
+      "source": "config-files/block-16-foundational-libs/tmux.conf",
       "target": "/etc/tmux.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -213,7 +213,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-16-phase-1-foundational-system-libraries/ros-multiterminal-launcher.sh",
+      "source": "shell-scripts/block-16-foundational-libs/ros-multiterminal-launcher.sh",
       "target": "/usr/local/bin/ros_multiterm",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -227,7 +227,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-17-phase-3-high-level-dependencies/block-system-g2o.pref",
+      "source": "config-files/apt-preferences/block-17-high-level-deps/block-system-g2o.pref",
       "target": "/etc/apt/preferences.d/block-system-g2o",
       "file_type": "config-files",
       "permissions": "0644",
@@ -241,7 +241,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-17-phase-3-high-level-dependencies/block-system-gtsam.pref",
+      "source": "config-files/apt-preferences/block-17-high-level-deps/block-system-gtsam.pref",
       "target": "/etc/apt/preferences.d/block-system-gtsam",
       "file_type": "config-files",
       "permissions": "0644",
@@ -255,7 +255,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-20-phase-4-opencv-compilation/block-system-opencv.pref",
+      "source": "config-files/apt-preferences/block-20-opencv/block-system-opencv.pref",
       "target": "/etc/apt/preferences.d/block-system-opencv",
       "file_type": "config-files",
       "permissions": "0644",
@@ -269,7 +269,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "other/block-21-julia-environment-setup/Overrides.toml",
+      "source": "other/block-21-julia/Overrides.toml",
       "target": "/root/.julia/artifacts/Overrides.toml",
       "file_type": "other",
       "permissions": "0644",
@@ -283,7 +283,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-21-julia-environment-setup/precompile-julia-cuda.sh",
+      "source": "shell-scripts/block-21-julia/precompile-julia-cuda.sh",
       "target": "/usr/local/bin/precompile_julia_cuda.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -297,7 +297,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-24-3d-reconstruction-and-nerf-tools/pip.conf",
+      "source": "config-files/block-24-3d-nerf/pip.conf",
       "target": "/root/.config/pip/pip.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -311,7 +311,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-24-3d-reconstruction-and-nerf-tools/compiled-libs.sh",
+      "source": "shell-scripts/block-24-3d-nerf/compiled-libs.sh",
       "target": "/etc/profile.d/compiled-libs.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -325,7 +325,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-24-3d-reconstruction-and-nerf-tools/block-system-colmap.pref",
+      "source": "config-files/apt-preferences/block-24-3d-nerf/block-system-colmap.pref",
       "target": "/etc/apt/preferences.d/block-system-colmap",
       "file_type": "config-files",
       "permissions": "0644",
@@ -339,7 +339,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/apt-preferences/block-25-jax-cuda-installation-reinforcement-learning/pytorch-protect.pref",
+      "source": "config-files/apt-preferences/block-25-jax-cuda/pytorch-protect.pref",
       "target": "/etc/apt/preferences.d/pytorch-protect",
       "file_type": "config-files",
       "permissions": "0644",
@@ -353,7 +353,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-25-jax-cuda-installation-reinforcement-learning/3d-recon-info.sh",
+      "source": "shell-scripts/block-25-jax-cuda/3d-recon-info.sh",
       "target": "/usr/local/bin/3d_recon_info",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -367,7 +367,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-27-x11-performance-and-diagnostic-tools/start-x11vnc.sh",
+      "source": "shell-scripts/block-27-x11-tools/start-x11vnc.sh",
       "target": "/usr/local/bin/start_x11vnc.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -381,7 +381,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-27-x11-performance-and-diagnostic-tools/vnc-clipboard-sync.sh",
+      "source": "shell-scripts/block-27-x11-tools/vnc-clipboard-sync.sh",
       "target": "/usr/local/bin/vnc_clipboard_sync.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -395,7 +395,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/network.conf",
+      "source": "config-files/block-28-desktop-part1/network.conf",
       "target": "/etc/pulse/default.pa.d/network.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -409,7 +409,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/start-pulseaudio.sh",
+      "source": "shell-scripts/block-28-desktop-part1/start-pulseaudio.sh",
       "target": "/usr/local/bin/start_pulseaudio.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -423,7 +423,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/turbovnc.sh",
+      "source": "shell-scripts/block-28-desktop-part1/turbovnc.sh",
       "target": "/etc/profile.d/turbovnc.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -437,7 +437,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/virtualgl.sh",
+      "source": "shell-scripts/block-28-desktop-part1/virtualgl.sh",
       "target": "/etc/profile.d/virtualgl.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -451,7 +451,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/configure-vglserver.sh",
+      "source": "shell-scripts/block-28-desktop-part1/configure-vglserver.sh",
       "target": "/usr/local/bin/configure_vglserver.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -465,7 +465,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/test-virtualgl.sh",
+      "source": "shell-scripts/block-28-desktop-part1/test-virtualgl.sh",
       "target": "/usr/local/bin/test_virtualgl.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -479,7 +479,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/system-benchmarking-suite.sh",
+      "source": "shell-scripts/block-28-desktop-part1/system-benchmarking-suite.sh",
       "target": "/usr/local/bin/vgl_benchmark.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -493,7 +493,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vgl-info.sh",
+      "source": "shell-scripts/block-28-desktop-part1/vgl-info.sh",
       "target": "/usr/local/bin/vgl_info.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -507,7 +507,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vgl-launch.sh",
+      "source": "shell-scripts/block-28-desktop-part1/vgl-launch.sh",
       "target": "/usr/local/bin/vgl_launch.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -521,7 +521,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/bash.sh",
+      "source": "shell-scripts/block-28-desktop-part1/bash.sh",
       "target": "/etc/bash.bashrc",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -535,7 +535,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-fast.conf",
+      "source": "config-files/block-28-desktop-part1/vglrun-fast.conf",
       "target": "/usr/local/etc/virtualgl/vglrun-fast.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -549,7 +549,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-balanced.conf",
+      "source": "config-files/block-28-desktop-part1/vglrun-balanced.conf",
       "target": "/usr/local/etc/virtualgl/vglrun-balanced.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -563,7 +563,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-lowbw.conf",
+      "source": "config-files/block-28-desktop-part1/vglrun-lowbw.conf",
       "target": "/usr/local/etc/virtualgl/vglrun-lowbw.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -577,7 +577,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-fast.sh",
+      "source": "shell-scripts/block-28-desktop-part1/vglrun-fast.sh",
       "target": "/usr/local/bin/vglrun-fast",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -591,7 +591,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-balanced.sh",
+      "source": "shell-scripts/block-28-desktop-part1/vglrun-balanced.sh",
       "target": "/usr/local/bin/vglrun-balanced",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -605,7 +605,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-lowbw.sh",
+      "source": "shell-scripts/block-28-desktop-part1/vglrun-lowbw.sh",
       "target": "/usr/local/bin/vglrun-lowbw",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -619,7 +619,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/performance.conf",
+      "source": "config-files/block-28-desktop-part1/performance.conf",
       "target": "/etc/turbovncserver.conf.d/performance.conf",
       "file_type": "config-files",
       "permissions": "0644",
@@ -633,7 +633,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/xstartup.turbovnc.sh",
+      "source": "shell-scripts/block-28-desktop-part1/xstartup.turbovnc.sh",
       "target": "/usr/share/turbovnc/xstartup.turbovnc.optimized",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -647,7 +647,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/turbovnc-tune.sh",
+      "source": "shell-scripts/block-28-desktop-part1/turbovnc-tune.sh",
       "target": "/usr/local/bin/turbovnc_tune.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -661,7 +661,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-29-conda-python-environment-setup/conda-profile-path-configuration.sh",
+      "source": "shell-scripts/block-29-conda/conda-profile-path-configuration.sh",
       "target": "/etc/profile.d/conda.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -675,7 +675,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-29-conda-python-environment-setup/conda-activation-hook-pythonpath-management.sh",
+      "source": "shell-scripts/block-29-conda/conda-activation-hook-pythonpath-management.sh",
       "target": "/opt/mamba/etc/conda/activate.d/unset_pythonpath.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -689,7 +689,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-29-conda-python-environment-setup/conda-deactivation-hook-pythonpath-restore.sh",
+      "source": "shell-scripts/block-29-conda/conda-deactivation-hook-pythonpath-restore.sh",
       "target": "/opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -703,7 +703,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "other/block-31-cad-and-3d-printing-tools/freecad.desktop",
+      "source": "other/block-31-cad-3d/freecad.desktop",
       "target": "/usr/share/applications/freecad.desktop",
       "file_type": "other",
       "permissions": "0644",
@@ -717,7 +717,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "other/block-31-cad-and-3d-printing-tools/orcaslicer.desktop",
+      "source": "other/block-31-cad-3d/orcaslicer.desktop",
       "target": "/usr/share/applications/orcaslicer.desktop",
       "file_type": "other",
       "permissions": "0644",
@@ -731,7 +731,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "other/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/xfwm4.xml",
+      "source": "other/block-33-vnc-part2/xfwm4.xml",
       "target": "/etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml",
       "file_type": "other",
       "permissions": "0644",
@@ -745,7 +745,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/start-vnc-xfce.sh",
+      "source": "shell-scripts/block-33-vnc-part2/start-vnc-xfce.sh",
       "target": "/usr/local/bin/start_vnc_xfce.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -759,7 +759,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/vnc-ssl-tunnel.sh",
+      "source": "shell-scripts/block-33-vnc-part2/vnc-ssl-tunnel.sh",
       "target": "/usr/local/bin/vnc_ssl_tunnel.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -773,7 +773,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/start-vnc-ultimate.sh",
+      "source": "shell-scripts/block-33-vnc-part2/start-vnc-ultimate.sh",
       "target": "/usr/local/bin/start_vnc_ultimate.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -787,7 +787,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/start-novnc-advanced.sh",
+      "source": "shell-scripts/block-33-vnc-part2/start-novnc-advanced.sh",
       "target": "/usr/local/bin/start_novnc_advanced.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -801,7 +801,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/test-virtualgl.sh",
+      "source": "shell-scripts/block-33-vnc-part2/test-virtualgl.sh",
       "target": "/usr/local/bin/test_virtualgl.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -815,7 +815,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/start-kasmvnc.sh",
+      "source": "shell-scripts/block-34-vnc-part3/start-kasmvnc.sh",
       "target": "/usr/local/bin/start_kasmvnc.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -829,7 +829,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/test-vulkan.sh",
+      "source": "shell-scripts/block-34-vnc-part3/test-vulkan.sh",
       "target": "/usr/local/bin/test_vulkan.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -843,7 +843,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/start-xpra.sh",
+      "source": "shell-scripts/block-34-vnc-part3/start-xpra.sh",
       "target": "/usr/local/bin/start_xpra.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -857,7 +857,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/xpra-seamless.sh",
+      "source": "shell-scripts/block-34-vnc-part3/xpra-seamless.sh",
       "target": "/usr/local/bin/xpra_seamless.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -871,7 +871,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/start-x11vnc.sh",
+      "source": "shell-scripts/block-34-vnc-part3/start-x11vnc.sh",
       "target": "/usr/local/bin/start_x11vnc.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -885,7 +885,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-35-multimedia-and-performance-tools/record-screen.sh",
+      "source": "shell-scripts/block-35-multimedia/record-screen.sh",
       "target": "/usr/local/bin/record_screen.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -899,7 +899,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-35-multimedia-and-performance-tools/gpu-monitor.sh",
+      "source": "shell-scripts/block-35-multimedia/gpu-monitor.sh",
       "target": "/usr/local/bin/gpu_monitor.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -913,7 +913,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-35-multimedia-and-performance-tools/vnc-monitor.sh",
+      "source": "shell-scripts/block-35-multimedia/vnc-monitor.sh",
       "target": "/usr/local/bin/vnc_monitor.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -927,7 +927,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "other/block-36-modern-rust-based-cli-tools/DEFAULT-FASTRTPS-PROFILES.xml",
+      "source": "other/block-36-rust-cli/DEFAULT-FASTRTPS-PROFILES.xml",
       "target": "/etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml",
       "file_type": "other",
       "permissions": "0644",
@@ -941,7 +941,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/rust.sh",
+      "source": "shell-scripts/block-37-rust/rust.sh",
       "target": "/etc/profile.d/rust.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -955,7 +955,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/bash.sh",
+      "source": "shell-scripts/block-37-rust/bash.sh",
       "target": "/etc/bash.bashrc",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -969,7 +969,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/zoxide-path.sh",
+      "source": "shell-scripts/block-37-rust/zoxide-path.sh",
       "target": "/etc/profile.d/zoxide-path.sh",
       "file_type": "shell-scripts",
       "permissions": "0644",
@@ -983,7 +983,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-37-rust-toolchain-installation/config.kdl",
+      "source": "config-files/block-37-rust/config.kdl",
       "target": "/etc/zellij/config.kdl",
       "file_type": "config-files",
       "permissions": "0644",
@@ -997,7 +997,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "config-files/block-37-rust-toolchain-installation/config.ron",
+      "source": "config-files/block-37-rust/config.ron",
       "target": "/etc/ox/config.ron",
       "file_type": "config-files",
       "permissions": "0644",
@@ -1011,7 +1011,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/ros-multiterminal-zellij-launcher.sh",
+      "source": "shell-scripts/block-37-rust/ros-multiterminal-zellij-launcher.sh",
       "target": "/usr/local/bin/ros_multiterm_zellij",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1025,7 +1025,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/ros-multiterminal-tmux-launcher.sh",
+      "source": "shell-scripts/block-37-rust/ros-multiterminal-tmux-launcher.sh",
       "target": "/usr/local/bin/ros_multiterm_tmux",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1039,7 +1039,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-37-rust-toolchain-installation/ros-multiterminal-launcher.sh",
+      "source": "shell-scripts/block-37-rust/ros-multiterminal-launcher.sh",
       "target": "/usr/local/bin/ros_multiterm",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1053,7 +1053,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "json-configs/block-38-robotics-middleware-zenoh/zenoh-router.json5",
+      "source": "json-configs/block-38-zenoh/zenoh-router.json5",
       "target": "/etc/zenoh/zenoh-router.json5",
       "file_type": "json-configs",
       "permissions": "0644",
@@ -1067,7 +1067,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-humble.json5",
+      "source": "json-configs/block-38-zenoh/zenoh-bridge-humble.json5",
       "target": "/etc/zenoh/zenoh-bridge-humble.json5",
       "file_type": "json-configs",
       "permissions": "0644",
@@ -1081,7 +1081,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-jazzy.json5",
+      "source": "json-configs/block-38-zenoh/zenoh-bridge-jazzy.json5",
       "target": "/etc/zenoh/zenoh-bridge-jazzy.json5",
       "file_type": "json-configs",
       "permissions": "0644",
@@ -1095,7 +1095,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-startup.sh",
+      "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-startup.sh",
       "target": "/usr/local/bin/zenoh_start",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1109,7 +1109,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-shutdown.sh",
+      "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-shutdown.sh",
       "target": "/usr/local/bin/zenoh_stop",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1123,7 +1123,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-status-check.sh",
+      "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-status-check.sh",
       "target": "/usr/local/bin/zenoh_status",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1137,7 +1137,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "python-scripts/block-38-robotics-middleware-zenoh/zenoh-topic-bridge.py",
+      "source": "python-scripts/block-38-zenoh/zenoh-topic-bridge.py",
       "target": "/opt/scripts/zenoh_topic_bridge.py",
       "file_type": "other",
       "permissions": "0644",
@@ -1151,7 +1151,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-38-robotics-middleware-zenoh/ros-multiterminal-zellij-launcher.sh",
+      "source": "shell-scripts/block-38-zenoh/ros-multiterminal-zellij-launcher.sh",
       "target": "/usr/local/bin/ros_multiterm_zellij_zenoh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1165,7 +1165,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-39-final-system-verification/vnc-server-selection-utility.sh",
+      "source": "shell-scripts/block-39-verification/vnc-server-selection-utility.sh",
       "target": "/usr/local/bin/vnc_select.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1179,7 +1179,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-39-final-system-verification/network-optimization-tuning.sh",
+      "source": "shell-scripts/block-39-verification/network-optimization-tuning.sh",
       "target": "/usr/local/bin/optimize_network.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1193,7 +1193,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-39-final-system-verification/remote-desktop-launcher-menu.sh",
+      "source": "shell-scripts/block-39-verification/remote-desktop-launcher-menu.sh",
       "target": "/usr/local/bin/remote_desktop.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1207,7 +1207,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "shell-scripts/block-39-final-system-verification/system-benchmarking-suite.sh",
+      "source": "shell-scripts/block-39-verification/system-benchmarking-suite.sh",
       "target": "/usr/local/bin/benchmark_all.sh",
       "file_type": "shell-scripts",
       "permissions": "0755",
@@ -1221,7 +1221,7 @@
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
     },
     {
-      "source": "docs/block-40-documentation-and-user-guides/virtualgl-guide.txt",
+      "source": "docs/block-40-docs/virtualgl-guide.txt",
       "target": "/usr/local/share/doc/virtualgl-guide.txt",
       "file_type": "other",
       "permissions": "0644",
