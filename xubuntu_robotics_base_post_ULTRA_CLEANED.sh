@@ -3419,7 +3419,17 @@ else()
 endif()
 EOF
 
-echo -e "  ${GREEN}✓ Library paths and CMake configs configured${NC}"
+# Create profile.d script for OpenBLAS (ensures variables available in all shells)
+cat > /etc/profile.d/openblas.sh <<EOF
+export PATH=${OPENBLAS_INSTALL_PREFIX}/bin:\${PATH}
+export LD_LIBRARY_PATH=${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
+export PKG_CONFIG_PATH=${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
+export OpenBLAS_DIR=${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas
+export CMAKE_PREFIX_PATH=${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
+EOF
+chmod 0644 /etc/profile.d/openblas.sh
+
+echo -e "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
 echo ""
 
 #--- Sub-block 12.9: Set up APT pinning ---
@@ -10623,7 +10633,7 @@ fi
 # Benefits: Self-contained, portable, high-performance, eliminates runtime linker errors
 # Note: libssl-dev already installed via PKGS_CORE_DEPS in Block 7
 # Additional libraries for robotics/Open3D context:
-#   - libopenblas-dev/libopenblas64-dev: OpenBLAS development libraries (CRITICAL for fixing build errors)
+#   - OpenBLAS: Built from source in Block 6.12B (available via PKG_CONFIG_PATH)
 #   - libomp-dev/libomp5: OpenMP support for parallel operations
 #   - libflann-dev: Fast Library for Approximate Nearest Neighbors (point cloud processing)
 #   - libpcl-dev: Point Cloud Library (robotics/3D processing) - may be in universe repo
@@ -10650,12 +10660,12 @@ echo "✓ Ninja build system available"
 echo "Installing CRITICAL Open3D dependencies..."
 # Note: LLVM-14 packages will be installed separately below (LLVM-11 not available on Noble)
 # LLVM-14 is stable and compatible. LLVM-18 may have libunwind conflicts with Python exceptions
+# NOTE: libopenblas-dev and libopenblas64-dev removed - we compile our own OpenBLAS in BLOCK 6.12B
+#       OpenBLAS is available via PKG_CONFIG_PATH and LD_LIBRARY_PATH (set in Block 6.12B)
 OPEN3D_PACKAGES=(
     libblas-dev
     liblapack-dev
     liblapacke-dev
-    libopenblas-dev
-    libopenblas64-dev
     libjpeg-dev
     libpng-dev
     libtiff-dev
@@ -10844,11 +10854,15 @@ else
 fi
 
 # Check OpenBLAS (CRITICAL - required to prevent build errors)
-if [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ] || \
-   dpkg_resolve_installed_package "libopenblas-dev" >/dev/null 2>&1; then
-    echo "✓ OpenBLAS development package installed"
+# NOTE: We compile OpenBLAS from source, so check for library files, not apt package
+if [ -f "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so" ] || \
+   [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ]; then
+    echo "✓ OpenBLAS library installed (source-built in ${OPENBLAS_INSTALL_PREFIX})"
+elif pkg-config --exists openblas 2>/dev/null; then
+    echo "✓ OpenBLAS found via pkg-config"
 else
-    echo "⚠ WARNING: libopenblas-dev may not be installed correctly"
+    echo "⚠ WARNING: OpenBLAS library may not be available"
+    echo "   Expected location: ${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
     VERIFY_ERROR=1
 fi
 
