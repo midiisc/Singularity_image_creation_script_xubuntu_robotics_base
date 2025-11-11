@@ -546,16 +546,48 @@ test_mirror() {
     # Download Packages.gz (~20MB) to measure actual bandwidth
     local previous_opts="$-"
     set +e
-    local CURL_OUTPUT CURL_EXIT_CODE
+    local CURL_OUTPUT CURL_EXIT_CODE HTTP_CODE
 
     # Download Packages.gz (typically 15-25MB) to measure bandwidth
-    CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" 2>/dev/null)"
+    # Check HTTP status code to detect 403 (blocked), 404, etc.
+    CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" 2>/dev/null)"
     CURL_EXIT_CODE=$?
+    
+    # Extract HTTP code and time from output (format: "HTTP_CODE|TIME")
+    HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null || echo "")
+    CURL_OUTPUT=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null || echo "")
+
+    # Reject mirrors that return 403 (Forbidden/Blocked), 404 (Not Found), or other error codes
+    if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
+      echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} (blocked or error)" >&2
+      echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
+      if [[ "${previous_opts}" == *e* ]]; then
+          set -e
+      else
+          set +e
+      fi
+      return
+    fi
 
     # If large file fails, try Release file as fallback
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
-      CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
+      CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
         CURL_EXIT_CODE=$?
+        HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null || echo "")
+        CURL_OUTPUT=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null || echo "")
+        
+        # Reject Release file if it also returns error codes
+        if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
+          echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} on Release file (blocked or error)" >&2
+          echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
+          if [[ "${previous_opts}" == *e* ]]; then
+              set -e
+          else
+              set +e
+          fi
+          return
+        fi
+        
       # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
       if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "${CURL_OUTPUT:-}" ]] && [[ "${CURL_OUTPUT:-}" != "0.000000" ]]; then
         CURL_OUTPUT=$(printf "%.3f" "$(echo "${CURL_OUTPUT} 10" | awk '{print $1 * $2}' 2>/dev/null || echo "${CURL_OUTPUT}")")
@@ -1257,7 +1289,62 @@ reapply_fastest_mirror() {
   # Clear apt state to force re-reading sources
   rm -f /var/lib/apt/lists/lock 2>/dev/null || true
   echo "[info] Running apt-get update to refresh package lists with new mirror..."
-  apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
+  local apt_update_output apt_update_exit_code
+  apt_update_output=$(apt-get update -o Acquire::Retries=3 2>&1)
+  apt_update_exit_code=$?
+  
+  # Check if apt-get update failed with 403 (blocked) or other access errors
+  if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
+    if echo "${apt_update_output}" | grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)"; then
+      echo "[ERROR] Selected mirror ${FASTEST_MIRROR} is blocked (403) or inaccessible"
+      echo "[info] Falling back to default archive.ubuntu.com..."
+      
+      # Revert to archive.ubuntu.com
+      FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
+      export FASTEST_MIRROR
+      
+      # Re-apply default mirror
+      local fastest_mirror_sed_escaped
+      fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+      
+      # Revert sources.list
+      if [ -f /etc/apt/sources.list ]; then
+        sed -i "s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      fi
+      
+      # Revert sources.list.d/ files
+      if [ -d /etc/apt/sources.list.d ]; then
+        shopt -s nullglob
+        for sources_file in /etc/apt/sources.list.d/*.{list,sources}; do
+          [ -f "${sources_file}" ] || continue
+          [ -n "${fastest_mirror_sed_escaped:-}" ] || continue
+          # Skip PPAs
+          grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null && continue
+          # Replace any mirror with archive.ubuntu.com
+          sed -i "s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|^URIs=https\\?://[^[:space:]]*/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+        done
+        shopt -u nullglob
+      fi
+      
+      # Clear cache and retry with default mirror
+      rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+      rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
+      rm -f /var/lib/apt/lists/lock 2>/dev/null || true
+      
+      echo "[info] Retrying apt-get update with default mirror..."
+      if apt-get update -o Acquire::Retries=3 2>&1; then
+        echo "[info] ✓ Successfully using default archive.ubuntu.com mirror"
+      else
+        echo "[warn] apt-get update still had issues even with default mirror"
+      fi
+    else
+      echo "[warn] apt-get update had issues (may continue): ${apt_update_output}"
+    fi
+  else
+    echo "[info] ✓ apt-get update succeeded with selected mirror"
+  fi
   
   # Verify the changes
   verify_fastest_mirror
@@ -1837,9 +1924,29 @@ echo "==> Refreshing package lists with fastest mirror (required for apt-aria to
 echo "    This ensures apt-get --print-uris will return URIs from ${FASTEST_MIRROR} instead of archive.ubuntu.com"
 # Clear old package list cache to force fresh download from new mirror
 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
-# Update package lists from the new mirror
-/usr/bin/apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
-echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirror"
+# Update package lists from the new mirror with validation
+local apt_update_output apt_update_exit_code
+apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
+apt_update_exit_code=$?
+
+# Check if apt-get update failed with 403 (blocked) or other access errors
+if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
+  if echo "${apt_update_output}" | grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)"; then
+    echo "[ERROR] Selected mirror ${FASTEST_MIRROR} is blocked (403) or inaccessible"
+    echo "[info] Falling back to default archive.ubuntu.com..."
+    
+    # Revert to archive.ubuntu.com
+    FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
+    export FASTEST_MIRROR
+    
+    # Re-apply default mirror using reapply_fastest_mirror function
+    reapply_fastest_mirror
+  else
+    echo "[warn] apt-get update had issues (may continue): ${apt_update_output}"
+  fi
+else
+  echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirror"
+fi
 
 #--- Sub-block 9.5: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
