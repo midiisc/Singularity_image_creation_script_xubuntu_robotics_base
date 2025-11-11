@@ -4022,7 +4022,13 @@ if [ -n "${GRAPHBLAS_CMakeLists}" ] && [ -f "${GRAPHBLAS_CMakeLists}" ]; then
     if grep -q "check_symbol_exists.*fmax" "${GRAPHBLAS_CMakeLists}" 2>/dev/null && \
        ! grep -q "CMAKE_REQUIRED_LIBRARIES.*m" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
         echo "  → Fixing check_symbol_exists to link against libm during check..."
-        cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
+        # Validate Python3 is available before attempting patch
+        if ! command -v python3 >/dev/null 2>&1; then
+            echo "  ✗ ERROR: python3 not found, cannot patch GraphBLAS CMakeLists.txt"
+            echo "    → Will rely on CMake linker flags only"
+        else
+            # Create backup for safety (will be cleaned up after successful patch)
+            cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
         python3 -c "
 import sys
 import re
@@ -4068,7 +4074,19 @@ if fixed:
 else:
     print('  ⚠ Could not find check_symbol_exists pattern to fix (may already be fixed)')
     sys.exit(1)
-" "${GRAPHBLAS_CMakeLists}" 2>&1 || echo "  ⚠ Failed to fix check_symbol_exists, will ensure libm is linked directly"
+" "${GRAPHBLAS_CMakeLists}" 2>&1
+            PATCH_RESULT=$?
+            if [ ${PATCH_RESULT} -eq 0 ]; then
+                # Patch succeeded, remove backup file
+                rm -f "${GRAPHBLAS_CMakeLists}.bak"
+            else
+                echo "  ⚠ Failed to fix check_symbol_exists, will ensure libm is linked directly"
+                # Restore backup on failure
+                if [ -f "${GRAPHBLAS_CMakeLists}.bak" ]; then
+                    mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
+                fi
+            fi
+        fi
     fi
     
     # Also ensure libm is always linked on Unix (safer approach)
@@ -4080,16 +4098,21 @@ else:
         
         if [ -n "${GRAPHBLAS_TARGET}" ]; then
             echo "  → GraphBLAS target: ${GRAPHBLAS_TARGET}"
-            # Find where to add the math library link - look for existing target_link_libraries for this target
-            # Add math library linking if not present
-            # We'll add it after the first target_link_libraries call for GraphBLAS, or at the end of target configuration
-            # Use sed to add target_link_libraries with math library
-            # First, check if there's already a target_link_libraries line we can modify
-            if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
-                # Add m to existing target_link_libraries line (if not already there)
-                echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
-                # Create a backup and patch using Python
-                cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
+            # Validate Python3 is available
+            if ! command -v python3 >/dev/null 2>&1; then
+                echo "  ✗ ERROR: python3 not found, cannot patch GraphBLAS target_link_libraries"
+                echo "    → Will rely on CMake linker flags only"
+            else
+                # Find where to add the math library link - look for existing target_link_libraries for this target
+                # Add math library linking if not present
+                # We'll add it after the first target_link_libraries call for GraphBLAS, or at the end of target configuration
+                # Use sed to add target_link_libraries with math library
+                # First, check if there's already a target_link_libraries line we can modify
+                if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+                    # Add m to existing target_link_libraries line (if not already there)
+                    echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
+                    # Create a backup and patch using Python (will be cleaned up after successful patch)
+                    cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
                 # Use Python to safely add math library to target_link_libraries
                 python3 -c "
 import sys
@@ -4155,13 +4178,25 @@ else:
             print(f'  ⚠ Could not determine insertion point for {target_name}')
             sys.exit(1)
     else:
-        print(f'  ⚠ Could not find add_library for {target_name}')
-        sys.exit(1)
-" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1 || echo "  ⚠ Python patch failed, will rely on CMake standard libraries"
-            else
-                echo "  → No existing target_link_libraries found for GraphBLAS, adding one..."
-                # Add a new target_link_libraries line after add_library
-                python3 -c "
+    print(f'  ⚠ Could not find add_library for {target_name}')
+    sys.exit(1)
+" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1
+                    PATCH_RESULT=$?
+                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                        # Patch succeeded, remove backup
+                        rm -f "${GRAPHBLAS_CMakeLists}.bak"
+                    else
+                        echo "  ⚠ Python patch failed, will rely on CMake standard libraries"
+                        # Restore backup on failure
+                        if [ -f "${GRAPHBLAS_CMakeLists}.bak" ]; then
+                            mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
+                        fi
+                    fi
+                else
+                    echo "  → No existing target_link_libraries found for GraphBLAS, adding one..."
+                    # Add a new target_link_libraries line after add_library
+                    cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
+                    python3 -c "
 import sys
 import re
 
@@ -4184,15 +4219,27 @@ if add_lib_idx >= 0:
     # Skip comments and find a good place to insert
     while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
         insert_idx += 1
-    # Insert target_link_libraries
-    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)\\n')
+    # Insert target_link_libraries (use actual newline, not literal \n)
+    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
     with open(cmake_file, 'w') as f:
         f.writelines(lines)
     print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
 else:
     print(f'  ⚠ Could not find add_library for {target_name}')
     sys.exit(1)
-" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1 || echo "  ⚠ Failed to add target_link_libraries, will rely on CMake variables"
+" "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1
+                    PATCH_RESULT=$?
+                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                        # Patch succeeded, remove backup
+                        rm -f "${GRAPHBLAS_CMakeLists}.bak"
+                    else
+                        echo "  ⚠ Failed to add target_link_libraries, will rely on CMake variables"
+                        # Restore backup on failure
+                        if [ -f "${GRAPHBLAS_CMakeLists}.bak" ]; then
+                            mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
+                        fi
+                    fi
+                fi
             fi
         else
             echo "  ⚠ Could not determine GraphBLAS target name"
@@ -4204,14 +4251,143 @@ else
     echo "  ⚠ GraphBLAS CMakeLists.txt not found (will rely on CMake standard libraries)"
 fi
 
-# Patch LAGraph similarly
+# Patch LAGraph similarly to ensure math library linking
 if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
-    if ! grep -qE "target_link_libraries\s*\(\s*[^)]*LAGraph[^)]*\s+m\s*\)" "${LAGRAPH_CMakeLists}" 2>/dev/null && \
-       ! grep -qE "target_link_libraries\s*\(\s*[^)]*lagraph[^)]*\s+m\s*\)" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
-        echo "  → LAGraph CMakeLists.txt found, will use CMAKE_C_STANDARD_LIBRARIES"
+    echo "  → Found LAGraph CMakeLists.txt: ${LAGRAPH_CMakeLists}"
+    # Check if LAGraph target already links to math library (case-insensitive)
+    if ! grep -qiE "(target_link_libraries.*LAGraph.*\bm\b|target_link_libraries.*lagraph.*\bm\b)" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+        # Find the LAGraph target name (could be LAGraph, lagraph, etc.)
+        LAGRAPH_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${LAGRAPH_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
+        
+        if [ -n "${LAGRAPH_TARGET}" ]; then
+            echo "  → LAGraph target: ${LAGRAPH_TARGET}"
+            # Validate Python3 is available
+            if ! command -v python3 >/dev/null 2>&1; then
+                echo "  ✗ ERROR: python3 not found, cannot patch LAGraph target_link_libraries"
+                echo "    → Will rely on CMake linker flags only"
+            else
+                # Check if there's already a target_link_libraries line we can modify
+                if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+                    # Add m to existing target_link_libraries line (if not already there)
+                    echo "  → LAGraph has target_link_libraries, ensuring math library is included..."
+                    cp "${LAGRAPH_CMakeLists}" "${LAGRAPH_CMakeLists}.bak"
+                python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+target_name = sys.argv[2]
+
+with open(cmake_file, 'r') as f:
+    content = f.read()
+
+# Pattern to find target_link_libraries for LAGraph target (multiline aware)
+pattern = r'(target_link_libraries\s*\(\s*' + re.escape(target_name) + r'(?:\s+[A-Z]+)?[^)]*)(\))'
+
+def add_math_lib(match):
+    libs = match.group(1)
+    closing = match.group(2)
+    # Check if 'm' is already in the libraries list (whole word match)
+    if re.search(r'\\bm\\b', libs):
+        return match.group(0)  # Already has math library
+    # Add ' m' before the closing parenthesis
+    return libs + ' m' + closing
+
+# Replace target_link_libraries calls for LAGraph target
+new_content = re.sub(pattern, add_math_lib, content, flags=re.IGNORECASE | re.MULTILINE)
+
+if new_content != content:
+    with open(cmake_file, 'w') as f:
+        f.write(new_content)
+    print(f'  ✓ Added math library to {target_name} target_link_libraries')
+    sys.exit(0)
+else:
+    # If no modification was made, try to add a new target_link_libraries line
+    lines = content.split('\n')
+    add_lib_pattern = r'add_library\s*\(\s*' + re.escape(target_name)
+    for i, line in enumerate(lines):
+        if re.search(add_lib_pattern, line, re.IGNORECASE):
+            # Find insertion point (after add_library, before next major command)
+            insert_idx = i + 1
+            while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
+                insert_idx += 1
+            # Insert target_link_libraries
+            lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
+            new_content = '\n'.join(lines)
+            with open(cmake_file, 'w') as f:
+                f.write(new_content)
+            print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
+            sys.exit(0)
+    print(f'  ⚠ Could not find add_library or target_link_libraries for {target_name}')
+    sys.exit(1)
+" "${LAGRAPH_CMakeLists}" "${LAGRAPH_TARGET}" 2>&1
+                    PATCH_RESULT=$?
+                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                        # Patch succeeded, remove backup
+                        rm -f "${LAGRAPH_CMakeLists}.bak"
+                    else
+                        echo "  ⚠ Failed to patch LAGraph, will rely on CMake linker flags"
+                        # Restore backup on failure
+                        if [ -f "${LAGRAPH_CMakeLists}.bak" ]; then
+                            mv "${LAGRAPH_CMakeLists}.bak" "${LAGRAPH_CMakeLists}"
+                        fi
+                    fi
+                else
+                    echo "  → No existing target_link_libraries found for LAGraph, adding one..."
+                    cp "${LAGRAPH_CMakeLists}" "${LAGRAPH_CMakeLists}.bak"
+                    python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+target_name = sys.argv[2]
+
+with open(cmake_file, 'r') as f:
+    lines = f.readlines()
+
+# Find add_library line for the target
+add_lib_idx = -1
+for i, line in enumerate(lines):
+    if re.search(r'add_library\s*\(\s*' + re.escape(target_name), line, re.IGNORECASE):
+        add_lib_idx = i
+        break
+
+if add_lib_idx >= 0:
+    # Find insertion point (after add_library, before next major command)
+    insert_idx = add_lib_idx + 1
+    # Skip comments and find a good place to insert
+    while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
+        insert_idx += 1
+    # Insert target_link_libraries (use actual newline, not literal \n)
+    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
+    with open(cmake_file, 'w') as f:
+        f.writelines(lines)
+    print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
+else:
+    print(f'  ⚠ Could not find add_library for {target_name}')
+    sys.exit(1)
+" "${LAGRAPH_CMakeLists}" "${LAGRAPH_TARGET}" 2>&1
+                    PATCH_RESULT=$?
+                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                        # Patch succeeded, remove backup
+                        rm -f "${LAGRAPH_CMakeLists}.bak"
+                    else
+                        echo "  ⚠ Failed to add target_link_libraries to LAGraph, will rely on CMake variables"
+                        # Restore backup on failure
+                        if [ -f "${LAGRAPH_CMakeLists}.bak" ]; then
+                            mv "${LAGRAPH_CMakeLists}.bak" "${LAGRAPH_CMakeLists}"
+                        fi
+                    fi
+                fi
+            fi
+        else
+            echo "  ⚠ Could not determine LAGraph target name"
+        fi
     else
         echo "  ✓ LAGraph already links to math library"
     fi
+else
+    echo "  ⚠ LAGraph CMakeLists.txt not found (will rely on CMake standard libraries)"
 fi
 
 echo -e "${YELLOW}[6.12C.3] Configuring SuiteSparse via CMake...${NC}"
@@ -4234,9 +4410,34 @@ BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/li
 # 4. Direct patching of GraphBLAS CMakeLists.txt (done above)
 # SuiteSparse uses its own CMake variables (SUITESPARSE_USE_CUDA, SUITESPARSE_USE_OPENMP) and auto-detects CUDA libraries.
 # Do not use standard CUDA CMake variables (CUDA_TOOLKIT_ROOT_DIR, CUBLAS_LIB, etc.) as they are ignored.
-export LDFLAGS="${LDFLAGS:+${LDFLAGS} }-lm"
-export CMAKE_REQUIRED_LIBRARIES="${CMAKE_REQUIRED_LIBRARIES:+${CMAKE_REQUIRED_LIBRARIES};}m"
-cmake ../src \
+#
+# LINKER FLAG ORDERING (CRITICAL):
+# - Order: -fopenmp -lm (OpenMP flag first, then system libraries)
+# - Rationale: -fopenmp adds OpenMP support (implicitly links -lgomp), system libraries like -lm should come last
+# - This ensures correct symbol resolution: GraphBLAS code -> math functions (-lm) -> OpenMP runtime (-lgomp from -fopenmp)
+# - System libraries (-lm, -lpthread, -ldl) should always be at the end of the linker command line
+# - Note: BLAS_LIBRARIES already includes -lgomp;-lpthread;-lm;-ldl in correct order for BLAS-using libraries
+#   But GraphBLAS doesn't use BLAS, so it only gets flags from CMAKE_*_LINKER_FLAGS
+#
+# CRITICAL SAFEGUARDS (based on diagnostic analysis):
+# - Save original LDFLAGS to avoid contaminating check_symbol_exists test
+# - The check_symbol_exists test should run WITHOUT -lm in LDFLAGS to correctly detect need for libm
+# - After CMake configuration, we can safely restore LDFLAGS for the actual build
+# - Use proper variable tracking to handle both set-but-empty and unset cases
+LDFLAGS_WAS_SET=false
+if [ "${LDFLAGS+set}" = "set" ]; then
+    LDFLAGS_WAS_SET=true
+    ORIG_LDFLAGS="${LDFLAGS}"
+fi
+# Temporarily unset LDFLAGS during CMake configuration to prevent check_symbol_exists from getting false positive
+# (If LDFLAGS contains -lm, check_symbol_exists might succeed incorrectly, thinking libm is not needed)
+unset LDFLAGS
+# Ensure CMAKE_REQUIRED_LIBRARIES is set for check_symbol_exists test (our patch also handles this)
+# This ensures the test actually links against libm during the symbol check
+export CMAKE_REQUIRED_LIBRARIES="m"
+
+echo "  → Configuring CMake (LDFLAGS temporarily unset to ensure clean check_symbol_exists test)..."
+if ! cmake ../src \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
     -DCMAKE_CXX_FLAGS="-O3 -march=native -fPIC -fopenmp" \
@@ -4244,9 +4445,9 @@ cmake ../src \
     -DCMAKE_CUDA_FLAGS="-O3 -fPIC -Xcompiler -fopenmp --ptxas-options=-v" \
     -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCH}" \
     -DCMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc" \
-    -DCMAKE_EXE_LINKER_FLAGS="-lm -fopenmp" \
-    -DCMAKE_SHARED_LINKER_FLAGS="-lm -fopenmp" \
-    -DCMAKE_MODULE_LINKER_FLAGS="-lm -fopenmp" \
+    -DCMAKE_EXE_LINKER_FLAGS="-fopenmp -lm" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" \
+    -DCMAKE_MODULE_LINKER_FLAGS="-fopenmp -lm" \
     -DCMAKE_REQUIRED_LIBRARIES="m" \
     -DBUILD_SHARED_LIBS=ON \
     -DBLA_VENDOR=Intel10_64lp \
@@ -4254,23 +4455,169 @@ cmake ../src \
     -DLAPACK_LIBRARIES="${BLAS_LIBS}" \
     -DBLA_SIZEOF_INTEGER=4 \
     -DCMAKE_PREFIX_PATH="${CUDA_HOME};${MKLROOT}${CMAKE_PREFIX_PATH:+;${CMAKE_PREFIX_PATH}}" \
-    ${SUITESPARSE_CMAKE_FLAGS}
+    ${SUITESPARSE_CMAKE_FLAGS}; then
+    echo "  ✗ CMake configuration failed"
+    # Restore LDFLAGS before exiting (in case other parts of script need it)
+    if [ "${LDFLAGS_WAS_SET}" = "true" ]; then
+        export LDFLAGS="${ORIG_LDFLAGS}"
+    fi
+    # Clean up environment variable
+    unset CMAKE_REQUIRED_LIBRARIES
+    exit 1
+fi
+
+# Verify NO_LIBM is not set (or is set to OFF/NO) in CMakeCache.txt
+if [ -f "CMakeCache.txt" ]; then
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+    if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ]; then
+        echo "  ⚠ WARNING: NO_LIBM is set to '${NO_LIBM_VALUE}' in CMakeCache.txt (expected OFF/NO/FALSE)"
+        echo "    → This may indicate check_symbol_exists detected libm incorrectly"
+        echo "    → CMake linker flags should still ensure libm is linked, but verification is recommended"
+    else
+        echo "  ✓ NO_LIBM check passed (value: ${NO_LIBM_VALUE:-unset/OFF})"
+    fi
+fi
+
+# Restore LDFLAGS after CMake configuration (if it was set originally)
+# This ensures the build phase can use LDFLAGS if needed, but the check_symbol_exists test ran cleanly
+# Note: The actual linking is handled by CMAKE_*_LINKER_FLAGS, so LDFLAGS restoration is mainly
+# for compatibility with other build tools that might be invoked
+if [ "${LDFLAGS_WAS_SET}" = "true" ]; then
+    export LDFLAGS="${ORIG_LDFLAGS}"
+    echo "  → Restored original LDFLAGS for build phase: ${LDFLAGS}"
+else
+    echo "  → LDFLAGS was not set originally, keeping it unset"
+fi
+
+# Clean up CMAKE_REQUIRED_LIBRARIES environment variable (it's now set in CMakeCache.txt)
+# Keeping it as environment variable shouldn't hurt, but cleaning up is good practice
+unset CMAKE_REQUIRED_LIBRARIES
 
 echo -e "${YELLOW}[6.12C.4] Building SuiteSparse...${NC}"
-cmake --build . -j"$(nproc)"
+if ! cmake --build . -j"$(nproc)"; then
+    echo "  ✗ SuiteSparse build failed"
+    # Provide diagnostic information
+    echo "  → Checking for build errors related to math library..."
+    # We're still in the build directory, so check CMakeCache.txt
+    if [ -f "CMakeCache.txt" ]; then
+        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        echo "    - NO_LIBM value in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
+        LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+        if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
+            echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
+        else
+            echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO"
+            echo "      Actual flags: ${LINKER_FLAGS:0:80}..."
+        fi
+    else
+        echo "    - CMakeCache.txt not found in current directory"
+    fi
+    # Restore LDFLAGS before exiting (if it was set)
+    if [ "${LDFLAGS_WAS_SET}" = "true" ]; then
+        export LDFLAGS="${ORIG_LDFLAGS}"
+    fi
+    exit 1
+fi
 
 echo -e "${YELLOW}[6.12C.5] Installing SuiteSparse to ${SUITESPARSE_INSTALL_PREFIX}...${NC}"
-if cmake --install .; then
-    echo "  ✓ SuiteSparse installation completed"
-else
+if ! cmake --install .; then
     echo "  ✗ SuiteSparse installation failed"
     exit 1
 fi
+echo "  ✓ SuiteSparse installation completed"
 
 popd >/dev/null
 
 echo -e "${YELLOW}[6.12C.6] Verifying SuiteSparse linkage (MKL + CUDA)...${NC}"
 ldconfig
+
+# Verify GraphBLAS and LAGraph specifically (critical for math library linking)
+# Function to verify math library linkage for a given library
+# Parameters:
+#   $1: Full path to library file (e.g., /usr/local/lib/libgraphblas.so)
+#   $2: Library name for display purposes (e.g., "GraphBLAS")
+# Returns: 0 if libm is linked or no undefined symbols found, 1 otherwise
+verify_math_library_linkage() {
+    local lib_path="$1"
+    local lib_name="$2"
+    
+    if [ -z "${lib_path}" ] || [ ! -f "${lib_path}" ]; then
+        echo "  ⚠ ${lib_name} library not found (may not be built)"
+        return 1
+    fi
+    
+    echo "  ✓ ${lib_name} library found: $(basename "${lib_path}")"
+    
+    # Check if libm is linked
+    if ldd "${lib_path}" 2>/dev/null | grep -q "libm.so"; then
+        echo "    ✓ ${lib_name} is linked against libm (math library) - verification passed"
+        return 0
+    else
+        echo "    ⚠ WARNING: ${lib_name} does NOT appear to link libm - this may cause undefined reference errors"
+        echo "    → Checking for undefined math symbols..."
+        
+        # Check for undefined math symbols using nm
+        if command -v nm >/dev/null 2>&1; then
+            # Common math symbols that require libm
+            MATH_SYMBOLS="acoshf|lgammaf|log1p|sinf|powf|ceil|expf|casinhf|atan|csinh|lgamma|fmax|clogf|hypotf|round|log2|asinf|fabs|sqrt|cos|sin|tan|acos|asin|atan2|exp|log|log10"
+            # Use nm with error handling - some systems may not support -D flag
+            if nm -D "${lib_path}" 2>/dev/null >/dev/null; then
+                UNDEF_SYMBOLS=$(nm -D "${lib_path}" 2>/dev/null | grep " U " | grep -E "(${MATH_SYMBOLS})" | head -10)
+            elif nm "${lib_path}" 2>/dev/null >/dev/null; then
+                # Fallback to regular nm if -D is not supported
+                UNDEF_SYMBOLS=$(nm "${lib_path}" 2>/dev/null | grep " U " | grep -E "(${MATH_SYMBOLS})" | head -10)
+            else
+                echo "    → nm command failed on ${lib_path}, skipping symbol verification"
+                UNDEF_SYMBOLS=""
+            fi
+            
+            if [ -n "${UNDEF_SYMBOLS}" ]; then
+                echo "    ✗ Found undefined math symbols (this will cause linker errors):"
+                echo "${UNDEF_SYMBOLS}" | sed 's/^/      /'
+                echo "    → Diagnostic information:"
+                
+                # Check CMakeCache.txt if available (use cmake_build_dir variable for consistency)
+                local cmake_cache="${SUITESPARSE_SOURCE_DIR}/build/CMakeCache.txt"
+                if [ -f "${cmake_cache}" ]; then
+                    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                    echo "      - NO_LIBM in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
+                    
+                    # Check if CMAKE_SHARED_LINKER_FLAGS contains -lm
+                    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2-)
+                    if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
+                        echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
+                    else
+                        echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO (this is unexpected)"
+                        echo "        Actual flags: ${LINKER_FLAGS:0:100}..."
+                    fi
+                else
+                    echo "      - CMakeCache.txt not found at ${cmake_cache}"
+                fi
+                
+                echo "    → Recommendation: Rebuild with verbose output or check GraphBLAS/LAGraph CMakeLists.txt patches"
+                return 1
+            else
+                echo "    → No obvious undefined math symbols detected"
+                echo "    → Note: Math functions may be resolved via other libraries or inlined"
+                echo "    → However, explicit libm linkage is recommended for portability"
+                return 0
+            fi
+        else
+            echo "    → nm command not available, skipping symbol verification"
+            return 1
+        fi
+    fi
+}
+
+# Verify GraphBLAS
+GRAPHBLAS_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "libgraphblas.so*" -type f 2>/dev/null | head -1)
+verify_math_library_linkage "${GRAPHBLAS_LIB}" "GraphBLAS"
+
+# Verify LAGraph (if it exists and was built)
+LAGRAPH_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "liblagraph.so*" -type f 2>/dev/null | head -1)
+if [ -n "${LAGRAPH_LIB}" ]; then
+    verify_math_library_linkage "${LAGRAPH_LIB}" "LAGraph"
+fi
 
 declare -a suitesparse_targets=("libcholmod.so" "libspqr.so")
 for target_lib in "${suitesparse_targets[@]}"; do

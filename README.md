@@ -268,6 +268,15 @@ Edit `CUDA_ARCH` in `config.sh` to match your hardware.
    - Clean old cache versions periodically
    - Keep 2 most recent versions by default
 
+## 🚀 Version 2 Improvements
+
+Planned improvements for version 2 of the Singularity image creation script are documented in [`docs/planning/V2_IMPROVEMENTS.md`](docs/planning/V2_IMPROVEMENTS.md). These improvements will be implemented after V1 (with current features) is successfully compiled, tested, and released.
+
+Key planned improvements include:
+- **libMETIS Compilation with Flags**: Compile libMETIS from source with optimized compilation flags instead of using the system package, providing better performance and consistent optimization across all compiled libraries.
+
+See the V2 improvements document for detailed implementation plans, dependencies, and benefits.
+
 ## 🤝 Contributing
 
 When modifying the build:
