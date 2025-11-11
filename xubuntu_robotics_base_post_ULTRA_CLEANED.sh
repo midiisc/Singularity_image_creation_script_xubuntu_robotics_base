@@ -1431,7 +1431,6 @@ reapply_fastest_mirror() {
       rm -f /var/lib/apt/lists/lock 2>/dev/null || true
       
       echo "[info] Retrying apt-get update with default archive.ubuntu.com mirror..."
-      local retry_output retry_exit_code
       retry_output=$(apt-get update -o Acquire::Retries=3 2>&1)
       retry_exit_code=$?
       
