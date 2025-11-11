@@ -4035,7 +4035,7 @@ import re
 
 cmake_file = sys.argv[1]
 
-with open(cmake_file, 'r') as f:
+with open(cmake_file, 'r', encoding='utf-8') as f:
     lines = f.readlines()
 
 # Find the check_symbol_exists line and fix it
@@ -4067,7 +4067,7 @@ for i, line in enumerate(lines):
         break
 
 if fixed:
-    with open(cmake_file, 'w') as f:
+    with open(cmake_file, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     print('  ✓ Fixed check_symbol_exists to use CMAKE_REQUIRED_LIBRARIES')
     sys.exit(0)
@@ -4121,64 +4121,61 @@ import re
 cmake_file = sys.argv[1]
 target_name = sys.argv[2]
 
-with open(cmake_file, 'r') as f:
+with open(cmake_file, 'r', encoding='utf-8') as f:
     content = f.read()
+    lines = content.splitlines(keepends=True)
 
-# Pattern to find target_link_libraries for GraphBLAS target (multiline aware)
-# Match: target_link_libraries(target_name ...) but not if ' m ' or ' m)' is already there
-pattern = r'(target_link_libraries\s*\(\s*' + re.escape(target_name) + r'(?:\s+[A-Z]+)?[^)]*)(\))'
+modified = False
+# Process line by line to preserve CMake structure - only modify single-line target_link_libraries
+for i, line in enumerate(lines):
+    stripped = line.strip()
+    # Only process complete single-line target_link_libraries calls (must have balanced parens on one line)
+    if re.search(r'target_link_libraries\s*\(\s*' + re.escape(target_name), stripped, re.IGNORECASE):
+        # Check if this is a single-line call (has opening and closing paren on same line)
+        if stripped.count('(') > 0 and stripped.count(')') >= stripped.count('('):
+            # Check if 'm' is already in the line (whole word match)
+            if not re.search(r'\\bm\\b', stripped):
+                # Find the last closing parenthesis
+                last_paren_idx = stripped.rfind(')')
+                if last_paren_idx > 0:
+                    # Insert ' m' before the closing parenthesis, preserving original line structure
+                    before_paren = stripped[:last_paren_idx].rstrip()
+                    after_paren = stripped[last_paren_idx:]
+                    # Preserve leading whitespace and newline from original line
+                    leading_ws = line[:len(line) - len(line.lstrip())]
+                    trailing_ws = line[len(line.rstrip()):]
+                    new_line = leading_ws + before_paren + ' m' + after_paren + trailing_ws
+                    lines[i] = new_line
+                    modified = True
+                    break  # Only modify the first matching target_link_libraries
 
-def add_math_lib(match):
-    libs = match.group(1)
-    closing = match.group(2)
-    # Check if 'm' is already in the libraries list (whole word match)
-    if re.search(r'\\bm\\b', libs):
-        return match.group(0)  # Already has math library
-    # Add ' m' before the closing parenthesis
-    return libs + ' m' + closing
-
-# Replace target_link_libraries calls for GraphBLAS target
-new_content = re.sub(pattern, add_math_lib, content, flags=re.IGNORECASE | re.MULTILINE)
-
-if new_content != content:
-    with open(cmake_file, 'w') as f:
-        f.write(new_content)
+if modified:
+    with open(cmake_file, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
     print(f'  ✓ Added math library to {target_name} target_link_libraries')
     sys.exit(0)
 else:
     # If no modification was made, try to add a new target_link_libraries line
-    # Find add_library command for the target
-    add_lib_pattern = r'add_library\s*\(\s*' + re.escape(target_name) + r'[^)]*\)'
-    match = re.search(add_lib_pattern, content, re.IGNORECASE | re.MULTILINE)
-    if match:
-        # Find a good insertion point after add_library (after next blank line or next command)
-        start_pos = match.end()
-        # Look for the next non-comment, non-blank line
-        lines_after = content[start_pos:].split('\n')
-        insert_line = 1
-        for i, line in enumerate(lines_after[:10], 1):  # Check first 10 lines
-            stripped = line.strip()
-            if stripped and not stripped.startswith('#') and not stripped.startswith('target_link_libraries'):
-                insert_line = i
-                break
-        # Insert target_link_libraries after add_library
-        lines = content.split('\n')
-        # Find the line number where add_library ends
-        add_lib_end_line = content[:start_pos].count('\n')
-        # Insert after add_lib_end_line
-        insert_idx = add_lib_end_line + insert_line
-        if insert_idx < len(lines):
-            lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
-            new_content = '\n'.join(lines)
-            with open(cmake_file, 'w') as f:
-                f.write(new_content)
+    with open(cmake_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
+    add_lib_pattern = r'add_library\s*\(\s*' + re.escape(target_name)
+    for i, line in enumerate(lines):
+        if re.search(add_lib_pattern, line, re.IGNORECASE):
+            # Find insertion point (after add_library, before next major command)
+            insert_idx = i + 1
+            while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
+                insert_idx += 1
+            # Preserve indentation from add_library line
+            indent = len(line) - len(line.lstrip())
+            indent_str = ' ' * indent
+            # Insert target_link_libraries with proper newline and indentation
+            lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+            with open(cmake_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
             print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
             sys.exit(0)
-        else:
-            print(f'  ⚠ Could not determine insertion point for {target_name}')
-            sys.exit(1)
-    else:
-    print(f'  ⚠ Could not find add_library for {target_name}')
+    print(f'  ⚠ Could not find add_library or target_link_libraries for {target_name}')
     sys.exit(1)
 " "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1
                     PATCH_RESULT=$?
@@ -4203,7 +4200,7 @@ import re
 cmake_file = sys.argv[1]
 target_name = sys.argv[2]
 
-with open(cmake_file, 'r') as f:
+with open(cmake_file, 'r', encoding='utf-8') as f:
     lines = f.readlines()
 
 # Find add_library line for the target
@@ -4216,12 +4213,16 @@ for i, line in enumerate(lines):
 if add_lib_idx >= 0:
     # Find insertion point (after add_library, before next major command)
     insert_idx = add_lib_idx + 1
-    # Skip comments and find a good place to insert
+    # Skip comments and empty lines to find a good place to insert
     while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
         insert_idx += 1
-    # Insert target_link_libraries (use actual newline, not literal \n)
-    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
-    with open(cmake_file, 'w') as f:
+    # Preserve indentation from add_library line
+    add_lib_line = lines[add_lib_idx]
+    indent = len(add_lib_line) - len(add_lib_line.lstrip())
+    indent_str = ' ' * indent
+    # Insert target_link_libraries with proper newline and indentation
+    lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+    with open(cmake_file, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
 else:
@@ -4278,32 +4279,44 @@ import re
 cmake_file = sys.argv[1]
 target_name = sys.argv[2]
 
-with open(cmake_file, 'r') as f:
+with open(cmake_file, 'r', encoding='utf-8') as f:
     content = f.read()
+    lines = content.splitlines(keepends=True)
 
-# Pattern to find target_link_libraries for LAGraph target (multiline aware)
-pattern = r'(target_link_libraries\s*\(\s*' + re.escape(target_name) + r'(?:\s+[A-Z]+)?[^)]*)(\))'
+modified = False
+# Process line by line to preserve CMake structure - only modify single-line target_link_libraries
+for i, line in enumerate(lines):
+    stripped = line.strip()
+    # Only process complete single-line target_link_libraries calls (must have balanced parens on one line)
+    if re.search(r'target_link_libraries\s*\(\s*' + re.escape(target_name), stripped, re.IGNORECASE):
+        # Check if this is a single-line call (has opening and closing paren on same line)
+        if stripped.count('(') > 0 and stripped.count(')') >= stripped.count('('):
+            # Check if 'm' is already in the line (whole word match)
+            if not re.search(r'\\bm\\b', stripped):
+                # Find the last closing parenthesis
+                last_paren_idx = stripped.rfind(')')
+                if last_paren_idx > 0:
+                    # Insert ' m' before the closing parenthesis, preserving original line structure
+                    before_paren = stripped[:last_paren_idx].rstrip()
+                    after_paren = stripped[last_paren_idx:]
+                    # Preserve leading whitespace and newline from original line
+                    leading_ws = line[:len(line) - len(line.lstrip())]
+                    trailing_ws = line[len(line.rstrip()):]
+                    new_line = leading_ws + before_paren + ' m' + after_paren + trailing_ws
+                    lines[i] = new_line
+                    modified = True
+                    break  # Only modify the first matching target_link_libraries
 
-def add_math_lib(match):
-    libs = match.group(1)
-    closing = match.group(2)
-    # Check if 'm' is already in the libraries list (whole word match)
-    if re.search(r'\\bm\\b', libs):
-        return match.group(0)  # Already has math library
-    # Add ' m' before the closing parenthesis
-    return libs + ' m' + closing
-
-# Replace target_link_libraries calls for LAGraph target
-new_content = re.sub(pattern, add_math_lib, content, flags=re.IGNORECASE | re.MULTILINE)
-
-if new_content != content:
-    with open(cmake_file, 'w') as f:
-        f.write(new_content)
+if modified:
+    with open(cmake_file, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
     print(f'  ✓ Added math library to {target_name} target_link_libraries')
     sys.exit(0)
 else:
     # If no modification was made, try to add a new target_link_libraries line
-    lines = content.split('\n')
+    with open(cmake_file, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    
     add_lib_pattern = r'add_library\s*\(\s*' + re.escape(target_name)
     for i, line in enumerate(lines):
         if re.search(add_lib_pattern, line, re.IGNORECASE):
@@ -4311,11 +4324,13 @@ else:
             insert_idx = i + 1
             while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
                 insert_idx += 1
-            # Insert target_link_libraries
-            lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
-            new_content = '\n'.join(lines)
-            with open(cmake_file, 'w') as f:
-                f.write(new_content)
+            # Preserve indentation from add_library line
+            indent = len(line) - len(line.lstrip())
+            indent_str = ' ' * indent
+            # Insert target_link_libraries with proper newline and indentation
+            lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+            with open(cmake_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
             print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
             sys.exit(0)
     print(f'  ⚠ Could not find add_library or target_link_libraries for {target_name}')
@@ -4342,7 +4357,7 @@ import re
 cmake_file = sys.argv[1]
 target_name = sys.argv[2]
 
-with open(cmake_file, 'r') as f:
+with open(cmake_file, 'r', encoding='utf-8') as f:
     lines = f.readlines()
 
 # Find add_library line for the target
@@ -4355,12 +4370,16 @@ for i, line in enumerate(lines):
 if add_lib_idx >= 0:
     # Find insertion point (after add_library, before next major command)
     insert_idx = add_lib_idx + 1
-    # Skip comments and find a good place to insert
+    # Skip comments and empty lines to find a good place to insert
     while insert_idx < len(lines) and (lines[insert_idx].strip().startswith('#') or not lines[insert_idx].strip()):
         insert_idx += 1
-    # Insert target_link_libraries (use actual newline, not literal \n)
-    lines.insert(insert_idx, f'target_link_libraries({target_name} PRIVATE m)')
-    with open(cmake_file, 'w') as f:
+    # Preserve indentation from add_library line
+    add_lib_line = lines[add_lib_idx]
+    indent = len(add_lib_line) - len(add_lib_line.lstrip())
+    indent_str = ' ' * indent
+    # Insert target_link_libraries with proper newline and indentation
+    lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+    with open(cmake_file, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     print(f'  ✓ Added target_link_libraries({target_name} PRIVATE m)')
 else:
