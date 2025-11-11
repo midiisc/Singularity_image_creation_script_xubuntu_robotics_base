@@ -550,14 +550,28 @@ test_mirror() {
 
     # Download Packages.gz (typically 15-25MB) to measure bandwidth
     # Check HTTP status code to detect 403 (blocked), 404, etc.
-    CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" 2>/dev/null)"
+    # Note: curl returns non-zero exit code for 4xx/5xx, but still writes HTTP code to stdout
+    # Use separate files to capture stdout (format string) and stderr (errors)
+    local curl_stdout curl_stderr
+    curl_stdout=$(mktemp) || curl_stdout="/tmp/curl_stdout_$$"
+    curl_stderr=$(mktemp) || curl_stderr="/tmp/curl_stderr_$$"
+    
+    LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" > "${curl_stdout}" 2> "${curl_stderr}"
     CURL_EXIT_CODE=$?
     
+    # Read output from file
+    CURL_OUTPUT=$(cat "${curl_stdout}" 2>/dev/null || echo "")
+    local curl_error=$(cat "${curl_stderr}" 2>/dev/null || echo "")
+    rm -f "${curl_stdout}" "${curl_stderr}" 2>/dev/null || true
+    
     # Extract HTTP code and time from output (format: "HTTP_CODE|TIME")
-    HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null || echo "")
-    CURL_OUTPUT=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null || echo "")
+    HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
+    local TIME_VALUE
+    TIME_VALUE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null | grep -E '^[0-9]' || echo "")
+    CURL_OUTPUT="${TIME_VALUE}"
 
     # Reject mirrors that return 403 (Forbidden/Blocked), 404 (Not Found), or other error codes
+    # Check HTTP code first (even if curl exit code is non-zero, we might have gotten HTTP response)
     if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
       echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} (blocked or error)" >&2
       echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
@@ -568,17 +582,56 @@ test_mirror() {
       fi
       return
     fi
+    
+    # Also check for connection/network errors that prevent HTTP response
+    if [[ -z "${HTTP_CODE:-}" ]] && [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]]; then
+      # No HTTP code means connection failed before getting response
+      # This is different from getting a 403 response
+      if echo "${curl_error}" | grep -qiE "(403|Forbidden|blocked)"; then
+        echo "[test_mirror] Rejecting ${URL}: Connection blocked (403 detected in error)" >&2
+        echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
+        if [[ "${previous_opts}" == *e* ]]; then
+            set -e
+        else
+            set +e
+        fi
+        return
+      fi
+    fi
 
     # If large file fails, try Release file as fallback
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
-      CURL_OUTPUT="$(LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" 2>/dev/null)"
-        CURL_EXIT_CODE=$?
-        HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null || echo "")
-        CURL_OUTPUT=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null || echo "")
+      # Use same approach for Release file
+      curl_stdout=$(mktemp) || curl_stdout="/tmp/curl_stdout_release_$$"
+      curl_stderr=$(mktemp) || curl_stderr="/tmp/curl_stderr_release_$$"
+      
+      LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" > "${curl_stdout}" 2> "${curl_stderr}"
+      CURL_EXIT_CODE=$?
+      
+      CURL_OUTPUT=$(cat "${curl_stdout}" 2>/dev/null || echo "")
+      curl_error=$(cat "${curl_stderr}" 2>/dev/null || echo "")
+      rm -f "${curl_stdout}" "${curl_stderr}" 2>/dev/null || true
+      
+      HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
+      TIME_VALUE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null | grep -E '^[0-9]' || echo "")
+      CURL_OUTPUT="${TIME_VALUE}"
         
-        # Reject Release file if it also returns error codes
-        if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
-          echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} on Release file (blocked or error)" >&2
+      # Reject Release file if it also returns error codes
+      if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
+        echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} on Release file (blocked or error)" >&2
+        echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
+        if [[ "${previous_opts}" == *e* ]]; then
+            set -e
+        else
+            set +e
+        fi
+        return
+      fi
+      
+      # Check for blocked errors in stderr
+      if [[ -z "${HTTP_CODE:-}" ]] && [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]]; then
+        if echo "${curl_error}" | grep -qiE "(403|Forbidden|blocked)"; then
+          echo "[test_mirror] Rejecting ${URL}: Release file blocked (403 detected)" >&2
           echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
           if [[ "${previous_opts}" == *e* ]]; then
               set -e
@@ -587,6 +640,7 @@ test_mirror() {
           fi
           return
         fi
+      fi
         
       # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
       if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "${CURL_OUTPUT:-}" ]] && [[ "${CURL_OUTPUT:-}" != "0.000000" ]]; then
