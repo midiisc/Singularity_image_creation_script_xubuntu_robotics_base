@@ -5943,14 +5943,16 @@ PKGS_LINALG="libeigen3-dev liblapack-dev liblapacke-dev libblas-dev gfortran"
 # CPU parallelism libraries
 PKGS_CPU_PARALLEL="libtbb-dev libmpich-dev"
 # Sparse matrix and SLAM libraries
-# NOTE: SuiteSparse dependencies (built in Block 6.12C):
+# NOTE: SuiteSparse is built from source in Block 6.12C (NOT installed via apt)
+# NOTE: SuiteSparse dependencies (installed here for Block 6.12C build):
 #   - libgmp-dev, libmpfr-dev: Required by SPEX (GNU GMP v6.1.2+, MPFR v4.0.2+)
 #   - libnuma-dev: Required for NUMA-aware memory management in CUDA builds
 #   - libpthread-stubs0-dev: Required for pthread compatibility
 #   - libmetis-dev: Required for graph partitioning (CHOLMOD)
 #   - CUDA libraries (libcublas, libcusparse, libcusolver, libcurand): Provided by CUDA toolkit (Block 13)
 #   - libnpp: Installed via ensure_cuda_companion_package in Block 13
-PKGS_SPARSE_SLAM="libsuitesparse-dev libmetis-dev libboost-all-dev libgmp-dev libmpfr-dev libnuma-dev libpthread-stubs0-dev"
+# CRITICAL: libsuitesparse-dev is NOT included here - we build from source with custom optimization
+PKGS_SPARSE_SLAM="libmetis-dev libboost-all-dev libgmp-dev libmpfr-dev libnuma-dev libpthread-stubs0-dev"
 # Core dependencies
 # NOTE: Using Ubuntu's libgoogle-glog-dev (0.6.0-2.1build1 with compatibility patches for COLMAP)
 # NOTE: apt-get install will upgrade if different version exists, or skip if already correct version
