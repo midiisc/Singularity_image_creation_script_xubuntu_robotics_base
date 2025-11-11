@@ -815,17 +815,19 @@ probe_and_set_mirrors() {
   fi
 
   # Extract the fastest mirror that responded in under 15 seconds
+  # Exclude mirrors that were rejected (score 999.9 = blocked/error)
   local fastest_mirror_raw
-  fastest_mirror_raw="$(LC_NUMERIC=C sort -n "${PROBE_RESULTS:-}" 2>/dev/null | awk 'NF==2 && $1 < 15.0 {print $2; exit}' || echo "")"
+  fastest_mirror_raw="$(LC_NUMERIC=C sort -n "${PROBE_RESULTS:-}" 2>/dev/null | awk 'NF==2 && $1 < 15.0 && $1 < 999.0 {print $2; exit}' || echo "")"
   
   # Clean up temporary file
   rm -f "${PROBE_RESULTS:-}" 2>/dev/null || true
 
   if [ -z "${fastest_mirror_raw:-}" ]; then
-    echo "[warn] All mirror probes failed or took >15 seconds. Using default ubuntu archive."
+    echo "[warn] No accessible mirrors found (all may be blocked or failed) - using default archive.ubuntu.com"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   else
     FASTEST_MIRROR="${fastest_mirror_raw}"
+    echo "[info] Selected fastest accessible mirror: ${FASTEST_MIRROR}"
   fi
   echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
