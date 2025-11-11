@@ -4577,6 +4577,7 @@ if ! cmake ../src \
     -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" \
     -DCMAKE_MODULE_LINKER_FLAGS="-fopenmp -lm" \
     -DCMAKE_REQUIRED_LIBRARIES="m" \
+    -DNO_LIBM=OFF \
     -DBUILD_SHARED_LIBS=ON \
     -DBLA_VENDOR=Intel10_64lp \
     -DBLAS_LIBRARIES="${BLAS_LIBS}" \
@@ -4597,10 +4598,23 @@ fi
 # Verify NO_LIBM is not set (or is set to OFF/NO) in CMakeCache.txt
 if [ -f "CMakeCache.txt" ]; then
     NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
-    if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ]; then
-        echo "  ⚠ WARNING: NO_LIBM is set to '${NO_LIBM_VALUE}' in CMakeCache.txt (expected OFF/NO/FALSE)"
+    if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
+        echo "  ⚠ WARNING: NO_LIBM is set to '${NO_LIBM_VALUE}' in CMakeCache.txt (expected OFF/NO/FALSE/0)"
         echo "    → This may indicate check_symbol_exists detected libm incorrectly"
-        echo "    → CMake linker flags should still ensure libm is linked, but verification is recommended"
+        echo "    → We explicitly set -DNO_LIBM=OFF, but CMake may have overridden it"
+        echo "    → CMake linker flags (-lm) should still ensure libm is linked, but verification is recommended"
+        echo "    → Attempting to force NO_LIBM=OFF via CMake cache..."
+        # Try to force NO_LIBM=OFF by editing CMakeCache.txt directly
+        sed -i 's/^NO_LIBM:.*=.*/NO_LIBM:BOOL=OFF/' CMakeCache.txt 2>/dev/null || true
+        # Re-run CMake configure to apply the change
+        cmake . -DNO_LIBM=OFF >/dev/null 2>&1 || true
+        # Verify again
+        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        if [ "${NO_LIBM_VALUE}" = "OFF" ] || [ "${NO_LIBM_VALUE}" = "NO" ] || [ "${NO_LIBM_VALUE}" = "FALSE" ] || [ "${NO_LIBM_VALUE}" = "0" ]; then
+            echo "  ✓ Successfully forced NO_LIBM=OFF"
+        else
+            echo "  ⚠ Could not force NO_LIBM=OFF, but linker flags should still work"
+        fi
     else
         echo "  ✓ NO_LIBM check passed (value: ${NO_LIBM_VALUE:-unset/OFF})"
     fi
