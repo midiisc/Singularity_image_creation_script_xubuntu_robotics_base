@@ -4198,6 +4198,89 @@ else:
         fi
     fi
     
+    # CRITICAL: Also patch GraphBLAS test CMakeLists.txt to ensure test executables link against libm
+    # Test executables are created in GraphBLAS/Test/CMakeLists.txt and need explicit libm linking
+    GRAPHBLAS_TEST_CMakeLists="${SUITESPARSE_SOURCE_DIR}/src/GraphBLAS/Test/CMakeLists.txt"
+    if [ -f "${GRAPHBLAS_TEST_CMakeLists}" ]; then
+        echo "  → Found GraphBLAS Test CMakeLists.txt, ensuring test executables link against libm..."
+        if ! grep -qiE "target_link_libraries.*\bm\b" "${GRAPHBLAS_TEST_CMakeLists}" 2>/dev/null; then
+            # Use Python to add libm to all test executables
+            if command -v python3 >/dev/null 2>&1; then
+                cp "${GRAPHBLAS_TEST_CMakeLists}" "${GRAPHBLAS_TEST_CMakeLists}.bak"
+                python3 -c "
+import sys
+import re
+
+cmake_file = sys.argv[1]
+
+with open(cmake_file, 'r', encoding='utf-8') as f:
+    lines = f.readlines()
+
+modified = False
+# Find all add_executable calls and ensure their targets link against libm
+for i, line in enumerate(lines):
+    # Match: add_executable(target_name ...)
+    match = re.search(r'add_executable\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)', line)
+    if match:
+        target_name = match.group(1)
+        # Check if this target already has target_link_libraries with libm
+        # Look ahead in the file for target_link_libraries for this target
+        has_libm = False
+        for j in range(i+1, min(i+20, len(lines))):
+            if re.search(r'target_link_libraries\s*\(\s*' + re.escape(target_name), lines[j], re.IGNORECASE):
+                if re.search(r'\\bm\\b', lines[j]):
+                    has_libm = True
+                    break
+                # If we found target_link_libraries but it doesn't have libm, add it
+                if not has_libm:
+                    # Add ' m' before closing parenthesis
+                    if ')' in lines[j]:
+                        lines[j] = re.sub(r'(\s*)\)', r' m\1)', lines[j])
+                        modified = True
+                        has_libm = True
+                    break
+        
+        # If no target_link_libraries found, add one after add_executable
+        if not has_libm:
+            # Find the end of add_executable (next non-continuation line)
+            insert_idx = i + 1
+            while insert_idx < len(lines) and (lines[insert_idx].strip().endswith('\\\\') or not lines[insert_idx].strip() or lines[insert_idx].strip().startswith('#')):
+                insert_idx += 1
+            # Preserve indentation
+            indent = len(line) - len(line.lstrip())
+            indent_str = ' ' * indent
+            # Insert target_link_libraries
+            lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+            modified = True
+
+if modified:
+    with open(cmake_file, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    print('  ✓ Added libm linking to GraphBLAS test executables')
+    sys.exit(0)
+else:
+    print('  ✓ GraphBLAS test executables already link against libm (or no test executables found)')
+    sys.exit(0)
+" "${GRAPHBLAS_TEST_CMakeLists}" 2>&1
+                PATCH_RESULT=$?
+                if [ ${PATCH_RESULT} -eq 0 ]; then
+                    rm -f "${GRAPHBLAS_TEST_CMakeLists}.bak"
+                else
+                    echo "  ⚠ Failed to patch GraphBLAS test CMakeLists.txt, will rely on CMAKE_EXE_LINKER_FLAGS"
+                    if [ -f "${GRAPHBLAS_TEST_CMakeLists}.bak" ]; then
+                        mv "${GRAPHBLAS_TEST_CMakeLists}.bak" "${GRAPHBLAS_TEST_CMakeLists}"
+                    fi
+                fi
+            else
+                echo "  ⚠ python3 not found, cannot patch GraphBLAS test CMakeLists.txt"
+            fi
+        else
+            echo "  ✓ GraphBLAS test executables already link against libm"
+        fi
+    else
+        echo "  ⚠ GraphBLAS Test CMakeLists.txt not found (tests may not be built)"
+    fi
+    
     # Also ensure libm is always linked on Unix (safer approach)
     # Check if GraphBLAS target already links to math library (case-insensitive)
     if ! grep -qiE "(target_link_libraries.*GraphBLAS.*\bm\b|target_link_libraries.*graphblas.*\bm\b)" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
@@ -4565,6 +4648,8 @@ unset LDFLAGS
 export CMAKE_REQUIRED_LIBRARIES="m"
 
 echo "  → Configuring CMake (LDFLAGS temporarily unset to ensure clean check_symbol_exists test)..."
+# CRITICAL: Ensure libm is linked for ALL targets including test executables
+# Use CMAKE_EXE_LINKER_FLAGS_INIT to ensure it applies to all executables
 if ! cmake ../src \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
@@ -4574,8 +4659,11 @@ if ! cmake ../src \
     -DCMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCH}" \
     -DCMAKE_CUDA_COMPILER="${CUDA_HOME}/bin/nvcc" \
     -DCMAKE_EXE_LINKER_FLAGS="-fopenmp -lm" \
+    -DCMAKE_EXE_LINKER_FLAGS_INIT="-fopenmp -lm" \
     -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" \
+    -DCMAKE_SHARED_LINKER_FLAGS_INIT="-fopenmp -lm" \
     -DCMAKE_MODULE_LINKER_FLAGS="-fopenmp -lm" \
+    -DCMAKE_MODULE_LINKER_FLAGS_INIT="-fopenmp -lm" \
     -DCMAKE_REQUIRED_LIBRARIES="m" \
     -DNO_LIBM=OFF \
     -DBUILD_SHARED_LIBS=ON \
