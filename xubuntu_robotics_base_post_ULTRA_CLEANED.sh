@@ -886,6 +886,7 @@ probe_and_set_mirrors() {
   fi
 
   # Also update sources.list.d/ files (excluding PPAs which should stay on ppa.launchpad.net)
+  # CRITICAL: Handle both .list (one-line format) and .sources (deb822 format) files
   echo "[info] Updating sources.list.d/ files with fastest mirror (excluding PPAs)..."
   if [ -d /etc/apt/sources.list.d ]; then
     # Escape FASTEST_MIRROR for safe use in sed
@@ -896,8 +897,10 @@ probe_and_set_mirrors() {
     local mirror_no_protocol
     mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
     
-    # Enable nullglob to handle case where no .list files exist
+    # Enable nullglob to handle case where no files exist
     shopt -s nullglob
+    
+    # Process .list files (one-line format)
     for sources_file in /etc/apt/sources.list.d/*.list; do
       # Double-check file exists (redundant with nullglob, but defensive)
       [ -f "${sources_file}" ] || continue
@@ -939,8 +942,54 @@ probe_and_set_mirrors() {
         fi
       fi
     done
+    
+    # Process .sources files (deb822 format used by Ubuntu 24.04+)
+    # deb822 format uses URIs= field instead of deb http://... format
+    for sources_file in /etc/apt/sources.list.d/*.sources; do
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        echo "[info] Skipping PPA file: $(basename "${sources_file}")"
+        continue
+      fi
+      
+      # Check if file contains archive.ubuntu.com in URIs= lines
+      if grep -qE "^URIs=.*archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+        # Replace archive.ubuntu.com in URIs= lines (deb822 format)
+        # Pattern: URIs=http://archive.ubuntu.com/ubuntu
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "s|^URIs=https\\?://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|^URIs=http://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
+        fi
+      fi
+      
+      # Also handle multi-line URIs= entries (space-separated)
+      if grep -qE "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          # Replace in URIs= lines that may have multiple URIs
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
+        fi
+      fi
+      
+      # Final check for remaining archive.ubuntu.com
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+        if [ -n "${mirror_no_protocol:-}" ]; then
+          local mirror_sed_escaped
+          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+          if [ -n "${mirror_sed_escaped:-}" ]; then
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
+            echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
+          fi
+        fi
+      fi
+    done
+    
     shopt -u nullglob  # Restore default behavior
-    echo "[info] ✓ sources.list.d/ update complete"
+    echo "[info] ✓ sources.list.d/ update complete (.list and .sources files)"
   else
     echo "[info] /etc/apt/sources.list.d/ not found or empty"
   fi
@@ -999,10 +1048,12 @@ verify_fastest_mirror() {
     return 1
   fi
   
-  # Check sources.list.d/ files (excluding PPAs)
+  # Check sources.list.d/ files (excluding PPAs) - both .list and .sources files
   if [ -d /etc/apt/sources.list.d ]; then
     local found_issues=0
-    shopt -s nullglob  # Handle case where no .list files exist
+    shopt -s nullglob  # Handle case where no files exist
+    
+    # Check .list files (one-line format)
     for sources_file in /etc/apt/sources.list.d/*.list; do
       [ -f "${sources_file}" ] || continue
       
@@ -1018,10 +1069,28 @@ verify_fastest_mirror() {
         found_issues=1
       fi
     done
+    
+    # Check .sources files (deb822 format used by Ubuntu 24.04+)
+    for sources_file in /etc/apt/sources.list.d/*.sources; do
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        continue
+      fi
+      
+      # Check for archive.ubuntu.com in URIs= lines or anywhere in file
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
+        echo "[ERROR] Found archive.ubuntu.com in deb822 file $(basename "${sources_file}"):"
+        grep -v "^#" "${sources_file}" 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+        found_issues=1
+      fi
+    done
+    
     shopt -u nullglob  # Restore default behavior
     
     if [ "${found_issues:-0}" -eq 0 ]; then
-      echo "[info] ✓ sources.list.d/: No archive.ubuntu.com found (good)"
+      echo "[info] ✓ sources.list.d/: No archive.ubuntu.com found (good - checked .list and .sources files)"
     else
       issues_found=$((issues_found + 1))
     fi
@@ -1094,9 +1163,12 @@ reapply_fastest_mirror() {
   fi
   
   # Update sources.list.d/ files (excluding PPAs) with aggressive replacement
+  # CRITICAL: Handle both .list (one-line format) and .sources (deb822 format) files
   if [ -d /etc/apt/sources.list.d ]; then
     local updated_count=0
-    shopt -s nullglob  # Handle case where no .list files exist
+    shopt -s nullglob  # Handle case where no files exist
+    
+    # Process .list files (one-line format)
     for sources_file in /etc/apt/sources.list.d/*.list; do
       [ -f "${sources_file}" ] || continue
       
@@ -1133,6 +1205,39 @@ reapply_fastest_mirror() {
         fi
       fi
     done
+    
+    # Process .sources files (deb822 format used by Ubuntu 24.04+)
+    for sources_file in /etc/apt/sources.list.d/*.sources; do
+      [ -f "${sources_file}" ] || continue
+      
+      # Skip PPA files
+      if grep -q "ppa.launchpad.net" "${sources_file}" 2>/dev/null; then
+        continue
+      fi
+      
+      # Check if file contains archive.ubuntu.com in URIs= lines
+      if grep -qE "^URIs=.*archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null || grep -qE "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+        # Replace archive.ubuntu.com in URIs= lines (deb822 format)
+        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+          sed -i "s|^URIs=https\\?://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|^URIs=http://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          # Also handle multi-line URIs= entries (space-separated)
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          echo "[info] ✓ Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
+          updated_count=$((updated_count + 1))
+        fi
+      fi
+      
+      # Final check for remaining archive.ubuntu.com
+      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+        if [ -n "${mirror_no_protocol_escaped:-}" ]; then
+          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}"
+          echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
+        fi
+      fi
+    done
+    
     shopt -u nullglob  # Restore default behavior
     
     if [ "${updated_count:-0}" -eq 0 ]; then
@@ -1147,6 +1252,10 @@ reapply_fastest_mirror() {
   # Otherwise apt-get --print-uris will still return archive.ubuntu.com URLs
   echo "[info] Clearing package list cache to force fresh download from fastest mirror..."
   rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+  # Also clear apt cache directory to remove any cached Release files
+  rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
+  # Clear apt state to force re-reading sources
+  rm -f /var/lib/apt/lists/lock 2>/dev/null || true
   echo "[info] Running apt-get update to refresh package lists with new mirror..."
   apt-get update -o Acquire::Retries=3 || echo "[warn] apt-get update had issues (may continue)"
   
