@@ -4150,27 +4150,36 @@ with open(cmake_file, 'r', encoding='utf-8') as f:
 # Find the check_symbol_exists line and fix it
 fixed = False
 for i, line in enumerate(lines):
-    # Match: check_symbol_exists ( fmax \"math.h\" NO_LIBM )
-    if re.search(r'check_symbol_exists\s*\(\s*fmax\s+\"math\.h\"\s+NO_LIBM', line):
-        # Check if already fixed
-        if i > 0 and 'CMAKE_REQUIRED_LIBRARIES' in lines[i-1]:
+    # Match: check_symbol_exists ( fmax \"math.h\" NO_LIBM ) - more flexible pattern
+    if re.search(r'check_symbol_exists\s*\(\s*fmax\s+[\"<]math\.h[\">]\s+NO_LIBM', line):
+        # Check if already fixed (look for CMAKE_REQUIRED_LIBRARIES setup before this line)
+        already_fixed = False
+        for k in range(max(0, i-3), i):
+            if 'CMAKE_REQUIRED_LIBRARIES' in lines[k] and 'm' in lines[k]:
+                already_fixed = True
+                break
+        if already_fixed:
             print('  ✓ check_symbol_exists already uses CMAKE_REQUIRED_LIBRARIES')
             sys.exit(0)
         # Insert CMAKE_REQUIRED_LIBRARIES setup before the check
         indent = len(line) - len(line.lstrip())
+        # Save original value first
         lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES \${CMAKE_REQUIRED_LIBRARIES} )\n')
+        # Set CMAKE_REQUIRED_LIBRARIES to include libm
         lines.insert(i+1, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \"m\" )\n')
-        # Find the closing of check_symbol_exists (next line with if)
+        # Find the closing of check_symbol_exists (next line with if NOT NO_LIBM)
         # Insert restore after the check_symbol_exists line
-        for j in range(i+3, min(i+10, len(lines))):
+        restore_inserted = False
+        for j in range(i+3, min(i+15, len(lines))):
             if re.search(r'if\s*\(\s*NOT\s+NO_LIBM', lines[j]):
                 # Insert restore before the if statement
                 indent_if = len(lines[j]) - len(lines[j].lstrip())
                 lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+                restore_inserted = True
                 fixed = True
                 break
-        if not fixed:
-            # If we couldn't find the if, add restore after check_symbol_exists line
+        if not restore_inserted:
+            # If we couldn't find the if, add restore after check_symbol_exists line (3 lines after insertion)
             lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
             fixed = True
         break
@@ -4198,87 +4207,114 @@ else:
         fi
     fi
     
-    # CRITICAL: Also patch GraphBLAS test CMakeLists.txt to ensure test executables link against libm
-    # Test executables are created in GraphBLAS/Test/CMakeLists.txt and need explicit libm linking
-    GRAPHBLAS_TEST_CMakeLists="${SUITESPARSE_SOURCE_DIR}/src/GraphBLAS/Test/CMakeLists.txt"
-    if [ -f "${GRAPHBLAS_TEST_CMakeLists}" ]; then
-        echo "  → Found GraphBLAS Test CMakeLists.txt, ensuring test executables link against libm..."
-        if ! grep -qiE "target_link_libraries.*\bm\b" "${GRAPHBLAS_TEST_CMakeLists}" 2>/dev/null; then
-            # Use Python to add libm to all test executables
-            if command -v python3 >/dev/null 2>&1; then
-                cp "${GRAPHBLAS_TEST_CMakeLists}" "${GRAPHBLAS_TEST_CMakeLists}.bak"
-                python3 -c "
+    # CRITICAL: Patch ALL CMakeLists.txt files that create executables to ensure libm linking
+    # This includes test directories, benchmark directories, and any other executables
+    echo "  → Searching for all CMakeLists.txt files with executables to ensure libm linking..."
+    if command -v python3 >/dev/null 2>&1; then
+        python3 -c "
 import sys
+import os
 import re
 
-cmake_file = sys.argv[1]
+base_dir = sys.argv[1]
 
-with open(cmake_file, 'r', encoding='utf-8') as f:
-    lines = f.readlines()
-
-modified = False
-# Find all add_executable calls and ensure their targets link against libm
-for i, line in enumerate(lines):
-    # Match: add_executable(target_name ...)
-    match = re.search(r'add_executable\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)', line)
-    if match:
-        target_name = match.group(1)
-        # Check if this target already has target_link_libraries with libm
-        # Look ahead in the file for target_link_libraries for this target
-        has_libm = False
-        for j in range(i+1, min(i+20, len(lines))):
-            if re.search(r'target_link_libraries\s*\(\s*' + re.escape(target_name), lines[j], re.IGNORECASE):
-                if re.search(r'\\bm\\b', lines[j]):
-                    has_libm = True
-                    break
-                # If we found target_link_libraries but it doesn't have libm, add it
-                if not has_libm:
-                    # Add ' m' before closing parenthesis
-                    if ')' in lines[j]:
-                        lines[j] = re.sub(r'(\s*)\)', r' m\1)', lines[j])
-                        modified = True
-                        has_libm = True
-                    break
+def patch_cmake_for_libm(cmake_file):
+    \"\"\"Patch a CMakeLists.txt file to ensure all executables link against libm\"\"\"
+    try:
+        with open(cmake_file, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
         
-        # If no target_link_libraries found, add one after add_executable
-        if not has_libm:
-            # Find the end of add_executable (next non-continuation line)
-            insert_idx = i + 1
-            while insert_idx < len(lines) and (lines[insert_idx].strip().endswith('\\\\') or not lines[insert_idx].strip() or lines[insert_idx].strip().startswith('#')):
-                insert_idx += 1
-            # Preserve indentation
-            indent = len(line) - len(line.lstrip())
-            indent_str = ' ' * indent
-            # Insert target_link_libraries
-            lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
-            modified = True
+        modified = False
+        # Find all add_executable calls and ensure their targets link against libm
+        for i, line in enumerate(lines):
+            # Match: add_executable(target_name ...)
+            match = re.search(r'add_executable\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)', line)
+            if match:
+                target_name = match.group(1)
+                # Skip if target name contains 'test' and we're looking for non-test executables
+                # Actually, we want to patch ALL executables
+                
+                # Check if this target already has target_link_libraries with libm
+                has_libm = False
+                # Look ahead up to 30 lines for target_link_libraries
+                for j in range(i+1, min(i+30, len(lines))):
+                    if re.search(r'target_link_libraries\s*\(\s*' + re.escape(target_name), lines[j], re.IGNORECASE):
+                        if re.search(r'\\bm\\b', lines[j]):
+                            has_libm = True
+                            break
+                        # If we found target_link_libraries but it doesn't have libm, add it
+                        stripped = lines[j].strip()
+                        if stripped.count('(') > 0 and stripped.count(')') >= stripped.count('('):
+                            # Single-line target_link_libraries - add ' m' before closing paren
+                            last_paren = stripped.rfind(')')
+                            if last_paren > 0:
+                                before = stripped[:last_paren].rstrip()
+                                after = stripped[last_paren:]
+                                leading_ws = lines[j][:len(lines[j]) - len(lines[j].lstrip())]
+                                trailing_ws = lines[j][len(lines[j].rstrip()):]
+                                lines[j] = leading_ws + before + ' m' + after + trailing_ws
+                                modified = True
+                                has_libm = True
+                                break
+                
+                # If no target_link_libraries found, add one after add_executable
+                if not has_libm:
+                    # Find the end of add_executable (next non-continuation line)
+                    insert_idx = i + 1
+                    while insert_idx < len(lines) and (lines[insert_idx].strip().endswith('\\\\') or not lines[insert_idx].strip() or lines[insert_idx].strip().startswith('#')):
+                        insert_idx += 1
+                    # Preserve indentation
+                    indent = len(line) - len(line.lstrip())
+                    indent_str = ' ' * indent
+                    # Insert target_link_libraries
+                    lines.insert(insert_idx, f'{indent_str}target_link_libraries({target_name} PRIVATE m)\n')
+                    modified = True
+        
+        if modified:
+            with open(cmake_file, 'w', encoding='utf-8') as f:
+                f.writelines(lines)
+            return True
+        return False
+    except Exception as e:
+        return False
 
-if modified:
-    with open(cmake_file, 'w', encoding='utf-8') as f:
-        f.writelines(lines)
-    print('  ✓ Added libm linking to GraphBLAS test executables')
+# Find all CMakeLists.txt files in GraphBLAS and LAGraph directories
+patched_count = 0
+for root, dirs, files in os.walk(base_dir):
+    # Skip hidden directories and build directories
+    dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'build' and d != 'Build']
+    
+    for file in files:
+        if file == 'CMakeLists.txt':
+            cmake_path = os.path.join(root, file)
+            # Skip if it's the main GraphBLAS/LAGraph CMakeLists.txt (already patched)
+            if 'GraphBLAS/CMakeLists.txt' in cmake_path and cmake_path.endswith('GraphBLAS/CMakeLists.txt'):
+                continue
+            if 'LAGraph/CMakeLists.txt' in cmake_path and cmake_path.endswith('LAGraph/CMakeLists.txt'):
+                continue
+            
+            # Check if file contains add_executable
+            try:
+                with open(cmake_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                    if 'add_executable' in content:
+                        if patch_cmake_for_libm(cmake_path):
+                            rel_path = os.path.relpath(cmake_path, base_dir)
+                            print(f'  ✓ Patched: {rel_path}')
+                            patched_count += 1
+            except:
+                pass
+
+if patched_count > 0:
+    print(f'  ✓ Patched {patched_count} CMakeLists.txt file(s) to ensure libm linking')
     sys.exit(0)
 else:
-    print('  ✓ GraphBLAS test executables already link against libm (or no test executables found)')
+    print('  ✓ All executables already link against libm (or no additional executables found)')
     sys.exit(0)
-" "${GRAPHBLAS_TEST_CMakeLists}" 2>&1
-                PATCH_RESULT=$?
-                if [ ${PATCH_RESULT} -eq 0 ]; then
-                    rm -f "${GRAPHBLAS_TEST_CMakeLists}.bak"
-                else
-                    echo "  ⚠ Failed to patch GraphBLAS test CMakeLists.txt, will rely on CMAKE_EXE_LINKER_FLAGS"
-                    if [ -f "${GRAPHBLAS_TEST_CMakeLists}.bak" ]; then
-                        mv "${GRAPHBLAS_TEST_CMakeLists}.bak" "${GRAPHBLAS_TEST_CMakeLists}"
-                    fi
-                fi
-            else
-                echo "  ⚠ python3 not found, cannot patch GraphBLAS test CMakeLists.txt"
-            fi
-        else
-            echo "  ✓ GraphBLAS test executables already link against libm"
-        fi
+" "${SUITESPARSE_SOURCE_DIR}/src" 2>&1 || echo "  ⚠ Failed to patch some CMakeLists.txt files, will rely on CMAKE_EXE_LINKER_FLAGS"
     else
-        echo "  ⚠ GraphBLAS Test CMakeLists.txt not found (tests may not be built)"
+        echo "  ⚠ python3 not found, cannot patch all CMakeLists.txt files"
+        echo "    → Will rely on CMAKE_EXE_LINKER_FLAGS_INIT for all executables"
     fi
     
     # Also ensure libm is always linked on Unix (safer approach)
@@ -4649,8 +4685,24 @@ export CMAKE_REQUIRED_LIBRARIES="m"
 
 echo "  → Configuring CMake (LDFLAGS temporarily unset to ensure clean check_symbol_exists test)..."
 # CRITICAL: Ensure libm is linked for ALL targets including test executables
-# Use CMAKE_EXE_LINKER_FLAGS_INIT to ensure it applies to all executables
+# Multiple layers of protection:
+# 1. CMAKE_*_LINKER_FLAGS_INIT ensures flags apply to all targets
+# 2. Explicit -DNO_LIBM=OFF overrides incorrect detection
+# 3. CMAKE_REQUIRED_LIBRARIES ensures check_symbol_exists links against libm
+# 4. Direct patching of CMakeLists.txt files (done above) ensures explicit linking
+# 5. Create initial cache file to force NO_LIBM=OFF before CMake runs
+INITIAL_CACHE_FILE="${SUITESPARSE_SOURCE_DIR}/build/initial_cache.cmake"
+cat > "${INITIAL_CACHE_FILE}" <<'EOF'
+# Force NO_LIBM=OFF to override any incorrect detection
+set(NO_LIBM OFF CACHE BOOL "Do not use libm" FORCE)
+# Ensure libm is always linked
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-fopenmp -lm" CACHE STRING "Initial executable linker flags" FORCE)
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-fopenmp -lm" CACHE STRING "Initial shared library linker flags" FORCE)
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-fopenmp -lm" CACHE STRING "Initial module linker flags" FORCE)
+EOF
+
 if ! cmake ../src \
+    -C "${INITIAL_CACHE_FILE}" \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX="${SUITESPARSE_INSTALL_PREFIX}" \
     -DCMAKE_CXX_FLAGS="-O3 -march=native -fPIC -fopenmp" \
@@ -4706,6 +4758,16 @@ if [ -f "CMakeCache.txt" ]; then
     else
         echo "  ✓ NO_LIBM check passed (value: ${NO_LIBM_VALUE:-unset/OFF})"
     fi
+    
+    # Additional verification: Check that linker flags actually contain -lm
+    LINKER_FLAGS_CHECK=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2-)
+    if echo "${LINKER_FLAGS_CHECK}" | grep -q "\-lm"; then
+        echo "  ✓ Verified: CMAKE_SHARED_LINKER_FLAGS contains -lm"
+    else
+        echo "  ⚠ WARNING: CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm"
+        echo "    → Attempting to fix by re-running CMake with explicit flags..."
+        cmake . -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" -DCMAKE_EXE_LINKER_FLAGS="-fopenmp -lm" >/dev/null 2>&1 || true
+    fi
 fi
 
 # Restore LDFLAGS after CMake configuration (if it was set originally)
@@ -4724,6 +4786,16 @@ fi
 unset CMAKE_REQUIRED_LIBRARIES
 
 echo -e "${YELLOW}[6.12C.4] Building SuiteSparse...${NC}"
+# Final pre-build verification: Ensure NO_LIBM=OFF and linker flags are correct
+if [ -f "CMakeCache.txt" ]; then
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+    if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
+        echo "  → Pre-build fix: NO_LIBM=${NO_LIBM_VALUE}, forcing OFF..."
+        sed -i 's/^NO_LIBM:.*=.*/NO_LIBM:BOOL=OFF/' CMakeCache.txt 2>/dev/null || true
+        cmake . -DNO_LIBM=OFF -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" -DCMAKE_EXE_LINKER_FLAGS="-fopenmp -lm" >/dev/null 2>&1 || true
+    fi
+fi
+
 if ! cmake --build . -j"$(nproc)"; then
     echo "  ✗ SuiteSparse build failed"
     # Provide diagnostic information
@@ -4733,11 +4805,18 @@ if ! cmake --build . -j"$(nproc)"; then
         NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
         echo "    - NO_LIBM value in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
         LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+        EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
         if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
         else
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO"
             echo "      Actual flags: ${LINKER_FLAGS:0:80}..."
+        fi
+        if echo "${EXE_LINKER_FLAGS}" | grep -q "\-lm"; then
+            echo "    - CMAKE_EXE_LINKER_FLAGS contains -lm: YES"
+        else
+            echo "    - CMAKE_EXE_LINKER_FLAGS contains -lm: NO"
+            echo "      Actual flags: ${EXE_LINKER_FLAGS:0:80}..."
         fi
     else
         echo "    - CMakeCache.txt not found in current directory"
@@ -4756,21 +4835,47 @@ if ! cmake --install .; then
 fi
 echo "  ✓ SuiteSparse installation completed"
 
-# Final verification: Check NO_LIBM value and provide informational message
+# Comprehensive post-build verification: Check NO_LIBM value and verify actual linking
 if [ -f "CMakeCache.txt" ]; then
     NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
     LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+    EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+    
+    # Check both shared and executable linker flags
+    SHARED_HAS_LM=$(echo "${LINKER_FLAGS}" | grep -q "\-lm" && echo "YES" || echo "NO")
+    EXE_HAS_LM=$(echo "${EXE_LINKER_FLAGS}" | grep -q "\-lm" && echo "YES" || echo "NO")
+    
     if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
-        if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
-            echo "  ℹ INFO: NO_LIBM=${NO_LIBM_VALUE} in CMakeCache.txt, but CMAKE_SHARED_LINKER_FLAGS contains -lm"
+        if [ "${SHARED_HAS_LM}" = "YES" ] && [ "${EXE_HAS_LM}" = "YES" ]; then
+            echo "  ℹ INFO: NO_LIBM=${NO_LIBM_VALUE} in CMakeCache.txt, but linker flags contain -lm"
+            echo "    → CMAKE_SHARED_LINKER_FLAGS contains -lm: ${SHARED_HAS_LM}"
+            echo "    → CMAKE_EXE_LINKER_FLAGS contains -lm: ${EXE_HAS_LM}"
             echo "    → This is non-critical: libm will still be linked due to explicit linker flags"
             echo "    → NO_LIBM is just an informational variable from check_symbol_exists"
         else
-            echo "  ⚠ WARNING: NO_LIBM=${NO_LIBM_VALUE} and CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm"
-            echo "    → This may cause undefined reference errors - attempting to fix..."
-            # Try to force NO_LIBM=OFF and re-configure
+            echo "  ⚠ WARNING: NO_LIBM=${NO_LIBM_VALUE} and linker flags may be missing -lm"
+            echo "    → CMAKE_SHARED_LINKER_FLAGS contains -lm: ${SHARED_HAS_LM}"
+            echo "    → CMAKE_EXE_LINKER_FLAGS contains -lm: ${EXE_HAS_LM}"
+            echo "    → Attempting to fix..."
             sed -i 's/^NO_LIBM:.*=.*/NO_LIBM:BOOL=OFF/' CMakeCache.txt 2>/dev/null || true
-            cmake . -DNO_LIBM=OFF >/dev/null 2>&1 || true
+            cmake . -DNO_LIBM=OFF -DCMAKE_SHARED_LINKER_FLAGS="-fopenmp -lm" -DCMAKE_EXE_LINKER_FLAGS="-fopenmp -lm" >/dev/null 2>&1 || true
+        fi
+    else
+        echo "  ✓ NO_LIBM check passed (value: ${NO_LIBM_VALUE:-unset/OFF})"
+        echo "    → CMAKE_SHARED_LINKER_FLAGS contains -lm: ${SHARED_HAS_LM}"
+        echo "    → CMAKE_EXE_LINKER_FLAGS contains -lm: ${EXE_HAS_LM}"
+    fi
+    
+    # Verify actual built libraries link against libm (if they exist)
+    if command -v ldd >/dev/null 2>&1; then
+        echo "  → Verifying actual library linking against libm..."
+        GRAPHBLAS_LIB=$(find . -name "libgraphblas.so*" -type f 2>/dev/null | head -1)
+        if [ -n "${GRAPHBLAS_LIB}" ] && [ -f "${GRAPHBLAS_LIB}" ]; then
+            if ldd "${GRAPHBLAS_LIB}" 2>/dev/null | grep -q "libm.so"; then
+                echo "    ✓ GraphBLAS library links against libm"
+            else
+                echo "    ⚠ GraphBLAS library does NOT link against libm (but linker flags should ensure it)"
+            fi
         fi
     fi
 fi
