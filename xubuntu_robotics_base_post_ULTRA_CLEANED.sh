@@ -4756,6 +4756,25 @@ if ! cmake --install .; then
 fi
 echo "  ✓ SuiteSparse installation completed"
 
+# Final verification: Check NO_LIBM value and provide informational message
+if [ -f "CMakeCache.txt" ]; then
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+    if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
+        if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
+            echo "  ℹ INFO: NO_LIBM=${NO_LIBM_VALUE} in CMakeCache.txt, but CMAKE_SHARED_LINKER_FLAGS contains -lm"
+            echo "    → This is non-critical: libm will still be linked due to explicit linker flags"
+            echo "    → NO_LIBM is just an informational variable from check_symbol_exists"
+        else
+            echo "  ⚠ WARNING: NO_LIBM=${NO_LIBM_VALUE} and CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm"
+            echo "    → This may cause undefined reference errors - attempting to fix..."
+            # Try to force NO_LIBM=OFF and re-configure
+            sed -i 's/^NO_LIBM:.*=.*/NO_LIBM:BOOL=OFF/' CMakeCache.txt 2>/dev/null || true
+            cmake . -DNO_LIBM=OFF >/dev/null 2>&1 || true
+        fi
+    fi
+fi
+
 popd >/dev/null
 
 echo -e "${YELLOW}[6.12C.6] Verifying SuiteSparse linkage (MKL + CUDA)...${NC}"
@@ -4816,6 +4835,7 @@ verify_math_library_linkage() {
                     LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2-)
                     if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
                         echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
+                        echo "      → NOTE: Even though NO_LIBM=${NO_LIBM_VALUE}, linker flags include -lm, so linking should work"
                     else
                         echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO (this is unexpected)"
                         echo "        Actual flags: ${LINKER_FLAGS:0:100}..."
