@@ -453,7 +453,11 @@ check_existing_jobs() {
     echo "" >&2
     echo "  Option 2: SSH to the node and find your container:" >&2
     if [ -n "$running_nodes" ] && [ "$running_nodes" != "N/A" ] && [ "$running_nodes" != "(null)" ]; then
-      # Extract first node (handle formats like "node001", "node001,node002", "node[001-002]")
+      # Extract first node from various SLURM NodeList formats:
+      # Step 1: 's/,.*//'      - Remove comma-separated list: "node001,node002" → "node001"
+      # Step 2: 's/\[.*\]//'   - Remove bracket ranges: "node[001-002]" → "node"
+      # Step 3: 's/-.*//'      - Remove dash ranges: "node001-002" → "node001"
+      # Result: "node001" from any format
       local first_node=$(echo "$running_nodes" | sed 's/,.*//' | sed 's/\[.*\]//' | sed 's/-.*//')
       if [ -n "$first_node" ]; then
         echo "    ssh $first_node" >&2

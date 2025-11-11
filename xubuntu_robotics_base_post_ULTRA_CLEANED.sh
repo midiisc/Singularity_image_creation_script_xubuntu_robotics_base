@@ -565,13 +565,19 @@ test_mirror() {
     rm -f "${curl_stdout}" "${curl_stderr}" 2>/dev/null || true
     
     # Extract HTTP code and time from output (format: "HTTP_CODE|TIME")
+    # Pattern: '^[0-9]{3}$' matches exactly 3 digits (200, 403, 404, etc.)
+    # If not matching (invalid format), return empty string
     HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
     local TIME_VALUE
+    # Pattern: '^[0-9]' matches any string starting with digit (0.123, 12.456, etc.)
+    # Validates that we have a numeric time value before using it
     TIME_VALUE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null | grep -E '^[0-9]' || echo "")
     CURL_OUTPUT="${TIME_VALUE}"
 
     # Reject mirrors that return 403 (Forbidden/Blocked), 404 (Not Found), or other error codes
     # Check HTTP code first (even if curl exit code is non-zero, we might have gotten HTTP response)
+    # Pattern: ^[45][0-9][0-9]$ matches HTTP 4xx and 5xx errors
+    # Examples: 400-499 (client errors), 500-599 (server errors)
     if [[ -n "${HTTP_CODE:-}" ]] && [[ "${HTTP_CODE}" =~ ^[45][0-9][0-9]$ ]]; then
       echo "[test_mirror] Rejecting ${URL}: HTTP ${HTTP_CODE} (blocked or error)" >&2
       echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
@@ -587,6 +593,8 @@ test_mirror() {
     if [[ -z "${HTTP_CODE:-}" ]] && [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]]; then
       # No HTTP code means connection failed before getting response
       # This is different from getting a 403 response
+      # grep pattern: -q (quiet), -i (ignore case), -E (extended regex)
+      # Pattern '(403|Forbidden|blocked)' matches any of these strings in error output
       if echo "${curl_error}" | grep -qiE "(403|Forbidden|blocked)"; then
         echo "[test_mirror] Rejecting ${URL}: Connection blocked (403 detected in error)" >&2
         echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
@@ -882,6 +890,13 @@ probe_and_set_mirrors() {
   # Exclude mirrors that were rejected (score 999.9 = blocked/error/failed)
   # Always ensure archive.ubuntu.com is tested and available as fallback
   local fastest_mirror_raw
+  # AWK pattern breakdown:
+  #   NF==2         - Ensure exactly 2 fields (time and URL)
+  #   $1 < 15.0     - First field (time) must be under 15 seconds
+  #   $1 < 999.0    - Exclude sentinel value 999.9 (blocked/failed mirrors)
+  #   {print $2}    - Print second field (mirror URL)
+  #   exit          - Stop after first match (fastest valid mirror)
+  # sort -n sorts numerically by time, so first valid result is fastest
   fastest_mirror_raw="$(LC_NUMERIC=C sort -n "${PROBE_RESULTS:-}" 2>/dev/null | awk 'NF==2 && $1 < 15.0 && $1 < 999.0 {print $2; exit}' || echo "")"
   
   # Clean up temporary file
@@ -911,14 +926,23 @@ probe_and_set_mirrors() {
   # Apply the fastest mirror to the main APT sources
   if [ -f /etc/apt/sources.list ]; then
     # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
+    # Pattern 's/[[\/&]/\\&/g' explained:
+    #   [[\/ &]  - Character class matching: [, \, /, &
+    #   \\&      - Replacement: prefix with backslash (\)
+    #   g        - Global: replace all occurrences
+    # Example: "http://mirror.com/ubuntu" → "http:\/\/mirror.com\/ubuntu"
     local fastest_mirror_sed_escaped
     fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g')"
     
     # Multiple replacement patterns to catch all variations:
     # 1. Specifically target archive.ubuntu.com (most common issue)
+    #    Pattern 'https\\?' matches http or https (? makes 's' optional)
+    #    Pattern '\\.ubuntu\\.com' matches literal dots (escaped for sed)
     sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
     sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
     # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+    #    '/security\\.ubuntu\\.com/!' is address negation - skip lines with security.ubuntu.com
+    #    Pattern '[a-zA-Z0-9.-]*' matches any subdomain: mirrors.ubuntu.com, us.archive.ubuntu.com, etc.
     sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
     sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
     echo "[info] Updated /etc/apt/sources.list with fastest mirror"
