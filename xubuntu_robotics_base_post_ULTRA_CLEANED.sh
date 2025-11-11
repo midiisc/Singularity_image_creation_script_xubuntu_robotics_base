@@ -5340,9 +5340,11 @@ EOF
         lib_path=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "lib${lib}.so*" -type f 2>/dev/null | head -1)
         if [ -n "${lib_path}" ]; then
             lib_name=$(basename "${lib_path}" | sed 's/\.so.*//')
-            echo "find_library(SuiteSparse_${lib^^}_LIBRARY ${lib_name} PATHS \"\${SuiteSparse_LIBRARY_DIRS}\" NO_DEFAULT_PATH)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
-            echo "if(SuiteSparse_${lib^^}_LIBRARY)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
-            echo "  list(APPEND SuiteSparse_LIBRARIES \"\${SuiteSparse_${lib^^}_LIBRARY}\")" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            # Convert lib name to uppercase for CMake variable (compatible with older bash)
+            lib_upper=$(echo "${lib}" | tr '[:lower:]' '[:upper:]')
+            echo "find_library(SuiteSparse_${lib_upper}_LIBRARY ${lib_name} PATHS \"\${SuiteSparse_LIBRARY_DIRS}\" NO_DEFAULT_PATH)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            echo "if(SuiteSparse_${lib_upper}_LIBRARY)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            echo "  list(APPEND SuiteSparse_LIBRARIES \"\${SuiteSparse_${lib_upper}_LIBRARY}\")" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
             echo "endif()" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
         fi
     done
