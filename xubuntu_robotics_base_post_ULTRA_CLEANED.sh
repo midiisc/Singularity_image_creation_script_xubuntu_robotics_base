@@ -2029,7 +2029,6 @@ echo "    This ensures apt-get --print-uris will return URIs from ${FASTEST_MIRR
 # Clear old package list cache to force fresh download from new mirror
 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 # Update package lists from the new mirror with validation
-local apt_update_output apt_update_exit_code
 apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
 apt_update_exit_code=$?
 
