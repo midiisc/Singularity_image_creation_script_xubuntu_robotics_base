@@ -3321,10 +3321,18 @@ fi
 export LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
 export PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
+# Add to CMAKE_PREFIX_PATH
+case ":${CMAKE_PREFIX_PATH:-}:" in
+    *:${OPENBLAS_INSTALL_PREFIX}:*) ;;
+    *) export CMAKE_PREFIX_PATH="${OPENBLAS_INSTALL_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
+esac
+
 # Add to environment for future sessions
 cat >> /etc/environment <<EOF
 LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
 PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}"
+OpenBLAS_DIR="${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas"
+CMAKE_PREFIX_PATH="${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
 EOF
 
 # Create pkg-config file for OpenBLAS
@@ -3341,7 +3349,53 @@ Libs: -L\${libdir} -lopenblas
 Cflags: -I\${includedir}
 EOF
 
-echo -e "  ${GREEN}✓ Library paths configured${NC}"
+# Create OpenBLAS CMake config files
+mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas"
+cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfig.cmake" <<EOF
+# OpenBLAS CMake configuration file
+set(OpenBLAS_VERSION "${OPENBLAS_VERSION#v}")
+set(OpenBLAS_DIR "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas")
+
+# Include directories
+set(OpenBLAS_INCLUDE_DIRS "${OPENBLAS_INSTALL_PREFIX}/include")
+
+# Library directories
+set(OpenBLAS_LIBRARY_DIRS "${OPENBLAS_INSTALL_PREFIX}/lib")
+
+# Find OpenBLAS library
+find_library(OpenBLAS_LIBRARY openblas PATHS "\${OpenBLAS_LIBRARY_DIRS}" NO_DEFAULT_PATH)
+if(OpenBLAS_LIBRARY)
+    set(OpenBLAS_LIBRARIES "\${OpenBLAS_LIBRARY}")
+    set(OpenBLAS_FOUND TRUE)
+    set(OPENBLAS_FOUND TRUE)
+    
+    # Create imported target
+    if(NOT TARGET OpenBLAS::OpenBLAS)
+        add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
+        set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
+            IMPORTED_LOCATION "\${OpenBLAS_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "\${OpenBLAS_INCLUDE_DIRS}"
+        )
+    endif()
+else()
+    set(OpenBLAS_FOUND FALSE)
+    set(OPENBLAS_FOUND FALSE)
+endif()
+EOF
+
+cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfigVersion.cmake" <<EOF
+set(PACKAGE_VERSION "${OPENBLAS_VERSION#v}")
+if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
+    set(PACKAGE_VERSION_COMPATIBLE FALSE)
+else()
+    set(PACKAGE_VERSION_COMPATIBLE TRUE)
+    if(PACKAGE_VERSION STREQUAL PACKAGE_FIND_VERSION)
+        set(PACKAGE_VERSION_EXACT TRUE)
+    endif()
+endif()
+EOF
+
+echo -e "  ${GREEN}✓ Library paths and CMake configs configured${NC}"
 echo ""
 
 #--- Sub-block 12.9: Set up APT pinning ---
@@ -5250,11 +5304,85 @@ for target_lib in "${suitesparse_targets[@]}"; do
     fi
 done
 
-if [ -f "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" ]; then
-    echo "  ✓ SuiteSparse CMake package config installed"
+# Create SuiteSparse CMake config files if they don't exist
+if [ ! -f "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" ]; then
+    echo "  ⚠ SuiteSparse CMake package config not found - creating it..."
+    mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse"
+    
+    # Find installed SuiteSparse libraries
+    SUITESPARSE_LIBS=""
+    for lib in cholmod amd camd colamd ccolamd umfpack spqr graphblas lagraph suitesparseconfig; do
+        lib_path=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "lib${lib}.so*" -type f 2>/dev/null | head -1)
+        if [ -n "${lib_path}" ]; then
+            lib_name=$(basename "${lib_path}" | sed 's/\.so.*//' | sed 's/^lib//')
+            SUITESPARSE_LIBS="${SUITESPARSE_LIBS} ${lib_name}"
+        fi
+    done
+    
+    # Create SuiteSparseConfig.cmake
+    cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" <<EOF
+# SuiteSparse CMake configuration file
+set(SuiteSparse_VERSION "7.0.0")
+set(SuiteSparse_DIR "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse")
+
+# Include directories
+set(SuiteSparse_INCLUDE_DIRS "${SUITESPARSE_INSTALL_PREFIX}/include")
+
+# Library directories
+set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_INSTALL_PREFIX}/lib")
+
+# Find all SuiteSparse libraries
+set(SuiteSparse_LIBRARIES "")
+EOF
+    
+    # Add individual library targets
+    for lib in cholmod amd camd colamd ccolamd umfpack spqr graphblas lagraph suitesparseconfig; do
+        lib_path=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "lib${lib}.so*" -type f 2>/dev/null | head -1)
+        if [ -n "${lib_path}" ]; then
+            lib_name=$(basename "${lib_path}" | sed 's/\.so.*//')
+            echo "find_library(SuiteSparse_${lib^^}_LIBRARY ${lib_name} PATHS \"\${SuiteSparse_LIBRARY_DIRS}\" NO_DEFAULT_PATH)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            echo "if(SuiteSparse_${lib^^}_LIBRARY)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            echo "  list(APPEND SuiteSparse_LIBRARIES \"\${SuiteSparse_${lib^^}_LIBRARY}\")" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+            echo "endif()" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+        fi
+    done
+    
+    cat >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" <<'EOF'
+
+# Set variables for compatibility
+set(SuiteSparse_FOUND TRUE)
+set(SUITESPARSE_FOUND TRUE)
+
+# Create imported targets
+if(NOT TARGET SuiteSparse::SuiteSparse)
+    add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
+    set_target_properties(SuiteSparse::SuiteSparse PROPERTIES
+        INTERFACE_INCLUDE_DIRECTORIES "${SuiteSparse_INCLUDE_DIRS}"
+        INTERFACE_LINK_LIBRARIES "${SuiteSparse_LIBRARIES}"
+    )
+endif()
+EOF
+    
+    echo "  ✓ SuiteSparse CMake package config created"
 else
-    echo "  ⚠ SuiteSparse CMake package config not found (downstream CMake may need hints)"
+    echo "  ✓ SuiteSparse CMake package config found"
 fi
+
+# Create pkg-config file for SuiteSparse
+mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"
+cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" <<EOF
+prefix=${SUITESPARSE_INSTALL_PREFIX}
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: SuiteSparse
+Description: Suite of sparse matrix libraries
+Version: 7.0.0
+Libs: -L\${libdir} -lcholmod -lamd -lcamd -lcolamd -lccolamd -lumfpack -lspqr -lgraphblas -llagraph -lsuitesparseconfig
+Cflags: -I\${includedir}
+Requires: openblas
+EOF
+echo "  ✓ SuiteSparse pkg-config file created"
 
 echo -e "${YELLOW}[6.12C.7] Protecting SuiteSparse installation via APT pinning...${NC}"
 cat > /etc/apt/preferences.d/suitesparse-protect <<'EOF'
@@ -5272,9 +5400,18 @@ else
     sed -i "s|^SuiteSparse_DIR=.*|SuiteSparse_DIR=${SuiteSparse_DIR}|" /etc/environment
 fi
 
+# Add to CMAKE_PREFIX_PATH
+case ":${CMAKE_PREFIX_PATH:-}:" in
+    *:${SUITESPARSE_INSTALL_PREFIX}:*) ;;
+    *) export CMAKE_PREFIX_PATH="${SUITESPARSE_INSTALL_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
+esac
+
 cat > /etc/profile.d/suitesparse.sh <<EOF
 export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
 export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
+export PKG_CONFIG_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
+export SuiteSparse_DIR=${SuiteSparse_DIR}
+export CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
 EOF
 chmod 0644 /etc/profile.d/suitesparse.sh
 echo "  ✓ Environment hooks added for SuiteSparse"
