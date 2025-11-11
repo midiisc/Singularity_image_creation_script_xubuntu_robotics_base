@@ -2343,12 +2343,22 @@ echo 'APT::Get::AutomaticRemove::Kernels "false";' >> /etc/apt/apt.conf.d/99keep
 
 cat > /usr/local/bin/apt-aria <<'EOF'
 #!/usr/bin/env bash
-set -euo pipefail
+set -eo pipefail  # Removed -u to allow unbound variables with defaults
 
 # Centralized APT cache configuration - All APT tools use this location
+# Set default cache location if not provided via environment variable
 if [ -z "${CONTAINER_APT_CACHE:-}" ]; then
-    echo "[apt-aria] ERROR: CONTAINER_APT_CACHE is not set"
-    exit 1
+    # Try to detect cache location from environment or use sensible default
+    if [ -n "${CONTAINER_CACHE_ROOT:-}" ]; then
+        CONTAINER_APT_CACHE="${CONTAINER_CACHE_ROOT}/apt/archives"
+    elif [ -d "/container_cache/apt" ]; then
+        CONTAINER_APT_CACHE="/container_cache/apt"
+    elif [ -d "/tmp/container_cache/apt" ]; then
+        CONTAINER_APT_CACHE="/tmp/container_cache/apt"
+    else
+        CONTAINER_APT_CACHE="/var/cache/apt/archives"
+    fi
+    echo "[apt-aria] WARNING: CONTAINER_APT_CACHE not set, using default: ${CONTAINER_APT_CACHE}"
 fi
 CACHE="${CONTAINER_APT_CACHE}"
 mkdir -p "/var/cache/apt/archives"
@@ -2474,6 +2484,41 @@ fi
 EOF
 chmod 0755 /usr/local/bin/apt-aria
 echo "✓ apt-aria wrapper created"
+
+#--- Sub-block 11.1.1: Ensure CONTAINER_APT_CACHE is always available ---
+# Critical: Export CONTAINER_APT_CACHE in container environment so apt-aria wrapper can use it
+# This ensures the variable is available even when container is run without explicit environment setup
+echo "Setting up CONTAINER_APT_CACHE environment variable..."
+cat > /etc/profile.d/container-cache.sh <<'EOF'
+#!/bin/bash
+# Container cache environment variables
+# These ensure apt-aria wrapper and other tools can find cache directories
+
+# Set default cache root if not already set
+export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+
+# Set APT cache location
+export CONTAINER_APT_CACHE="${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
+
+# Other cache locations
+export CONTAINER_BIN_CACHE="${CONTAINER_BIN_CACHE:-${CONTAINER_CACHE_ROOT}/binaries}"
+export CONTAINER_DEB_CACHE="${CONTAINER_DEB_CACHE:-${CONTAINER_CACHE_ROOT}/debs}"
+export CONTAINER_CONDA_CACHE="${CONTAINER_CONDA_CACHE:-${CONTAINER_CACHE_ROOT}/conda_pkgs}"
+export CONTAINER_WHEELS_CACHE="${CONTAINER_WHEELS_CACHE:-${CONTAINER_CACHE_ROOT}/wheels}"
+export CONTAINER_JULIA_CACHE="${CONTAINER_JULIA_CACHE:-${CONTAINER_CACHE_ROOT}/julia_pkgs}"
+
+# Ensure cache directories exist
+mkdir -p "${CONTAINER_APT_CACHE}" "${CONTAINER_BIN_CACHE}" "${CONTAINER_DEB_CACHE}" \
+         "${CONTAINER_CONDA_CACHE}" "${CONTAINER_WHEELS_CACHE}" "${CONTAINER_JULIA_CACHE}" 2>/dev/null || true
+EOF
+chmod 0644 /etc/profile.d/container-cache.sh
+echo "✓ Container cache environment setup created"
+
+# Also add to /etc/environment for non-interactive shells
+if ! grep -q "^CONTAINER_APT_CACHE=" /etc/environment 2>/dev/null; then
+    echo "CONTAINER_APT_CACHE=${CONTAINER_APT_CACHE:-/container_cache/apt/archives}" >> /etc/environment
+fi
+
 # Monitor cache after apt-aria setup
 monitor_cache "After apt-aria wrapper setup"
 
