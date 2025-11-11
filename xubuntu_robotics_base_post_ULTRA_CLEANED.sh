@@ -654,9 +654,15 @@ test_mirror() {
     fi
 
     # Write results (flock doesn't work reliably in xargs subshells, using simple append)
-    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
+    # Final check: if we still don't have a valid time value, mark as failed
+    if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]] || [[ ! "${CURL_OUTPUT:-}" =~ ^[0-9] ]]; then
+      # Check for any error indicators we might have missed
+      if [[ -n "${curl_error:-}" ]] && echo "${curl_error}" | grep -qiE "(timeout|connection refused|connection reset|name resolution|couldn't connect|failed|error|403|404|500|502|503|504)"; then
+        echo "[test_mirror] Rejecting ${URL}: Connection/download error detected" >&2
+      fi
       echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
     else
+      # Valid result - write time and URL
       echo "${CURL_OUTPUT} ${URL}" >> "${PROBE_RESULTS}"
     fi
 }
@@ -816,13 +822,16 @@ probe_and_set_mirrors() {
     
     # Explicit check for non-empty and sufficient mirrors
     if [ -n "${DYNAMIC_MIRRORS:-}" ] && [ "${MIRROR_COUNT:-0}" -ge 10 ]; then
+      # Always start with archive.ubuntu.com as guaranteed fallback
       CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
       # Append dynamic mirrors line-by-line to preserve whitespace safely
       while IFS= read -r mirror; do
         [ -z "${mirror:-}" ] && continue
+        # Skip archive.ubuntu.com if already added (avoid duplicates)
+        [[ "${mirror}" == *"archive.ubuntu.com"* ]] && continue
         CANDIDATE_MIRRORS+="${mirror}"$'\n'
       done <<< "${DYNAMIC_MIRRORS}"
-      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors"
+      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors (archive.ubuntu.com included as fallback)"
     else
       echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
       CANDIDATE_MIRRORS=""  # Will trigger fallback below
@@ -833,6 +842,7 @@ probe_and_set_mirrors() {
   fi
   
   # Fallback to curated static list if dynamic fetch failed
+  # CRITICAL: Always include archive.ubuntu.com as first entry (guaranteed fallback)
   if [ -z "${CANDIDATE_MIRRORS:-}" ]; then
     echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
     CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
@@ -869,20 +879,30 @@ probe_and_set_mirrors() {
   fi
 
   # Extract the fastest mirror that responded in under 15 seconds
-  # Exclude mirrors that were rejected (score 999.9 = blocked/error)
+  # Exclude mirrors that were rejected (score 999.9 = blocked/error/failed)
+  # Always ensure archive.ubuntu.com is tested and available as fallback
   local fastest_mirror_raw
   fastest_mirror_raw="$(LC_NUMERIC=C sort -n "${PROBE_RESULTS:-}" 2>/dev/null | awk 'NF==2 && $1 < 15.0 && $1 < 999.0 {print $2; exit}' || echo "")"
   
   # Clean up temporary file
   rm -f "${PROBE_RESULTS:-}" 2>/dev/null || true
 
+  # Robust fallback: Always use archive.ubuntu.com if no accessible mirrors found
   if [ -z "${fastest_mirror_raw:-}" ]; then
-    echo "[warn] No accessible mirrors found (all may be blocked or failed) - using default archive.ubuntu.com"
+    echo "[warn] ⚠ No accessible mirrors found (all may be blocked, failed, or timed out)"
+    echo "[info] Falling back to default archive.ubuntu.com (guaranteed to work)"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   else
     FASTEST_MIRROR="${fastest_mirror_raw}"
-    echo "[info] Selected fastest accessible mirror: ${FASTEST_MIRROR}"
+    echo "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
   fi
+  
+  # Final safety check: Ensure FASTEST_MIRROR is set (should never be empty at this point)
+  if [ -z "${FASTEST_MIRROR:-}" ]; then
+    echo "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
+    FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
+  fi
+  
   echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
   # Export the variable so it persists after function ends and is available globally
@@ -1351,9 +1371,30 @@ reapply_fastest_mirror() {
   
   # Check if apt-get update failed with 403 (blocked) or other access errors
   if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
+    # Check for various error conditions that indicate mirror is inaccessible
+    local mirror_failed=false
+    local error_reason=""
+    
     if echo "${apt_update_output}" | grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)"; then
-      echo "[ERROR] Selected mirror ${FASTEST_MIRROR} is blocked (403) or inaccessible"
-      echo "[info] Falling back to default archive.ubuntu.com..."
+      mirror_failed=true
+      error_reason="blocked (403)"
+    elif echo "${apt_update_output}" | grep -qiE "(404|Not Found|not available)"; then
+      mirror_failed=true
+      error_reason="not found (404)"
+    elif echo "${apt_update_output}" | grep -qiE "(500|502|503|504|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)"; then
+      mirror_failed=true
+      error_reason="server error (5xx)"
+    elif echo "${apt_update_output}" | grep -qiE "(timeout|timed out|connection timeout)"; then
+      mirror_failed=true
+      error_reason="timeout"
+    elif echo "${apt_update_output}" | grep -qiE "(couldn't connect|could not resolve|name resolution|connection refused)"; then
+      mirror_failed=true
+      error_reason="connection failed"
+    fi
+    
+    if [[ "${mirror_failed}" == "true" ]]; then
+      echo "[ERROR] ⚠ Selected mirror ${FASTEST_MIRROR} failed: ${error_reason}"
+      echo "[info] Falling back to default archive.ubuntu.com (guaranteed fallback)..."
       
       # Revert to archive.ubuntu.com
       FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
@@ -1389,14 +1430,22 @@ reapply_fastest_mirror() {
       rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
       rm -f /var/lib/apt/lists/lock 2>/dev/null || true
       
-      echo "[info] Retrying apt-get update with default mirror..."
-      if apt-get update -o Acquire::Retries=3 2>&1; then
+      echo "[info] Retrying apt-get update with default archive.ubuntu.com mirror..."
+      local retry_output retry_exit_code
+      retry_output=$(apt-get update -o Acquire::Retries=3 2>&1)
+      retry_exit_code=$?
+      
+      if [[ "${retry_exit_code:-1}" -eq 0 ]]; then
         echo "[info] ✓ Successfully using default archive.ubuntu.com mirror"
       else
-        echo "[warn] apt-get update still had issues even with default mirror"
+        echo "[ERROR] ⚠ apt-get update failed even with default archive.ubuntu.com mirror"
+        echo "[warn] This may indicate a network or system issue. Output:"
+        echo "${retry_output}" | head -10 | sed 's/^/  /'
+        echo "[warn] Build may continue, but package operations may fail"
       fi
     else
-      echo "[warn] apt-get update had issues (may continue): ${apt_update_output}"
+      echo "[warn] apt-get update had issues (may continue):"
+      echo "${apt_update_output}" | head -5 | sed 's/^/  /'
     fi
   else
     echo "[info] ✓ apt-get update succeeded with selected mirror"
