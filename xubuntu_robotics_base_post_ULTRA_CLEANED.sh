@@ -2519,6 +2519,95 @@ if ! grep -q "^CONTAINER_APT_CACHE=" /etc/environment 2>/dev/null; then
     echo "CONTAINER_APT_CACHE=${CONTAINER_APT_CACHE:-/container_cache/apt/archives}" >> /etc/environment
 fi
 
+#--- Sub-block 11.1.2: Create fix script for existing containers ---
+# Critical: Provide a script that can fix CONTAINER_APT_CACHE in already-built containers
+# This allows users to fix existing containers without rebuilding
+echo "Creating fix script for existing containers..."
+cat > /usr/local/bin/fix-container-apt-cache.sh <<'EOF'
+#!/bin/bash
+# Fix CONTAINER_APT_CACHE for existing containers
+# This script can be run inside an existing container to fix apt-get issues
+
+set -e
+
+echo "[fix-container-apt-cache] Setting up CONTAINER_APT_CACHE..."
+
+# Set default cache root if not already set
+export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+
+# Set APT cache location
+export CONTAINER_APT_CACHE="${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
+
+# Ensure cache directory exists
+mkdir -p "${CONTAINER_APT_CACHE}" 2>/dev/null || true
+
+# Add to /etc/environment for non-interactive shells
+if ! grep -q "^CONTAINER_APT_CACHE=" /etc/environment 2>/dev/null; then
+    echo "CONTAINER_APT_CACHE=${CONTAINER_APT_CACHE}" >> /etc/environment
+    echo "[fix-container-apt-cache] Added CONTAINER_APT_CACHE to /etc/environment"
+fi
+
+# Source the profile script if it exists
+if [ -f /etc/profile.d/container-cache.sh ]; then
+    source /etc/profile.d/container-cache.sh
+    echo "[fix-container-apt-cache] Sourced /etc/profile.d/container-cache.sh"
+fi
+
+# Export for current shell
+export CONTAINER_APT_CACHE
+
+echo "[fix-container-apt-cache] CONTAINER_APT_CACHE=${CONTAINER_APT_CACHE}"
+echo "[fix-container-apt-cache] ✓ Fix applied."
+echo ""
+echo "[fix-container-apt-cache] IMPORTANT: In Singularity containers with writable overlays:"
+echo "[fix-container-apt-cache]   - sudo does NOT work (PR_SET_NO_NEW_PRIVILEGS flag prevents it)"
+echo "[fix-container-apt-cache]   - Run apt-get DIRECTLY without sudo: 'apt-get update' (not 'sudo apt-get update')"
+echo "[fix-container-apt-cache]   - You are typically running as root inside the container, so sudo is not needed"
+echo "[fix-container-apt-cache]   - Example: apt-get update && apt-get install -y <package>"
+EOF
+chmod 0755 /usr/local/bin/fix-container-apt-cache.sh
+echo "✓ Fix script for existing containers created"
+
+#--- Sub-block 11.1.3: Create README for apt-get usage in containers ---
+# Critical: Document that sudo doesn't work in Singularity containers
+echo "Creating apt-get usage documentation..."
+cat > /usr/local/share/doc/apt-get-in-container.txt <<'EOF'
+APT-GET USAGE IN SINGULARITY CONTAINERS
+========================================
+
+IMPORTANT: sudo does NOT work in Singularity containers with writable overlays
+due to the PR_SET_NO_NEW_PRIVILEGS security flag.
+
+SOLUTION: Run apt-get directly without sudo (you're already root inside the container)
+
+CORRECT USAGE:
+  apt-get update
+  apt-get install -y <package>
+  apt-get upgrade -y
+
+INCORRECT USAGE (will fail):
+  sudo apt-get update  ❌ "no new privileges flag is set"
+
+FIXING CONTAINER_APT_CACHE ISSUE:
+  If you see "CONTAINER_APT_CACHE: unbound variable" error:
+  
+  1. Run the fix script:
+     /usr/local/bin/fix-container-apt-cache.sh
+  
+  2. Or manually set the variable:
+     export CONTAINER_APT_CACHE=/container_cache/apt/archives
+     mkdir -p ${CONTAINER_APT_CACHE}
+  
+  3. Then run apt-get directly (no sudo):
+     apt-get update
+
+WRITABLE OVERLAY:
+  When using writable overlays, apt-get installs packages persist in the overlay.
+  The overlay must be mounted with :rw (read-write) flag.
+EOF
+chmod 0644 /usr/local/share/doc/apt-get-in-container.txt
+echo "✓ Documentation created"
+
 # Monitor cache after apt-aria setup
 monitor_cache "After apt-aria wrapper setup"
 
