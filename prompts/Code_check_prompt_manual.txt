@@ -37,6 +37,12 @@ A. Structure & Syntax
 - A3. Avoidance of deprecated or non-portable constructs unless justified.
 - A4. Declaration order: functions and variables are defined before first use (or accompanied by guards) to avoid relying on implicit forward declarations.
 - A5. Favor POSIX-safe command patterns; when Bash-specific constructs are required, document the justification and ensure degradations are gracefully handled.
+- A6. **BASH VERSION COMPATIBILITY**: Check for Bash 4+ features that may not work in older versions:
+  - FORBIDDEN: `${var^^}` (uppercase conversion) - use `tr '[:lower:]' '[:upper:]'` or `awk '{print toupper($0)}'` instead
+  - FORBIDDEN: `${var,,}` (lowercase conversion) - use `tr '[:upper:]' '[:lower:]'` or `awk '{print tolower($0)}'` instead
+  - FORBIDDEN: Associative arrays (`declare -A`) without version check
+  - When using Bash 4+ features, add explicit version check: `if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then ... else ... fi`
+  - Example replacement: `lib_upper=$(echo "${lib}" | tr '[:lower:]' '[:upper:]')` instead of `lib_upper=${lib^^}`
 
 B. Shell Options & Execution Controls
 - B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
@@ -45,10 +51,21 @@ B. Shell Options & Execution Controls
 C. Variables & Defaults
 - C1. Detection/handling of unbound variables with `${var:-default}` or `${var:?message}` as appropriate.
 - C2. Correct use of `local`, `readonly`, `declare -r`, exported variables, and avoidance of unintended global state.
+  - **CRITICAL**: NEVER use `local` keyword outside a function - this causes error "local: can only be used in a function"
+  - Check every `local` declaration is inside a function body
+  - For global variables, use plain assignment or `declare` (without `local`)
+  - Example error pattern: `local apt_update_output` at top-level scope (line 2033 error)
+  - Suggested commands: `grep -n '^[[:space:]]*local ' script.sh` to find `local` declarations, verify each is inside a function
 - C3. Safe handling of arrays, indexes, and `IFS` mutations (restore defaults after use).
 - C4. Each variable is declared once, with an explicit, meaningful default or guard. Later redeclarations are removed in favor of the carried-forward definition, and usages reference the original declaration.
   - Example: Replace `FOO=${FOO:-}` + repeated assignments with a single `FOO="${FOO:-/opt/default}"` near the declaration, then update later sections to reuse `FOO`.
   - Suggested commands: `grep -R "FOO="`; `rg --fixed-strings "local FOO"` to detect duplicates.
+- C5. **UNBOUND VARIABLE PROTECTION**: When using `set -u` or expecting unbound variables, ensure all variables have defaults:
+  - Use `${VAR:-default_value}` pattern consistently
+  - For environment variables that may not be set: `CACHE_DIR="${CONTAINER_APT_CACHE:-/var/cache/apt/archives}"`
+  - Export critical variables in profile scripts: `/etc/profile.d/*.sh` and `/etc/environment`
+  - Add fallback detection logic for missing environment variables before first use
+  - Example error: "CONTAINER_APT_CACHE: unbound variable" - fix with detection and fallback logic
 
 D. Quoting & Expansion Safety
 - D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
@@ -83,6 +100,27 @@ I. Timeouts, Retries, & Robustness
 - I2. Graceful degradation/fallback behavior documented when timeouts or partial failures occur.
 - I3. Handling of transient network or IO failures, including retries and validation of results.
   - Tools: `grep -n "curl"` / `grep -n "wget"` to confirm retry flags; ensure `timeout` or `retry` loops exist.
+- I4. **HTTP ERROR HANDLING**: All curl/wget operations must check HTTP status codes and handle errors:
+  - Capture HTTP status codes: `curl -w "%{http_code}" -o output_file URL`
+  - Check for HTTP errors: 403 (Forbidden/Blocked), 404 (Not Found), 5xx (Server Errors)
+  - Detect connection errors: timeouts, connection refused, DNS failures
+  - Implement fallback logic when primary source fails (e.g., fallback to archive.ubuntu.com for mirrors)
+  - Use temporary files to capture both stdout and stderr separately for proper error analysis
+  - Example pattern:
+    ```bash
+    temp_out=$(mktemp)
+    temp_err=$(mktemp)
+    if curl_output=$(curl -sS -w "%{http_code}" -o "${temp_out}" URL 2>"${temp_err}"); then
+      http_code=$(echo "${curl_output}" | tail -n1)
+      if [[ "${http_code}" =~ ^[45][0-9][0-9]$ ]]; then
+        # Handle HTTP error
+      fi
+    fi
+    rm -f "${temp_out}" "${temp_err}"
+    ```
+  - Validate HTTP codes are 3-digit numbers before checking: `[[ "${http_code}" =~ ^[0-9]{3}$ ]]`
+  - Always provide user-visible error messages explaining the specific failure (403, timeout, etc.)
+  - Mirror/URL validation should exclude failed sources from selection (score 999.9 or similar marker)
 
 J. Edge Cases & Resiliency
 - J1. Input validation, file/directory existence checks, and permissions (`umask`) where relevant.
@@ -107,10 +145,26 @@ L. Performance & Maintainability
 M. Environment & Dependencies
 - M1. Validation that required external commands/binaries exist (`command -v`, `hash`) and version-sensitive behavior is documented.
 - M2. Verification of environment assumptions (shell, OS, distro, architecture, locale, `LANG`, `LC_ALL`, `PATH`, proxy settings).
+  - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats:
+    - Legacy format: `/etc/apt/sources.list` and `/etc/apt/sources.list.d/*.list` (one-line deb format)
+    - Modern format: `/etc/apt/sources.list.d/*.sources` (deb822 format, Ubuntu 24.04+)
+    - Parse both `deb http://...` lines AND `URIs: http://...` fields from .sources files
+    - Update mirror URLs in BOTH formats when modifying apt sources
+    - Validate changes in BOTH formats after modifications
+    - Example: When replacing mirrors, process both `sed` on .list files AND `URIs=` field updates in .sources files
 - M3. Safe handling of configuration files, credentials, and secrets (no accidental logging, enforce permissions).
 - M4. Package detection/checking uses resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) instead of brittle parsing of `dpkg -l` or similar command output; replace and verify during the audit.
- - M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
- - M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
+- M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
+- M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
+- M7. **CMAKE CONFIGURATION VALIDATION**: When building software with CMake, validate critical configuration options:
+  - Check CMakeCache.txt after configuration for incorrect detection (e.g., NO_LIBM=1 when libm is available)
+  - Add pre-configuration CMake cache files to force correct settings before CMake runs
+  - Verify linker flags contain required libraries: `CMAKE_SHARED_LINKER_FLAGS`, `CMAKE_EXE_LINKER_FLAGS`
+  - Use `CMAKE_*_LINKER_FLAGS_INIT` to ensure flags apply to all targets from the start
+  - Patch CMakeLists.txt files when automatic detection fails (with clear documentation)
+  - Post-build verification: check built libraries with `ldd` to confirm required libraries are linked
+  - Example: Force `-lm` linking with `CMAKE_SHARED_LINKER_FLAGS_INIT="-lm"` and verify `NO_LIBM=OFF`
+  - Create CMake config files for libraries that don't install them (SuiteSparseConfig.cmake, OpenBLASConfig.cmake)
   - Tooling tips: `rg --json "dpkg -l"` to locate legacy patterns; run `shellcheck` (SC2143, SC2145) to catch unsafe parsing.
 
 Helper Reference – Robust Package Checks
