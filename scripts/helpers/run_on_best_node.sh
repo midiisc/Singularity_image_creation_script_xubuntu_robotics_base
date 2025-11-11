@@ -378,8 +378,156 @@ try_launch_on_node() {
 }
 
 #===============================================================================
+# CHECK FOR EXISTING JOBS
+#===============================================================================
+
+check_existing_jobs() {
+  # Check if user has any running or pending jobs
+  # Focus on interactive/interactive-like jobs (pty sessions) since HPC typically allows only one interactive session
+  local existing_jobs=$(squeue -u "$USER" -h -o "%i|%j|%T|%N|%M|%l|%R" 2>/dev/null)
+  
+  if [ -z "$existing_jobs" ]; then
+    return 0  # No existing jobs
+  fi
+  
+  # Filter for interactive jobs (those with --pty flag or interactive-like characteristics)
+  # Also include all running jobs since they might be interactive sessions
+  local interactive_jobs=""
+  while IFS="|" read -r job_id job_name state nodes time_used time_limit reason; do
+    # Include all RUNNING jobs (likely interactive) and PENDING jobs that might be interactive
+    if [ "$state" = "RUNNING" ] || [ "$state" = "PENDING" ]; then
+      if [ -z "$interactive_jobs" ]; then
+        interactive_jobs="${job_id}|${job_name}|${state}|${nodes}|${time_used}|${time_limit}|${reason}"
+      else
+        interactive_jobs="${interactive_jobs}"$'\n'"${job_id}|${job_name}|${state}|${nodes}|${time_used}|${time_limit}|${reason}"
+      fi
+    fi
+  done <<< "$existing_jobs"
+  
+  if [ -z "$interactive_jobs" ]; then
+    return 0  # No active interactive jobs
+  fi
+  
+  # Count jobs by state
+  local running_jobs=$(echo "$interactive_jobs" | grep -c "RUNNING" || echo "0")
+  local pending_jobs=$(echo "$interactive_jobs" | grep -c "PENDING" || echo "0")
+  local total_jobs=$((running_jobs + pending_jobs))
+  
+  if [ "$total_jobs" -eq 0 ]; then
+    return 0  # No active jobs
+  fi
+  
+  echo "" >&2
+  echo -e "${YELLOW}═══════════════════════════════════════════════════════════════${NC}" >&2
+  echo -e "${YELLOW}  WARNING: Existing Job(s) Detected${NC}" >&2
+  echo -e "${YELLOW}═══════════════════════════════════════════════════════════════${NC}" >&2
+  echo "" >&2
+  echo "You have $total_jobs existing job(s):" >&2
+  echo "  - Running: $running_jobs" >&2
+  echo "  - Pending: $pending_jobs" >&2
+  echo "" >&2
+  echo "Job Details:" >&2
+  echo "───────────────────────────────────────────────────────────────────────────────" >&2
+  printf "%-10s %-30s %-10s %-20s %-10s %-15s\n" "JOB_ID" "JOB_NAME" "STATE" "NODES" "TIME" "TIME_LIMIT" >&2
+  echo "───────────────────────────────────────────────────────────────────────────────" >&2
+  
+  while IFS="|" read -r job_id job_name state nodes time_used time_limit reason; do
+    printf "%-10s %-30s %-10s %-20s %-10s %-15s\n" \
+      "$job_id" "${job_name:0:30}" "$state" "${nodes:0:20}" "${time_used:0:10}" "${time_limit:0:15}" >&2
+  done <<< "$interactive_jobs"
+  
+  echo "" >&2
+  
+  # Find running jobs with node information for login instructions
+  local running_job_info=$(echo "$interactive_jobs" | grep "RUNNING" | head -1)
+  if [ -n "$running_job_info" ]; then
+    local running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
+    local running_nodes=$(echo "$running_job_info" | cut -d'|' -f4)
+    
+    echo -e "${CYAN}To log in to your existing running job:${NC}" >&2
+    echo "  Job ID: $running_job_id" >&2
+    echo "  Node(s): $running_nodes" >&2
+    echo "" >&2
+    echo "  Option 1: Use sattach to attach to the interactive session:" >&2
+    echo "    sattach $running_job_id" >&2
+    echo "" >&2
+    echo "  Option 2: SSH to the node and find your container:" >&2
+    if [ -n "$running_nodes" ] && [ "$running_nodes" != "N/A" ] && [ "$running_nodes" != "(null)" ]; then
+      # Extract first node (handle formats like "node001", "node001,node002", "node[001-002]")
+      local first_node=$(echo "$running_nodes" | sed 's/,.*//' | sed 's/\[.*\]//' | sed 's/-.*//')
+      if [ -n "$first_node" ]; then
+        echo "    ssh $first_node" >&2
+        echo "    # Then find your singularity container:" >&2
+        echo "    ps aux | grep singularity | grep $USER" >&2
+        echo "    # Or check scontrol for job details:" >&2
+        echo "    scontrol show job $running_job_id" >&2
+      fi
+    else
+      echo "    # Get node information first:" >&2
+      echo "    scontrol show job $running_job_id | grep NodeList" >&2
+    fi
+    echo "" >&2
+  fi
+  
+  # Ask user what to do
+  echo -e "${YELLOW}What would you like to do?${NC}" >&2
+  echo "  1) Cancel all existing jobs and start a new one" >&2
+  echo "  2) Exit and keep existing jobs running" >&2
+  echo "" >&2
+  read -p "Enter choice [1/2]: " user_choice
+  
+  case "$user_choice" in
+    1)
+      echo "" >&2
+      echo -e "${YELLOW}Cancelling existing jobs...${NC}" >&2
+      local cancelled_count=0
+      while IFS="|" read -r job_id rest; do
+        if scancel "$job_id" 2>/dev/null; then
+          echo "  ✓ Cancelled job $job_id" >&2
+          cancelled_count=$((cancelled_count + 1))
+        else
+          echo "  ⚠ Failed to cancel job $job_id" >&2
+        fi
+      done <<< "$interactive_jobs"
+      
+      if [ "$cancelled_count" -gt 0 ]; then
+        echo "" >&2
+        echo -e "${GREEN}✓ Cancelled $cancelled_count job(s). Waiting 3 seconds for cleanup...${NC}" >&2
+        sleep 3
+        return 0  # Continue with new job
+      else
+        echo -e "${RED}✗ Failed to cancel jobs. Exiting.${NC}" >&2
+        return 1
+      fi
+      ;;
+    2)
+      echo "" >&2
+      echo -e "${CYAN}Keeping existing jobs. Exiting.${NC}" >&2
+      echo "" >&2
+      if [ -n "$running_job_info" ]; then
+        local running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
+        echo "To attach to your running job, use:" >&2
+        echo "  sattach $running_job_id" >&2
+        echo "" >&2
+      fi
+      exit 0
+      ;;
+    *)
+      echo "" >&2
+      echo -e "${RED}Invalid choice. Exiting.${NC}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+#===============================================================================
 # MAIN EXECUTION
 #===============================================================================
+
+# Check for existing jobs before proceeding
+if ! check_existing_jobs; then
+  exit 1
+fi
 
 TOP_NODES=$(find_best_nodes $MAX_FALLBACK_ATTEMPTS)
 [ -z "$TOP_NODES" ] && exit 1
