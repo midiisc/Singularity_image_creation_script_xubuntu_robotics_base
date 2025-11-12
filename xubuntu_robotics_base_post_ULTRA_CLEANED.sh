@@ -6752,9 +6752,16 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.13: Verify g2o installation ---
   # Critical: Confirm g2o libraries are in linker cache
+  echo -e "${BLUE}[DEBUG] Verifying g2o installation...${NC}"
   if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
-    echo -e "${RED}✗ g2o compilation FAILED.${NC}"
+    echo -e "${RED}✗ g2o compilation FAILED - libg2o_core.so not found in ldconfig cache.${NC}"
+    echo -e "${YELLOW}[DEBUG] Checking /usr/local/lib for g2o libraries:${NC}"
+    ls -la /usr/local/lib/libg2o* 2>/dev/null || echo "  No g2o libraries found in /usr/local/lib"
+    echo -e "${YELLOW}[DEBUG] ldconfig -p output (g2o related):${NC}"
+    timeout 5 ldconfig -p 2>/dev/null | grep "libg2o" || echo "  No g2o libraries in ldconfig cache"
     PHASE3_ALL_SUCCESS=false
+  else
+    echo -e "${GREEN}✓ g2o verification PASSED - libg2o_core.so found in ldconfig cache.${NC}"
   fi
 
   #--- Sub-block 17.14: Protect compiled G2O from APT overwrites ---
@@ -6804,6 +6811,7 @@ debug_glibc "After installing g2o"
 # Purpose: Build GTSAM SLAM library with TBB and Python bindings
 # Dependencies: PHASE 1 (Build tools), sparse solvers (CHOLMOD, METIS)
 # Outputs: Configured system components
+echo -e "\n${BLUE}[DEBUG] PHASE3_ALL_SUCCESS before GTSAM compilation: ${PHASE3_ALL_SUCCESS}${NC}"
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "${YELLOW}[PHASE 3 | GTSAM] Compiling from source...${NC}"
   # Ensure we're not inside the directory before removing it
@@ -6921,8 +6929,12 @@ EOF
 
   # Cleanup
   cd / && rm -rf /tmp/gtsam
+else
+  echo -e "${RED}⚠ [PHASE 3 | GTSAM] SKIPPED - Previous phase failure detected!${NC}"
+  echo -e "${RED}  PHASE3_ALL_SUCCESS = ${PHASE3_ALL_SUCCESS}${NC}"
+  echo -e "${YELLOW}  Check the g2o compilation/verification logs above for errors.${NC}"
 fi
-debug_glibc "After installing GTSAM"
+debug_glibc "After GTSAM section (compiled or skipped)"
 
 #--- Sub-block 17.20: Phase 3 completion verification ---
 # Critical: Verify all Phase 3 libraries compiled successfully
