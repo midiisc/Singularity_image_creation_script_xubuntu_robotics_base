@@ -6511,7 +6511,7 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 # 
 # PERFORMANCE FLAGS (from Ceres documentation):
 #   - SCHUR_SPECIALIZATIONS=ON: Fixed-size Schur complement for better performance
-#   - CUSTOM_BLAS=ON: Handcoded BLAS routines (usually faster than Eigen)
+#   - CUSTOM_BLAS=OFF: Force external BLAS/LAPACK (MKL) instead of handcoded routines
 #   - USE_CUDA=ON: Enable CUDA linear algebra solvers (documented flag)
 #   - EIGENMETIS=ON: Eigen METIS support for sparse matrix ordering
 #   - EIGENSPARSE=ON: Eigen sparse linear algebra
@@ -6529,7 +6529,7 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #
 # PERFORMANCE OPTIMIZATIONS:
 #   SCHUR_SPECIALIZATIONS=ON: Fixed-size Schur complement specializations (faster performance)
-#   CUSTOM_BLAS=ON: Handcoded BLAS routines (usually faster than Eigen)
+#   CUSTOM_BLAS=OFF: Prefer external MKL BLAS/LAPACK over internal routines
 #   GFLAGS=ON: Google Flags support for runtime configuration
 #   CMAKE_POSITION_INDEPENDENT_CODE=ON: Build PIC for shared library compatibility
 #   PROVIDE_UNINSTALL_TARGET=ON: Adds uninstall target for package management
@@ -6546,7 +6546,7 @@ cmake .. \
   -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
   -D BUILD_SHARED_LIBS=ON \
   -D SCHUR_SPECIALIZATIONS=ON \
-  -D CUSTOM_BLAS=ON \
+  -D CUSTOM_BLAS=OFF \
   -D MINIGLOG=OFF \
   -D GFLAGS=ON \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
@@ -6795,32 +6795,55 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Critical: Confirm g2o libraries are installed and in linker cache
   echo -e "${BLUE}[DEBUG] Verifying g2o installation...${NC}"
   
-  # Check 1: Verify core library file exists
-  if [ ! -f "/usr/local/lib/libg2o_core.so" ]; then
-    echo -e "${RED}✗ g2o compilation FAILED: libg2o_core.so not found in /usr/local/lib${NC}"
-    echo -e "${YELLOW}[DEBUG] Checking /usr/local/lib for g2o libraries:${NC}"
-    ls -la /usr/local/lib/libg2o*.so 2>/dev/null || echo "  No g2o libraries found in /usr/local/lib"
+  # Check 1: Locate the installed core library (handle multi-arch libdirs)
+  g2o_core_candidates=(
+    "/usr/local/lib/libg2o_core.so"
+    "/usr/local/lib64/libg2o_core.so"
+    "/usr/local/lib/x86_64-linux-gnu/libg2o_core.so"
+  )
+  g2o_core_path=""
+  for candidate in "${g2o_core_candidates[@]}"; do
+    if [ -e "${candidate}" ]; then
+      g2o_core_path="$(realpath "${candidate}" 2>/dev/null || echo "${candidate}")"
+      break
+    fi
+  done
+
+  if [ -z "${g2o_core_path}" ]; then
+    echo -e "${RED}✗ g2o compilation FAILED: libg2o_core.so not found under /usr/local${NC}"
+    echo -e "${YELLOW}[DEBUG] Searching for libg2o*.so under /usr/local:${NC}"
+    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null || echo "  No g2o libraries found"
     PHASE3_ALL_SUCCESS=false
   else
-    echo -e "${GREEN}✓ g2o library file found: /usr/local/lib/libg2o_core.so${NC}"
-    
+    echo -e "${GREEN}✓ g2o library file found: ${g2o_core_path}${NC}"
+
+    # Determine SONAME used by ldconfig
+    g2o_soname=""
+    if command -v objdump >/dev/null 2>&1; then
+      g2o_soname="$(objdump -p "${g2o_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}')"
+    fi
+    if [ -z "${g2o_soname}" ]; then
+      g2o_soname="$(basename "${g2o_core_path}")"
+    fi
+    g2o_lib_dir="$(dirname "${g2o_core_path}")"
+
     # Check 2: Verify library is in linker cache
-    if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
-      echo -e "${YELLOW}⚠ g2o library exists but not in ldconfig cache (non-fatal)${NC}"
-      echo -e "${YELLOW}[DEBUG] Running ldconfig again...${NC}"
+    if ! ldconfig -p 2>/dev/null | grep -F "${g2o_soname}" >/dev/null 2>&1; then
+      echo -e "${YELLOW}⚠ g2o library exists but ${g2o_soname} not in ldconfig cache (attempting fix)${NC}"
+      echo -e "${YELLOW}[DEBUG] Running ldconfig refresh and targeted rescan for ${g2o_lib_dir}${NC}"
       run_ldconfig_refresh
-      
-      # Verify again
-      if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
-        echo -e "${RED}✗ g2o library still not in ldconfig cache after refresh${NC}"
+      ldconfig -n "${g2o_lib_dir}" 2>/dev/null || true
+
+      if ! ldconfig -p 2>/dev/null | grep -F "${g2o_soname}" >/dev/null 2>&1; then
+        echo -e "${RED}✗ g2o library still not in ldconfig cache after targeted refresh${NC}"
         echo -e "${YELLOW}[DEBUG] ldconfig -p output (g2o related):${NC}"
-        timeout 5 ldconfig -p 2>/dev/null | grep "libg2o" || echo "  No g2o libraries in ldconfig cache"
+        ldconfig -p 2>/dev/null | grep "libg2o" || echo "  No g2o libraries in ldconfig cache"
         PHASE3_ALL_SUCCESS=false
       else
-        echo -e "${GREEN}✓ g2o library now in ldconfig cache${NC}"
+        echo -e "${GREEN}✓ g2o library registered in ldconfig cache (${g2o_soname})${NC}"
       fi
     else
-      echo -e "${GREEN}✓ g2o verification PASSED - library in ldconfig cache${NC}"
+      echo -e "${GREEN}✓ g2o verification PASSED - ${g2o_soname} present in ldconfig cache${NC}"
     fi
   fi
 
