@@ -2905,8 +2905,17 @@ if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
     exit 1
 fi
 
-MKL_BLAS_LIBRARIES="${MKL_LIB_DIR}/libmkl_intel_lp64.so;${MKL_LIB_DIR}/libmkl_core.so;${MKL_LIB_DIR}/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
-MKL_LINK_FLAGS="-Wl,--start-group ${MKL_LIB_DIR}/libmkl_intel_lp64.so ${MKL_LIB_DIR}/libmkl_core.so ${MKL_LIB_DIR}/libmkl_gnu_thread.so -Wl,--end-group -lgomp -lpthread -lm -ldl"
+MKL_RT_LIB="${MKL_LIB_DIR}/libmkl_rt.so"
+if [ -f "${MKL_RT_LIB}" ]; then
+    echo "  ✓ Using libmkl_rt runtime for BLAS/LAPACK linkage"
+    MKL_BLAS_LIBRARIES="${MKL_RT_LIB};-lgomp;-lpthread;-lm;-ldl"
+    MKL_LINK_FLAGS="${MKL_RT_LIB} -lgomp -lpthread -lm -ldl"
+else
+    echo "  ⚠ libmkl_rt.so not found, falling back to explicit MKL component libraries"
+    MKL_BLAS_COMPONENTS="${MKL_LIB_DIR}/libmkl_intel_lp64.so;${MKL_LIB_DIR}/libmkl_core.so;${MKL_LIB_DIR}/libmkl_gnu_thread.so"
+    MKL_BLAS_LIBRARIES="${MKL_BLAS_COMPONENTS};-lgomp;-lpthread;-lm;-ldl"
+    MKL_LINK_FLAGS="-Wl,--start-group ${MKL_LIB_DIR}/libmkl_intel_lp64.so ${MKL_LIB_DIR}/libmkl_core.so ${MKL_LIB_DIR}/libmkl_gnu_thread.so -Wl,--end-group -lgomp -lpthread -lm -ldl"
+fi
 
 export MKL_LIB_DIR MKL_INCLUDE_DIR MKL_BLAS_LIBRARIES MKL_LINK_FLAGS
 export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
@@ -7643,8 +7652,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   echo "✓ NVIDIA Video Codec SDK headers installed successfully."
 else
   echo "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
-  echo "  → Continuing build without NVIDIA Video Codec SDK"
-  echo "  → OpenCV will be compiled without NVIDIA Video Codec SDK support"
+  echo "  → Continuing build; OpenCV configuration will auto-detect any pre-existing SDK headers/libraries"
 fi
 # End NVIDIA Video SDK installation (conditional based on file presence)
 
@@ -7828,6 +7836,13 @@ if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
     fi
 fi
 
+MKL_BLA_VENDOR="${MKL_BLA_VENDOR:-Intel10_64lp_seq}"
+MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
+MKL_CMAKE_DIR=""
+if [ -n "${MKLROOT:-}" ] && [ -d "${MKLROOT}/lib/cmake/mkl" ]; then
+  MKL_CMAKE_DIR="${MKLROOT}/lib/cmake/mkl"
+fi
+
 # Build OpenCV CMake command (base configuration)
 OPENCV_CMAKE_ARGS=(
   -G "Ninja"
@@ -7870,10 +7885,11 @@ OPENCV_CMAKE_ARGS=(
   "-DMKL_USE_STATIC_LIBS=OFF"
   "-DWITH_TIFF=ON"
   "-DWITH_OPENMP=ON"
-  "-DBLA_VENDOR=Intel10_64lp"
+  "-DBLA_VENDOR=${MKL_BLA_VENDOR}"
   "-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
   "-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
   "-DMKL_ROOT=${MKLROOT}"
+  "-DMKL_THREADING_LAYER=${MKL_THREADING_LAYER}"
   "-DJlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/"
   "-DLAPACK_ENABLE_LAPACKE=ON"
   "-DWITH_VTK=ON"
@@ -7898,6 +7914,8 @@ OPENCV_CMAKE_ARGS=(
   "-DBUILD_opencv_cudaoptflow=ON"
   "-DBUILD_opencv_cudastereo=ON"
   "-DBUILD_opencv_cudawarping=ON"
+  "-DBUILD_opencv_video=ON"
+  "-DBUILD_opencv_videoio=ON"
   "-DBUILD_opencv_julia=OFF"
   "-DPYTHON3_EXECUTABLE=/usr/bin/python3"
   "-DPYTHON3_INCLUDE_DIR=/usr/include/python${SYSTEM_PYTHON_VER}"
@@ -7927,21 +7945,62 @@ OPENCV_CMAKE_ARGS=(
   "-DJlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx"
   "-DCMAKE_PREFIX_PATH=/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}"
 )
-# Add NVIDIA Video Codec SDK support to OpenCV if SDK is installed
+# Surface MKL CMake package location if available (helps CMake find_package workflows)
+if [ -n "${MKL_CMAKE_DIR}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DMKL_DIR=${MKL_CMAKE_DIR}")
+fi
+# Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
+NV_CODEC_HEADER_DIR=""
+NV_CODEC_SDK_DIR=""
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
-  echo "  → Adding NVIDIA Video Codec SDK support to OpenCV configuration"
-  OPENCV_CMAKE_ARGS+=(
-    "-DVIDEO_CODEC_SDK_DIR=/opt/Video_Codec_SDK"
-    "-DWITH_NVCUVID=ON"
-    "-DWITH_NVCUVENC=ON"
-    "-DNVCUVID_HEADER_DIR=/usr/local/include/"
-  )
+  NV_CODEC_SDK_DIR="/opt/Video_Codec_SDK"
+  if [ -d "${NV_CODEC_SDK_DIR}/Interface" ]; then
+    NV_CODEC_HEADER_DIR="${NV_CODEC_SDK_DIR}/Interface"
+  fi
+fi
+
+if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
+  for candidate in \
+    "/opt/Video_Codec_SDK/Interface" \
+    "/usr/local/Video_Codec_SDK/Interface" \
+    "/usr/local/include" \
+    "/usr/include/nvidia" \
+    "/usr/include"; do
+    if [ -f "${candidate}/nvcuvid.h" ]; then
+      NV_CODEC_HEADER_DIR="${candidate}"
+      case "${candidate}" in
+        */Interface) NV_CODEC_SDK_DIR="$(dirname "${candidate}")" ;;
+      esac
+      break
+    fi
+  done
+fi
+
+NV_CODEC_LIB_CUVID_FOUND=false
+NV_CODEC_LIB_ENCODE_FOUND=false
+LDCONFIG_CACHE="$(ldconfig -p 2>/dev/null || true)"
+if echo "${LDCONFIG_CACHE}" | grep -q "libnvcuvid.so"; then
+  NV_CODEC_LIB_CUVID_FOUND=true
+fi
+if echo "${LDCONFIG_CACHE}" | grep -q "libnvidia-encode.so"; then
+  NV_CODEC_LIB_ENCODE_FOUND=true
+fi
+
+if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ] && [ "${NV_CODEC_LIB_ENCODE_FOUND}" = "true" ]; then
+  echo "  → NVIDIA NVDEC/NVENC interfaces detected; enabling Video Codec support in OpenCV"
+  OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=ON")
+  OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=ON")
+  if [ -n "${NV_CODEC_SDK_DIR}" ]; then
+    OPENCV_CMAKE_ARGS+=("-DVIDEO_CODEC_SDK_DIR=${NV_CODEC_SDK_DIR}")
+  fi
+  if [ -n "${NV_CODEC_HEADER_DIR}" ]; then
+    OPENCV_CMAKE_ARGS+=("-DNVCUVID_HEADER_DIR=${NV_CODEC_HEADER_DIR}")
+  fi
+  NVIDIA_VIDEO_SDK_INSTALLED=true
 else
-  echo "  → OpenCV will be built without NVIDIA Video Codec SDK support (SDK not installed)"
-  OPENCV_CMAKE_ARGS+=(
-    "-DWITH_NVCUVID=OFF"
-    "-DWITH_NVCUVENC=OFF"
-  )
+  echo "  → NVIDIA Video Codec SDK support not fully detected; OpenCV will be built without NVDEC/NVENC acceleration"
+  OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=OFF")
+  OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=OFF")
 fi
 # Execute the CMake command
 if ! cmake "${OPENCV_CMAKE_ARGS[@]}" ..; then
@@ -7954,29 +8013,89 @@ fi
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 echo "Verifying CMake configuration..."
-if ! grep -q "LAPACK.*YES" CMakeCache.txt; then
-  echo "WARNING: LAPACK not detected"
+lapack_found=false
+if grep -Eq "^LAPACK(_lapack)?_FOUND:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
+  lapack_found=true
+  echo -e "  ${GREEN}✓ LAPACK detected by CMake (using ${MKL_BLA_VENDOR})${NC}"
+else
+  echo -e "  ${RED}✗ LAPACK not detected by CMake${NC}"
+  grep -E "^LAPACK" CMakeCache.txt | head -10 || true
 fi
-if ! grep -q "TBB.*YES" CMakeCache.txt; then
-  echo "WARNING: TBB not detected"
+lapack_libs_line=$(grep -E "^LAPACK_LIBRARIES" CMakeCache.txt 2>/dev/null | head -1 || true)
+if [ -n "${lapack_libs_line}" ]; then
+  echo "  • ${lapack_libs_line}"
+fi
+
+tbb_found=false
+if grep -Eq "^TBB_FOUND:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
+  tbb_found=true
+  echo -e "  ${GREEN}✓ Intel TBB detected by CMake${NC}"
+else
+  echo -e "  ${RED}✗ Intel TBB not detected by CMake${NC}"
 fi
 
 # Verify TBB is from system paths (not MKL TBB)
-echo "Verifying TBB source (must be system TBB, not MKL TBB)..."
-TBB_LIB_PATH=$(grep "^TBB_LIBRARIES:" CMakeCache.txt 2>/dev/null | cut -d= -f2 | tr -d ' ' || echo "")
-if [ -n "${TBB_LIB_PATH:-}" ]; then
-  if echo "${TBB_LIB_PATH}" | grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)"; then
-    echo -e "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
-    echo "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
-    echo "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
-    exit 1
-  elif echo "${TBB_LIB_PATH}" | grep -qE "/usr/lib/x86_64-linux-gnu/libtbb"; then
-    echo -e "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
+if [ "${tbb_found}" = "true" ]; then
+  echo "Verifying TBB source (must be system TBB, not MKL TBB)..."
+  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+  if [ -n "${TBB_LIB_PATH:-}" ]; then
+      if echo "${TBB_LIB_PATH}" | grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)"; then
+        echo -e "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
+        echo "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
+        echo "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
+        tbb_found=false
+      elif echo "${TBB_LIB_PATH}" | grep -qE "/usr/lib/x86_64-linux-gnu/libtbb"; then
+        echo -e "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
+      else
+        echo -e "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
+      fi
   else
-    echo -e "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
+      echo -e "  ${YELLOW}⚠ WARNING: Could not verify TBB library path${NC}"
   fi
+fi
+
+if grep -Eq "^WITH_NVCUVID:BOOL=ON" CMakeCache.txt; then
+  echo -e "  ${GREEN}✓ NVIDIA Video Codec SDK support enabled (NVDEC/NVENC)${NC}"
 else
-  echo -e "  ${YELLOW}⚠ WARNING: Could not verify TBB library path${NC}"
+  echo -e "  ${YELLOW}• NVIDIA Video Codec SDK support disabled (expected if SDK or drivers missing)${NC}"
+fi
+if grep -Eq "^WITH_NVCUVENC:BOOL=ON" CMakeCache.txt; then
+  echo -e "  ${GREEN}✓ NVIDIA NVENC hardware encoder enabled${NC}"
+else
+  echo -e "  ${YELLOW}• NVIDIA NVENC hardware encoder disabled${NC}"
+fi
+
+video_modules_ok=true
+if grep -Eq "^BUILD_opencv_video:BOOL=ON" CMakeCache.txt; then
+  echo -e "  ${GREEN}✓ opencv_video module will be built${NC}"
+else
+  echo -e "  ${RED}✗ opencv_video module disabled${NC}"
+  video_modules_ok=false
+fi
+if grep -Eq "^BUILD_opencv_videoio:BOOL=ON" CMakeCache.txt; then
+  echo -e "  ${GREEN}✓ opencv_videoio module will be built${NC}"
+else
+  echo -e "  ${RED}✗ opencv_videoio module disabled${NC}"
+  video_modules_ok=false
+fi
+
+config_error=false
+if [ "${lapack_found}" != "true" ]; then
+  config_error=true
+  echo -e "  ${RED}→ LAPACK detection failed – check MKL installation and CMake flags${NC}"
+fi
+if [ "${tbb_found}" != "true" ]; then
+  config_error=true
+  echo -e "  ${RED}→ TBB detection failed – ensure libtbb-dev is installed and accessible${NC}"
+fi
+if [ "${video_modules_ok}" != "true" ]; then
+  config_error=true
+  echo -e "  ${RED}→ Required OpenCV video modules are disabled – verify CMake cache${NC}"
+fi
+
+if [ "${config_error}" = "true" ]; then
+  echo -e "${RED}ERROR: Critical numerical backends missing from OpenCV configuration. Aborting build.${NC}"
+  exit 1
 fi
 
 echo "Configuration summary:"
