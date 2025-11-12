@@ -1,0 +1,54 @@
+# 🚨 CURSOR CLOUD AGENT RULES - BETA WORKFLOW ONLY
+
+## MANDATORY FOR ALL CURSOR AGENTS (ESPECIALLY CLOUD AGENTS)
+
+### 🔴 CRITICAL: Beta-Only Workflow
+
+**BEFORE ANY WORK:**
+1. Check branch: `git branch --show-current` (MUST be "beta")
+2. If not beta, switch: `git checkout beta`
+3. Pull latest: `git pull origin beta`
+
+**ABSOLUTE RULES:**
+- ✅ ONLY work on `beta` branch
+- ✅ ONLY pull from `origin/beta`
+- ✅ ONLY push to `origin/beta` (after explicit user approval)
+- ❌ NEVER create new branches
+- ❌ NEVER create `cursor/*` branches
+- ❌ NEVER create pull requests
+- ❌ NEVER push without explicit user approval
+- ❌ NEVER commit without explicit user approval
+
+### Git Operations Require Explicit Approval
+
+**User MUST say one of these phrases:**
+- For commit: "commit this", "commit changes", "save changes"
+- For push: "push to beta", "push changes", "deploy to beta"
+
+**ONLY after hearing approval:**
+```bash
+git add -A
+git commit -m "fix: description"
+git push origin beta
+```
+
+### No Pull Requests
+
+**NEVER create pull requests. All cloud agents work on beta branch directly.**
+
+### Complete Rules
+
+See `.cursor/rules/` directory for complete rules:
+- `000-MANDATORY-READ-FIRST.mdc` - Overview and checklist
+- `001-agent-behavior.mdc` - Agent behavior rules
+- `002-repository-workflow.mdc` - Repository workflow rules
+- `003-cloud-agent-workflow.mdc` - **Cloud agent specific rules (READ THIS!)**
+
+### When in Doubt
+
+**STOP. ASK USER. WAIT FOR APPROVAL.**
+
+---
+
+**These rules are MANDATORY and STRICTLY ENFORCED.**
+**Cursor IDE will monitor compliance.**

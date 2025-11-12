@@ -24,6 +24,7 @@ globs:
 ### Rule Awareness
 - [ ] **I have read `.cursor/rules/001-agent-behavior.mdc`** (behavior rules)
 - [ ] **I have read `.cursor/rules/002-repository-workflow.mdc`** (workflow rules)
+- [ ] **I have read `.cursor/rules/003-cloud-agent-workflow.mdc`** (cloud agent rules - CRITICAL!)
 - [ ] **I understand ALL rules are MANDATORY and STRICTLY ENFORCED**
 - [ ] **I understand violations are PROHIBITED**
 
@@ -78,6 +79,13 @@ globs:
    - Git operations (require user approval)
    - Verification checklist
 
+3. **`.cursor/rules/003-cloud-agent-workflow.mdc`** ⚠️ CRITICAL FOR CLOUD AGENTS
+   - Cloud agent specific rules
+   - Beta-only workflow (pull from beta, push to beta)
+   - Pull request prohibition (NEVER create PRs)
+   - Multi-agent coordination
+   - Explicit approval requirements
+
 ## 🔴 ENFORCEMENT REMINDER
 
 **THESE RULES ARE:**
@@ -112,5 +120,16 @@ globs:
 **THIS FILE SERVES AS A REMINDER. THE ACTUAL RULES ARE IN:**
 - `.cursor/rules/001-agent-behavior.mdc`
 - `.cursor/rules/002-repository-workflow.mdc`
+- `.cursor/rules/003-cloud-agent-workflow.mdc` (⚠️ CRITICAL FOR CLOUD AGENTS)
 
 **READ THOSE FILES FOR COMPLETE RULES.**
+
+## 🌩️ SPECIAL NOTE FOR CLOUD AGENTS
+
+**If you are a Cursor Cloud Agent or Background Agent:**
+- You MUST read `.cursor/rules/003-cloud-agent-workflow.mdc` first
+- You MUST work on beta branch only
+- You MUST pull from beta before starting
+- You MUST push to beta only (after approval)
+- You MUST NEVER create pull requests
+- You MUST NEVER create cursor/* branches
