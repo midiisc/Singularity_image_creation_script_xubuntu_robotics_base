@@ -6745,6 +6745,13 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   #   - G2O_USE_CHOLMOD=ON links against MKL-enabled libcholmod.so
   #   - CHOLMOD was compiled with -DBLA_VENDOR=Intel10_64lp in Block 9
   #   - Result: g2o → CHOLMOD → MKL (transitive MKL linkage)
+  #
+  # Feature Configuration (all explicitly set for clarity):
+  #   - Linear Algebra: CHOLMOD (MKL-enabled) + CSparse with LGPL libs
+  #   - Type System: Full SLAM2D/3D support including SBA, ICP, Sim3
+  #   - Optimization: OpenMP enabled, SSE auto-detection
+  #   - Logging: spdlog support (libspdlog-dev installed in Block 22)
+  #   - Visualization: OpenGL support for g2o_viewer
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -6755,8 +6762,19 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D BUILD_WITH_MARCH_NATIVE=OFF \
     -D G2O_USE_CHOLMOD=ON \
     -D G2O_USE_CSPARSE=ON \
+    -D G2O_USE_LGPL_LIBS=ON \
     -D G2O_USE_OPENMP=ON \
+    -D G2O_USE_OPENGL=ON \
+    -D G2O_USE_LOGGING=ON \
+    -D G2O_BUILD_SLAM2D_TYPES=ON \
+    -D G2O_BUILD_SLAM3D_TYPES=ON \
+    -D G2O_BUILD_SBA_TYPES=ON \
+    -D G2O_BUILD_ICP_TYPES=ON \
+    -D G2O_BUILD_SIM3_TYPES=ON \
+    -D G2O_BUILD_APPS=OFF \
+    -D G2O_BUILD_EXAMPLES=OFF \
     -D BUILD_UNITTESTS=OFF \
+    -D DO_SSE_AUTODETECT=ON \
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
     -D CMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
     -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
