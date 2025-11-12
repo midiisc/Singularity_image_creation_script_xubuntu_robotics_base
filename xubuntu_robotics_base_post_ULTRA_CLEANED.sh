@@ -7429,7 +7429,7 @@ if [ -x "${JULIA_BIN:-}" ]; then
       -DCMAKE_INSTALL_PREFIX="${CXXWRAP_PREFIX}" \
       -DCMAKE_BUILD_TYPE=Release \
       -DJulia_EXECUTABLE="${JULIA_BIN}" \
-      -DJulia_INCLUDE_DIR="${JULIA_INCLUDE}" \
+      -DJulia_INCLUDE_DIRS="${JULIA_INCLUDE}" \
       -DJulia_LIBRARY_DIR="${JULIA_LIB}" \
       -DCMAKE_INSTALL_LIBDIR=lib; then
       echo "ERROR: CMake configuration failed for libCxxWrap-julia"
