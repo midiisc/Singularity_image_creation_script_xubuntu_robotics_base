@@ -49,6 +49,14 @@ git status
 
 **DO NOT SKIP THESE STEPS. THEY ARE MANDATORY FOR ALL CLOUD AGENTS.**
 
+### Initial Response Reporting Requirements
+
+- ✅ **First response after initialization must explicitly report**:
+  - The repository path you pulled from (e.g., `/workspace`)
+  - The branch that was pulled (e.g., `beta`)
+  - The commit message associated with the most recent `git pull`
+- ✅ Only after providing this information may you proceed with additional context or actions in that response.
+
 ### Branch Rules
 
 - ✅ **WORK ONLY ON USER-APPROVED BRANCHES**
@@ -65,6 +73,7 @@ git status
 - ❌ **NEVER use**: GitHub PR APIs without approval
 - ❌ **NEVER create**: Pull requests through any mechanism unless the user asks for one
 - ✅ **ONLY ALLOWED**: Direct commits to the approved branch (after user approval)
+- ✅ **If the user explicitly authorizes a pull request**, you must post the PR URL, target branch, source branch, and PR title in chat immediately after creation and await confirmation that the PR was successfully created before continuing with further actions.
 
 **Why:** Uncoordinated pull requests make it difficult to manage cloud-agent workflows. Always defer to user instructions.
 
@@ -179,7 +188,7 @@ git commit -m "fix: Description of changes"
 
 3. **Present changes to user**:
    - Show summary of changes
-   - List modified files
+   - List modified files, including line ranges touched and a short purpose statement for each file
    - Ask: "Would you like me to commit these changes to <branch>?"
 
 4. **WAIT for explicit approval**
