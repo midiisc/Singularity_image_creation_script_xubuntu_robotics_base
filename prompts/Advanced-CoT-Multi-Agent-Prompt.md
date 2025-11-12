@@ -74,10 +74,14 @@ AGENT SYSTEM: Five Specialized Reviewers
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
-│ AGENT 2: HPC/DOMAIN SPECIALIST (MKL, CUDA, OpenMP)         │
-│ Role: Verify BLAS, GPU acceleration, threading             │
+│ AGENT 2: HPC/DOMAIN SPECIALIST (MKL, CUDA, OpenMP, CMake)  │
+│ Role: Verify BLAS, GPU acceleration, threading, CMake flags│
 │ Responsibility: Performance & correctness in HPC context    │
-│ Exit Criteria: MKL, CUDA, OpenMP checks 100% pass          │
+│ Exit Criteria: MKL, CUDA, OpenMP, CMake validation pass    │
+│ NEW CHECKS (2025-11-12):                                    │
+│ - CMake flag validation against library documentation       │
+│ - MKL/OpenBLAS/TBB conflict detection                      │
+│ - Multi-phase detection logic documentation                │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -280,6 +284,14 @@ PHASE C – VARIABLES & DEFAULTS
 PHASE D – QUOTING & EXPANSION SAFETY
   D1. Quote variable expansions, command substitutions, globs.
   D2. Verify `read` invocations (`read -r`, sanitized IFS).
+  D3. **PIPE PATTERN SAFETY** (NEW - Added 2025-11-12):
+      - CRITICAL: Avoid `echo "${VAR}" | grep` patterns (unsafe, inefficient)
+      - REQUIRED: Use here-string `grep <<< "${VAR}"` or Bash regex `[[ "${VAR}" =~ pattern ]]`
+      - Rationale: Here-strings avoid subshell overhead, prevent echo flag interpretation (-n, -e), ensure explicit quoting
+      - Detection: `grep -n 'echo.*|.*grep'` to find violations
+      - Performance impact: Here-string eliminates pipeline fork overhead
+      - Security impact: Prevents potential echo flag injection
+      - Real error: Line 8026 audit found unsafe pattern (corrected to here-string)
 
 PHASE E – HEREDOCS & HERESTRINGS
   E1. Quote literal delimiters (`<<'EOF'`), use `<<-` when tab stripping required.
@@ -322,6 +334,33 @@ PHASE L – PERFORMANCE & MAINTAINABILITY
   L2. Remove duplicated logic; ensure naming consistency.
   L3. Maintain readability: aligned spacing, grouping related statements.
   L4. Identify reusable helpers; justify complex flows with comments.
+  L5. **MULTI-PHASE LOGIC DOCUMENTATION** (NEW - Added 2025-11-12):
+      - CRITICAL: Complex detection/configuration with multiple phases REQUIRES explicit documentation
+      - MANDATORY components:
+        1. Header comment: Overall strategy, number of phases, final decision logic
+        2. Phase markers: "# Phase 1: ...", "# Phase 2: ...", etc.
+        3. Phase descriptions: What each phase checks, why it matters
+        4. Final decision comment: How all phases combine to make decision
+      - Pattern example (3-phase SDK detection):
+        ```bash
+        # Strategy: 3-phase detection for maximum compatibility
+        # Phase 1: Check explicit installation path
+        # Phase 2: Search common system locations
+        # Phase 3: Verify runtime library availability
+        # Final: Enable only if ALL three phases pass
+        
+        # Phase 1: Explicit installation check
+        ...
+        # Phase 2: Fallback search
+        ...
+        # Phase 3: Runtime verification
+        ...
+        # Final decision: Enable only if all three phases passed
+        if [ phase1 ] && [ phase2 ] && [ phase3 ]; then ...
+        ```
+      - Detection: Multiple related `if` blocks without clear phase structure
+      - Real error: Lines 7996-8057 lacked phase markers (15% → 28% comment coverage after fix)
+      - Impact: Maintainability, onboarding time, debugging efficiency
 
 PHASE M – ENVIRONMENT & DEPENDENCIES
   M1. Validate external command availability (`command -v`, version notes).
@@ -330,6 +369,43 @@ PHASE M – ENVIRONMENT & DEPENDENCIES
   M4. Replace fragile package checks (`dpkg -l | grep`) with resilient helpers (`dpkg_resolve_installed_package`, `dpkg_get_installed_version`) and confirm multi-arch/held-package handling.
   M5. Prevent unintended removals/downgrades; prefer `apt-get install --no-remove --ignore-hold`.
   M6. Ensure locally compiled packages are pinned or otherwise protected; scope/document pins and cleanup plans.
+  M11. **CMAKE FLAG VALIDATION** (NEW - Added 2025-11-12):
+      - CRITICAL: ALL CMake flags MUST be validated against official library documentation
+      - MANDATORY: Check docs/flags/LIBRARY_VERSION_CMAKE_FLAGS_DOCUMENTATION.md before using flags
+      - FORBIDDEN patterns (caught in today's audit):
+        * Library-prefixed flags: `Ceres_ENABLE_CUDA` → use documented `USE_CUDA`
+        * Framework-specific flags to incompatible libraries: `MKL_ROOT` to Ceres (not supported)
+        * Undocumented flags: `Ceres_USE_EIGEN_MKL` (doesn't exist, use BLA_VENDOR)
+      - REQUIRED: Use standard CMake variables (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES)
+      - Validation tool: `scripts/helpers/validate_cmake_flags.sh` (run before commit)
+      - Detection: `grep -r "option(" CMakeLists.txt` to find valid flags
+      - Real errors caught: 7+ invalid Ceres flags, 3+ invalid GTSAM flags (commits 7c252cb, c9e14c6)
+      - Impact: Build failures, silent feature disablement, incorrect optimizations
+  M12. **HPC LIBRARY CONFLICT DETECTION** (NEW - Added 2025-11-12):
+      - CRITICAL: Detect and prevent MKL/OpenBLAS/TBB conflicts in HPC library builds
+      - Conflict types:
+        1. MKL vs OpenBLAS: NEVER link both BLAS implementations (symbol conflicts)
+        2. MKL TBB vs System TBB: Always use system TBB, not MKL's bundled version
+        3. BLAS vendor inconsistency: All libraries in dep chain must use same BLAS
+      - Detection patterns:
+        ```bash
+        # Check for mixed BLAS
+        if grep -q "MKL" CMakeCache.txt && grep -q "openblas" CMakeCache.txt; then
+          error "Mixed BLAS detected"
+        fi
+        # Verify TBB source
+        TBB_LIB=$(grep "^TBB_LIBRARIES:" CMakeCache.txt | cut -d= -f2)
+        if echo "${TBB_LIB}" | grep -qE "/opt/intel|mkl"; then
+          error "Using MKL TBB instead of system TBB"
+        fi
+        ```
+      - Prevention flags:
+        * `-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB`
+        * `-DCMAKE_IGNORE_PATH=/opt/intel` (exclude MKL TBB from search)
+        * `-DBLA_VENDOR=Intel10_64lp` (explicit BLAS vendor)
+      - Real errors caught: OpenCV using MKL TBB (lines 8073-8102), GTSAM MKL config (commit c9e14c6)
+      - Verification: Check library paths, not just "found" status
+      - Tool: Parse CMakeCache.txt with `grep -E "^(BLAS|LAPACK|TBB)_"` after configure
 
 PHASE N – RESOURCE MANAGEMENT & CLEANUP
   N1. Create/destroy temp resources safely (`mktemp`, `trap`).

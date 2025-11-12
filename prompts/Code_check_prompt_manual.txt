@@ -70,6 +70,14 @@ C. Variables & Defaults
 D. Quoting & Expansion Safety
 - D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
 - D2. Verification of `read` usage (`read -r`, IFS settings) and word-splitting safeguards.
+- D3. **PIPE PATTERN SAFETY**: Avoid unsafe `echo | grep` patterns; prefer here-strings or direct grep on variables:
+  - UNSAFE: `if echo "${VARIABLE}" | grep -q "pattern"; then` (creates unnecessary subshell, potential echo flag interpretation)
+  - SAFE: `if grep -q "pattern" <<< "${VARIABLE}"; then` (here-string, no subshell, explicit quoting)
+  - SAFE: `if [[ "${VARIABLE}" =~ pattern ]]; then` (Bash regex, no external command)
+  - Rationale: Here-strings are more efficient, safer (no echo interpretation of flags like -n or -e), and more explicit about quoting
+  - Detection: `grep -n 'echo.*|.*grep' script.sh` to find all occurrences
+  - Performance: Here-string avoids pipeline overhead (no subshell fork)
+  - Example error caught in audit: Line 8026 used `echo "${LDCONFIG_CACHE}" | grep` instead of `grep <<< "${LDCONFIG_CACHE}"`
 
 E. Here-docs & Here-strings
 - E1. Use of quoted delimiters (`<<'EOF'`) where literal content is intended.
@@ -139,6 +147,42 @@ L. Performance & Maintainability
 - L2. Clear comments for intentional complexity, avoidance of duplicated logic.
 - L3. Readability: consistent naming, structure, modularization, and comment density that explains non-trivial control flow. Refresh stale comments or insert concise summaries when logic evolves.
 - L4. Evaluate opportunities to extract reusable functions or helpers that improve efficiency, clarity, and testability.
+- L5. **MULTI-PHASE LOGIC DOCUMENTATION**: Complex detection/configuration logic with multiple phases MUST be documented:
+  - REQUIRED: Header comment explaining overall strategy and number of phases
+  - REQUIRED: Phase markers (e.g., "# Phase 1: ...") before each distinct phase
+  - REQUIRED: Final decision comment explaining how phases combine
+  - Example pattern (3-phase SDK detection):
+    ```bash
+    # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
+    # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
+    # Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK
+    # Phase 2: Search common header locations for nvcuvid.h (may be system-installed)
+    # Phase 3: Verify runtime libraries are available via ldconfig (driver-provided)
+    # All three conditions must pass to enable NVDEC/NVENC hardware acceleration
+    
+    # Phase 1: Explicit SDK installation check
+    if [ -d "/opt/Video_Codec_SDK" ]; then
+      ...
+    fi
+    
+    # Phase 2: Fallback header search
+    for candidate in ...; do
+      ...
+    done
+    
+    # Phase 3: Verify runtime libraries
+    if grep -q "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
+      ...
+    fi
+    
+    # Final decision: Enable only if all three phases passed
+    if [ -n "${HEADER}" ] && [ "${LIB1}" = "true" ] && [ "${LIB2}" = "true" ]; then
+      ...
+    fi
+    ```
+  - Rationale: Multi-phase logic is complex; without clear phase markers, maintainers cannot understand the detection strategy
+  - Detection: Look for multiple `if` blocks checking related conditions without explanatory comments
+  - Error caught in audit: Lines 7996-8057 had 3-phase detection without phase markers (corrected)
 - L5. Respect local context: ensure comments adjacent to blocks reflect actual behavior, nested scopes are visually separated, and reviewers can follow control flow without scanning distant sections. Treat mismatched or missing comments as defects to be corrected.
 - L6. When documenting updates, call out the self-contained blocks you touched (e.g., loop, trap handler, function) and confirm their comments, whitespace, and readability were brought in line with project conventions.
 
@@ -153,6 +197,36 @@ M. Environment & Dependencies
     - Validate changes in BOTH formats after modifications
     - Example: When replacing mirrors, process both `sed` on .list files AND `URIs=` field updates in .sources files
 - M3. Safe handling of configuration files, credentials, and secrets (no accidental logging, enforce permissions).
+- M11. **CMAKE FLAG VALIDATION**: All CMake flags MUST be validated against official library documentation:
+  - REQUIRED: Before adding CMake flags, verify against library's official documentation (e.g., docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
+  - FORBIDDEN: Using undocumented or library-specific prefixed flags (e.g., `Ceres_ENABLE_CUDA` → use `USE_CUDA`)
+  - FORBIDDEN: Passing framework-specific flags to libraries that don't support them (e.g., `MKL_ROOT` to Ceres)
+  - REQUIRED: Use standard CMake variables (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES) for BLAS/LAPACK configuration
+  - VALIDATION: Run `scripts/helpers/validate_cmake_flags.sh` on script before commit
+  - Example errors caught today:
+    - `Ceres_ENABLE_CUDA=ON` → Invalid, should be `USE_CUDA=ON`
+    - `Ceres_USE_EIGEN_MKL=ON` → Invalid, MKL controlled via BLA_VENDOR
+    - `MKL_ROOT=...` passed to Ceres → Invalid, Ceres doesn't use this variable
+  - Prevention: Always check library's CMakeLists.txt or official docs before adding flags
+  - Tool: `grep -r "option(" library/CMakeLists.txt` to find valid flags
+- M12. **HPC LIBRARY CONFLICT DETECTION**: When configuring HPC libraries (MKL, OpenBLAS, TBB), detect and prevent conflicts:
+  - MKL/OpenBLAS conflict: NEVER link both MKL BLAS and OpenBLAS in same library
+    - Detection: `if [ -n "${MKLROOT}" ] && command -v openblas-config >/dev/null; then warn "Both MKL and OpenBLAS detected"; fi`
+  - TBB conflict: Ensure system TBB is used, NOT MKL's bundled TBB
+    - Check: `TBB_LIBRARIES` must point to `/usr/lib/x86_64-linux-gnu/libtbb.so`, NOT `/opt/intel/*/tbb`
+    - CMake flags: `-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB -DCMAKE_IGNORE_PATH=/opt/intel`
+  - BLAS vendor consistency: All libraries in dependency chain must use same BLAS (all MKL or all OpenBLAS)
+  - Verification: After CMake configure, check `CMakeCache.txt`:
+    ```bash
+    if grep -q "MKL" CMakeCache.txt && grep -q "openblas" CMakeCache.txt; then
+      echo "ERROR: Mixed MKL/OpenBLAS detected"
+      exit 1
+    fi
+    ```
+  - Example errors caught today:
+    - OpenCV was picking up MKL's TBB instead of system TBB (lines 8073-8102)
+    - GTSAM needed explicit MKL threading layer configuration
+  - Prevention: Always verify library paths after configuration, not just "found" status
 - M4. Package detection/checking uses resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) instead of brittle parsing of `dpkg -l` or similar command output; replace and verify during the audit.
 - M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
 - M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
