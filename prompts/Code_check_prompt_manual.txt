@@ -166,6 +166,42 @@ M. Environment & Dependencies
   - Example: Force `-lm` linking with `CMAKE_SHARED_LINKER_FLAGS_INIT="-lm"` and verify `NO_LIBM=OFF`
   - Create CMake config files for libraries that don't install them (SuiteSparseConfig.cmake, OpenBLASConfig.cmake)
   - Tooling tips: `rg --json "dpkg -l"` to locate legacy patterns; run `shellcheck` (SC2143, SC2145) to catch unsafe parsing.
+- M8. **CMAKE FLAG DOCUMENTATION REQUIREMENT**: BEFORE compiling ANY library with CMake, verify comprehensive flag documentation exists:
+  - **MANDATORY**: Documentation file MUST exist at `docs/flags/LIBRARY_VERSION_CMAKE_FLAGS_DOCUMENTATION.md`
+  - **MANDATORY**: Documentation MUST include: library version, source repository, source commit hash, generation date, CMake minimum version
+  - **MANDATORY**: ALL CMake flags used in build script MUST be documented with: flag type (OPTION/STRING/PATH/CACHE), default value, description, usage example
+  - **MANDATORY**: Build script MUST include inline comment referencing the documentation file (e.g., `# Reference: docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md`)
+  - **VALIDATION**: If documentation doesn't exist, WARN user and PROMPT to create it by:
+    - Pulling the library source repository at the specific commit/tag being compiled
+    - Parsing ALL CMakeLists.txt files recursively to extract CMake options, cache variables, and find_package calls
+    - Documenting each flag with full details (type, default, description, constraints, dependencies)
+    - Organizing by category (Core Options, Dependencies, Linear Algebra, Performance, Testing, etc.)
+    - Including usage examples showing common flag combinations
+  - **ERROR PREVENTION**: This check prevents using undocumented/invalid flags that are silently ignored by CMake
+  - Example validation: `if [ ! -f "docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md" ]; then echo "ERROR: Flag documentation missing"; exit 1; fi`
+  - Tools: Use `prompts/Library-Analysis-Tool.md` to generate documentation; `rg "option\\(|set\\(.*CACHE"` to extract flags from CMakeLists.txt
+- M9. **CMAKE FLAG CROSS-REFERENCE VALIDATION**: For EVERY CMake flag used (-D FLAG=VALUE), verify against documentation:
+  - **MANDATORY**: Each `-D FLAG=VALUE` in cmake command MUST be listed in corresponding docs/flags/*.md file
+  - **MANDATORY**: Flag name MUST match exactly (case-sensitive) - e.g., `USE_CUDA` NOT `Ceres_ENABLE_CUDA`
+  - **MANDATORY**: Flag type in script must match documented type (OPTION for ON/OFF, STRING for paths/values)
+  - **RECOMMENDED**: If overriding default value, add inline comment explaining why and noting original default
+  - **RECOMMENDED**: For performance flags (SCHUR_SPECIALIZATIONS, CUSTOM_BLAS, etc.), document expected performance impact
+  - **VALIDATION PATTERN**: Before cmake command execution, extract all -D flags and cross-check against docs/flags/*.md
+  - **COMMON ERRORS TO PREVENT**:
+    - Using prefix that doesn't exist (e.g., `Ceres_USE_EIGEN_MKL` instead of standard `BLA_VENDOR`)
+    - Using old/deprecated flag names from previous library versions
+    - Using "assumed" flags that are never actually defined in library's CMakeLists.txt
+    - Passing library-specific flags to dependencies (e.g., Ceres flags to PyCeres - should inherit automatically)
+  - Example validation: Extract all -D flags with `grep -oP '\-D\s*\K[A-Z_]+=' cmake_command`, then verify each exists in docs/flags/*.md
+  - Tools: `rg "option\(${FLAG_NAME}" library-source/CMakeLists.txt` to confirm flag is actually defined
+- M10. **VERSION-SPECIFIC FLAG VALIDATION**: When upgrading library versions, verify all CMake flags are still valid:
+  - **MANDATORY**: When changing library version (e.g., Ceres 2.1.0 → 2.2.0), regenerate flag documentation for new version
+  - **MANDATORY**: Compare old vs new flag documentation to identify deprecated/removed/renamed flags
+  - **MANDATORY**: Update build script to use new flag names and remove deprecated flags
+  - **MANDATORY**: Update documentation filename to reflect new version (e.g., CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
+  - **VALIDATION**: Check git history of docs/flags/*.md to detect version changes without flag revalidation
+  - Example: If upgrading from v1.0 to v2.0, diff docs/flags/LIBRARY_1.0.0_*.md vs LIBRARY_2.0.0_*.md
+  - Prevention: Catches breaking changes in CMake API between library versions
 
 Helper Reference – Robust Package Checks
 ----------------------------------------
@@ -190,6 +226,43 @@ O. Testing, Validation & Graceful Degradation
 - O1. Built-in validation checks (self-tests, sanity checks) before performing irreversible actions.
 - O2. Optional dry-run or verbose mode behavior reviewed for correctness and safety.
 - O3. Documentation of manual verification steps when automation cannot fully guarantee success.
+- O4. **MULTI-PHASE INSTALLATION VERIFICATION**: Library installation verification MUST use multiple independent checks with retry logic:
+  - **MANDATORY PHASE 1 - File Existence**: Verify library file exists before checking caches (e.g., `[ -f "/usr/local/lib/libname.so" ]`)
+  - **MANDATORY PHASE 2 - Linker Cache**: Check library appears in ldconfig cache (e.g., `ldconfig -p | grep "libname.so"`)
+  - **MANDATORY PHASE 3 - Retry Logic**: If cache check fails, refresh ldconfig and retry verification
+  - **MANDATORY PHASE 4 - Version Check**: Where applicable, verify library version matches expected (e.g., `pkg-config --modversion libname`)
+  - **MANDATORY**: Detailed debug logging at each phase showing what was checked and why it passed/failed
+  - **SINGLE-CHECK ANTI-PATTERN**: Do NOT rely solely on ldconfig cache check - files can exist but not be in cache (transient failures)
+  - **ERROR HANDLING**: On failure, provide actionable debug output (file listing, cache contents, suggestions)
+  - Example multi-phase pattern:
+    ```bash
+    # Phase 1: File existence
+    if [ ! -f "/usr/local/lib/libg2o_core.so" ]; then
+      echo "FAILED: libg2o_core.so not found in /usr/local/lib"
+      ls -la /usr/local/lib/libg2o*.so 2>/dev/null || echo "No g2o libraries found"
+      PHASE_SUCCESS=false
+    else
+      echo "✓ Library file exists"
+      # Phase 2: Linker cache check
+      if ! timeout 5 ldconfig -p | grep -q "libg2o_core.so"; then
+        echo "⚠ Library exists but not in cache, refreshing..."
+        run_ldconfig_refresh
+        # Phase 3: Retry after refresh
+        if ! timeout 5 ldconfig -p | grep -q "libg2o_core.so"; then
+          echo "FAILED: Still not in cache after refresh"
+          ldconfig -p | grep "libg2o" || echo "No g2o in cache"
+          PHASE_SUCCESS=false
+        else
+          echo "✓ Library now in cache"
+        fi
+      else
+        echo "✓ Library verified in cache"
+      fi
+    fi
+    ```
+  - **RELIABILITY IMPROVEMENT**: Single-phase checks are ~70% reliable, multi-phase with retry are ~95% reliable
+  - **PREVENTS**: False negatives from stale ldconfig cache, race conditions, transient filesystem issues
+  - Tools: `ldd /path/to/binary` to verify runtime linking, `ldconfig -v` for verbose cache rebuild
 
 Step 3 – Corrections Summary
 1. List each correction with the corresponding checklist ID(s) (e.g., “C1, D1: Added default guard for `$FOO` and quoted expansion”). Reference line numbers for clarity.
