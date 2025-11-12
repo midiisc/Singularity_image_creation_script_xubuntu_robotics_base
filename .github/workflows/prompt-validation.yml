@@ -1,0 +1,185 @@
+name: Prompt Validation Checks
+
+on:
+  pull_request:
+    branches: [ main, beta ]
+    paths:
+      - '**.sh'
+      - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
+      - 'build_xubuntu_robotics_base.sh'
+      - 'prompts/**'
+      - 'scripts/**'
+  push:
+    branches: [ main, beta ]
+    paths:
+      - '**.sh'
+      - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
+      - 'build_xubuntu_robotics_base.sh'
+
+jobs:
+  check-pipe-patterns:
+    name: Check Unsafe Pipe Patterns
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for echo | grep patterns
+        id: pipe_check
+        run: |
+          echo "Checking for unsafe 'echo | grep' patterns..."
+          if grep -n 'echo.*|.*grep' xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh 2>/dev/null | head -20; then
+            echo "❌ Found unsafe pipe patterns"
+            echo "::warning::Found echo | grep patterns that should use here-strings (<<<)"
+            exit 1
+          else
+            echo "✅ No unsafe pipe patterns found"
+          fi
+
+  validate-cmake-flags:
+    name: Validate CMake Flags
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Make validator executable
+        run: chmod +x scripts/helpers/validate_cmake_flags.sh
+
+      - name: Run CMake flag validator
+        run: |
+          echo "Validating CMake flags..."
+          if ./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --report-only; then
+            echo "✅ CMake flags validation passed"
+          else
+            echo "❌ CMake flags validation failed"
+            exit 1
+          fi
+
+  check-multi-phase-docs:
+    name: Check Multi-Phase Logic Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for undocumented multi-phase logic
+        run: |
+          echo "Checking for complex logic blocks without phase markers..."
+          
+          # Count blocks with multiple related conditionals
+          COMPLEX_BLOCKS=$(grep -c "for candidate in" xubuntu_robotics_base_post_ULTRA_CLEANED.sh || true)
+          
+          # Count phase markers
+          PHASE_MARKERS=$(grep -c "# Phase [0-9]:" xubuntu_robotics_base_post_ULTRA_CLEANED.sh || true)
+          
+          echo "Found $COMPLEX_BLOCKS potential multi-phase blocks"
+          echo "Found $PHASE_MARKERS phase markers"
+          
+          if [ "$COMPLEX_BLOCKS" -gt 0 ] && [ "$PHASE_MARKERS" -eq 0 ]; then
+            echo "::warning::Consider adding phase markers to complex detection logic"
+          else
+            echo "✅ Multi-phase logic appears documented"
+          fi
+
+  check-tbb-verification:
+    name: Check TBB Verification Blocks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verify TBB checks exist
+        run: |
+          echo "Checking for TBB verification blocks..."
+          
+          # Check for TBB verification in Ceres, g2o, GTSAM sections
+          if grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh && \
+             grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_post_ULTRA_CLEANED.sh && \
+             grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+            echo "✅ TBB verification blocks found for all HPC libraries"
+          else
+            echo "❌ Missing TBB verification blocks"
+            exit 1
+          fi
+
+  check-heredoc-syntax:
+    name: Check Heredoc Syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate heredoc delimiters
+        run: |
+          echo "Checking heredoc syntax..."
+          
+          # Check for unquoted EOF delimiters (should be <<'EOF' for literals)
+          UNQUOTED_EOF=$(grep -n "<<EOF" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" | wc -l || true)
+          
+          if [ "$UNQUOTED_EOF" -gt 0 ]; then
+            echo "::warning::Found $UNQUOTED_EOF potentially unquoted EOF delimiters"
+            echo "Consider using <<'EOF' for literal heredocs to prevent variable expansion"
+          else
+            echo "✅ Heredoc syntax appears correct"
+          fi
+
+  check-bash-compatibility:
+    name: Check Bash Compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check for Bash 4+ features
+        run: |
+          echo "Checking for Bash 4+ specific features..."
+          
+          # Check for uppercase/lowercase conversion
+          if grep -nE '\$\{[^}]+\^\^' *.sh 2>/dev/null; then
+            echo "❌ Found uppercase conversion (\${var^^}) - not compatible with Bash 3"
+            exit 1
+          fi
+          
+          if grep -nE '\$\{[^}]+,,' *.sh 2>/dev/null; then
+            echo "❌ Found lowercase conversion (\${var,,}) - not compatible with Bash 3"
+            exit 1
+          fi
+          
+          echo "✅ No Bash 4+ specific features detected"
+
+  shellcheck:
+    name: ShellCheck Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run ShellCheck
+        uses: ludeeus/action-shellcheck@master
+        with:
+          severity: warning
+          ignore_paths: |
+            container-scripts
+            analysis
+          check_together: 'yes'
+
+  summary:
+    name: Validation Summary
+    runs-on: ubuntu-latest
+    needs: [check-pipe-patterns, validate-cmake-flags, check-multi-phase-docs, check-tbb-verification, check-heredoc-syntax, check-bash-compatibility]
+    if: always()
+    steps:
+      - name: Summary
+        run: |
+          echo "## Prompt Validation Summary"
+          echo ""
+          echo "All prompt-based validation checks completed."
+          echo ""
+          echo "If any checks failed, review the errors above and:"
+          echo "1. Fix unsafe pipe patterns (use here-strings)"
+          echo "2. Validate CMake flags against library documentation"
+          echo "3. Add phase markers to complex multi-phase logic"
+          echo "4. Ensure TBB verification exists for HPC libraries"
+          echo "5. Quote heredoc delimiters for literal content"
+          echo "6. Avoid Bash 4+ features or add version checks"

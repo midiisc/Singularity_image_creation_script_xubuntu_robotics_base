@@ -567,11 +567,11 @@ test_mirror() {
     # Extract HTTP code and time from output (format: "HTTP_CODE|TIME")
     # Pattern: '^[0-9]{3}$' matches exactly 3 digits (200, 403, 404, etc.)
     # If not matching (invalid format), return empty string
-    HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
+    HTTP_CODE=$(cut -d'|' -f1 <<< "${CURL_OUTPUT}" 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
     local TIME_VALUE
     # Pattern: '^[0-9]' matches any string starting with digit (0.123, 12.456, etc.)
     # Validates that we have a numeric time value before using it
-    TIME_VALUE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null | grep -E '^[0-9]' || echo "")
+    TIME_VALUE=$(cut -d'|' -f2 <<< "${CURL_OUTPUT}" 2>/dev/null | grep -E '^[0-9]' || echo "")
     CURL_OUTPUT="${TIME_VALUE}"
 
     # Reject mirrors that return 403 (Forbidden/Blocked), 404 (Not Found), or other error codes
@@ -595,7 +595,7 @@ test_mirror() {
       # This is different from getting a 403 response
       # grep pattern: -q (quiet), -i (ignore case), -E (extended regex)
       # Pattern '(403|Forbidden|blocked)' matches any of these strings in error output
-      if echo "${curl_error}" | grep -qiE "(403|Forbidden|blocked)"; then
+      if grep -qiE "(403|Forbidden|blocked)" <<< "${curl_error}"; then
         echo "[test_mirror] Rejecting ${URL}: Connection blocked (403 detected in error)" >&2
         echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
         if [[ "${previous_opts}" == *e* ]]; then
@@ -620,8 +620,8 @@ test_mirror() {
       curl_error=$(cat "${curl_stderr}" 2>/dev/null || echo "")
       rm -f "${curl_stdout}" "${curl_stderr}" 2>/dev/null || true
       
-      HTTP_CODE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f1 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
-      TIME_VALUE=$(echo "${CURL_OUTPUT}" | cut -d'|' -f2 2>/dev/null | grep -E '^[0-9]' || echo "")
+      HTTP_CODE=$(cut -d'|' -f1 <<< "${CURL_OUTPUT}" 2>/dev/null | grep -E '^[0-9]{3}$' || echo "")
+      TIME_VALUE=$(cut -d'|' -f2 <<< "${CURL_OUTPUT}" 2>/dev/null | grep -E '^[0-9]' || echo "")
       CURL_OUTPUT="${TIME_VALUE}"
         
       # Reject Release file if it also returns error codes
@@ -638,7 +638,7 @@ test_mirror() {
       
       # Check for blocked errors in stderr
       if [[ -z "${HTTP_CODE:-}" ]] && [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]]; then
-        if echo "${curl_error}" | grep -qiE "(403|Forbidden|blocked)"; then
+        if grep -qiE "(403|Forbidden|blocked)" <<< "${curl_error}"; then
           echo "[test_mirror] Rejecting ${URL}: Release file blocked (403 detected)" >&2
           echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
           if [[ "${previous_opts}" == *e* ]]; then
@@ -665,7 +665,7 @@ test_mirror() {
     # Final check: if we still don't have a valid time value, mark as failed
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]] || [[ ! "${CURL_OUTPUT:-}" =~ ^[0-9] ]]; then
       # Check for any error indicators we might have missed
-      if [[ -n "${curl_error:-}" ]] && echo "${curl_error}" | grep -qiE "(timeout|connection refused|connection reset|name resolution|couldn't connect|failed|error|403|404|500|502|503|504)"; then
+      if [[ -n "${curl_error:-}" ]] && grep -qiE "(timeout|connection refused|connection reset|name resolution|couldn't connect|failed|error|403|404|500|502|503|504)" <<< "${curl_error}"; then
         echo "[test_mirror] Rejecting ${URL}: Connection/download error detected" >&2
       fi
       echo "999.9 ${URL}" >> "${PROBE_RESULTS}"
@@ -1399,19 +1399,19 @@ reapply_fastest_mirror() {
     local mirror_failed=false
     local error_reason=""
     
-    if echo "${apt_update_output}" | grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)"; then
+    if grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)" <<< "${apt_update_output}"; then
       mirror_failed=true
       error_reason="blocked (403)"
-    elif echo "${apt_update_output}" | grep -qiE "(404|Not Found|not available)"; then
+    elif grep -qiE "(404|Not Found|not available)" <<< "${apt_update_output}"; then
       mirror_failed=true
       error_reason="not found (404)"
-    elif echo "${apt_update_output}" | grep -qiE "(500|502|503|504|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)"; then
+    elif grep -qiE "(500|502|503|504|Internal Server Error|Bad Gateway|Service Unavailable|Gateway Timeout)" <<< "${apt_update_output}"; then
       mirror_failed=true
       error_reason="server error (5xx)"
-    elif echo "${apt_update_output}" | grep -qiE "(timeout|timed out|connection timeout)"; then
+    elif grep -qiE "(timeout|timed out|connection timeout)" <<< "${apt_update_output}"; then
       mirror_failed=true
       error_reason="timeout"
-    elif echo "${apt_update_output}" | grep -qiE "(couldn't connect|could not resolve|name resolution|connection refused)"; then
+    elif grep -qiE "(couldn't connect|could not resolve|name resolution|connection refused)" <<< "${apt_update_output}"; then
       mirror_failed=true
       error_reason="connection failed"
     fi
@@ -2058,7 +2058,7 @@ apt_update_exit_code=$?
 
 # Check if apt-get update failed with 403 (blocked) or other access errors
 if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
-  if echo "${apt_update_output}" | grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)"; then
+  if grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)" <<< "${apt_update_output}"; then
     echo "[ERROR] Selected mirror ${FASTEST_MIRROR} is blocked (403) or inaccessible"
     echo "[info] Falling back to default archive.ubuntu.com..."
     
@@ -2646,11 +2646,11 @@ if is_install_command "$@"; then
     APT_EXIT_CODE=$?
     
     # Check if packages are already installed or nothing to download (benign case)
-    if echo "${APT_OUTPUT}" | grep -qiE "(already the newest|0 upgraded|0 to install|already installed)"; then
+    if grep -qiE "(already the newest|0 upgraded|0 to install|already installed)" <<< "${APT_OUTPUT}"; then
         echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
         touch "${URI_FILE}"
     # Check if there's an actual error (not just "no URIs")
-    elif [ "${APT_EXIT_CODE}" -ne 0 ] && ! echo "${APT_OUTPUT}" | grep -qiE "(already the newest|0 upgraded|0 to install)"; then
+    elif [ "${APT_EXIT_CODE}" -ne 0 ] && ! grep -qiE "(already the newest|0 upgraded|0 to install)" <<< "${APT_OUTPUT}"; then
         echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
         echo "[apt-aria] Error output: $(echo "${APT_OUTPUT}" | head -3)"
         echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
@@ -5116,7 +5116,7 @@ if [ -f "CMakeCache.txt" ]; then
     
     # Additional verification: Check that linker flags actually contain -lm
     LINKER_FLAGS_CHECK=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2-)
-    if echo "${LINKER_FLAGS_CHECK}" | grep -q "\-lm"; then
+    if grep -q "\-lm" <<< "${LINKER_FLAGS_CHECK}"; then
         echo "  ✓ Verified: CMAKE_SHARED_LINKER_FLAGS contains -lm"
     else
         echo "  ⚠ WARNING: CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm"
@@ -5161,13 +5161,13 @@ if ! cmake --build . -j"$(nproc)"; then
         echo "    - NO_LIBM value in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
         LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
         EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
-        if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
+        if grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
         else
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO"
             echo "      Actual flags: ${LINKER_FLAGS:0:80}..."
         fi
-        if echo "${EXE_LINKER_FLAGS}" | grep -q "\-lm"; then
+        if grep -q "\-lm" <<< "${EXE_LINKER_FLAGS}"; then
             echo "    - CMAKE_EXE_LINKER_FLAGS contains -lm: YES"
         else
             echo "    - CMAKE_EXE_LINKER_FLAGS contains -lm: NO"
@@ -5197,8 +5197,8 @@ if [ -f "CMakeCache.txt" ]; then
     EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
     
     # Check both shared and executable linker flags
-    SHARED_HAS_LM=$(echo "${LINKER_FLAGS}" | grep -q "\-lm" && echo "YES" || echo "NO")
-    EXE_HAS_LM=$(echo "${EXE_LINKER_FLAGS}" | grep -q "\-lm" && echo "YES" || echo "NO")
+    SHARED_HAS_LM=$(grep -q "\-lm" <<< "${LINKER_FLAGS}" && echo "YES" || echo "NO")
+    EXE_HAS_LM=$(grep -q "\-lm" <<< "${EXE_LINKER_FLAGS}" && echo "YES" || echo "NO")
     
     if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
         if [ "${SHARED_HAS_LM}" = "YES" ] && [ "${EXE_HAS_LM}" = "YES" ]; then
@@ -5293,7 +5293,7 @@ verify_math_library_linkage() {
                     
                     # Check if CMAKE_SHARED_LINKER_FLAGS contains -lm
                     LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2-)
-                    if echo "${LINKER_FLAGS}" | grep -q "\-lm"; then
+                    if grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
                         echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
                         echo "      → NOTE: Even though NO_LIBM=${NO_LIBM_VALUE}, linker flags include -lm, so linking should work"
                     else
@@ -6126,7 +6126,7 @@ install_and_verify_group() {
       # Don't fail the group if package verification fails - it might be a virtual package or optional
       # Only mark as failure if it's a critical package
       # Use case-insensitive matching and proper regex escaping
-      if echo "${pkg}" | grep -qiE "^(cmake|ninja-build|g\+\+|gcc|build-essential)$"; then
+      if grep -qiE "^(cmake|ninja-build|g\+\+|gcc|build-essential)$" <<< "${pkg}"; then
         echo -e "    ${RED}CRITICAL package missing!${NC}"
         group_success=false
         if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
@@ -6161,9 +6161,9 @@ BASE_GLOG_VERSION=""
 
 # Use extended regex for better pattern matching
 DPKG_OUTPUT=$(dpkg -l 2>/dev/null || echo "")
-if echo "${DPKG_OUTPUT}" | grep -qE "^ii.*libgoogle-glog|^ii.*libglog"; then
+if grep -qE "^ii.*libgoogle-glog|^ii.*libglog" <<< "${DPKG_OUTPUT}"; then
     BASE_GLOG_INSTALLED=true
-    BASE_GLOG_VERSION=$(echo "${DPKG_OUTPUT}" | grep -E "^ii.*(libgoogle-glog|libglog)" | awk '{printf "  - %s %s\n", $2, $3}')
+    BASE_GLOG_VERSION=$(grep -E "^ii.*(libgoogle-glog|libglog)" <<< "${DPKG_OUTPUT}" | awk '{printf "  - %s %s\n", $2, $3}')
     echo "ℹ Base image already has glog packages installed:"
     echo "$BASE_GLOG_VERSION"
     echo ""
@@ -6658,8 +6658,8 @@ if [ "${GLOG_VERSION}" != "unknown" ]; then
     
     # Validate version components are numeric before comparison
     if [ -n "${GLOG_MAJOR}" ] && [ -n "${GLOG_MINOR}" ] && \
-       echo "${GLOG_MAJOR}" | grep -qE '^[0-9]+$' && \
-       echo "${GLOG_MINOR}" | grep -qE '^[0-9]+$'; then
+       grep -qE '^[0-9]+$' <<< "${GLOG_MAJOR}" && \
+       grep -qE '^[0-9]+$' <<< "${GLOG_MINOR}"; then
         if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
             echo "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches"
             echo "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)"
@@ -6868,6 +6868,27 @@ fi
   fi
   
   echo "✓ Ceres protected from APT overwrites (verified)"
+
+# Verify TBB configuration for Ceres (ensure system TBB, not MKL TBB)
+echo "Verifying TBB configuration for Ceres..."
+cd /tmp/ceres-solver/build || true
+if [ -f "CMakeCache.txt" ]; then
+  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+  if [ -n "${TBB_LIB_PATH}" ]; then
+    if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
+      echo -e "  ${RED}✗ ERROR: Ceres is using MKL TBB: ${TBB_LIB_PATH}${NC}"
+      echo "  This may cause runtime conflicts. System TBB should be used."
+    elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
+      echo -e "  ${GREEN}✓ Ceres is using system TBB: ${TBB_LIB_PATH}${NC}"
+    else
+      echo -e "  ${YELLOW}⚠ Ceres TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+    fi
+  else
+    echo "  • TBB not detected in Ceres configuration (may not be required)"
+  fi
+else
+  echo "  • CMakeCache.txt not found, skipping TBB verification"
+fi
 
 # Cleanup
 cd / && rm -rf /tmp/ceres-solver
@@ -7142,6 +7163,27 @@ EOF
   
   echo "✓ G2O protected from APT overwrites (APT pinning method)"
 
+  # Verify TBB configuration for g2o (ensure system TBB, not MKL TBB)
+  echo "Verifying TBB configuration for g2o..."
+  cd /tmp/g2o/build || true
+  if [ -f "CMakeCache.txt" ]; then
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    if [ -n "${TBB_LIB_PATH}" ]; then
+      if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
+        echo -e "  ${RED}ERROR: g2o is using MKL TBB: ${TBB_LIB_PATH}${NC}"
+        echo "  This may cause runtime conflicts. System TBB should be used."
+      elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
+        echo -e "  ${GREEN}OK: g2o is using system TBB: ${TBB_LIB_PATH}${NC}"
+      else
+        echo -e "  ${YELLOW}WARNING: g2o TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+      fi
+    else
+      echo "  INFO: TBB not detected in g2o configuration (may not be required)"
+    fi
+  else
+    echo "  INFO: CMakeCache.txt not found, skipping TBB verification"
+  fi
+
   # Cleanup
   cd / && rm -rf /tmp/g2o
 fi
@@ -7270,6 +7312,35 @@ EOF
   fi
   
   echo "✓ GTSAM protected from APT overwrites (APT pinning method)"
+
+  # Verify TBB configuration for GTSAM (CRITICAL - GTSAM requires TBB)
+  echo "Verifying TBB configuration for GTSAM..."
+  cd /tmp/gtsam/build || true
+  if [ -f "CMakeCache.txt" ]; then
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    TBB_FOUND=$(grep -E "^GTSAM_WITH_TBB:BOOL=(ON|TRUE)" CMakeCache.txt 2>/dev/null || echo "")
+    
+    if [ -n "${TBB_FOUND}" ]; then
+      echo "  OK: GTSAM_WITH_TBB is enabled"
+      if [ -n "${TBB_LIB_PATH}" ]; then
+        if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
+          echo -e "  ${RED}ERROR: GTSAM is using MKL TBB: ${TBB_LIB_PATH}${NC}"
+          echo "  This WILL cause runtime conflicts. System TBB is required."
+          echo "  Recommendation: Rebuild GTSAM with -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
+        elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
+          echo -e "  ${GREEN}OK: GTSAM is using system TBB: ${TBB_LIB_PATH}${NC}"
+        else
+          echo -e "  ${YELLOW}WARNING: GTSAM TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+        fi
+      else
+        echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found${NC}"
+      fi
+    else
+      echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB is disabled (TBB support not enabled)${NC}"
+    fi
+  else
+    echo "  INFO: CMakeCache.txt not found, skipping TBB verification"
+  fi
 
   # Cleanup
   cd / && rm -rf /tmp/gtsam
@@ -7994,8 +8065,14 @@ if [ -n "${MKL_CMAKE_DIR}" ]; then
   OPENCV_CMAKE_ARGS+=("-DMKL_DIR=${MKL_CMAKE_DIR}")
 fi
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
+# Strategy: 3-phase detection for maximum compatibility across deployment scenarios
+# Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK
+# Phase 2: Search common header locations for nvcuvid.h (may be system-installed)
+# Phase 3: Verify runtime libraries are available via ldconfig (driver-provided)
+# All three conditions must pass to enable NVDEC/NVENC hardware acceleration
 NV_CODEC_HEADER_DIR=""
 NV_CODEC_SDK_DIR=""
+# Phase 1: Explicit SDK installation check
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
   NV_CODEC_SDK_DIR="/opt/Video_Codec_SDK"
   if [ -d "${NV_CODEC_SDK_DIR}/Interface" ]; then
@@ -8003,6 +8080,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]
   fi
 fi
 
+# Phase 2: Fallback header search across common system paths
 if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
   for candidate in \
     "/opt/Video_Codec_SDK/Interface" \
@@ -8020,16 +8098,18 @@ if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
   done
 fi
 
+# Phase 3: Verify runtime libraries are available (driver-provided, not from SDK)
 NV_CODEC_LIB_CUVID_FOUND=false
 NV_CODEC_LIB_ENCODE_FOUND=false
 LDCONFIG_CACHE="$(ldconfig -p 2>/dev/null || true)"
-if echo "${LDCONFIG_CACHE}" | grep -q "libnvcuvid.so"; then
+if grep -q "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_CUVID_FOUND=true
 fi
-if echo "${LDCONFIG_CACHE}" | grep -q "libnvidia-encode.so"; then
+if grep -q "libnvidia-encode.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_ENCODE_FOUND=true
 fi
 
+# Final decision: Enable only if all three phases passed
 if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ] && [ "${NV_CODEC_LIB_ENCODE_FOUND}" = "true" ]; then
   echo "  → NVIDIA NVDEC/NVENC interfaces detected; enabling Video Codec support in OpenCV"
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=ON")
@@ -8083,12 +8163,12 @@ if [ "${tbb_found}" = "true" ]; then
   echo "Verifying TBB source (must be system TBB, not MKL TBB)..."
   TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
   if [ -n "${TBB_LIB_PATH:-}" ]; then
-      if echo "${TBB_LIB_PATH}" | grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)"; then
+      if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
         echo -e "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
         echo "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
         echo "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
         tbb_found=false
-      elif echo "${TBB_LIB_PATH}" | grep -qE "/usr/lib/x86_64-linux-gnu/libtbb"; then
+      elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
         echo -e "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
       else
         echo -e "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
@@ -8798,7 +8878,7 @@ if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
         echo "    ${CERES_GLOG}"
         
         # Verify it's not "not found"
-        if echo "${CERES_GLOG}" | grep -q "not found"; then
+        if grep -q "not found" <<< "${CERES_GLOG}"; then
             echo "  ✗ ERROR: Ceres cannot find glog library!"
             exit 1
         fi
@@ -9735,7 +9815,7 @@ echo "Installing JAX with CUDA support (using pre-built wheels)..."
 # Handle externally-managed Python environments
 # Use --ignore-installed to avoid errors when uninstalling Debian-installed packages (wheel, etc.)
 pip_output=$(python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1) || true
-if echo "${pip_output}" | grep -q "externally-managed-environment"; then
+if grep -q "externally-managed-environment" <<< "${pip_output}"; then
     echo "  Using --break-system-packages flag (for Singularity/container environments)"
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
 else
@@ -9746,7 +9826,7 @@ fi
 # Determine if we need --break-system-packages flag
 pip_flags=""
 test_output=$(python3 -m pip install --dry-run pip 2>&1) || true
-if echo "${test_output}" | grep -q "externally-managed-environment"; then
+if grep -q "externally-managed-environment" <<< "${test_output}"; then
     pip_flags="--break-system-packages"
 fi
 
@@ -11898,7 +11978,7 @@ if [ -z "${GLFW_CONFIG_DIR:-}" ] || [ -z "${GLFW_DIR:-}" ]; then
     if [ -n "${GLFW_INCLUDE_PATH:-}" ] && [ -f "${GLFW_INCLUDE_PATH}" ]; then
         # Handle both /usr/include/GLFW/glfw3.h and /usr/include/glfw3.h
         # Properly quote nested dirname calls
-        if echo "${GLFW_INCLUDE_PATH}" | grep -q "/GLFW/"; then
+        if grep -q "/GLFW/" <<< "${GLFW_INCLUDE_PATH}"; then
             GLFW_INCLUDE_DIR=$(dirname "$(dirname "${GLFW_INCLUDE_PATH}")")
         else
             GLFW_INCLUDE_DIR=$(dirname "${GLFW_INCLUDE_PATH}")

@@ -86,6 +86,19 @@ All built from source with optimizations (updated to latest versions):
 - **dust** 1.2.3 - Intuitive du replacement
 - **ox** - Modern text editor
 
+### Build & Validation Tools (NEW)
+Repository includes automated validation and build tools:
+- **CMake Flag Validator** (`scripts/helpers/validate_cmake_flags.sh`) - Validates CMake flags against official library documentation
+- **CMakeCache Verifier** (`scripts/helpers/verify_cmake_cache.sh`) - Post-configuration validation (TBB, BLAS, CUDA checks)
+- **Flag Documentation Generator** (`scripts/generate_flag_docs.sh`) - Auto-generates Markdown documentation for CMake flags
+- **Pre-commit Hook** (`scripts/hooks/pre-commit-cmake-validator`) - Enforces CMake validation before commits
+
+### CMake Templates (NEW)
+Standardized CMake configuration templates for HPC libraries:
+- **Ceres Solver Template** (`docs/cmake-templates/ceres-solver-template.sh`) - Complete Ceres 2.2.0+ configuration with TBB verification
+- **GTSAM Template** (`docs/cmake-templates/gtsam-template.sh`) - Complete GTSAM 4.2+ configuration with MKL/TBB integration
+- All templates include built-in verification functions and conflict detection
+
 ### Utilities
 - **yq** 4.48.1 - YAML/JSON processor
 - **FreeCAD** 1.0.2 - 3D CAD modeling
@@ -144,6 +157,19 @@ All built from source with optimizations (updated to latest versions):
 - Automatic fallback to alternative download sources
 - Comprehensive logging with rotation
 
+### Automated Validation (NEW - 2025-11-12)
+- **CI/CD Enforcement** - GitHub Actions workflow validates all code changes
+  - Unsafe pipe pattern detection
+  - CMake flag validation
+  - Multi-phase logic documentation checks
+  - TBB verification block checks
+  - Heredoc syntax validation
+  - Bash compatibility checks
+  - ShellCheck linting
+- **Pre-commit Hooks** - CMake validation runs before every commit
+- **Post-configuration Verification** - Automatic TBB/BLAS/CUDA validation after CMake
+- See `.github/workflows/prompt-validation.yml` for details
+
 ### Optimization Flags
 - **CPU**: x86-64-v3 architecture (AVX2, FMA, BMI2)
 - **CUDA**: Architecture-specific optimizations (sm_86 for A6000)
@@ -161,6 +187,7 @@ All built from source with optimizations (updated to latest versions):
   - `-D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}"`
   - `-D MKL_LIBRARIES="${MKL_BLAS_LIBRARIES}"`
 - Override these variables in the environment (or via `config.sh`) if you need to point at alternative MKL/TBB installations; the script keeps them in sync so FindMKL/FindTBB operate without emitting ignored-variable warnings.
+- **Automated TBB Verification** (NEW) - Post-configuration checks for Ceres, g2o, and GTSAM ensure system TBB is used (not MKL TBB)
 
 ## 🐍 Python Packages
 
@@ -308,6 +335,7 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 - **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Mandatory pre-work verification checklist (READ FIRST)
 - **`.cursor/rules/001-agent-behavior.mdc`** - AI behavior rules (file creation, planning, code review)
 - **`.cursor/rules/002-repository-workflow.mdc`** - Repository workflow rules (git, branches, files)
+- **`.cursor/rules/003-cloud-agent-workflow.mdc`** (NEW) - Cloud agent specific rules (branch coordination, feature branches, PR workflow)
 
 **These files are the single source of truth and are STRICTLY ENFORCED. To update rules, edit the `.mdc` files directly.**
 
@@ -320,10 +348,36 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 - Chunked code review protocol
 
 **Workflow Rules** (See `.cursor/rules/002-repository-workflow.mdc`):
-- Beta branch only (never create new branches)
+- **Feature Branch Workflow** (NEW - Updated 2025-11-12):
+  - Create dedicated feature branch per session
+  - Push feature branch and open PR targeting beta
+  - Merge-feasibility check before landing
+  - Auto-cleanup: Delete merged branches (keep only main/beta)
 - Core files only (strict file editing restrictions)
 - No git operations without explicit user approval
+- Advanced CoT audit mandatory before commit
 - Mandatory verification checklist before completing work
+
+**Cloud Agent Rules** (NEW - See `.cursor/rules/003-cloud-agent-workflow.mdc`):
+- Branch coordination (confirm with user, sync latest changes)
+- Feature branch lifecycle (create → push → PR → merge → cleanup)
+- PR restrictions (require approval, post URL/details)
+- Multi-agent coordination
+- Explicit approval for all git operations
+
+### Code Review & Validation (NEW - 2025-11-12)
+
+**Prompt Framework**:
+- **`prompts/Advanced-CoT-Multi-Agent-Prompt.md`** - Multi-agent Chain-of-Thought code review framework
+  - Updated with 8 new error pattern checks (D3, L5, M11, M12)
+  - TBB conflict detection, CMake validation, pipe safety, multi-phase docs
+- **`prompts/Code_check_prompt_manual.txt`** - Comprehensive Bash code review checklist
+  - 80+ lines of new checks matching Advanced CoT updates
+
+**Automated Enforcement**:
+- **CI/CD Pipeline** (`.github/workflows/prompt-validation.yml`) - 7 automated checks on every PR/push
+- **Pre-commit Hooks** - CMake validation runs before commits
+- **Zero manual oversight** required for validation
 
 ### Configuration
 
@@ -343,6 +397,7 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 For more information:
 - **Rule Files (Source of Truth)**: `.cursor/rules/*.mdc` (automatically enforced by Cursor IDE)
 - **Global Settings**: `docs/GLOBAL_CURSOR_SETTINGS.md` (setup instructions for all repositories)
+- **Checks, Rules & CI/CD** (NEW): `docs/CHECKS_RULES_CICD.md` (comprehensive documentation of all automated checks, workflow rules, and CI/CD integrations)
 
 ### Requesting Files
 
@@ -355,7 +410,36 @@ To get the AI to create a file, use explicit phrases:
 
 ## 📖 Documentation
 
-For detailed usage instructions:
+### Repository Documentation
+
+**Build & Validation:**
+- **`docs/CHECKS_RULES_CICD.md`** (NEW) - Code checks, workflow rules, and CI/CD integrations documentation
+- **`docs/CMAKE_FLAG_VALIDATOR_USAGE.md`** (NEW) - CMake flag validator guide
+- **`docs/cmake-templates/`** (NEW) - Standardized CMake configuration templates
+- **`docs/flags/`** - Library-specific CMake flag documentation
+- **`docs/planning/`** - V2 improvements and planning documents
+- **`docs/testing/`** - Testing documentation
+
+**Tools & Scripts:**
+- **`scripts/helpers/validate_cmake_flags.sh`** - CMake flag validator
+- **`scripts/helpers/verify_cmake_cache.sh`** - Post-configuration verifier
+- **`scripts/generate_flag_docs.sh`** - Documentation generator
+- **`scripts/hooks/pre-commit-cmake-validator`** - Pre-commit validation hook
+
+**Prompts & Code Review:**
+- **`prompts/Advanced-CoT-Multi-Agent-Prompt.md`** - Multi-agent CoT code review framework
+- **`prompts/Code_check_prompt_manual.txt`** - Comprehensive Bash code checklist
+- **`prompts/Enhanced-Code-Review-Prompt.md`** - Enhanced code review guidelines
+
+**AI Agent Rules:**
+- **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Pre-work verification checklist
+- **`.cursor/rules/001-agent-behavior.mdc`** - Agent behavior rules
+- **`.cursor/rules/002-repository-workflow.mdc`** - Repository workflow rules
+- **`.cursor/rules/003-cloud-agent-workflow.mdc`** (NEW) - Cloud agent rules
+
+### External Documentation
+
+For software usage instructions:
 - ROS 2: https://docs.ros.org/en/jazzy/
 - COLMAP: https://colmap.github.io/
 - Open3D: http://www.open3d.org/
@@ -374,9 +458,15 @@ Components have individual licenses:
 ## 🏷️ Version Information
 
 - **Image Version**: Based on config.sh versions
-- **Last Updated**: 2025-10-27
+- **Last Updated**: 2025-11-12
 - **Base**: Ubuntu 24.04 + ROS 2 Jazzy
 - **Build System**: Singularity/Apptainer 1.x
+- **Major Updates (2025-11-12)**:
+  - Added automated validation tools (CMake validator, CMakeCache verifier)
+  - Implemented CI/CD pipeline (7 automated checks)
+  - Updated AI agent rules (feature branch workflow, cloud agent coordination)
+  - Created CMake configuration templates
+  - Enhanced code review prompts (8 new error pattern checks)
 
 ---
 
