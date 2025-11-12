@@ -6637,6 +6637,12 @@ else
     cd /tmp/pyceres || exit 1
   echo "Building PyCeres from source (linking against compiled Ceres)..."
   
+  # Patch CMakeLists.txt to set minimum CMake version to 3.15 (required by scikit-build-core)
+  if [ -f CMakeLists.txt ]; then
+    echo "Updating CMake minimum version to 3.15 for scikit-build-core compatibility..."
+    sed -i 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.15)/' CMakeLists.txt
+  fi
+  
   # MKL note: PyCeres must inherit MKL/CUDA configuration from compiled Ceres
   # Pass MKL and CUDA flags to ensure PyCeres bindings use the same Ceres configuration
   # Reference: docs/planning/MKL_MIGRATION_PLAN.md Phase 4.7
@@ -6653,8 +6659,7 @@ else
         --disable-pip-version-check \
         --no-binary :all: \
         --config-settings=cmake.build-type=Release \
-        --config-settings=cmake.verbose=true \
-        --config-settings=cmake.install-prefix=/usr/local \
+        --config-settings=build.verbose=true \
         . 2>&1 | tee /tmp/pyceres_install.log; then
       echo "✓ PyCeres built and installed from source (using compiled Ceres)"
 
