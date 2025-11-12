@@ -6709,11 +6709,21 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.11: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
-  # MKL note: g2o inherits MKL-enabled SuiteSparse; see
-  # `docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md` (no BLAS override flags).
-  # MKL note: `docs/flags/GTSAM_4.2.0_CMAKE_FLAGS_DOCUMENTATION.md` documents
-  # MKL integration via `GTSAM_WITH_EIGEN_MKL{,_OPENMP}`; we rely on MKLROOT env
-  # rather than passing undocumented cache entries.
+  # MKL Integration Strategy (Phase 4.8 - docs/planning/MKL_MIGRATION_PLAN.md):
+  #   - g2o uses standard CMake FindBLAS/FindLAPACK modules
+  #   - MKL linkage via BLA_VENDOR=Intel10_64lp and BLAS_LIBRARIES
+  #   - MKLROOT environment variable (already set) guides FindBLAS to MKL
+  #   - g2o automatically inherits MKL through MKL-enabled SuiteSparse/CHOLMOD
+  #   - CHOLMOD solver uses BLAS_DEFINITIONS and LAPACK_DEFINITIONS
+  #
+  # Reference: docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md
+  #   - Documented flags: BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES (standard CMake)
+  #   - Undocumented flags: MKL_ROOT, MKL_INCLUDE_DIR, MKL_LIBRARY_DIR (not recognized, removed)
+  #
+  # CHOLMOD Integration:
+  #   - G2O_USE_CHOLMOD=ON links against MKL-enabled libcholmod.so
+  #   - CHOLMOD was compiled with -DBLA_VENDOR=Intel10_64lp in Block 9
+  #   - Result: g2o → CHOLMOD → MKL (transitive MKL linkage)
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -6734,10 +6744,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -D BLA_VENDOR=Intel10_64lp \
     -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D MKL_ROOT="${MKLROOT}" \
-    -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
-    -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}"
+    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 
   #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores
@@ -6746,10 +6753,34 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   run_ldconfig_refresh
 
   #--- Sub-block 17.13: Verify g2o installation ---
-  # Critical: Confirm g2o libraries are in linker cache
-  if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
-    echo -e "${RED}✗ g2o compilation FAILED.${NC}"
+  # Critical: Confirm g2o libraries are installed and in linker cache
+  echo "Verifying g2o installation..."
+  
+  # Check 1: Verify core library file exists
+  if [ ! -f "/usr/local/lib/libg2o_core.so" ]; then
+    echo -e "${RED}✗ g2o compilation FAILED: libg2o_core.so not found in /usr/local/lib${NC}"
+    echo "  Checking for any g2o libraries installed:"
+    ls -la /usr/local/lib/libg2o*.so 2>/dev/null || echo "  No g2o libraries found"
     PHASE3_ALL_SUCCESS=false
+  else
+    echo "✓ g2o library file found: /usr/local/lib/libg2o_core.so"
+    
+    # Check 2: Verify library is in linker cache
+    if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
+      echo -e "${YELLOW}⚠ g2o library exists but not in ldconfig cache (non-fatal)${NC}"
+      echo "  Running ldconfig again..."
+      run_ldconfig_refresh
+      
+      # Verify again
+      if ! timeout 5 ldconfig -p 2>/dev/null | grep -q "libg2o_core.so"; then
+        echo -e "${RED}✗ g2o library still not in ldconfig cache after refresh${NC}"
+        PHASE3_ALL_SUCCESS=false
+      else
+        echo "✓ g2o library now in ldconfig cache"
+      fi
+    else
+      echo "✓ g2o library in ldconfig cache"
+    fi
   fi
 
   #--- Sub-block 17.14: Protect compiled G2O from APT overwrites ---
