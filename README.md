@@ -150,6 +150,18 @@ All built from source with optimizations (updated to latest versions):
 - **Compiler**: -O3 -march=native -mtune=native
 - **Link-Time Optimization**: Enabled where supported
 
+### MKL & TBB CMake Flags
+- The build orchestration exports canonical hints that downstream CMake projects (notably GTSAM) can reuse:
+  - `MKLDIR=${MKLROOT}`
+  - `MKL_LIBRARIES=${MKL_BLAS_LIBRARIES}`
+  - `TBBROOT=${TBBROOT:-/usr}`
+- GTSAM configuration consumes the supported cache entries:
+  - `-D TBB_ROOT_DIR="${TBBROOT}"`
+  - `-D MKL_ROOT_DIR="${MKLROOT}"`
+  - `-D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}"`
+  - `-D MKL_LIBRARIES="${MKL_BLAS_LIBRARIES}"`
+- Override these variables in the environment (or via `config.sh`) if you need to point at alternative MKL/TBB installations; the script keeps them in sync so FindMKL/FindTBB operate without emitting ignored-variable warnings.
+
 ## 🐍 Python Packages
 
 ### Scientific Computing
