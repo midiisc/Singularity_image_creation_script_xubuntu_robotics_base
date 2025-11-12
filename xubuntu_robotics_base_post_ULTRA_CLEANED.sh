@@ -6507,15 +6507,25 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 
 #--- Sub-block 17.5: Configure Ceres with CMake ---
 # Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
+# Reference: docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md
 # 
+# PERFORMANCE FLAGS (from Ceres documentation):
+#   - SCHUR_SPECIALIZATIONS=ON: Fixed-size Schur complement for better performance
+#   - CUSTOM_BLAS=ON: Handcoded BLAS routines (usually faster than Eigen)
+#   - USE_CUDA=ON: Enable CUDA linear algebra solvers (documented flag)
+#   - EIGENMETIS=ON: Eigen METIS support for sparse matrix ordering
+#   - EIGENSPARSE=ON: Eigen sparse linear algebra
+#   - SUITESPARSE=ON: SuiteSparse for sparse linear algebra
+#
 # COMPATIBILITY NOTE: MINIGLOG=OFF (uses system glog 0.6.0)
 #   Why: Unified approach - both Ceres and COLMAP use same glog version
 #   Result: Ceres uses system glog 0.6.0, COLMAP uses system glog 0.6.0
 #   Benefit: Single glog version, consistent logging, proven compatible
 #   Verified: COLMAP 3.12.6 + Ceres 2.2.0 + glog 0.6.0 = Working combination
+#
+# MKL INTEGRATION:
 #   MKL linkage: `BLA_VENDOR` and `{BLAS,LAPACK}_LIBRARIES` are the documented knobs
-#   (docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md). No extra MKL cache
-#   variables are passed here.
+#   (docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
 #
 cmake .. \
   -G Ninja \
@@ -6528,6 +6538,7 @@ cmake .. \
   -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
   -D BUILD_SHARED_LIBS=ON \
   -D MINIGLOG=OFF \
+  -D GFLAGS=OFF \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
   -D BLA_VENDOR=Intel10_64lp \
   -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
@@ -6539,8 +6550,9 @@ cmake .. \
   -D EIGENMETIS=ON \
   -D EIGENSPARSE=ON \
   -D SUITESPARSE=ON \
-  -D Ceres_USE_EIGEN_MKL=ON \
-  -D Ceres_ENABLE_CUDA=ON \
+  -D SCHUR_SPECIALIZATIONS=ON \
+  -D CUSTOM_BLAS=ON \
+  -D USE_CUDA=ON \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_TESTING=OFF \
   -D BUILD_BENCHMARKS=OFF \
@@ -6643,16 +6655,14 @@ else
     sed -i 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.15)/' CMakeLists.txt
   fi
   
-  # MKL note: PyCeres must inherit MKL/CUDA configuration from compiled Ceres
-  # Pass MKL and CUDA flags to ensure PyCeres bindings use the same Ceres configuration
+  # MKL note: PyCeres will automatically inherit MKL/CUDA configuration from compiled Ceres
+  # Point to compiled Ceres location - MKL and CUDA support are already built into Ceres
   # Reference: docs/planning/MKL_MIGRATION_PLAN.md Phase 4.7
   export SKBUILD_CONFIGURE_OPTIONS="\
 -DWITH_TESTS=OFF \
 -DWITH_BENCHMARKS=OFF \
 -DWITH_PYTEST=OFF \
--DCeres_DIR=/usr/local/lib/cmake/Ceres \
--DCeres_USE_EIGEN_MKL=ON \
--DCeres_ENABLE_CUDA=ON"
+-DCeres_DIR=/usr/local/lib/cmake/Ceres"
 
   if python3 -m pip install \
         --no-deps \
