@@ -7994,8 +7994,14 @@ if [ -n "${MKL_CMAKE_DIR}" ]; then
   OPENCV_CMAKE_ARGS+=("-DMKL_DIR=${MKL_CMAKE_DIR}")
 fi
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
+# Strategy: 3-phase detection for maximum compatibility across deployment scenarios
+# Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK
+# Phase 2: Search common header locations for nvcuvid.h (may be system-installed)
+# Phase 3: Verify runtime libraries are available via ldconfig (driver-provided)
+# All three conditions must pass to enable NVDEC/NVENC hardware acceleration
 NV_CODEC_HEADER_DIR=""
 NV_CODEC_SDK_DIR=""
+# Phase 1: Explicit SDK installation check
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]; then
   NV_CODEC_SDK_DIR="/opt/Video_Codec_SDK"
   if [ -d "${NV_CODEC_SDK_DIR}/Interface" ]; then
@@ -8003,6 +8009,7 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]
   fi
 fi
 
+# Phase 2: Fallback header search across common system paths
 if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
   for candidate in \
     "/opt/Video_Codec_SDK/Interface" \
@@ -8020,16 +8027,18 @@ if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
   done
 fi
 
+# Phase 3: Verify runtime libraries are available (driver-provided, not from SDK)
 NV_CODEC_LIB_CUVID_FOUND=false
 NV_CODEC_LIB_ENCODE_FOUND=false
 LDCONFIG_CACHE="$(ldconfig -p 2>/dev/null || true)"
-if echo "${LDCONFIG_CACHE}" | grep -q "libnvcuvid.so"; then
+if grep -q "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_CUVID_FOUND=true
 fi
-if echo "${LDCONFIG_CACHE}" | grep -q "libnvidia-encode.so"; then
+if grep -q "libnvidia-encode.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_ENCODE_FOUND=true
 fi
 
+# Final decision: Enable only if all three phases passed
 if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ] && [ "${NV_CODEC_LIB_ENCODE_FOUND}" = "true" ]; then
   echo "  → NVIDIA NVDEC/NVENC interfaces detected; enabling Video Codec support in OpenCV"
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=ON")
