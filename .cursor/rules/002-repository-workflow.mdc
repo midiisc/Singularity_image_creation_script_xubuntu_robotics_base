@@ -118,17 +118,18 @@ globs:
 - ✅ `git pull origin <branch>` - To sync the approved branch before starting work
 
 **When user explicitly requests commit/push**:
-1. Stage and commit: `git add -A && git commit -m "fix: Description of changes"` (only after user approval).
-2. Push to the active PR branch immediately: `git push origin <feature-branch>` (only after user approval).
-3. Run a merge-feasibility check against `origin/beta` after the push:
+1. Run the Advanced CoT audit on the current diff using `prompts/Advanced-CoT-Multi-Agent-Prompt.md` and summarize the findings (or lack thereof) in chat.
+2. Stage and commit: `git add -A && git commit -m "fix: Description of changes"` (only after user approval).
+3. Push to the active PR branch immediately: `git push origin <feature-branch>` (only after user approval).
+4. Run a merge-feasibility check against `origin/beta` after the push:
    - `git fetch origin`
    - `git checkout beta`
    - `git pull origin beta`
    - `git merge --no-commit --no-ff origin/<feature-branch>`
    - Report the outcome (clean vs. conflicts and affected files)
    - `git merge --abort` to reset the dry-run state.
-4. If the feasibility check is clean, proceed to merge the PR branch into `beta`, push `beta`, and delete the merged branch (see “Merge & Cleanup Sequence” below). If conflicts occur, stop and coordinate with the user before retrying.
-5. ONLY if explicitly instructed, push to additional branches (e.g., `main`).
+5. If the feasibility check is clean, proceed to merge the PR branch into `beta`, push `beta`, and delete the merged branch (see “Merge & Cleanup Sequence” below). If conflicts occur, stop and coordinate with the user before retrying.
+6. ONLY if explicitly instructed, push to additional branches (e.g., `main`).
 
 #### Commit Process - USER APPROVAL REQUIRED
 
@@ -137,7 +138,8 @@ globs:
 2. Verify only core files are modified
 3. Verify no new files were created (unless explicitly requested)
 4. Get explicit user approval for commit/push
-5. After pushing, complete and report the merge-feasibility check against `origin/beta`
+5. Run the Advanced CoT audit and report the outcome before staging.
+6. After pushing, complete and report the merge-feasibility check against `origin/beta`
 
 **Commit message format**:
 - Use clear, descriptive messages
@@ -156,7 +158,8 @@ globs:
 2. **Implement changes on the feature branch**
    - Keep commits focused; follow core-file restrictions unless user expands scope
 3. **Request approval to stage/commit/push**
-   - After approval: `git add`, `git commit -m "<type>: <summary>"`, then immediately `git push origin feature/<scope>-<timestamp>`
+   - Run the Advanced CoT audit on the diff and summarize results.
+   - After approval: `git add`, `git commit -m "<type>: <summary>"`, then immediately `git push origin feature/<scope>-<timestamp)`
 4. **Run merge-feasibility after every approved push**
    - Perform the dry-run merge into updated `beta`; report clean vs. conflicts and reset with `git merge --abort`
    - If conflicts surface, coordinate with the user before proceeding
@@ -165,8 +168,9 @@ globs:
    - `git pull origin beta`
    - `git merge --no-ff feature/<scope>-<timestamp>`
    - `git push origin beta`
-   - `git branch -d feature/<scope>-<timestamp>`
-   - `git push origin --delete feature/<scope>-<timestamp>`
+   - Delete the now-redundant PR branch (it has already merged into `beta`):
+     - `git branch -d feature/<scope>-<timestamp>`
+     - `git push origin --delete feature/<scope>-<timestamp)`
    - Confirm only `main` and `beta` remain on the remote
 6. **Close the PR**
    - Mark the PR as merged/closed and report status to the user

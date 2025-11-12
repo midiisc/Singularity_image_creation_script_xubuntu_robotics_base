@@ -207,18 +207,22 @@ git commit -m "fix: Description of changes"
 
 4. **WAIT for explicit approval**
 
-5. **Upon user approval, stage and commit**:
+5. **Run the mandatory Advanced CoT audit before staging**:
+   - Use the prompt in `prompts/Advanced-CoT-Multi-Agent-Prompt.md` to review the current diff.
+   - Summarize any findings or confirm the audit passed in chat.
+
+6. **Upon user approval, stage and commit**:
    ```bash
    git add -A
    git commit -m "fix: <description>"
    ```
 
-6. **Push immediately after committing** (still on the PR branch):
+7. **Push immediately after committing** (still on the PR branch):
    ```bash
    git push origin <branch>
    ```
 
-7. **Run the merge-feasibility check against `origin/beta` (now that the PR branch is up to date)**:
+8. **Run the merge-feasibility check against `origin/beta` (now that the PR branch is up to date)**:
    ```bash
    git fetch origin
    git checkout beta
@@ -228,21 +232,21 @@ git commit -m "fix: Description of changes"
    - If conflicts occur, note the conflicting files, run `git merge --abort`, return to the PR branch, and report back to the user for guidance.
    - If clean, run `git merge --abort` to reset the dry-run state, then proceed to the actual merge.
 
-8. **Merge the PR branch into `beta` when feasible**:
+9. **Merge the PR branch into `beta` when feasible**:
    ```bash
    git checkout beta
    git pull origin beta
    git merge --no-ff <branch>
    git push origin beta
    ```
-   - After pushing `beta`, delete the PR branch locally and remotely:
+   - After pushing `beta`, delete the now-redundant PR branch (it has already merged into `beta`) locally and remotely:
      ```bash
      git branch -d <branch>
      git push origin --delete <branch>
      ```
    - Confirm in chat that only `origin/main` and `origin/beta` remain.
 
-9. **If conflicts blocked the merge**, remain on the PR branch after aborting the dry-run, summarize the conflict set, and collaborate with the user on a resolution plan before attempting another merge-feasibility check.
+10. **If conflicts blocked the merge**, remain on the PR branch after aborting the dry-run, summarize the conflict set, and collaborate with the user on a resolution plan before attempting another merge-feasibility check.
 
 ## 🔁 Parallel Feature Branch Lifecycle (Cloud Agent)
 
@@ -259,6 +263,7 @@ When the user authorizes parallel work using feature branches:
    - Follow core-file restrictions unless the user expands scope
    - Keep work isolated to the feature branch
 3. **Before every commit**
+   - Run the Advanced CoT audit on the diff (see prompt in `prompts/Advanced-CoT-Multi-Agent-Prompt.md`) and report results.
    - Obtain approval, then `git add` / `git commit`
    - Push the commit(s) to the PR branch immediately after each approved commit
 4. **Maintain the PR**
