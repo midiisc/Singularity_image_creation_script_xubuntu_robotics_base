@@ -6527,6 +6527,13 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #   MKL linkage: `BLA_VENDOR` and `{BLAS,LAPACK}_LIBRARIES` are the documented knobs
 #   (docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
 #
+# PERFORMANCE OPTIMIZATIONS:
+#   SCHUR_SPECIALIZATIONS=ON: Fixed-size Schur complement specializations (faster performance)
+#   CUSTOM_BLAS=ON: Handcoded BLAS routines (usually faster than Eigen)
+#   GFLAGS=ON: Google Flags support for runtime configuration
+#   CMAKE_POSITION_INDEPENDENT_CODE=ON: Build PIC for shared library compatibility
+#   PROVIDE_UNINSTALL_TARGET=ON: Adds uninstall target for package management
+#
 cmake .. \
   -G Ninja \
   -D CMAKE_BUILD_TYPE=Release \
@@ -6536,26 +6543,25 @@ cmake .. \
   -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
   -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
   -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
+  -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
   -D BUILD_SHARED_LIBS=ON \
+  -D SCHUR_SPECIALIZATIONS=ON \
+  -D CUSTOM_BLAS=ON \
   -D MINIGLOG=OFF \
-  -D GFLAGS=OFF \
+  -D GFLAGS=ON \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
   -D BLA_VENDOR=Intel10_64lp \
   -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
   -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-  -D MKL_ROOT="${MKLROOT}" \
-  -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
-  -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}" \
   -D LAPACK=ON \
   -D EIGENMETIS=ON \
   -D EIGENSPARSE=ON \
   -D SUITESPARSE=ON \
-  -D SCHUR_SPECIALIZATIONS=ON \
-  -D CUSTOM_BLAS=ON \
   -D USE_CUDA=ON \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_TESTING=OFF \
   -D BUILD_BENCHMARKS=OFF \
+  -D PROVIDE_UNINSTALL_TARGET=ON \
   -D CMAKE_CUDA_ARCHITECTURES="86;89;90" \
   -D CMAKE_CXX_STANDARD=17 \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -6655,9 +6661,9 @@ else
     sed -i 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.15)/' CMakeLists.txt
   fi
   
-  # MKL note: PyCeres will automatically inherit MKL/CUDA configuration from compiled Ceres
-  # Point to compiled Ceres location - MKL and CUDA support are already built into Ceres
-  # Reference: docs/planning/MKL_MIGRATION_PLAN.md Phase 4.7
+  # Note: PyCeres will automatically inherit the configuration from the installed Ceres library
+  # We only need to point it to the Ceres installation directory
+  # CUDA support will be automatically detected from the installed Ceres library
   export SKBUILD_CONFIGURE_OPTIONS="\
 -DWITH_TESTS=OFF \
 -DWITH_BENCHMARKS=OFF \
