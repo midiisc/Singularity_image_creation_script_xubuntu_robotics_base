@@ -7134,13 +7134,21 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     exit 1
   fi
 
+  # Provide canonical hints for CMake's FindMKL/FindTBB modules so that
+  # manually specified cache entries are actually consumed (and do not trigger
+  # "ignored" warnings during configuration).
+  export MKLDIR="${MKLROOT}"
+  export MKL_LIBRARIES="${MKL_BLAS_LIBRARIES}"
+  export TBBROOT="${TBBROOT:-/usr}"
+
   #--- Sub-block 17.16: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
   # IMPORTANT: TBB (Threading Building Blocks) is independent from Intel MKL:
   # - TBB: Intel's threading library for parallel algorithms (installed via libtbb-dev)
   # - MKL: Linear algebra implementation (BLAS/LAPACK) provided by Intel oneAPI
-  # - They coexist but are linked separately (MKL via BLA_VENDOR=Intel10_64lp)
-  # - TBB_DIR and TBB_LIBRARIES point to the system TBB package (not MKL's optional TBB build)
+  # - They coexist but are linked separately (MKL via FindMKL, TBB via FindTBB)
+  # - TBB_ROOT_DIR points to the system TBB package (not MKL's optional TBB build)
+  # - MKL_ROOT_DIR/MKL_LIBRARIES align with GTSAM's bundled FindMKL.cmake logic
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -7148,8 +7156,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_POLICY_DEFAULT_CMP0069=NEW \
     -D BUILD_SHARED_LIBS=ON \
     -D GTSAM_WITH_TBB=ON \
-    -D TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
-    -D TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
+    -D TBB_ROOT_DIR="${TBBROOT}" \
     -D GTSAM_WITH_EIGEN_MKL=ON \
     -D GTSAM_WITH_EIGEN_MKL_OPENMP=ON \
     -D GTSAM_USE_SYSTEM_EIGEN=ON \
@@ -7169,12 +7176,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_CXX_STANDARD=17 \
     -D CMAKE_CXX_STANDARD_REQUIRED=ON \
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-    -D BLA_VENDOR=Intel10_64lp \
-    -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D MKL_ROOT="${MKLROOT}" \
+    -D MKL_ROOT_DIR="${MKLROOT}" \
     -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
-    -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}"
+    -D MKL_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 
   #--- Sub-block 17.17: Build and install GTSAM ---
   # Critical: Compile with ninja using half CPU cores
