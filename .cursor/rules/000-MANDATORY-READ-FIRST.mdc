@@ -29,10 +29,10 @@ globs:
 - [ ] **I understand violations are PROHIBITED**
 
 ### Branch Verification
-- [ ] **I have checked current branch**: `git branch --show-current`
-- [ ] **I am on `beta` branch** (if not, I MUST switch immediately)
-- [ ] **I have pulled latest changes**: `git pull origin beta`
-- [ ] **I understand I MUST NOT create new branches**
+- [ ] **I have checked my current branch**: `git branch --show-current`
+- [ ] **I have confirmed this is the correct branch for the task** (per user or project instructions)
+- [ ] **I have synced the latest changes for the active branch** (e.g., `git pull origin <branch>`)
+- [ ] **I understand branch operations must follow user guidance**
 
 ### File Operations
 - [ ] **I understand ONLY core files can be modified** (see workflow rules)
@@ -104,7 +104,7 @@ globs:
 - Unsure? → ASK USER FIRST
 
 **Before git operation:**
-- Verify branch (must be beta)
+- Verify branch aligns with task requirements
 - Verify files (core files only)
 - Get explicit user approval
 - Never assume permission
@@ -128,8 +128,8 @@ globs:
 
 **If you are a Cursor Cloud Agent or Background Agent:**
 - You MUST read `.cursor/rules/003-cloud-agent-workflow.mdc` first
-- You MUST work on beta branch only
-- You MUST pull from beta before starting
-- You MUST push to beta only (after approval)
-- You MUST NEVER create pull requests
-- You MUST NEVER create cursor/* branches
+- You MUST confirm the correct branch with the user or project owner
+- You MUST sync the latest changes for that branch before starting
+- You MUST obtain explicit approval before pushing to any remote branch
+- You MUST NEVER create pull requests without approval
+- You MUST NEVER create cursor/* branches unless explicitly directed

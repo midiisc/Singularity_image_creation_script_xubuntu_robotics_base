@@ -22,13 +22,13 @@ globs:
 **YOU MUST complete this checklist BEFORE performing ANY action:**
 
 - [ ] **I have read and understand ALL rules in this file**
-- [ ] **I have verified I'm on beta branch** (`git branch --show-current`)
-- [ ] **I understand that ONLY beta branch is allowed** (never create new branches)
+- [ ] **I have checked my current branch** (`git branch --show-current`)
+- [ ] **I have confirmed the branch aligns with user or project instructions**
 - [ ] **I understand that ONLY core files can be modified** (see list below)
 - [ ] **I understand that git operations REQUIRE explicit user approval**
 - [ ] **I will NOT run git add/commit/push without explicit user permission**
 - [ ] **I will NOT create new files unless explicitly requested**
-- [ ] **I will NOT create new branches under any circumstances**
+- [ ] **I will NOT create or switch branches without user approval**
 
 **IF YOU ARE UNSURE ABOUT ANY ACTION, YOU MUST ASK THE USER FIRST.**
 
@@ -42,30 +42,29 @@ globs:
 ### GIT WORKFLOW
 
 #### Branch Rules - STRICTLY ENFORCED
-- **ONLY 2 BRANCHES ALLOWED**: `main` and `beta`
-- **ALWAYS work on `beta` branch** - NEVER create new branches
-- **NO `cursor/*` branches** - This is absolutely forbidden
-- **NO pull requests** - All changes go directly to beta branch
-- **MAIN BRANCH**: Only when explicitly instructed (e.g., "commit to main" or "merge beta to main")
-- **BETA TO MAIN**: User will explicitly say when to merge beta commits to main
+- **Confirm the target branch with the user before starting work**
+- **Do NOT create or switch branches without explicit approval**
+- **Avoid `cursor/*` branches unless explicitly directed to use them**
+- **Do NOT open pull requests unless the user asks for one**
+- **Main branch work**: Only when the user explicitly instructs you to operate on `main` or merge changes
 
 #### BEFORE STARTING ANY WORK - MANDATORY STEPS (NO EXCEPTIONS)
 
 **YOU MUST perform these steps BEFORE making ANY changes. THIS IS MANDATORY.**
 
 1. **Check current branch**: `git branch --show-current`
-   - **MUST be `beta`** - If not, you MUST switch immediately
-   
-2. **If not on beta, switch to beta**: `git checkout beta`
-   - **DO NOT proceed until you are on beta branch**
-   
-3. **Pull latest changes**: `git pull origin beta`
-   - **MUST pull latest changes before starting work**
-   
-4. **Verify you're on beta branch**: `git status`
-   - **CONFIRM you are on beta branch before proceeding**
+   - Confirm it matches the branch the user asked you to use
+    
+2. **Switch if necessary**: `git checkout <branch>`
+   - Do not proceed until you are on the approved branch
+    
+3. **Pull latest changes**: `git pull origin <branch>`
+   - Always sync the remote branch before starting work
+    
+4. **Verify workspace state**: `git status`
+   - Confirm you are on the correct branch with a clean working tree
 
-**IF YOU ARE ON THE WRONG BRANCH, YOU MUST STOP AND SWITCH TO BETA BEFORE PROCEEDING.**
+**IF YOU ARE ON A DIFFERENT BRANCH THAN REQUESTED, YOU MUST STOP AND GET USER APPROVAL BEFORE SWITCHING.**
 
 **DO NOT SKIP THESE STEPS. THEY ARE MANDATORY.**
 
@@ -104,25 +103,25 @@ globs:
 - ❌ **NEVER run `git add`** without user saying "add", "stage", "commit", or similar
 - ❌ **NEVER run `git commit`** without user explicitly saying "commit", "commit this", "save changes", or similar
 - ❌ **NEVER run `git push`** without user explicitly saying "push", "push this", "push to beta", or similar
-- ❌ **NEVER run `git checkout`** to create new branches (only to switch to beta)
-- ❌ **NEVER run `git branch`** to create new branches
+- ❌ **NEVER run `git checkout -b`** without explicit approval
+- ❌ **NEVER run `git branch <name>`** without explicit approval
 
 **Allowed git operations (with context)**:
 - ✅ `git branch --show-current` - To check current branch
 - ✅ `git status` - To check repository status
-- ✅ `git checkout beta` - To switch to beta branch (when not on beta)
-- ✅ `git pull origin beta` - To pull latest changes (before starting work)
+- ✅ `git checkout <branch>` - To switch to the user-approved branch
+- ✅ `git pull origin <branch>` - To sync the approved branch before starting work
 
 **When user explicitly requests commit/push**:
 1. Add changes: `git add -A` (only after user approval)
 2. Commit with clear message: `git commit -m "fix: Description of changes"` (only after user approval)
-3. Push to beta branch (DEFAULT): `git push origin beta` (only after user approval)
-4. ONLY if explicitly instructed, push to main
+3. Push to the approved branch: `git push origin <branch>` (only after user approval)
+4. ONLY if explicitly instructed, push to additional branches (e.g., `main`)
 
 #### Commit Process - USER APPROVAL REQUIRED
 
 **Before committing, you MUST**:
-1. Verify you're on beta branch
+1. Verify you're on the user-approved branch
 2. Verify only core files are modified
 3. Verify no new files were created (unless explicitly requested)
 4. Get explicit user approval for commit/push
@@ -132,20 +131,20 @@ globs:
 - Format: `"fix: Description of changes"` or `"feat: Description of changes"`
 - Be specific about what was changed
 
-#### BETA TO MAIN WORKFLOW
+#### COORDINATING MULTIPLE BRANCHES
 
-- **DEFAULT**: All commits go to beta branch
-- **MAIN COMMITS**: Only when user explicitly says "commit to main" or "merge beta to main"
-- **END OF DAY**: User will explicitly instruct when to merge beta commits to main
-- **VERIFICATION**: User will verify changes before main branch updates
+- **DEFAULT**: Work on the branch the user specifies for the task
+- **PROMOTIONS**: Only move changes to other branches (e.g., `main`) when the user explicitly instructs it
+- **SYNCHRONIZATION**: Confirm with the user how to handle merges or rebases when multiple branches are involved
+- **VERIFICATION**: Ensure the user reviews and approves before updating protected branches like `main`
 
 #### Forbidden Actions - ABSOLUTELY PROHIBITED
 
-❌ Creating new branches
-❌ Creating pull requests
+❌ Creating new branches without explicit approval
+❌ Creating pull requests without explicit approval
 ❌ Adding non-core files
 ❌ Creating patch scripts
-❌ Working on any branch other than beta
+❌ Working on unapproved branches
 ❌ Creating temporary files
 ❌ Adding workflow files
 ❌ Committing to main without explicit instruction
@@ -165,11 +164,11 @@ globs:
 #### VERIFICATION CHECKLIST - BEFORE COMPLETING WORK
 
 Before finishing any task, verify:
-- [ ] Working on beta branch (checked with `git branch --show-current`)
+- [ ] Working on the user-approved branch (checked with `git branch --show-current`)
 - [ ] Only core files modified (verified with `git status`)
 - [ ] No new files created (unless explicitly requested)
 - [ ] Changes ready for commit (but NOT committed without user approval)
-- [ ] No new branches created
+- [ ] No unapproved branches created
 - [ ] Repository remains minimal and clean
 - [ ] User has been asked for approval before any git operations
 
@@ -202,4 +201,4 @@ Before finishing any task, verify:
 
 **THESE RULES ARE AUTOMATICALLY ENFORCED. VIOLATIONS WILL BE DETECTED.**
 
-## REMEMBER: BETA BRANCH ONLY, CORE FILES ONLY, NO NEW BRANCHES, MINIMAL REPO, USER APPROVAL FOR GIT OPERATIONS - STRICTLY ENFORCED
+## REMEMBER: USE USER-APPROVED BRANCHES, MODIFY ONLY CORE FILES, KEEP REPO MINIMAL, AND ALWAYS OBTAIN USER APPROVAL FOR GIT OPERATIONS

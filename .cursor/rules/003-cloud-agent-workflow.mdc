@@ -1,6 +1,6 @@
 ---
 name: Cloud Agent Workflow Rules
-description: Specific rules for Cursor Cloud Agents and Background Agents - Beta-only workflow enforcement
+description: Specific rules for Cursor Cloud Agents and Background Agents - Branch coordination and approval workflow
 version: "1.0"
 alwaysApply: true
 globs:
@@ -27,7 +27,7 @@ globs:
 
 **If any of the above apply, you MUST follow these rules.**
 
-## 🚨 CRITICAL: BETA BRANCH ONLY WORKFLOW
+## 🚨 CRITICAL: BRANCH COORDINATION WORKFLOW
 
 ### Mandatory Pre-Work Steps - NO EXCEPTIONS
 
@@ -37,37 +37,36 @@ globs:
 # 1. Check current branch
 git branch --show-current
 
-# 2. If not on beta, switch to beta immediately
-git checkout beta
+# 2. Confirm the branch matches user instructions
+git checkout <branch>   # only if a switch is required
 
-# 3. Pull latest changes from beta
-git pull origin beta
+# 3. Pull latest changes for the approved branch
+git pull origin <branch>
 
-# 4. Verify you're on beta
+# 4. Verify workspace state
 git status
 ```
 
 **DO NOT SKIP THESE STEPS. THEY ARE MANDATORY FOR ALL CLOUD AGENTS.**
 
-### Absolute Branch Rules
+### Branch Rules
 
-- ✅ **ONLY BRANCH ALLOWED**: `beta`
-- ❌ **FORBIDDEN**: Creating new branches
-- ❌ **FORBIDDEN**: Creating `cursor/*` branches
-- ❌ **FORBIDDEN**: Working on any branch other than `beta`
-- ❌ **FORBIDDEN**: Creating pull requests
-- ❌ **FORBIDDEN**: Pushing to any branch other than `beta`
+- ✅ **WORK ONLY ON USER-APPROVED BRANCHES**
+- ❌ **FORBIDDEN**: Creating or switching to new branches without explicit approval
+- ❌ **FORBIDDEN**: Creating `cursor/*` branches unless the user directs you
+- ❌ **FORBIDDEN**: Creating pull requests without explicit approval
+- ❌ **FORBIDDEN**: Pushing to any remote branch without explicit approval
 
-### Pull Request Prohibition
+### Pull Request Restrictions
 
-**CLOUD AGENTS MUST NEVER CREATE PULL REQUESTS.**
+**CLOUD AGENTS MUST NOT CREATE PULL REQUESTS WITHOUT EXPLICIT USER APPROVAL.**
 
-- ❌ **NEVER run**: `gh pr create`
-- ❌ **NEVER use**: GitHub PR APIs
-- ❌ **NEVER create**: Pull requests through any mechanism
-- ✅ **ONLY ALLOWED**: Direct commits to beta branch (after user approval)
+- ❌ **NEVER run**: `gh pr create` unless instructed
+- ❌ **NEVER use**: GitHub PR APIs without approval
+- ❌ **NEVER create**: Pull requests through any mechanism unless the user asks for one
+- ✅ **ONLY ALLOWED**: Direct commits to the approved branch (after user approval)
 
-**Why:** All cloud agents work on the same `beta` branch. Pull requests would create chaos with multiple agents creating PRs independently.
+**Why:** Uncoordinated pull requests make it difficult to manage cloud-agent workflows. Always defer to user instructions.
 
 ## 🔒 Git Operations - Explicit User Approval Required
 
@@ -75,10 +74,10 @@ git status
 
 **Allowed without explicit approval (but MANDATORY before work):**
 ```bash
-git pull origin beta
+git pull origin <branch>
 ```
 
-**You MUST pull from beta before starting any work.**
+**You MUST pull the latest changes for the approved branch before starting any work.**
 
 ### Pushing Changes
 
@@ -86,21 +85,20 @@ git pull origin beta
 
 **Forbidden commands (without approval):**
 - ❌ `git push`
-- ❌ `git push origin beta`
-- ❌ `git push origin main`
-- ❌ `git push -u origin <any-branch>`
+- ❌ `git push origin <branch>`
+- ❌ `git push -u origin <branch>`
 - ❌ `git push --force`
 
 **Required approval phrases from user:**
-- "push to beta"
+- "push to <branch>"
 - "push changes"
 - "push this"
 - "commit and push"
-- "deploy to beta"
+- Any explicit instruction to push
 
 **ONLY after hearing one of these phrases, you may:**
 ```bash
-git push origin beta
+git push origin <branch>
 ```
 
 ### Committing Changes
@@ -126,15 +124,15 @@ git commit -m "fix: Description of changes"
 
 ### Branch Operations
 
-**NEVER create or switch branches (except to beta).**
+**NEVER create or switch branches without user approval.**
 
-**Forbidden commands:**
+**Forbidden commands (without approval):**
 - ❌ `git checkout -b <new-branch>`
 - ❌ `git branch <new-branch>`
 - ❌ `git switch -c <new-branch>`
 
-**ONLY allowed:**
-- ✅ `git checkout beta` (to switch TO beta)
+**Allowed with approval:**
+- ✅ `git checkout <branch>` (to move to the approved branch)
 - ✅ `git branch --show-current` (to check current branch)
 
 ## 📋 Cloud Agent Workflow - Step by Step
@@ -145,23 +143,23 @@ git commit -m "fix: Description of changes"
    ```bash
    git branch --show-current
    ```
-   - If output is NOT "beta" → STOP and switch to beta
+   - If output is not the approved branch → STOP and coordinate with the user
 
-2. **Switch to beta** (if needed):
+2. **Switch to the approved branch** (only with approval):
    ```bash
-   git checkout beta
+   git checkout <branch>
    ```
 
 3. **Pull latest changes**:
    ```bash
-   git pull origin beta
+   git pull origin <branch>
    ```
 
-4. **Verify beta branch**:
+4. **Verify branch and status**:
    ```bash
    git status
    ```
-   - Output MUST show "On branch beta"
+   - Output MUST show you are on the approved branch with expected status
 
 5. **NOW you can start work**
 
@@ -173,16 +171,16 @@ git commit -m "fix: Description of changes"
    git diff
    ```
 
-2. **Verify you're still on beta**:
+2. **Verify you're still on the approved branch**:
    ```bash
    git branch --show-current
    ```
-   - If NOT "beta" → STOP and ask user
+   - If not correct → STOP and ask user
 
 3. **Present changes to user**:
    - Show summary of changes
    - List modified files
-   - Ask: "Would you like me to commit these changes to beta?"
+   - Ask: "Would you like me to commit these changes to <branch>?"
 
 4. **WAIT for explicit approval**
 
@@ -193,13 +191,13 @@ git commit -m "fix: Description of changes"
    ```
 
 6. **Ask about pushing**:
-   - "Changes committed to beta. Would you like me to push to origin/beta?"
+   - "Changes committed to <branch>. Would you like me to push to origin/<branch>?"
 
 7. **WAIT for explicit approval**
 
 8. **ONLY after approval, push**:
    ```bash
-   git push origin beta
+   git push origin <branch>
    ```
 
 ## 🚨 Cursor/* Branch Handling
@@ -212,60 +210,60 @@ git commit -m "fix: Description of changes"
 2. **Report to user**:
    ```
    ⚠️ WARNING: Currently on cursor/<branch-name>
-   This violates the beta-only workflow rule.
+    This branch was not approved for this task.
    ```
 
 3. **Ask user for permission**:
    ```
-   I need to switch to beta branch. May I proceed?
+    I need to switch to the approved branch. May I proceed?
    Commands I will run:
-   1. git checkout beta
-   2. git pull origin beta
+    1. git checkout <branch>
+    2. git pull origin <branch>
    ```
 
 4. **WAIT for explicit approval**
 
-5. **ONLY after approval, switch to beta**:
+5. **ONLY after approval, switch to the approved branch**:
    ```bash
-   git checkout beta
-   git pull origin beta
+   git checkout <branch>
+   git pull origin <branch>
    ```
 
-6. **Continue work on beta**
+6. **Continue work on the approved branch**
 
 ## 🔴 Multi-Agent Coordination
 
 **When multiple cloud agents are working:**
 
-- ✅ **All agents work on beta branch**
-- ✅ **All agents pull latest before starting work**
-- ✅ **All agents push to beta after approval**
-- ❌ **No pull requests** (would create chaos)
-- ❌ **No separate branches** (would create conflicts)
+- ✅ **All agents confirm the correct branch with the user**
+- ✅ **All agents pull latest changes before starting work**
+- ✅ **All agents coordinate pushes to avoid conflicts**
+- ❌ **No pull requests** without user approval
+- ❌ **No unsanctioned branches**
 
 **Conflict Resolution:**
 - If push fails due to remote changes:
   ```bash
-  git pull --rebase origin beta
-  git push origin beta
+  git pull --rebase origin <branch>
+  git push origin <branch>
   ```
-- Only after user approval
+  - Only after user approval
 
 ## 📋 Cloud Agent Checklist
 
 **Before starting ANY work:**
-- [ ] I am on beta branch (`git branch --show-current` shows "beta")
-- [ ] I have pulled latest changes (`git pull origin beta`)
-- [ ] I understand I MUST NOT create branches
-- [ ] I understand I MUST NOT create pull requests
+- [ ] I am on the user-approved branch (`git branch --show-current`)
+- [ ] I have pulled the latest changes for that branch (`git pull origin <branch>`)
+- [ ] I understand I MUST NOT create branches without approval
+- [ ] I understand I MUST NOT create pull requests without approval
 - [ ] I understand I MUST NOT push without explicit approval
 - [ ] I understand I MUST NOT commit without explicit approval
 
 **Before finishing ANY work:**
-- [ ] I am still on beta branch
+- [ ] I am still on the approved branch
 - [ ] I have asked user for commit approval
 - [ ] I have asked user for push approval
-- [ ] I have NOT created any new branches
+- [ ] I have NOT created any unapproved branches
 - [ ] I have NOT created any pull requests
 
 ## 🔗 Related Rules
@@ -279,14 +277,14 @@ git commit -m "fix: Description of changes"
 ## 💡 Summary for Cloud Agents
 
 **Simple rules to remember:**
-1. ✅ **Always work on beta branch**
-2. ✅ **Always pull from beta before starting**
+1. ✅ **Always confirm the correct branch with the user**
+2. ✅ **Always sync the approved branch before starting**
 3. ✅ **Always ask before committing**
 4. ✅ **Always ask before pushing**
-5. ✅ **Always push to beta only**
-6. ❌ **Never create branches**
-7. ❌ **Never create pull requests**
-8. ❌ **Never work on cursor/* branches**
+5. ✅ **Only push to branches the user approves**
+6. ❌ **Never create unapproved branches**
+7. ❌ **Never create pull requests without approval**
+8. ❌ **Never continue on unexpected `cursor/*` branches without the user's consent**
 
 **When in doubt: STOP, ASK USER, WAIT FOR APPROVAL.**
 
