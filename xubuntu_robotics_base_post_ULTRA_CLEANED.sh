@@ -6659,8 +6659,7 @@ else
         --disable-pip-version-check \
         --no-binary :all: \
         --config-settings=cmake.build-type=Release \
-        --config-settings=cmake.verbose=true \
-        --config-settings=cmake.install-prefix=/usr/local \
+        --config-settings=build.verbose=true \
         . 2>&1 | tee /tmp/pyceres_install.log; then
       echo "✓ PyCeres built and installed from source (using compiled Ceres)"
 
