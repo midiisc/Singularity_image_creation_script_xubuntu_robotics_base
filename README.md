@@ -397,7 +397,7 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 For more information:
 - **Rule Files (Source of Truth)**: `.cursor/rules/*.mdc` (automatically enforced by Cursor IDE)
 - **Global Settings**: `docs/GLOBAL_CURSOR_SETTINGS.md` (setup instructions for all repositories)
-- **Implementation Summary** (NEW): `docs/IMPLEMENTATION_SUMMARY.md` (comprehensive audit recommendations implemented 2025-11-12)
+- **Checks, Rules & CI/CD** (NEW): `docs/CHECKS_RULES_CICD.md` (comprehensive documentation of all automated checks, workflow rules, and CI/CD integrations)
 
 ### Requesting Files
 
@@ -413,7 +413,7 @@ To get the AI to create a file, use explicit phrases:
 ### Repository Documentation
 
 **Build & Validation:**
-- **`docs/IMPLEMENTATION_SUMMARY.md`** (NEW) - Comprehensive audit implementation summary (2025-11-12)
+- **`docs/CHECKS_RULES_CICD.md`** (NEW) - Code checks, workflow rules, and CI/CD integrations documentation
 - **`docs/CMAKE_FLAG_VALIDATOR_USAGE.md`** (NEW) - CMake flag validator guide
 - **`docs/cmake-templates/`** (NEW) - Standardized CMake configuration templates
 - **`docs/flags/`** - Library-specific CMake flag documentation
