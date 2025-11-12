@@ -75,8 +75,13 @@ git status
 - ✅ **Create the PR immediately after the feature branch is pushed** (during initialization).
 - ✅ **PR titles must describe the task and include the creation date/time**, e.g., `feat: diagnostics refresh (2025-11-12 15:30 UTC)`.
 - ✅ **Post the PR URL, source branch, target branch, and title in chat as soon as the PR exists** and await confirmation that creation succeeded.
-- ✅ **Update the PR description/checklist as work progresses and note merge-feasibility results.**
-- ✅ **Once changes merge into `beta`, close or mark the PR as merged and delete the feature branch (local and remote).**
+- ✅ **Update the PR description/checklist as work progresses and note merge-feasibility or merge outcomes.**
+- ✅ **Once a user authorizes commit/push, you MUST execute the full post-submission sequence in order:**  
+  1. Stage and commit the approved changes.  
+  2. Push the commit(s) back to the active PR branch.  
+  3. Run a merge-feasibility check against `origin/beta`.  
+  4. If the check is clean, merge the PR branch into `beta`, push `beta`, and delete the merged branch locally and remotely.  
+  5. If conflicts arise, stop, report the conflicts (including files), and collaborate with the user on resolution before retrying.
 - ❌ **Do NOT leave PRs or feature branches open after completion.**
 - ❌ **Do NOT open multiple PRs per session without user direction.**
 
@@ -202,39 +207,42 @@ git commit -m "fix: Description of changes"
 
 4. **WAIT for explicit approval**
 
-5. **Run the merge-feasibility check against `origin/beta` (before committing)**:
-   ```bash
-   git fetch origin
-   git merge --no-commit --no-ff origin/beta
-   ```
-   - Report whether the merge is clean or list conflicts/files if not
-   - Reset: `git merge --abort`
-
-6. **ONLY after approval, commit**:
+5. **Upon user approval, stage and commit**:
    ```bash
    git add -A
    git commit -m "fix: <description>"
    ```
 
-7. **Ask about pushing**:
-    - "Changes committed to <branch>. Would you like me to push to origin/<branch>?"
-
-8. **WAIT for explicit approval**
-
-9. **ONLY after approval, push**:
+6. **Push immediately after committing** (still on the PR branch):
    ```bash
    git push origin <branch>
    ```
-   - (<branch> should be the active feature branch backing the PR)
 
-10. **Update the PR immediately after pushing**:
-    - Link to the latest commit(s) and note the merge-feasibility result
-    - Confirm in chat that the PR reflects the new changes
+7. **Run the merge-feasibility check against `origin/beta` (now that the PR branch is up to date)**:
+   ```bash
+   git fetch origin
+   git checkout beta
+   git pull origin beta
+   git merge --no-commit --no-ff origin/<branch>
+   ```
+   - If conflicts occur, note the conflicting files, run `git merge --abort`, return to the PR branch, and report back to the user for guidance.
+   - If clean, run `git merge --abort` to reset the dry-run state, then proceed to the actual merge.
 
-11. **After work merges into `beta`, clean up**:
-    - Close or mark the PR as merged
-    - Delete the feature branch locally (`git branch -d <branch>`) and remotely (`git push origin --delete <branch>`)
-    - Confirm only `main` and `beta` remain on the remote
+8. **Merge the PR branch into `beta` when feasible**:
+   ```bash
+   git checkout beta
+   git pull origin beta
+   git merge --no-ff <branch>
+   git push origin beta
+   ```
+   - After pushing `beta`, delete the PR branch locally and remotely:
+     ```bash
+     git branch -d <branch>
+     git push origin --delete <branch>
+     ```
+   - Confirm in chat that only `origin/main` and `origin/beta` remain.
+
+9. **If conflicts blocked the merge**, remain on the PR branch after aborting the dry-run, summarize the conflict set, and collaborate with the user on a resolution plan before attempting another merge-feasibility check.
 
 ## 🔁 Parallel Feature Branch Lifecycle (Cloud Agent)
 
@@ -251,21 +259,16 @@ When the user authorizes parallel work using feature branches:
    - Follow core-file restrictions unless the user expands scope
    - Keep work isolated to the feature branch
 3. **Before every commit**
-   - Run the merge-feasibility check against `origin/beta` and report the result
-   - `git merge --abort` to reset, then `git commit -m "<type>: <summary>"`
-   - Push updates to the feature branch after approval
+   - Obtain approval, then `git add` / `git commit`
+   - Push the commit(s) to the PR branch immediately after each approved commit
 4. **Maintain the PR**
-   - Update descriptions/checklists and note merge-feasibility outcomes
-   - Promptly share PR status in chat after each push
-5. **Merge into beta when approved**
-   - `git checkout beta`
-   - `git pull origin beta`
-   - `git merge --no-ff feature/<scope>-<timestamp>`
-   - Resolve conflicts with user guidance; commit and `git push origin beta`
+   - After each push, run the merge-feasibility dry-run against `origin/beta`
+   - If clean, keep the results noted; if conflicts appear, coordinate with the user before proceeding
+5. **Merge into beta when the work is approved for landing**
+   - Execute the merge steps: checkout `beta`, pull latest, merge the PR branch with `--no-ff`, push `beta`
+   - Upon success, delete the PR branch locally and remotely
 6. **Clean up**
    - Close/merge the PR
-   - `git branch -d feature/<scope>-<timestamp>`
-   - `git push origin --delete feature/<scope>-<timestamp>`
    - Confirm only `main` and `beta` remain on the remote
 7. **Promote to main only with explicit instruction**, repeating feasibility checks and cleanup
 
