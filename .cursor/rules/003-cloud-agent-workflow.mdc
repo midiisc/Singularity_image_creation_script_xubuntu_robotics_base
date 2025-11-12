@@ -59,23 +59,26 @@ git status
 
 ### Branch Rules
 
-- ✅ **WORK ONLY ON USER-APPROVED BRANCHES**
-- ❌ **FORBIDDEN**: Creating or switching to new branches without explicit approval
-- ❌ **FORBIDDEN**: Creating `cursor/*` branches unless the user directs you
-- ❌ **FORBIDDEN**: Creating pull requests without explicit approval
-- ❌ **FORBIDDEN**: Pushing to any remote branch without explicit approval
+- ✅ **Start from the user-approved base branch (`beta` unless otherwise directed)**
+- ✅ **Create exactly one feature branch per session immediately after initialization (with explicit approval for branch creation)**
+  - Name it descriptively and include a timestamp, e.g., `feature/<scope>-20251112-1530`
+- ✅ **Push the feature branch and open a pull request targeting `beta` as part of initialization (requires explicit approval for push/PR)**
+  - Share the PR URL, source branch, target branch, and title (which must include the timestamp) in your first update after creation
+- ✅ **Perform all subsequent work through that PR; do not commit directly to `beta` or `main`**
+- ✅ **Close/merge the PR and delete the feature branch (local and remote) once work lands on `beta`, keeping only `main` and `beta`**
+- ❌ **FORBIDDEN**: Using `cursor/*` branches unless the user explicitly directs you
+- ❌ **FORBIDDEN**: Leaving feature branches or PRs open after completion
 
-### Pull Request Restrictions
+### Pull Request Workflow
 
-**CLOUD AGENTS MUST NOT CREATE PULL REQUESTS WITHOUT EXPLICIT USER APPROVAL.**
-
-- ❌ **NEVER run**: `gh pr create` unless instructed
-- ❌ **NEVER use**: GitHub PR APIs without approval
-- ❌ **NEVER create**: Pull requests through any mechanism unless the user asks for one
-- ✅ **ONLY ALLOWED**: Direct commits to the approved branch (after user approval)
-- ✅ **If the user explicitly authorizes a pull request**, you must post the PR URL, target branch, source branch, and PR title in chat immediately after creation and await confirmation that the PR was successfully created before continuing with further actions.
-
-**Why:** Uncoordinated pull requests make it difficult to manage cloud-agent workflows. Always defer to user instructions.
+- ✅ **Request explicit approval** before pushing the feature branch and creating the PR.
+- ✅ **Create the PR immediately after the feature branch is pushed** (during initialization).
+- ✅ **PR titles must describe the task and include the creation date/time**, e.g., `feat: diagnostics refresh (2025-11-12 15:30 UTC)`.
+- ✅ **Post the PR URL, source branch, target branch, and title in chat as soon as the PR exists** and await confirmation that creation succeeded.
+- ✅ **Update the PR description/checklist as work progresses and note merge-feasibility results.**
+- ✅ **Once changes merge into `beta`, close or mark the PR as merged and delete the feature branch (local and remote).**
+- ❌ **Do NOT leave PRs or feature branches open after completion.**
+- ❌ **Do NOT open multiple PRs per session without user direction.**
 
 ## 🔒 Git Operations - Explicit User Approval Required
 
@@ -169,8 +172,14 @@ git commit -m "fix: Description of changes"
    git status
    ```
    - Output MUST show you are on the approved branch with expected status
-
-5. **NOW you can start work**
+5. **Create the session feature branch and PR (with approval)**:
+   - Request permission to create the feature branch and PR
+   - `git checkout -b feature/<scope>-<timestamp>`
+   - Announce intended file changes
+   - After approval, push the branch: `git push -u origin feature/<scope>-<timestamp>`
+   - Create the PR targeting `beta` with a descriptive, timestamped title
+   - Post the PR URL, source branch, target branch, and title in chat; wait for confirmation that the PR is ready
+6. **NOW you can start work**
 
 ### When Completing Work
 
@@ -193,55 +202,72 @@ git commit -m "fix: Description of changes"
 
 4. **WAIT for explicit approval**
 
-5. **ONLY after approval, commit**:
+5. **Run the merge-feasibility check against `origin/beta` (before committing)**:
+   ```bash
+   git fetch origin
+   git merge --no-commit --no-ff origin/beta
+   ```
+   - Report whether the merge is clean or list conflicts/files if not
+   - Reset: `git merge --abort`
+
+6. **ONLY after approval, commit**:
    ```bash
    git add -A
    git commit -m "fix: <description>"
    ```
 
-6. **Ask about pushing**:
-   - "Changes committed to <branch>. Would you like me to push to origin/<branch>?"
+7. **Ask about pushing**:
+    - "Changes committed to <branch>. Would you like me to push to origin/<branch>?"
 
-7. **WAIT for explicit approval**
+8. **WAIT for explicit approval**
 
-8. **ONLY after approval, push**:
+9. **ONLY after approval, push**:
    ```bash
    git push origin <branch>
    ```
+   - (<branch> should be the active feature branch backing the PR)
+
+10. **Update the PR immediately after pushing**:
+    - Link to the latest commit(s) and note the merge-feasibility result
+    - Confirm in chat that the PR reflects the new changes
+
+11. **After work merges into `beta`, clean up**:
+    - Close or mark the PR as merged
+    - Delete the feature branch locally (`git branch -d <branch>`) and remotely (`git push origin --delete <branch>`)
+    - Confirm only `main` and `beta` remain on the remote
 
 ## 🔁 Parallel Feature Branch Lifecycle (Cloud Agent)
 
 When the user authorizes parallel work using feature branches:
 
-1. **Create the feature branch from the approved base**
-   - `git checkout <base-branch>`
-   - `git pull origin <base-branch>`
-   - `git checkout -b feature/<scope>`
-   - Announce branch name, scope, and intended files in chat
+1. **Create the feature branch from `beta`**
+   - `git checkout beta`
+   - `git pull origin beta`
+   - `git checkout -b feature/<scope>-<timestamp>`
+   - Announce branch scope and intended file changes in chat
+   - After approval, `git push -u origin feature/<scope>-<timestamp>`
+   - Create the PR targeting `beta`, include scope + timestamp in the title, and share its URL/details in chat
 2. **Implement changes**
    - Follow core-file restrictions unless the user expands scope
    - Keep work isolated to the feature branch
-3. **Stage, commit, and push only after approval**
-   - `git add -A`
-   - `git commit -m "<type>: <summary>"`
-   - `git push origin feature/<scope>`
-4. **Run the merge feasibility check against beta**
-   - `git fetch origin`
-   - `git merge --no-commit --no-ff origin/beta`
-   - Report the outcome (clean vs. conflicts + files) to the user
-   - Run `git merge --abort` to reset the branch even if no conflicts occurred
-5. **Request merge approval**
-   - Provide diff summary, test status, and feasibility result
-6. **Merge into beta when approved**
+3. **Before every commit**
+   - Run the merge-feasibility check against `origin/beta` and report the result
+   - `git merge --abort` to reset, then `git commit -m "<type>: <summary>"`
+   - Push updates to the feature branch after approval
+4. **Maintain the PR**
+   - Update descriptions/checklists and note merge-feasibility outcomes
+   - Promptly share PR status in chat after each push
+5. **Merge into beta when approved**
    - `git checkout beta`
    - `git pull origin beta`
-   - `git merge --no-ff feature/<scope>`
-   - Resolve conflicts with user guidance; commit and push to beta
-7. **Clean up the feature branch**
-   - `git branch -d feature/<scope>`
-   - `git push origin --delete feature/<scope>`
-8. **Main branch promotions**
-   - Only execute when the user explicitly requests it; repeat feasibility check and cleanup for main
+   - `git merge --no-ff feature/<scope>-<timestamp>`
+   - Resolve conflicts with user guidance; commit and `git push origin beta`
+6. **Clean up**
+   - Close/merge the PR
+   - `git branch -d feature/<scope>-<timestamp>`
+   - `git push origin --delete feature/<scope>-<timestamp>`
+   - Confirm only `main` and `beta` remain on the remote
+7. **Promote to main only with explicit instruction**, repeating feasibility checks and cleanup
 
 ## 🚨 Cursor/* Branch Handling
 
@@ -294,21 +320,20 @@ When the user authorizes parallel work using feature branches:
 ## 📋 Cloud Agent Checklist
 
 **Before starting ANY work:**
-- [ ] I am on the user-approved branch (`git branch --show-current`)
+- [ ] I am on the user-approved base branch (`git branch --show-current`)
 - [ ] I have pulled the latest changes for that branch (`git pull origin <branch>`)
-- [ ] I have confirmed whether a dedicated feature branch is expected
-- [ ] I understand I MUST NOT create branches without approval
-- [ ] I understand I MUST NOT create pull requests without approval
-- [ ] I understand I MUST NOT push without explicit approval
-- [ ] I understand I MUST NOT commit without explicit approval
+- [ ] I have explicit approval to create the session feature branch and PR
+- [ ] I have created and pushed `feature/<scope>-<timestamp>` for this session
+- [ ] I have opened the PR targeting `beta`, shared its URL/details in chat, and confirmed it is ready
+- [ ] I understand I MUST NOT commit or push again without explicit approval
 
 **Before finishing ANY work:**
-- [ ] I am still on the approved branch
-- [ ] I have asked user for commit approval
-- [ ] I have asked user for push approval
-- [ ] I have run and reported the beta merge feasibility check if the branch targets beta
-- [ ] I have NOT created any unapproved branches
-- [ ] I have NOT created any pull requests
+- [ ] I am still on the approved feature branch
+- [ ] I have asked the user for commit approval
+- [ ] I have run and reported the pre-commit merge-feasibility check against `origin/beta`
+- [ ] I have asked the user for push approval and updated the PR after pushing
+- [ ] The PR reflects the latest status and merge-feasibility results
+- [ ] After merging into `beta`, I have closed/merged the PR and deleted the feature branch locally and remotely
 
 ## 🔗 Related Rules
 

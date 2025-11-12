@@ -42,14 +42,16 @@ globs:
 ### GIT WORKFLOW
 
 #### Branch Rules - STRICTLY ENFORCED
-- **Confirm the target branch with the user before starting work**
-- **Do NOT create or switch branches without explicit approval**
-- **Short-lived feature branches are allowed when the user requests or approves parallel work**
-  - Prefer names like `feature/<scope>` or `fix/<ticket>` for clarity
-  - Document in chat which branch owns which task
+- **Confirm the target branch (`beta` unless otherwise directed) with the user before starting work**
+- **Create exactly one dedicated feature branch per agent session, immediately after initialization and user confirmation**
+  - Branch naming must be descriptive and include a timestamp, e.g., `feature/<scope>-20251112-1530`
+  - Only this feature branch, plus `beta` and `main`, may exist after cleanup. No additional branches are permitted.
+- **Push the feature branch and open a pull request targeting `beta` as part of initialization (after explicit approval for required git operations)**
+  - PR titles must clearly describe the task and include the creation date/time, e.g., `feat: telemetry cleanup (2025-11-12 15:30 UTC)`
+  - Post the PR URL, source branch, target branch, and title in chat immediately after creation.
+- **All subsequent work must occur through that PR; do not commit directly to `beta` or `main`**
 - **Avoid `cursor/*` branches unless explicitly directed to use them**
-- **Do NOT open pull requests unless the user asks for one**
-- **Main branch work**: Only when the user explicitly instructs you to operate on `main` or merge changes
+- **Main branch work**: Only when the user explicitly instructs you to promote changes from `beta` to `main`
 
 #### BEFORE STARTING ANY WORK - MANDATORY STEPS (NO EXCEPTIONS)
 
@@ -117,9 +119,14 @@ globs:
 
 **When user explicitly requests commit/push**:
 1. Add changes: `git add -A` (only after user approval)
-2. Commit with clear message: `git commit -m "fix: Description of changes"` (only after user approval)
-3. Push to the approved branch: `git push origin <branch>` (only after user approval)
-4. ONLY if explicitly instructed, push to additional branches (e.g., `main`)
+2. Run a merge-feasibility check _before_ committing:
+   - `git fetch origin`
+   - `git merge --no-commit --no-ff origin/beta`
+   - Report the outcome in chat (clean vs. conflicts and affected files)
+   - `git merge --abort` to reset the branch regardless of result
+3. Commit with clear message: `git commit -m "fix: Description of changes"` (only after user approval)
+4. Push to the active feature branch associated with the PR: `git push origin <feature-branch>` (only after user approval)
+5. ONLY if explicitly instructed, push to additional branches (e.g., `main`)
 
 #### Commit Process - USER APPROVAL REQUIRED
 
@@ -128,6 +135,7 @@ globs:
 2. Verify only core files are modified
 3. Verify no new files were created (unless explicitly requested)
 4. Get explicit user approval for commit/push
+5. Complete and report the pre-commit merge-feasibility check against `origin/beta`
 
 **Commit message format**:
 - Use clear, descriptive messages
@@ -137,30 +145,29 @@ globs:
 #### PARALLEL FEATURE BRANCH WORKFLOW
 
 1. **Create the feature branch (with approval)**
-   - `git checkout -b feature/<scope>` from the approved base (often `beta` or `main`)
+   - `git checkout beta`
+   - `git pull origin beta`
+   - `git checkout -b feature/<scope>-<timestamp>`
    - Announce in chat which files you will modify
+   - After approval, push the new branch: `git push -u origin feature/<scope>-<timestamp>`
+   - Immediately open a PR targeting `beta` with a descriptive, timestamped title and post its URL, source branch, target branch, and title in chat
 2. **Implement changes on the feature branch**
    - Keep commits focused; follow core-file restrictions unless user expands scope
 3. **Request approval to stage/commit/push**
-   - After approval: `git add -A`, `git commit -m "<type>: <summary>"`, `git push origin feature/<scope>`
-4. **Run a beta merge feasibility check immediately after pushing**
-   - `git fetch origin`
-   - `git checkout feature/<scope>`
-   - `git merge --no-commit --no-ff origin/beta`
-   - Summarize the result for the user (no conflicts vs. conflicts + files involved)
-   - Run `git merge --abort` to reset the branch after the check (required even if no conflicts)
-5. **Request merge approval**
+   - After approval: execute the pre-commit merge-feasibility check, then `git commit -m "<type>: <summary>"` and `git push origin feature/<scope>-<timestamp>`
+4. **Request merge approval**
    - Provide test status, diff summary, and merge-feasibility outcome
-6. **Merge into beta when approved**
+5. **Merge into beta when approved**
    - `git checkout beta`
    - `git pull origin beta`
-   - `git merge --no-ff feature/<scope>`
-   - Resolve conflicts if any (with user guidance), then `git commit`
-   - `git push origin beta`
-7. **Clean up feature branch**
-   - `git branch -d feature/<scope>`
-   - `git push origin --delete feature/<scope>`
-8. **Main branch promotions**
+   - `git merge --no-ff feature/<scope>-<timestamp>`
+   - Resolve conflicts if any (with user guidance); commit and push to beta
+6. **Clean up feature branch and PR**
+   - Close or mark the PR as merged
+   - `git branch -d feature/<scope>-<timestamp>`
+   - `git push origin --delete feature/<scope>-<timestamp>`
+   - Confirm in chat that only `main` and `beta` remain on the remote
+7. **Main branch promotions**
    - Only after user explicitly requests it; follow the same feasibility check and cleanup pattern
 
 #### Forbidden Actions - ABSOLUTELY PROHIBITED
@@ -177,6 +184,8 @@ globs:
 ❌ Running git push without user approval
 ❌ Running git add without user approval (unless user explicitly requested commit)
 ❌ Creating any file not in the core files list (unless explicitly requested)
+❌ Leaving feature branches or their pull requests open after changes have been merged into `beta`
+❌ Skipping the required pre-commit merge-feasibility check against `origin/beta`
 
 #### Repository Principles
 
@@ -197,6 +206,7 @@ Before finishing any task, verify:
 - [ ] No unapproved branches created
 - [ ] Repository remains minimal and clean
 - [ ] User has been asked for approval before any git operations
+- [ ] Associated feature branch PR has been merged or closed, and the feature branch deleted locally and remotely (confirm only `main` and `beta` remain)
 
 #### MANDATORY ENFORCEMENT PROTOCOL - STRICTLY ENFORCED
 
