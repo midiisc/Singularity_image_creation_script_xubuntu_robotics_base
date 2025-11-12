@@ -112,6 +112,7 @@ globs:
 - Modify existing files when requested (this is allowed and expected)
 - Create new source/implementation files when part of development tasks
 - Documentation/summary/plan files require explicit user confirmation
+- When presenting the final response after making edits, explicitly list each modified file along with the line ranges touched and a short explanation of the purpose of those changes.
 
 ### UNCERTAINTY PROTOCOL
 
