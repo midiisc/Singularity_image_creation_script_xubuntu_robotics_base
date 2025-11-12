@@ -6517,6 +6517,13 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #   (docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md). No extra MKL cache
 #   variables are passed here.
 #
+# PERFORMANCE OPTIMIZATIONS:
+#   SCHUR_SPECIALIZATIONS=ON: Fixed-size Schur complement specializations (faster performance)
+#   CUSTOM_BLAS=ON: Handcoded BLAS routines (usually faster than Eigen)
+#   GFLAGS=ON: Google Flags support for runtime configuration
+#   CMAKE_POSITION_INDEPENDENT_CODE=ON: Build PIC for shared library compatibility
+#   PROVIDE_UNINSTALL_TARGET=ON: Adds uninstall target for package management
+#
 cmake .. \
   -G Ninja \
   -D CMAKE_BUILD_TYPE=Release \
@@ -6526,8 +6533,12 @@ cmake .. \
   -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
   -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
   -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
+  -D CMAKE_POSITION_INDEPENDENT_CODE=ON \
   -D BUILD_SHARED_LIBS=ON \
+  -D SCHUR_SPECIALIZATIONS=ON \
+  -D CUSTOM_BLAS=ON \
   -D MINIGLOG=OFF \
+  -D GFLAGS=ON \
   -D CMAKE_CUDA_COMPILER_WORKS=TRUE \
   -D BLA_VENDOR=Intel10_64lp \
   -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
@@ -6540,6 +6551,7 @@ cmake .. \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_TESTING=OFF \
   -D BUILD_BENCHMARKS=OFF \
+  -D PROVIDE_UNINSTALL_TARGET=ON \
   -D CMAKE_CUDA_ARCHITECTURES="86;89;90" \
   -D CMAKE_CXX_STANDARD=17 \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
