@@ -44,6 +44,9 @@ globs:
 #### Branch Rules - STRICTLY ENFORCED
 - **Confirm the target branch with the user before starting work**
 - **Do NOT create or switch branches without explicit approval**
+- **Short-lived feature branches are allowed when the user requests or approves parallel work**
+  - Prefer names like `feature/<scope>` or `fix/<ticket>` for clarity
+  - Document in chat which branch owns which task
 - **Avoid `cursor/*` branches unless explicitly directed to use them**
 - **Do NOT open pull requests unless the user asks for one**
 - **Main branch work**: Only when the user explicitly instructs you to operate on `main` or merge changes
@@ -131,12 +134,34 @@ globs:
 - Format: `"fix: Description of changes"` or `"feat: Description of changes"`
 - Be specific about what was changed
 
-#### COORDINATING MULTIPLE BRANCHES
+#### PARALLEL FEATURE BRANCH WORKFLOW
 
-- **DEFAULT**: Work on the branch the user specifies for the task
-- **PROMOTIONS**: Only move changes to other branches (e.g., `main`) when the user explicitly instructs it
-- **SYNCHRONIZATION**: Confirm with the user how to handle merges or rebases when multiple branches are involved
-- **VERIFICATION**: Ensure the user reviews and approves before updating protected branches like `main`
+1. **Create the feature branch (with approval)**
+   - `git checkout -b feature/<scope>` from the approved base (often `beta` or `main`)
+   - Announce in chat which files you will modify
+2. **Implement changes on the feature branch**
+   - Keep commits focused; follow core-file restrictions unless user expands scope
+3. **Request approval to stage/commit/push**
+   - After approval: `git add -A`, `git commit -m "<type>: <summary>"`, `git push origin feature/<scope>`
+4. **Run a beta merge feasibility check immediately after pushing**
+   - `git fetch origin`
+   - `git checkout feature/<scope>`
+   - `git merge --no-commit --no-ff origin/beta`
+   - Summarize the result for the user (no conflicts vs. conflicts + files involved)
+   - Run `git merge --abort` to reset the branch after the check (required even if no conflicts)
+5. **Request merge approval**
+   - Provide test status, diff summary, and merge-feasibility outcome
+6. **Merge into beta when approved**
+   - `git checkout beta`
+   - `git pull origin beta`
+   - `git merge --no-ff feature/<scope>`
+   - Resolve conflicts if any (with user guidance), then `git commit`
+   - `git push origin beta`
+7. **Clean up feature branch**
+   - `git branch -d feature/<scope>`
+   - `git push origin --delete feature/<scope>`
+8. **Main branch promotions**
+   - Only after user explicitly requests it; follow the same feasibility check and cleanup pattern
 
 #### Forbidden Actions - ABSOLUTELY PROHIBITED
 
@@ -168,6 +193,7 @@ Before finishing any task, verify:
 - [ ] Only core files modified (verified with `git status`)
 - [ ] No new files created (unless explicitly requested)
 - [ ] Changes ready for commit (but NOT committed without user approval)
+- [ ] Merge feasibility check with `origin/beta` has been reported if the branch is destined for beta
 - [ ] No unapproved branches created
 - [ ] Repository remains minimal and clean
 - [ ] User has been asked for approval before any git operations

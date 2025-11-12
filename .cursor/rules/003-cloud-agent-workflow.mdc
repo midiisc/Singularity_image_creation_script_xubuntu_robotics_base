@@ -200,6 +200,40 @@ git commit -m "fix: Description of changes"
    git push origin <branch>
    ```
 
+## 🔁 Parallel Feature Branch Lifecycle (Cloud Agent)
+
+When the user authorizes parallel work using feature branches:
+
+1. **Create the feature branch from the approved base**
+   - `git checkout <base-branch>`
+   - `git pull origin <base-branch>`
+   - `git checkout -b feature/<scope>`
+   - Announce branch name, scope, and intended files in chat
+2. **Implement changes**
+   - Follow core-file restrictions unless the user expands scope
+   - Keep work isolated to the feature branch
+3. **Stage, commit, and push only after approval**
+   - `git add -A`
+   - `git commit -m "<type>: <summary>"`
+   - `git push origin feature/<scope>`
+4. **Run the merge feasibility check against beta**
+   - `git fetch origin`
+   - `git merge --no-commit --no-ff origin/beta`
+   - Report the outcome (clean vs. conflicts + files) to the user
+   - Run `git merge --abort` to reset the branch even if no conflicts occurred
+5. **Request merge approval**
+   - Provide diff summary, test status, and feasibility result
+6. **Merge into beta when approved**
+   - `git checkout beta`
+   - `git pull origin beta`
+   - `git merge --no-ff feature/<scope>`
+   - Resolve conflicts with user guidance; commit and push to beta
+7. **Clean up the feature branch**
+   - `git branch -d feature/<scope>`
+   - `git push origin --delete feature/<scope>`
+8. **Main branch promotions**
+   - Only execute when the user explicitly requests it; repeat feasibility check and cleanup for main
+
 ## 🚨 Cursor/* Branch Handling
 
 **Cursor IDE sometimes auto-creates `cursor/*` branches for cloud agents.**
@@ -233,8 +267,7 @@ git commit -m "fix: Description of changes"
 
 ## 🔴 Multi-Agent Coordination
 
-**When multiple cloud agents are working:**
-
+- ✅ **Assign distinct feature branches per agent when parallel work is approved**
 - ✅ **All agents confirm the correct branch with the user**
 - ✅ **All agents pull latest changes before starting work**
 - ✅ **All agents coordinate pushes to avoid conflicts**
@@ -254,6 +287,7 @@ git commit -m "fix: Description of changes"
 **Before starting ANY work:**
 - [ ] I am on the user-approved branch (`git branch --show-current`)
 - [ ] I have pulled the latest changes for that branch (`git pull origin <branch>`)
+- [ ] I have confirmed whether a dedicated feature branch is expected
 - [ ] I understand I MUST NOT create branches without approval
 - [ ] I understand I MUST NOT create pull requests without approval
 - [ ] I understand I MUST NOT push without explicit approval
@@ -263,6 +297,7 @@ git commit -m "fix: Description of changes"
 - [ ] I am still on the approved branch
 - [ ] I have asked user for commit approval
 - [ ] I have asked user for push approval
+- [ ] I have run and reported the beta merge feasibility check if the branch targets beta
 - [ ] I have NOT created any unapproved branches
 - [ ] I have NOT created any pull requests
 

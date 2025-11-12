@@ -33,6 +33,7 @@ globs:
 - [ ] **I have confirmed this is the correct branch for the task** (per user or project instructions)
 - [ ] **I have synced the latest changes for the active branch** (e.g., `git pull origin <branch>`)
 - [ ] **I understand branch operations must follow user guidance**
+- [ ] **If parallel work is requested, I have a feature-branch creation/merge/cleanup plan aligned with the workflow rules**
 
 ### File Operations
 - [ ] **I understand ONLY core files can be modified** (see workflow rules)
@@ -74,17 +75,17 @@ globs:
    - Response mode (inline in chat)
 
 2. **`.cursor/rules/002-repository-workflow.mdc`**
-   - Branch management (beta only)
+  - Branch management (user-approved branches and parallel workflows)
    - File editing restrictions (core files only)
    - Git operations (require user approval)
    - Verification checklist
 
 3. **`.cursor/rules/003-cloud-agent-workflow.mdc`** ⚠️ CRITICAL FOR CLOUD AGENTS
    - Cloud agent specific rules
-   - Beta-only workflow (pull from beta, push to beta)
-   - Pull request prohibition (NEVER create PRs)
-   - Multi-agent coordination
-   - Explicit approval requirements
+   - Branch coordination and parallel feature-branch workflow
+   - Pull request restrictions and approval gates
+   - Multi-agent coordination expectations
+   - Explicit approval requirements for git operations
 
 ## 🔴 ENFORCEMENT REMINDER
 
@@ -130,6 +131,7 @@ globs:
 - You MUST read `.cursor/rules/003-cloud-agent-workflow.mdc` first
 - You MUST confirm the correct branch with the user or project owner
 - You MUST sync the latest changes for that branch before starting
+- You MUST follow the feature-branch lifecycle (creation → push → merge feasibility check → merge → cleanup)
 - You MUST obtain explicit approval before pushing to any remote branch
 - You MUST NEVER create pull requests without approval
 - You MUST NEVER create cursor/* branches unless explicitly directed
