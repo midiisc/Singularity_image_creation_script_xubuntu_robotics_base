@@ -6532,15 +6532,11 @@ cmake .. \
   -D BLA_VENDOR=Intel10_64lp \
   -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
   -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-  -D MKL_ROOT="${MKLROOT}" \
-  -D MKL_INCLUDE_DIR="${MKL_INCLUDE_DIR}" \
-  -D MKL_LIBRARY_DIR="${MKL_LIB_DIR}" \
   -D LAPACK=ON \
   -D EIGENMETIS=ON \
   -D EIGENSPARSE=ON \
   -D SUITESPARSE=ON \
-  -D Ceres_USE_EIGEN_MKL=ON \
-  -D Ceres_ENABLE_CUDA=ON \
+  -D USE_CUDA=ON \
   -D BUILD_EXAMPLES=OFF \
   -D BUILD_TESTING=OFF \
   -D BUILD_BENCHMARKS=OFF \
@@ -6637,16 +6633,14 @@ else
     cd /tmp/pyceres || exit 1
   echo "Building PyCeres from source (linking against compiled Ceres)..."
   
-  # MKL note: PyCeres must inherit MKL/CUDA configuration from compiled Ceres
-  # Pass MKL and CUDA flags to ensure PyCeres bindings use the same Ceres configuration
-  # Reference: docs/planning/MKL_MIGRATION_PLAN.md Phase 4.7
+  # Note: PyCeres will automatically inherit the configuration from the installed Ceres library
+  # We only need to point it to the Ceres installation directory
+  # CUDA support will be automatically detected from the installed Ceres library
   export SKBUILD_CONFIGURE_OPTIONS="\
 -DWITH_TESTS=OFF \
 -DWITH_BENCHMARKS=OFF \
 -DWITH_PYTEST=OFF \
--DCeres_DIR=/usr/local/lib/cmake/Ceres \
--DCeres_USE_EIGEN_MKL=ON \
--DCeres_ENABLE_CUDA=ON"
+-DCeres_DIR=/usr/local/lib/cmake/Ceres"
 
   if python3 -m pip install \
         --no-deps \
