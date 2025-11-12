@@ -5317,94 +5317,252 @@ if [ -n "${LAGRAPH_LIB}" ]; then
     verify_math_library_linkage "${LAGRAPH_LIB}" "LAGraph"
 fi
 
-declare -a suitesparse_targets=("libcholmod.so" "libspqr.so")
-for target_lib in "${suitesparse_targets[@]}"; do
-    full_path="${SUITESPARSE_INSTALL_PREFIX}/lib/${target_lib}"
-    if [[ -f "${full_path}" ]]; then
-        echo "  ✓ ${target_lib} installed"
-        if ldd "${full_path}" | grep -qi "mkl"; then
-            echo "    → Linked against MKL"
-        else
-            echo "    ⚠ ${target_lib} does not appear to link MKL (investigate)"
-        fi
-        if ldd "${full_path}" | grep -qi "cuda"; then
-            echo "    → CUDA dependencies resolved"
-        else
-            echo "    ⚠ ${target_lib} does not show CUDA linkage (verify build flags)"
+find_suitesparse_library() {
+    local lib_basename="${1:-}"
+    local result=""
+    while IFS= read -r candidate; do
+        result="${candidate}"
+        break
+    done < <(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -maxdepth 1 -type f \( -name "lib${lib_basename}.so" -o -name "lib${lib_basename}.so.*" \) 2>/dev/null | sort)
+    if [ -z "${result}" ]; then
+        while IFS= read -r candidate; do
+            result="${candidate}"
+            break
+        done < <(find "${SUITESPARSE_INSTALL_PREFIX}" -maxdepth 3 -type f \( -name "lib${lib_basename}.so" -o -name "lib${lib_basename}.so.*" \) 2>/dev/null | sort)
+    fi
+    if [ -n "${result}" ]; then
+        realpath "${result}" 2>/dev/null || echo "${result}"
+    fi
+}
+
+declare -A suitesparse_lib_paths=()
+declare -a suitesparse_required_libraries=("suitesparseconfig" "amd" "camd" "colamd" "ccolamd" "cholmod" "spqr")
+declare -a suitesparse_optional_libraries=("umfpack" "klu" "btf" "graphblas" "lagraph")
+
+for lib in "${suitesparse_required_libraries[@]}"; do
+    lib_path="$(find_suitesparse_library "${lib}")"
+    if [ -n "${lib_path}" ]; then
+        suitesparse_lib_paths["${lib}"]="${lib_path}"
+        echo "  ✓ lib${lib}.so detected"
+        if [[ "${lib}" == "cholmod" || "${lib}" == "spqr" ]]; then
+            if ldd "${lib_path}" | grep -qi "mkl"; then
+                echo "    → Linked against MKL"
+            else
+                echo "    ⚠ lib${lib}.so does not appear to link MKL (investigate)"
+            fi
+            if ldd "${lib_path}" | grep -qi "cuda"; then
+                echo "    → CUDA dependencies resolved"
+            else
+                echo "    ⚠ lib${lib}.so does not show CUDA linkage (verify build flags)"
+            fi
         fi
     else
-        echo "  ✗ ${target_lib} missing in ${SUITESPARSE_INSTALL_PREFIX}/lib"
+        echo "  ✗ lib${lib}.so missing under ${SUITESPARSE_INSTALL_PREFIX}"
         exit 1
     fi
 done
 
-# Create SuiteSparse CMake config files if they don't exist
-if [ ! -f "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" ]; then
-    echo "  ⚠ SuiteSparse CMake package config not found - creating it..."
-    mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse"
-    
-    # Find installed SuiteSparse libraries
-    SUITESPARSE_LIBS=""
-    for lib in cholmod amd camd colamd ccolamd umfpack spqr graphblas lagraph suitesparseconfig; do
-        lib_path=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "lib${lib}.so*" -type f 2>/dev/null | head -1)
-        if [ -n "${lib_path}" ]; then
-            lib_name=$(basename "${lib_path}" | sed 's/\.so.*//' | sed 's/^lib//')
-            SUITESPARSE_LIBS="${SUITESPARSE_LIBS} ${lib_name}"
+for lib in "${suitesparse_optional_libraries[@]}"; do
+    lib_path="$(find_suitesparse_library "${lib}")"
+    if [ -n "${lib_path}" ]; then
+        suitesparse_lib_paths["${lib}"]="${lib_path}"
+        echo "  • Optional component lib${lib}.so detected"
+    fi
+done
+
+SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INSTALL_PREFIX}/include"
+SUITESPARSE_LIB_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib"
+SUITESPARSE_CMAKE_BASE="${SUITESPARSE_LIB_DIR}/cmake"
+SUITESPARSE_CMAKE_DIR="${SUITESPARSE_CMAKE_BASE}/SuiteSparse"
+mkdir -p "${SUITESPARSE_CMAKE_DIR}"
+
+SUITESPARSE_VERSION_STR="${SUITESPARSE_VERSION#v}"
+if [ -z "${SUITESPARSE_VERSION_STR}" ]; then
+    SUITESPARSE_VERSION_STR="${SUITESPARSE_VERSION}"
+fi
+IFS='.' read -r SUITESPARSE_VERSION_MAJOR SUITESPARSE_VERSION_MINOR SUITESPARSE_VERSION_PATCH <<< "${SUITESPARSE_VERSION_STR}"
+SUITESPARSE_VERSION_MAJOR="${SUITESPARSE_VERSION_MAJOR:-0}"
+SUITESPARSE_VERSION_MINOR="${SUITESPARSE_VERSION_MINOR:-0}"
+SUITESPARSE_VERSION_PATCH="${SUITESPARSE_VERSION_PATCH:-0}"
+
+declare -A suitesparse_component_libnames=(
+    [Config]="suitesparseconfig"
+    [AMD]="amd"
+    [CAMD]="camd"
+    [COLAMD]="colamd"
+    [CCOLAMD]="ccolamd"
+    [CHOLMOD]="cholmod"
+    [SPQR]="spqr"
+)
+declare -A suitesparse_optional_component_libnames=(
+    [UMFPACK]="umfpack"
+    [GraphBLAS]="graphblas"
+    [LAGraph]="lagraph"
+    [KLU]="klu"
+    [BTF]="btf"
+)
+suitesparse_component_order=("Config" "AMD" "CAMD" "COLAMD" "CCOLAMD" "CHOLMOD" "SPQR")
+
+SUITESPARSE_LIBRARY_LIST=""
+for component in "${suitesparse_component_order[@]}"; do
+    lib_key="${suitesparse_component_libnames[${component}]}"
+    lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
+    if [ -n "${lib_path}" ]; then
+        if [ -z "${SUITESPARSE_LIBRARY_LIST}" ]; then
+            SUITESPARSE_LIBRARY_LIST="${lib_path}"
+        else
+            SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST};${lib_path}"
         fi
-    done
-    
-    # Create SuiteSparseConfig.cmake
-    cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" <<EOF
-# SuiteSparse CMake configuration file
-set(SuiteSparse_VERSION "7.0.0")
-set(SuiteSparse_DIR "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse")
-
-# Include directories
-set(SuiteSparse_INCLUDE_DIRS "${SUITESPARSE_INSTALL_PREFIX}/include")
-
-# Library directories
-set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_INSTALL_PREFIX}/lib")
-
-# Find all SuiteSparse libraries
-set(SuiteSparse_LIBRARIES "")
-EOF
-    
-    # Add individual library targets
-    for lib in cholmod amd camd colamd ccolamd umfpack spqr graphblas lagraph suitesparseconfig; do
-        lib_path=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "lib${lib}.so*" -type f 2>/dev/null | head -1)
-        if [ -n "${lib_path}" ]; then
-            lib_name=$(basename "${lib_path}" | sed 's/\.so.*//')
-            # Convert lib name to uppercase for CMake variable (compatible with older bash)
-            lib_upper=$(echo "${lib}" | tr '[:lower:]' '[:upper:]')
-            echo "find_library(SuiteSparse_${lib_upper}_LIBRARY ${lib_name} PATHS \"\${SuiteSparse_LIBRARY_DIRS}\" NO_DEFAULT_PATH)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
-            echo "if(SuiteSparse_${lib_upper}_LIBRARY)" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
-            echo "  list(APPEND SuiteSparse_LIBRARIES \"\${SuiteSparse_${lib_upper}_LIBRARY}\")" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
-            echo "endif()" >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake"
+    fi
+done
+for component in "${!suitesparse_optional_component_libnames[@]}"; do
+    lib_key="${suitesparse_optional_component_libnames[${component}]}"
+    lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
+    if [ -n "${lib_path}" ]; then
+        if [ -z "${SUITESPARSE_LIBRARY_LIST}" ]; then
+            SUITESPARSE_LIBRARY_LIST="${lib_path}"
+        else
+            SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST};${lib_path}"
         fi
-    done
-    
-    cat >> "${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake" <<'EOF'
+    fi
+done
+SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST#;}"
 
-# Set variables for compatibility
+{
+    cat <<EOF
+# Auto-generated SuiteSparseConfig.cmake
+if(DEFINED SuiteSparse_CONFIG_INCLUDED)
+  return()
+endif()
+set(SuiteSparse_CONFIG_INCLUDED TRUE)
+
 set(SuiteSparse_FOUND TRUE)
 set(SUITESPARSE_FOUND TRUE)
+set(SuiteSparse_VERSION "${SUITESPARSE_VERSION_STR}")
+set(SuiteSparse_VERSION_MAJOR ${SUITESPARSE_VERSION_MAJOR})
+set(SuiteSparse_VERSION_MINOR ${SUITESPARSE_VERSION_MINOR})
+set(SuiteSparse_VERSION_PATCH ${SUITESPARSE_VERSION_PATCH})
+set(SuiteSparse_INCLUDE_DIR "${SUITESPARSE_INCLUDE_DIR}")
+set(SuiteSparse_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")
+set(SuiteSparse_LIBRARY_DIR "${SUITESPARSE_LIB_DIR}")
+set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_LIB_DIR}")
+set(SuiteSparse_LIBRARIES "${SUITESPARSE_LIBRARY_LIST}")
+EOF
 
-# Create imported targets
-if(NOT TARGET SuiteSparse::SuiteSparse)
-    add_library(SuiteSparse::SuiteSparse INTERFACE IMPORTED)
-    set_target_properties(SuiteSparse::SuiteSparse PROPERTIES
-        INTERFACE_INCLUDE_DIRECTORIES "${SuiteSparse_INCLUDE_DIRS}"
-        INTERFACE_LINK_LIBRARIES "${SuiteSparse_LIBRARIES}"
-    )
+    for component in "${suitesparse_component_order[@]}"; do
+        lib_key="${suitesparse_component_libnames[${component}]}"
+        lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
+        if [ -n "${lib_path}" ]; then
+            cat <<EOF
+if(NOT TARGET SuiteSparse::${component})
+  add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
+  set_target_properties(SuiteSparse::${component} PROPERTIES
+    IMPORTED_LOCATION "${lib_path}"
+    INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
+endif()
+set(SuiteSparse_${component}_LIBRARY "${lib_path}")
+set(SuiteSparse_${component}_FOUND TRUE)
+EOF
+        else
+            cat <<EOF
+set(SuiteSparse_${component}_FOUND FALSE)
+EOF
+        fi
+    done
+
+    for component in "${!suitesparse_optional_component_libnames[@]}"; do
+        lib_key="${suitesparse_optional_component_libnames[${component}]}"
+        lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
+        if [ -n "${lib_path}" ]; then
+            cat <<EOF
+if(NOT TARGET SuiteSparse::${component})
+  add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
+  set_target_properties(SuiteSparse::${component} PROPERTIES
+    IMPORTED_LOCATION "${lib_path}"
+    INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
+endif()
+set(SuiteSparse_${component}_LIBRARY "${lib_path}")
+set(SuiteSparse_${component}_FOUND TRUE)
+EOF
+        fi
+    done
+
+    cat <<EOF
+if(TARGET SuiteSparse::CHOLMOD)
+  set_property(TARGET SuiteSparse::CHOLMOD APPEND PROPERTY
+    INTERFACE_LINK_LIBRARIES SuiteSparse::AMD SuiteSparse::CAMD SuiteSparse::COLAMD SuiteSparse::CCOLAMD SuiteSparse::Config)
+endif()
+if(TARGET SuiteSparse::SPQR)
+  set_property(TARGET SuiteSparse::SPQR APPEND PROPERTY
+    INTERFACE_LINK_LIBRARIES SuiteSparse::CHOLMOD SuiteSparse::Config)
+endif()
+if(TARGET SuiteSparse::Config)
+  set_property(TARGET SuiteSparse::Config APPEND PROPERTY
+    INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
+endif()
+foreach(_component IN ITEMS AMD CAMD COLAMD CCOLAMD UMFPACK GraphBLAS LAGraph KLU BTF SPQR)
+  if(TARGET SuiteSparse::\${_component})
+    set_property(TARGET SuiteSparse::\${_component} APPEND PROPERTY
+      INTERFACE_LINK_LIBRARIES SuiteSparse::Config)
+  endif()
+endforeach()
+EOF
+} > "${SUITESPARSE_CMAKE_DIR}/SuiteSparseConfig.cmake"
+echo "  ✓ SuiteSparse CMake package config created"
+
+cat > "${SUITESPARSE_CMAKE_DIR}/SuiteSparseConfigVersion.cmake" <<EOF
+set(PACKAGE_VERSION "${SUITESPARSE_VERSION_STR}")
+if(PACKAGE_FIND_VERSION)
+  if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
+    set(PACKAGE_VERSION_COMPATIBLE FALSE)
+  else()
+    set(PACKAGE_VERSION_COMPATIBLE TRUE)
+    if(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
+      set(PACKAGE_VERSION_EXACT TRUE)
+    endif()
+  endif()
+else()
+  set(PACKAGE_VERSION_COMPATIBLE TRUE)
 endif()
 EOF
-    
-    echo "  ✓ SuiteSparse CMake package config created"
-else
-    echo "  ✓ SuiteSparse CMake package config found"
-fi
 
-# Create pkg-config file for SuiteSparse
+CHOLMOD_LIBRARY_PATH="${suitesparse_lib_paths[cholmod]}"
+SPQR_LIBRARY_PATH="${suitesparse_lib_paths[spqr]}"
+CHOLMOD_CONFIG_DIR="${SUITESPARSE_CMAKE_BASE}/CHOLMOD"
+mkdir -p "${CHOLMOD_CONFIG_DIR}" "${SUITESPARSE_CMAKE_BASE}/cholmod"
+
+cat > "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
+include("${SUITESPARSE_CMAKE_DIR}/SuiteSparseConfig.cmake")
+set(CHOLMOD_FOUND FALSE)
+if(TARGET SuiteSparse::CHOLMOD)
+  set(CHOLMOD_FOUND TRUE)
+  set(CHOLMOD_LIBRARY "${CHOLMOD_LIBRARY_PATH}")
+  set(CHOLMOD_LIBRARIES "${CHOLMOD_LIBRARY_PATH}")
+  set(CHOLMOD_INCLUDE_DIR "${SUITESPARSE_INCLUDE_DIR}")
+  set(CHOLMOD_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")
+  if(NOT TARGET CHOLMOD::CHOLMOD)
+    add_library(CHOLMOD::CHOLMOD INTERFACE IMPORTED)
+    set_property(TARGET CHOLMOD::CHOLMOD PROPERTY INTERFACE_LINK_LIBRARIES SuiteSparse::CHOLMOD)
+    set_property(TARGET CHOLMOD::CHOLMOD PROPERTY INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
+  endif()
+endif()
+EOF
+cp "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" "${SUITESPARSE_CMAKE_BASE}/cholmod/CHOLMODConfig.cmake"
+cp "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" "${SUITESPARSE_CMAKE_BASE}/cholmod/cholmod-config.cmake"
+
+cat > "${CHOLMOD_CONFIG_DIR}/CHOLMODConfigVersion.cmake" <<EOF
+set(PACKAGE_VERSION "${SUITESPARSE_VERSION_STR}")
+set(PACKAGE_VERSION_COMPATIBLE TRUE)
+if(PACKAGE_FIND_VERSION)
+  if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
+    set(PACKAGE_VERSION_COMPATIBLE FALSE)
+  elseif(PACKAGE_FIND_VERSION VERSION_EQUAL PACKAGE_VERSION)
+    set(PACKAGE_VERSION_EXACT TRUE)
+  endif()
+endif()
+EOF
+cp "${CHOLMOD_CONFIG_DIR}/CHOLMODConfigVersion.cmake" "${SUITESPARSE_CMAKE_BASE}/cholmod/CHOLMODConfigVersion.cmake"
+
 mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"
 cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" <<EOF
 prefix=${SUITESPARSE_INSTALL_PREFIX}
@@ -5413,7 +5571,7 @@ includedir=\${prefix}/include
 
 Name: SuiteSparse
 Description: Suite of sparse matrix libraries
-Version: 7.0.0
+Version: ${SUITESPARSE_VERSION_STR}
 Libs: -L\${libdir} -lcholmod -lamd -lcamd -lcolamd -lccolamd -lumfpack -lspqr -lgraphblas -llagraph -lsuitesparseconfig
 Cflags: -I\${includedir}
 Requires: openblas
@@ -5429,25 +5587,59 @@ Pin-Priority: -1
 EOF
 echo "  ✓ APT pinning created at /etc/apt/preferences.d/suitesparse-protect"
 
-SuiteSparse_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib/cmake/SuiteSparse"
-if ! grep -q "^SuiteSparse_DIR=" /etc/environment 2>/dev/null; then
-    echo "SuiteSparse_DIR=${SuiteSparse_DIR}" >> /etc/environment
-else
-    sed -i "s|^SuiteSparse_DIR=.*|SuiteSparse_DIR=${SuiteSparse_DIR}|" /etc/environment
-fi
+SuiteSparse_DIR="${SUITESPARSE_CMAKE_DIR}"
+SuiteSparse_ROOT="${SUITESPARSE_INSTALL_PREFIX}"
+SuiteSparse_LIBRARIES_ENV="${SUITESPARSE_LIBRARY_LIST}"
+SUITESPARSE_INCLUDE_DIR_ENV="${SUITESPARSE_INCLUDE_DIR}"
+SUITESPARSE_LIBRARY_DIR_ENV="${SUITESPARSE_LIB_DIR}"
+CHOLMOD_DIR="${CHOLMOD_CONFIG_DIR}"
+CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARY_PATH}"
+
+export SuiteSparse_DIR SuiteSparse_ROOT SuiteSparse_LIBRARIES_ENV
+export SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR_ENV}"
+export SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR_ENV}"
+export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
+export CHOLMOD_DIR CHOLMOD_LIBRARY_PATH CHOLMOD_LIBRARIES
+
+for env_entry in \
+    "SuiteSparse_DIR=${SuiteSparse_DIR}" \
+    "SuiteSparse_ROOT=${SuiteSparse_ROOT}" \
+    "SuiteSparse_LIBRARIES=${SuiteSparse_LIBRARIES_ENV}" \
+    "SUITESPARSE_INCLUDE_DIR=${SUITESPARSE_INCLUDE_DIR_ENV}" \
+    "SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIB_DIR}" \
+    "CHOLMOD_DIR=${CHOLMOD_DIR}" \
+    "CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}" \
+    "CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARY_PATH}"; do
+    key="${env_entry%%=*}"
+    value="${env_entry#*=}"
+    if ! grep -q "^${key}=" /etc/environment 2>/dev/null; then
+        echo "${env_entry}" >> /etc/environment
+    else
+        sed -i "s|^${key}=.*|${key}=${value}|" /etc/environment
+    fi
+done
 
 # Add to CMAKE_PREFIX_PATH
-case ":${CMAKE_PREFIX_PATH:-}:" in
-    *:${SUITESPARSE_INSTALL_PREFIX}:*) ;;
-    *) export CMAKE_PREFIX_PATH="${SUITESPARSE_INSTALL_PREFIX}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
-esac
+for prefix in "${SUITESPARSE_INSTALL_PREFIX}" "${SuiteSparse_DIR}" "${CHOLMOD_DIR}"; do
+    case ":${CMAKE_PREFIX_PATH:-}:" in
+        *:${prefix}:*) ;;
+        *) export CMAKE_PREFIX_PATH="${prefix}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
+    esac
+done
 
 cat > /etc/profile.d/suitesparse.sh <<EOF
 export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
 export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
+export SuiteSparse_ROOT=${SuiteSparse_ROOT}
 export SuiteSparse_DIR=${SuiteSparse_DIR}
-export CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
+export SUITESPARSE_INCLUDE_DIR=${SUITESPARSE_INCLUDE_DIR_ENV}
+export SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIBRARY_DIR_ENV}
+export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
+export CHOLMOD_DIR=${CHOLMOD_DIR}
+export CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}
+export CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARY_PATH}
+export CMAKE_PREFIX_PATH=${SuiteSparse_DIR}:${CHOLMOD_DIR}:${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
 EOF
 chmod 0644 /etc/profile.d/suitesparse.sh
 echo "  ✓ Environment hooks added for SuiteSparse"
@@ -6565,7 +6757,15 @@ cmake .. \
   -D CMAKE_CUDA_ARCHITECTURES="86;89;90" \
   -D CMAKE_CXX_STANDARD=17 \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
-  -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON
+  -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+  -D SuiteSparse_DIR="${SuiteSparse_DIR}" \
+  -D SuiteSparse_ROOT="${SuiteSparse_ROOT}" \
+  -D SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
+  -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
+  -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
+  -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARY_PATH}" \
+  -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
+  -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
 
 #--- Sub-block 17.6: Build and install Ceres ---
 # Critical: Compile with ninja using memory-aware job calculation
@@ -6783,7 +6983,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -D BLA_VENDOR=Intel10_64lp \
     -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
+    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
+    -D SuiteSparse_DIR="${SuiteSparse_DIR}" \
+    -D SuiteSparse_ROOT="${SuiteSparse_ROOT}" \
+    -D SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
+    -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
+    -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
+    -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARY_PATH}" \
+    -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
+    -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
 
   #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores
