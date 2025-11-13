@@ -1,0 +1,232 @@
+---
+name: Git Workflow & Branch Management
+description: Git operations, PR workflow, branch management, commit/push reporting
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🔄 GIT WORKFLOW & BRANCH MANAGEMENT
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**See `CORE-AUTOMATION.mdc` for automation principles (all git operations are fully automated).**
+
+---
+
+## MANDATORY PRE-WORK STEPS (NO EXCEPTIONS)
+
+**BEFORE performing ANY action, you MUST execute these commands in this exact order:**
+
+```bash
+# 1. Check current branch
+git branch --show-current
+
+# 2. Switch to appropriate branch (see Target Branch Determination below)
+git checkout <target-branch>
+
+# 3. Pull latest changes from the target branch
+git pull origin <target-branch>
+
+# 4. Verify workspace state
+git status
+```
+
+**DO NOT SKIP THESE STEPS. THEY ARE MANDATORY.**
+
+---
+
+## TARGET BRANCH DETERMINATION
+
+**Decision Tree:**
+1. **User explicitly specifies branch** → Use that branch
+2. **Project requirements specify branch** → Use that branch
+3. **Default fallback** → Use `beta` branch
+4. **Never assume** → Always verify with user if unclear
+
+**Common target branches:**
+- `beta` - Default development branch (most common)
+- `main` - Production branch (rarely used for development)
+- Feature branches - Only when explicitly requested
+
+---
+
+## PULL REQUEST WORKFLOW
+
+### PR-per-agent requirement:
+- Every agent MUST operate through a dedicated open PR targeting the appropriate branch
+- The PR branch naming: Use descriptive names like `feature/<description>` or `fix/<description>`
+- One agent → one active PR. Close or merge the existing PR before starting a new one.
+
+### Establishing or resuming a PR:
+1. After syncing the target branch, either:
+   - Check out the branch backing the agent's existing PR, **or**
+   - Create a new branch for the PR (use descriptive name like `feature/<description>`)
+2. Push the branch and open the PR immediately if it does not already exist
+3. Record the PR URL and keep it referenced in chat status updates
+
+---
+
+## GIT OPERATIONS - FULLY AUTOMATED
+
+**All git operations execute automatically (see `CORE-AUTOMATION.mdc`):**
+
+- `git add` → Automatic (no user approval needed)
+- `git commit` → Automatic (no user approval needed)
+- `git push` → Automatic (no user approval needed)
+- `git merge` → Automatic (no user approval needed)
+- `git branch` (create/delete) → Automatic (no user approval needed)
+
+**Automation guarantees:**
+- Required safety checks (validation, formatting, etc.) still run before and after commits/pushes
+- Corrections are applied automatically
+- Status updates remain informational: report what happened and what comes next, never ask for permission
+
+**Mandatory chat updates:**
+- Immediately after executing any git command, send an informational chat update summarizing:
+  - The action that was just performed
+  - The branch(es) involved
+  - Resulting commit hashes or PR identifiers when applicable
+  - Next automated step (if any)
+
+---
+
+## WORKFLOW: COMMIT → PUSH → VALIDATION → MERGE → CLEANUP
+
+**Complete workflow sequence:**
+
+1. **Make changes on the PR branch**
+   - All work happens on the branch backing the active PR
+   - Never commit directly to `beta` or `main`
+
+2. **Stage and commit automatically**:
+   ```bash
+   git add -A
+   git commit -m "fix: <description>"
+   ```
+   - **AUTOMATIC**: If pre-commit hooks fail:
+     1. AI agent analyzes hook failures automatically
+     2. Auto-fixes ALL fixable issues immediately (batch all fixes)
+     3. Stages ALL fixes together: `git add <all-fixed-files>`
+     4. Re-runs commit automatically (hooks will pass)
+     5. Reports: "Pre-commit hooks failed → Auto-fixed N issues → Re-committed successfully"
+     6. **NO USER INTERVENTION**: All handled automatically
+     7. **BATCHED**: All fixes applied in single commit (clean build tree)
+   - Immediately publish a commit status update following the format in Section "Commit & Push Reporting"
+
+3. **Push updates to the PR branch**:
+   ```bash
+   git push origin <pr-branch>
+   ```
+   - Immediately publish a push status update following the format in Section "Commit & Push Reporting"
+
+4. **Run validation automatically** (see `VALIDATION.mdc`)
+   - **AUTOMATIC**: Validation runs, auto-fixes apply
+   - **BATCHED**: All fixes collected → Single commit → Single push
+   - **NO USER INTERVENTION**: User only notified of results
+   - **CLEAN BUILD TREE**: Minimal pushes (one per validation cycle)
+
+5. **Merge PR into target branch automatically** (see `MERGE-CONFLICTS.mdc`)
+   - Merge occurs immediately after validation passes
+   - Target branch is pushed automatically
+
+6. **Cleanup automatically**:
+   ```bash
+   git checkout <target-branch>
+   git branch -d <pr-branch>
+   git push origin --delete <pr-branch>
+   ```
+   - Close the PR (mark as merged)
+   - Verify only `main` and `beta` (or other permanent branches) remain
+   - **DISPLAY** merge commit details as per "Commit & Push Reporting" section
+
+---
+
+## COMMIT & PUSH REPORTING (ALWAYS DISPLAY IN CHAT)
+
+**CRITICAL REQUIREMENT**: After EVERY git commit or push, ALWAYS display in chat the structured report below.
+
+### Commit Report:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GIT COMMIT COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPOSITORY: <repo-name> (<absolute-path>)
+COMMIT HASH: <hash>
+BRANCH: <pr-branch-name>
+
+COMMIT MESSAGE:
+┌────────────────────────────────────────────────────┐
+│ <full commit message line 1>                       │
+│ <full commit message line 2>                       │
+│ ...                                                │
+└────────────────────────────────────────────────────┘
+
+FILES CHANGED: <count>
+  - <file1>
+  - <file2>
+  ...
+
+STATUS: ✅ SUCCESS / ❌ FAILED
+NOTES: <hook status, auto-fixes applied, next automated action>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+### Push Report:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GIT PUSH COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPOSITORY: <repo-name> (<absolute-path>)
+COMMIT HASH: <hash>
+BRANCH: <pr-branch-name>
+REMOTE: origin/<pr-branch-name>
+
+COMMIT MESSAGE:
+┌────────────────────────────────────────────────────┐
+│ <full commit message - line 1>                    │
+│ <full commit message - line 2>                    │
+│ ...                                                 │
+└────────────────────────────────────────────────────┘
+
+FILES CHANGED: <count>
+  - <file1>
+  - <file2>
+  ...
+
+PUSH STATUS: ✅ SUCCESS / ❌ FAILED
+VERIFICATION: GitHub link or manual verification instructions
+NEXT ACTION: <validation, merge, cleanup, etc.>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**WHY THIS IS MANDATORY**:
+- Enables cross-verification on GitHub.com later
+- Provides audit trail for all commits
+- Helps debug if commits don't appear on GitHub
+- Essential for team coordination
+- Required for compliance tracking
+
+**WHEN TO DISPLAY**:
+- ✅ After EVERY `git commit` command (including auto-commits during merges or rebase)
+- ✅ After EVERY `git push` command
+- ✅ After automated pushes (auto-fix loops, validation reruns)
+- ✅ After merge commits that land on `beta`
+- ✅ After PR merges that push to beta
+- ✅ When push or commit fails (include error details and remediation steps)
+
+**NEVER SKIP THIS** - This is a mandatory reporting requirement for all git operations.
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `VALIDATION.mdc` - Code validation rules
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution

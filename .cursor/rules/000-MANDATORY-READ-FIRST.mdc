@@ -1,7 +1,7 @@
 ---
 name: MANDATORY READ FIRST - All Agents
 description: MANDATORY pre-work verification and rules reminder - MUST READ BEFORE ANY WORK
-version: "1.0"
+version: "4.0"
 alwaysApply: true
 globs:
   - "**/*"
@@ -17,65 +17,79 @@ globs:
 
 **VIOLATION OF THESE RULES IS STRICTLY PROHIBITED.**
 
+---
+
 ## 🔴 MANDATORY PRE-WORK VERIFICATION CHECKLIST
 
 **BEFORE PERFORMING ANY ACTION, YOU MUST COMPLETE THIS CHECKLIST:**
 
 ### Rule Awareness
 - [ ] **I have read `.cursor/rules/MASTER-RULES-INDEX.mdc`** (MASTER INDEX - SINGLE SOURCE OF TRUTH)
-- [ ] **I have reviewed the focused rule modules** (all under `.cursor/rules/MASTER-RULES-*.mdc`)
+- [ ] **I have reviewed the core rule modules** (all under `.cursor/rules/*.mdc`)
 - [ ] **I understand ALL rules are MANDATORY and STRICTLY ENFORCED**
 - [ ] **I understand violations are PROHIBITED**
+- [ ] **I understand FULL AUTOMATION is the default** (see `CORE-AUTOMATION.mdc`)
 
 ### Branch Verification
 - [ ] **I have checked my current branch**: `git branch --show-current`
 - [ ] **I have confirmed this is the correct branch for the task** (per user or project instructions)
 - [ ] **I have synced the latest changes for the active branch** (e.g., `git pull origin <branch>`)
-- [ ] **I understand branch operations must follow user guidance**
+- [ ] **I understand branch operations follow automation principles** (see `CORE-AUTOMATION.mdc`)
 - [ ] **If parallel work is requested, I have a feature-branch creation/merge/cleanup plan aligned with the workflow rules**
 
 ### File Operations
-- [ ] **I understand ONLY core files can be modified** (see workflow rules)
+- [ ] **I understand ONLY core files can be modified** (see `AGENT-BEHAVIOR.mdc` - Core Files section)
 - [ ] **I understand I MUST NOT create documentation/summary/plan files without explicit request**
 - [ ] **I understand I MUST respond INLINE in chat unless explicitly asked to create a file**
 - [ ] **I understand I MUST ask user before creating any non-core file**
 
-### Git Operations
-- [ ] **I understand git operations REQUIRE explicit user approval**
-- [ ] **I understand I MUST NOT run `git add` without explicit user permission**
-- [ ] **I understand I MUST NOT run `git commit` without explicit user permission**
-- [ ] **I understand I MUST NOT run `git push` without explicit user permission**
+### Git Operations (FULLY AUTOMATED)
+- [ ] **I understand git operations are FULLY AUTOMATED** (see `CORE-AUTOMATION.mdc`)
+- [ ] **I understand I MUST run `git add`, `git commit`, `git push` automatically** (no user approval needed)
+- [ ] **I understand automation is the default** (all operations execute automatically)
 - [ ] **I understand I MUST verify branch and files before any git operation**
+- [ ] **I understand I MUST report all git operations** (informational only, not asking permission)
 
 ### Workflow Principles
 - [ ] **I understand plans must be presented INLINE, not as files**
 - [ ] **I understand code reviews must be CHUNKED and INLINE**
-- [ ] **I understand I MUST get user approval before committing**
+- [ ] **I understand I MUST follow full automation principles** (see `CORE-AUTOMATION.mdc`)
 - [ ] **I understand I MUST verify all checklist items before completing work**
+
+---
 
 ## 🚨 IF YOU ARE UNSURE
 
 **IF YOU ARE UNSURE ABOUT ANY ACTION:**
 1. **STOP immediately**
 2. **READ the master index file** (`.cursor/rules/MASTER-RULES-INDEX.mdc`)
-3. **READ the relevant rule module** (`.cursor/rules/MASTER-RULES-*.mdc`)
+3. **READ the relevant rule module** (`.cursor/rules/*.mdc`)
 4. **ASK the user for clarification**
 5. **WAIT for explicit confirmation before proceeding**
 
 **DO NOT ASSUME. DO NOT GUESS. ASK FIRST.**
+
+---
 
 ## 📋 REQUIRED RULE FILES
 
 **YOU MUST READ THESE FILES:**
 
 **`.cursor/rules/MASTER-RULES-INDEX.mdc`** - MASTER INDEX & SINGLE SOURCE OF TRUTH
-   - Points to consolidated rule files (PART1 and PART2)
+   - Points to modular rule files
    - **🤖 Full Automation Principle** - AI handles ALL validation/corrections automatically (READ FIRST)
 
-**Consolidated Rule Files** (both under 500 lines for proper context):
-   - `MASTER-RULES-PART1.mdc` - Core Principles, Agent Behavior, Git Workflow
-   - `MASTER-RULES-PART2.mdc` - Validation, Merge, Cloud, Communication, Best Practices
+**Core Rule Modules** (all under 500 lines for proper context):
+   - `CORE-AUTOMATION.mdc` - Full automation principles (CRITICAL - READ FIRST)
+   - `AGENT-BEHAVIOR.mdc` - File creation, response mode, planning, core files
+   - `GIT-WORKFLOW.mdc` - Git operations, PR workflow, branch management
+   - `VALIDATION.mdc` - Validation triggers, bash validation, CoT checks
+   - `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+   - `CLOUD-AGENTS.mdc` - Cloud agent specifics
+   - `COMMUNICATION.mdc` - User communication and feedback
+   - `BEST-PRACTICES.mdc` - Best practices compliance
 
+---
 
 ## 🔴 ENFORCEMENT REMINDER
 
@@ -87,42 +101,66 @@ globs:
 
 **YOU HAVE BEEN WARNED. FOLLOW THE RULES.**
 
+---
+
 ## 📚 QUICK REFERENCE
 
 **Before creating a file:**
-- Is it a core file? → Check workflow rules
+- Is it a core file? → Check `AGENT-BEHAVIOR.mdc` (Core Files section)
 - Is it documentation/summary/plan? → Require explicit user request
 - Unsure? → ASK USER FIRST
 
 **Before git operation:**
-- Verify branch aligns with task requirements
+- Verify branch aligns with task requirements (see `GIT-WORKFLOW.mdc`)
 - Verify files (core files only)
-- Get explicit user approval
-- Never assume permission
+- **All git operations are fully automated** (see `CORE-AUTOMATION.mdc`)
+- Never assume permission (but automation is default)
 
 **Before completing work:**
-- Verify all checklist items
+- Verify all checklist items (see `BEST-PRACTICES.mdc` - Compliance Checklist)
 - Verify branch and files
-- Verify user approval obtained
+- Verify user approval obtained (only if truly needed - automation is default)
 - Verify no rules violated
+
+---
+
+## 🤖 FULL AUTOMATION PRINCIPLE
+
+**CRITICAL**: All operations are fully automated by default (see `CORE-AUTOMATION.mdc`):
+- ✅ **ALL git operations** → Execute automatically (add, commit, push, merge, cleanup)
+- ✅ **ALL validation errors** → Auto-fixed automatically
+- ✅ **ALL hook failures** → Auto-fixed and re-run automatically
+- ✅ **ALL merge conflicts** → Auto-resolved automatically
+- ✅ **ALL fixes** → Batched together → Single commit → Single push
+- ✅ **User intervention ONLY** → When multiple solutions exist with different pros/cons
+- ✅ **User notification** → Informational only (what was done, not asking permission)
 
 ---
 
 **THIS FILE SERVES AS A REMINDER. THE ACTUAL RULES ARE IN:**
 - `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX - SINGLE SOURCE OF TRUTH)
-- `.cursor/rules/MASTER-RULES-PART1.mdc` (Core Principles, Agent Behavior, Git Workflow)
-- `.cursor/rules/MASTER-RULES-PART2.mdc` (Validation, Merge, Cloud, Communication, Best Practices)
+- `.cursor/rules/CORE-AUTOMATION.mdc` (Full automation principles - READ FIRST)
+- `.cursor/rules/AGENT-BEHAVIOR.mdc` (Agent behavior rules)
+- `.cursor/rules/GIT-WORKFLOW.mdc` (Git operations and workflow)
+- `.cursor/rules/VALIDATION.mdc` (Code validation rules)
+- `.cursor/rules/MERGE-CONFLICTS.mdc` (Merge and conflict resolution)
+- `.cursor/rules/CLOUD-AGENTS.mdc` (Cloud agent specifics)
+- `.cursor/rules/COMMUNICATION.mdc` (User communication and feedback)
+- `.cursor/rules/BEST-PRACTICES.mdc` (Best practices compliance)
 
 **READ THOSE FILES FOR COMPLETE RULES.**
+
+---
 
 ## 🌩️ SPECIAL NOTE FOR CLOUD AGENTS
 
 **If you are a Cursor Cloud Agent or Background Agent:**
 - You MUST read `.cursor/rules/MASTER-RULES-INDEX.mdc` (master index)
-- You MUST read `.cursor/rules/MASTER-RULES-PART1.mdc` and `MASTER-RULES-PART2.mdc` (all rules)
+- You MUST read all core rule modules (all under `.cursor/rules/*.mdc`)
 - You MUST confirm the correct branch with the user or project owner
 - You MUST sync the latest changes for that branch before starting
 - You MUST follow the PR lifecycle (PR creation → push → validation → merge → cleanup)
-- All git operations are fully automated (no user approval needed)
+- **All git operations are fully automated** (no user approval needed) - see `CORE-AUTOMATION.mdc`
 - You MUST create pull requests as part of initialization workflow
 - You MUST NEVER create cursor/* branches unless explicitly directed
+- See `CLOUD-AGENTS.mdc` for cloud agent specifics

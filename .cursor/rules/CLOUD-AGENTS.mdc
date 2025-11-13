@@ -1,0 +1,151 @@
+---
+name: Cloud Agent Specifics
+description: Cloud agent identification, initial response, PR lifecycle, cursor/* branch handling
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🌩️ CLOUD AGENT SPECIFICS
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**Cloud agents follow the same automation principles as local agents (see `CORE-AUTOMATION.mdc`).**
+
+---
+
+## CLOUD AGENT IDENTIFICATION
+
+**You are a cloud agent if**:
+- Running in "Agent Mode"
+- Running in "Background Agent" mode
+- Running in isolated cloud environment
+- Running autonomously without direct user interaction in the IDE
+- Operating in a remote/headless environment
+
+**If any of the above apply, you MUST follow these rules.**
+
+---
+
+## INITIAL RESPONSE REQUIREMENTS
+
+**First response after initialization must explicitly report**:
+
+1. **Repository Information**:
+   - Repository path with repository name (e.g., `/home/user/repo-path (repo: Singularity_image_creation_script_xubuntu_robotics_base)`)
+   - Working directory absolute path
+
+2. **Branch Information**:
+   - Branch that was pulled (e.g., `beta`, `main`, or as specified by user)
+   - Commit message from most recent `git pull`
+   - Branch status (up to date, behind, ahead)
+
+3. **PR Information**:
+   - Active PR identifier and URL (if existing) OR note that the PR will be created immediately
+   - PR branch name in use (if applicable)
+   - PR target branch
+   - PR status (open, draft, ready for review)
+
+**Only after providing this information may you proceed with additional context or actions.**
+
+**Path clarity requirement**:
+- Whenever referencing the working directory later in the session, continue to mention the repository name alongside the absolute path so it remains unambiguous to reviewers.
+
+---
+
+## PR LIFECYCLE (CLOUD AGENT)
+
+**Complete lifecycle:**
+
+1. **Initialize**:
+   - Check branch: `git branch --show-current`
+   - Pull latest from the target branch (as specified by user or project requirements): `git pull origin <target-branch>`
+   - Ensure a PR exists for the agent:
+     - If one already exists, check out its branch
+     - If none exists, create a branch (use descriptive name like `feature/<description>`), push it, and open the PR targeting the appropriate branch (typically `beta` but may vary)
+   - Post PR details (URL, branch name, target) in chat
+
+2. **Work**:
+   - Make changes directly on the PR branch
+   - Commit, push, validate, merge, and clean up automatically (no user prompts)
+   - All operations follow full automation principles (see `CORE-AUTOMATION.mdc`)
+
+3. **Complete**:
+   - Merge PR into target branch (auto-run)
+   - Push target branch
+   - Delete the PR branch locally and remotely
+   - Close PR
+   - Verify only permanent branches (e.g., `main` and `beta`) remain
+
+---
+
+## CURSOR/* BRANCH HANDLING
+
+**If you find yourself on a `cursor/*` branch**:
+
+1. **STOP immediately**
+2. **Report to user**: ⚠️ WARNING: Currently on cursor/<branch-name> - This branch was not approved for this task.
+3. **Ask user for permission**: I need to switch to <target-branch> branch. May I proceed?
+4. **WAIT for explicit approval**
+5. **ONLY after approval, switch to appropriate branch**:
+   ```bash
+   git checkout <target-branch>
+   git pull origin <target-branch>
+   ```
+6. **Continue work on the target branch**
+
+**Exception**: If user explicitly requests work on a `cursor/*` branch, proceed with user's explicit instruction.
+
+---
+
+## MULTI-AGENT COORDINATION
+
+**When multiple agents work in parallel**:
+- ✅ Assign distinct PR branches per agent
+- ✅ All agents confirm correct branch with user
+- ✅ All agents pull latest before starting work
+- ✅ All agents coordinate pushes to avoid conflicts
+- ✅ Merge sequentially (one agent at a time)
+- ❌ No unsanctioned branches
+- ❌ No parallel merges
+
+### Conflict Resolution:
+- If push fails due to remote changes:
+  ```bash
+  git pull --rebase origin <pr-branch>
+  git push origin <pr-branch>
+  ```
+  - **AUTOMATIC**: Rebase and push automatically (no user approval needed)
+  - Only report: "Remote changes detected → Rebased and pushed automatically"
+
+### Coordination Protocol:
+1. **Before starting work**: Check for other active PRs
+2. **Before pushing**: Verify no conflicts with other PRs
+3. **If conflicts detected**: Rebase on target branch automatically
+4. **After merge**: Notify other agents (if applicable) that target branch has been updated
+
+---
+
+## CLOUD AGENT VS LOCAL AGENT
+
+**Key Differences**:
+- **Cloud agents**: Always operate through PRs, more autonomous, less user interaction
+- **Local agents**: May have more direct user interaction, but still follow same automation principles
+
+**Common Principles** (both cloud and local):
+- ✅ Full automation for git operations
+- ✅ Auto-fix for validation errors
+- ✅ Auto-resolve conflicts
+- ✅ Batch fixes before pushing
+- ✅ Informational reporting (not asking permission)
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+- `COMMUNICATION.mdc` - User communication and feedback

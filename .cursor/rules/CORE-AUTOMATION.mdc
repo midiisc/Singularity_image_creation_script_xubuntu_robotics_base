@@ -1,0 +1,133 @@
+---
+name: Core Automation Principles
+description: Full automation principles - single source of truth for all automation behavior
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🤖 CORE AUTOMATION PRINCIPLES
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL AUTOMATION BEHAVIOR.**
+
+**These principles are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**VIOLATION OF THESE PRINCIPLES IS STRICTLY PROHIBITED.**
+
+---
+
+## FULL AUTOMATION PRINCIPLE
+
+**AI AGENT (CURSOR) HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**
+
+### MANDATORY AUTOMATION REQUIREMENTS
+
+- ✅ **ALL validation errors** → Auto-fixed automatically (NO user prompts)
+- ✅ **ALL pre-commit hook failures** → Auto-fixed and re-run automatically
+- ✅ **ALL post-push validation errors** → Auto-fixed, batched, committed, pushed automatically
+- ✅ **ALL critical issues** → Auto-resolved automatically
+- ✅ **ALL merge conflicts** → Auto-resolved automatically
+- ✅ **ALL fixes** → Batched together → Single commit → Single push (minimal pushes)
+- ✅ **BATCHING CRITICAL** → Collect ALL fixes before pushing (clean build tree)
+- ✅ **ALL validation** → Auto-re-run after fixes automatically
+- ✅ **ALL workflow steps** → Continue automatically after fixes
+- ✅ **ALL git operations** → Execute automatically (add, commit, push, merge, cleanup)
+
+### USER INTERVENTION ONLY WHEN
+
+- Multiple solution options exist with **different pros/cons** (present options, wait for choice, then implement automatically)
+- **RARE**: Truly unfixable issues (extremely rare, last resort)
+
+### USER NOTIFICATION
+
+- Informational only: "What was done" (not asking permission)
+- Status updates: "Action → Result → Next Step"
+- No approval requests for fixes (all automatic)
+
+### APPLIES TO ALL STAGES
+
+- Pre-commit hooks → Auto-fix failures automatically (batch all fixes)
+- Commit hooks → Auto-fix failures automatically (batch all fixes)
+- Push hooks → Auto-fix failures automatically (batch all fixes)
+- Post-push validation → Auto-fix all errors automatically (batch all fixes)
+- Merge conflicts → Auto-resolve automatically
+- All corrections → Batch together → Single commit → Single push (minimal pushes)
+- **CRITICAL**: Always batch fixes before pushing (clean build tree requirement)
+
+---
+
+## BATCHING REQUIREMENT (CRITICAL FOR CLEAN BUILD TREE)
+
+- ✅ Collect ALL fixes from validation before committing
+- ✅ Stage ALL fixes together: `git add <all-fixed-files>`
+- ✅ Commit ALL fixes together: Single commit with all corrections
+- ✅ Push ONCE after all fixes: `git push origin <pr-branch>`
+- ✅ **NEVER**: Multiple commits/pushes for fixes (batches into one)
+- ✅ **RESULT**: Clean git history, minimal pushes, clean build tree
+
+---
+
+## AUTOMATION SCOPE
+
+### Git Operations (Fully Automated)
+- `git add` → Automatic (no user approval needed)
+- `git commit` → Automatic (no user approval needed)
+- `git push` → Automatic (no user approval needed)
+- `git merge` → Automatic (no user approval needed)
+- `git branch` (create/delete) → Automatic (no user approval needed)
+- Branch cleanup → Automatic (no user approval needed)
+
+### Validation & Fixes (Fully Automated)
+- Pre-commit hook failures → Auto-fix and re-run
+- Post-push validation errors → Auto-fix, batch, commit, push
+- Bash script validation errors → Auto-fix automatically
+- CoT audit findings → Auto-resolve critical issues
+- Pattern learning → Automatic integration
+
+### Error Recovery (Fully Automated)
+- Auto-fix retry logic → Automatic (up to 3 attempts)
+- Escalation → Only if truly unfixable (extremely rare)
+- Error reporting → Informational only (not asking permission)
+
+---
+
+## EXCEPTIONS TO AUTOMATION
+
+**ONLY these scenarios require user intervention:**
+
+1. **Multiple Valid Solutions with Different Trade-offs**
+   - Present options with pros/cons clearly
+   - Wait for user choice
+   - Implement chosen solution automatically
+
+2. **Truly Unfixable Issues (Extremely Rare)**
+   - Report specific issue clearly
+   - Provide exact commands for manual resolution
+   - Explain why auto-fix failed
+
+3. **User-Requested Manual Review**
+   - If user explicitly requests manual review: "review this manually"
+   - Otherwise, automation is default
+
+---
+
+## AUTOMATION GUARANTEES
+
+- Required safety checks (validation, formatting, etc.) still run before and after commits/pushes
+- Corrections are applied automatically
+- If a branch needs to be created, agents create and push it without waiting for user prompts
+- Status updates remain informational: report what happened and what comes next, never ask for permission
+- All automation respects repository state and branch protection rules
+
+---
+
+**See other rule modules for specific implementation details:**
+- `AGENT-BEHAVIOR.mdc` - File creation, response mode, planning
+- `GIT-WORKFLOW.mdc` - Git operations, PR workflow, branch management
+- `VALIDATION.mdc` - Validation triggers, bash validation, CoT checks
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+- `CLOUD-AGENTS.mdc` - Cloud agent specifics
+- `COMMUNICATION.mdc` - User communication and feedback

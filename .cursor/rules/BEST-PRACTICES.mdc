@@ -1,0 +1,216 @@
+---
+name: Best Practices Compliance
+description: Cursor IDE best practices, git workflow, automation, build tree cleanliness
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# ✨ BEST PRACTICES COMPLIANCE
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**This module summarizes best practices across all rule modules.**
+
+---
+
+## CURSOR IDE BEST PRACTICES
+
+### Rule File Structure:
+- ✅ Single source of truth (modular rule files)
+- ✅ Proper YAML frontmatter
+- ✅ Clear organization (focused modules, each under 500 lines)
+- ✅ No conflicts or duplication
+- ✅ Actionable rules with examples
+- ✅ Cross-references between modules
+
+### Rule File Naming:
+- Use descriptive names: `CORE-AUTOMATION.mdc`, `GIT-WORKFLOW.mdc`, etc.
+- Use consistent versioning: `version: "4.0"`
+- Use `alwaysApply: true` for all rule files
+
+---
+
+## GIT WORKFLOW BEST PRACTICES
+
+### PR-Centric Workflow:
+- ✅ One active PR per agent targeting appropriate branch
+- ✅ PR branches exist only while PR is open
+- ✅ All work flows through PR
+- ✅ Sequential PR merging (one at a time)
+- ✅ Automatic cleanup keeps only `main` and `beta`
+
+### Pre-commit Hooks:
+- ✅ CMake flag validator
+- ✅ AI-assisted review (optional)
+- ✅ Hooks run automatically
+- ✅ **AUTOMATIC** auto-fix and re-run on failure
+- ✅ **NO USER INTERVENTION**
+
+### CI/CD Integration:
+- ✅ GitHub Actions workflow
+- ✅ Automated validation checks on PR/push
+- ✅ Comprehensive coverage
+
+---
+
+## AUTOMATION BEST PRACTICES
+
+### Maximum Automation:
+- ✅ Auto-fix all errors
+- ✅ Auto-resolve conflicts
+- ✅ Auto-merge when clean
+- ✅ Auto-cleanup
+- ✅ Auto-classify commits
+
+### User Intervention ONLY When:
+- Multiple solution options exist with different pros/cons
+- **RARE** auto-resolution failure with multiple valid strategies
+
+### AUTOMATIC HANDLING:
+- All validation errors → Auto-fixed
+- All critical issues → Auto-resolved
+- All merges → Performed automatically
+- All fixes → Batched → Single commit → Single push
+- **BATCHING CRITICAL** for clean build tree
+
+---
+
+## USER COMMUNICATION BEST PRACTICES
+
+### Feedback Level:
+- ✅ Immediate status updates
+- ✅ Adequate detail (not overwhelming)
+- ✅ Clear error messages
+- ✅ Summary format "Action → Result → Next Step"
+- ✅ Avoid atomic-level details
+- ✅ Always include repository name and path
+
+### Communication Principles:
+- ✅ Informational only (not asking permission)
+- ✅ Report what was done, not what will be done (unless truly needed)
+- ✅ Use consistent format for all updates
+- ✅ Provide context for errors
+- ✅ Show automation in action
+
+---
+
+## BUILD TREE CLEANLINESS
+
+### Branch Management:
+- ✅ Only `main` and `beta` remain after cleanup
+- ✅ PR branches deleted immediately
+- ✅ PRs closed immediately
+- ✅ No orphaned branches
+
+### File Management:
+- ✅ Only core files modified
+- ✅ No temporary files
+- ✅ No patch scripts
+- ✅ No workflow files
+
+### Commit/Push Management:
+- ✅ **BATCH ALL FIXES** → **SINGLE COMMIT** → **SINGLE PUSH**
+- ✅ Clean history
+- ✅ Minimal pushes
+- ✅ One push per validation cycle
+
+---
+
+## EARLY ERROR DETECTION
+
+### Multi-Layer Validation:
+- ✅ Pre-commit hooks (early detection)
+- ✅ Post-push agent validation (thorough check)
+- ✅ CI/CD checks (continuous monitoring)
+
+### Auto-fix Capabilities:
+- ✅ Comprehensive checklists
+- ✅ Multiple validation stages
+- ✅ Clear error messages
+- ✅ Automatic retry logic
+
+---
+
+## CONTEXT MANAGEMENT
+
+### Rule File Size:
+- ✅ Keep every rule file under 500 lines (preferably under 400)
+- ✅ Chunk large instructions into targeted references
+- ✅ Summarize long outputs before re-posting
+- ✅ Trim optional flags/comments for concise content
+
+### Context Optimization:
+- ✅ Monitor conversation length
+- ✅ Move artifacts to rule files (within size limits)
+- ✅ Use cross-references instead of duplication
+- ✅ Focus each module on specific topic
+
+---
+
+## ERROR RECOVERY PROCEDURES
+
+### Auto-fix Retry Logic:
+- ✅ Maximum 3 attempts per validation cycle
+- ✅ Automatic retry on transient errors
+- ✅ Escalation after 3 failed attempts
+
+### Timeout Handling:
+- ✅ Pre-commit hooks: 60 second timeout
+- ✅ Post-push validation: 300 second timeout
+- ✅ CoT audit: 600 second timeout
+- ✅ Report timeout, suggest manual review if needed
+
+### API Failure Handling:
+- ✅ Fall back to basic validation if AI review fails
+- ✅ Fall back to secondary provider if primary fails
+- ✅ Report error, suggest manual review if all providers fail
+
+---
+
+## PATTERN LEARNING BEST PRACTICES
+
+### Pattern Management:
+- ✅ Unique pattern IDs
+- ✅ Categorization (syntax, logic, security, etc.)
+- ✅ Frequency tracking
+- ✅ Pattern refinement
+- ✅ Deprecation of outdated patterns
+
+### Pattern Storage:
+- ✅ Store in `prompts/Pattern-Learning-Repository.md`
+- ✅ Automatic integration into future reviews
+- ✅ Regular pattern review and cleanup
+
+---
+
+## COMPLIANCE CHECKLIST
+
+**Before completing any work, verify:**
+- [ ] All rule modules read and understood
+- [ ] Working on correct branch (verified with user if needed)
+- [ ] Only core files modified
+- [ ] No new files created (unless explicitly requested)
+- [ ] All validation errors auto-fixed
+- [ ] All fixes batched into single commit
+- [ ] Single push per validation cycle
+- [ ] Merge completed successfully
+- [ ] PR branch deleted and PR closed
+- [ ] Only permanent branches remain
+- [ ] All status updates provided (informational only)
+
+---
+
+**COMPLIANCE STATUS: ✅ ALL BEST PRACTICES MET**
+
+**See other rule modules for specific implementation details:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `AGENT-BEHAVIOR.mdc` - Agent behavior rules
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `VALIDATION.mdc` - Code validation rules
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+- `CLOUD-AGENTS.mdc` - Cloud agent specifics
+- `COMMUNICATION.mdc` - User communication and feedback

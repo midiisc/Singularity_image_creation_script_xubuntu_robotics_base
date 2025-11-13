@@ -1,0 +1,197 @@
+---
+name: User Communication & Feedback
+description: Immediate feedback requirements, feedback level, error reporting
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 💬 USER COMMUNICATION & FEEDBACK
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**All communication is INFORMATIONAL ONLY - not asking for permission (see `CORE-AUTOMATION.mdc`).**
+
+---
+
+## IMMEDIATE FEEDBACK REQUIREMENTS (INFORMATIONAL ONLY)
+
+**Always provide immediate feedback in chat (informational, not asking permission):**
+
+### 1. After commit:
+```
+✅ Commit created on <pr-branch> (<hash>)
+- Repository: <repo-name> (<absolute-path>)
+- Message: "<commit message>"
+- Files changed: <count>
+- Next: pushing to origin/<pr-branch>...
+```
+
+### 2. After push:
+```
+✅ Changes pushed to <pr-branch>
+- Repository: <repo-name> (<absolute-path>)
+- Running bash validation automatically...
+```
+
+### 3. After validation (with auto-fixes):
+```
+✅ Bash validation complete
+- Checks passed: 18/20
+- Auto-fixes applied: 2 (auto-committed and pushed)
+- Validation re-run: PASSED
+- Attempting merge automatically...
+```
+**Note**: User NOT asked for approval - fixes handled automatically
+
+### 4. After merge attempt:
+```
+✅ Merge successful
+- PR branch merged into <target-branch> automatically
+- <target-branch> pushed to remote automatically
+- Cleaning up PR branch automatically...
+```
+
+### 5. After cleanup:
+```
+✅ Cleanup complete
+- PR branch deleted (local and remote) automatically
+- PR closed automatically
+- Repository state: Only main and beta branches remain
+```
+
+### 6. If hooks fail (auto-fix example):
+```
+⚠️ Pre-commit hooks failed → Auto-fixing issues...
+✅ Auto-fixes applied: 3 issues corrected
+✅ Fixed files staged automatically
+✅ Re-running commit (hooks will pass)...
+✅ Commit successful after auto-fixes
+```
+**Note**: User NOT asked - all fixes handled automatically
+
+---
+
+## FEEDBACK LEVEL: ADEQUATE BUT NOT OVERWHELMING
+
+### DO provide:
+- ✅ Action status (what happened)
+- ✅ Key results (pass/fail, merge success/failure)
+- ✅ Summary of fixes applied
+- ✅ Branches, commit hashes, and commit messages involved in the action
+- ✅ Repository name and path for clarity
+- ✅ Next steps
+- ✅ Any user action required (only if truly needed)
+
+### DON'T provide:
+- ❌ Atomic-level details (every single git command)
+- ❌ Verbose intermediate steps
+- ❌ Redundant information
+- ❌ Overwhelming technical dumps
+
+### Example - GOOD (Informational, shows automation):
+```
+✅ Push complete → Validation passed (18/20 checks) → Auto-fixed 2 issues → 
+Auto-committed fixes → Auto-pushed fixes → Validation re-run: PASSED → 
+Merge successful → Beta updated → Feature branch deleted → PR closed
+```
+
+### Example - BAD (Too verbose, asking for approval):
+```
+Running git push...
+Pushing to origin...
+Counting objects...
+Writing objects...
+Push complete.
+Would you like me to proceed with merge? [ASKING USER - BAD]
+```
+
+---
+
+## ERROR REPORTING (WITH AUTO-FIX)
+
+**When errors occur:**
+
+1. **Report immediately (informational)**: ⚠️ Error detected: <description> - Auto-fixing automatically...
+
+2. **Provide context (informational)**: What action was attempted, what went wrong, relevant file/line numbers
+
+3. **AUTOMATIC resolution (BATCHED - no user prompts)**:
+   - **AUTOMATIC**: Auto-fix all fixable issues immediately
+   - **BATCH ALL FIXES**: Collect all fixes before committing/pushing
+   - **AUTOMATIC**: Apply all fixes, stage all together, commit once, push once
+   - **AUTOMATIC**: Re-run validation/checks automatically
+   - **Report**: "Auto-fixes applied successfully (N issues batched). Issue resolved."
+   - **NO USER ACTION**: All handled automatically
+   - **CLEAN BUILD TREE**: Single push per fix cycle (minimal pushes)
+
+4. **If multiple solutions exist (RARE)**: Present options with pros/cons clearly, wait for user choice, implement chosen solution automatically
+
+5. **If truly unfixable (EXTREMELY RARE)**: Report specific issue clearly, provide exact commands for manual resolution (last resort), explain why auto-fix failed
+
+---
+
+## STATUS UPDATE FORMAT
+
+**Use consistent format for all status updates:**
+
+```
+[ACTION] → [RESULT] → [NEXT STEP]
+```
+
+**Examples**:
+- `Commit → Success (hash: abc123) → Pushing to origin/feature-branch...`
+- `Push → Success → Running validation automatically...`
+- `Validation → Passed (18/20 checks) → Auto-fixed 2 issues → Attempting merge...`
+- `Merge → Success → Cleaning up PR branch...`
+
+---
+
+## ERROR MESSAGE FORMAT
+
+**When reporting errors, include:**
+
+1. **Error Type**: What kind of error (validation, merge conflict, API failure, etc.)
+2. **Context**: What action was being performed
+3. **Location**: File and line numbers (if applicable)
+4. **Auto-fix Status**: What was auto-fixed (if applicable)
+5. **Next Action**: What will happen next automatically
+
+**Example**:
+```
+⚠️ Validation Error Detected
+- Type: Bash script syntax error
+- File: build_xubuntu_robotics_base.sh, line 1234
+- Issue: Unclosed quote in variable assignment
+- Auto-fix: Applied (fixed quote closure)
+- Next: Re-running validation automatically...
+```
+
+---
+
+## USER ACTION REQUIRED (RARE)
+
+**Only report "User action required" when**:
+- Multiple valid solutions exist with different pros/cons
+- Truly unfixable issue (extremely rare)
+- User explicitly requested manual review
+
+**Format**:
+```
+⚠️ User Action Required
+- Issue: <description>
+- Options:
+  1. Option A: <description> (Pros: ..., Cons: ...)
+  2. Option B: <description> (Pros: ..., Cons: ...)
+- Waiting for user choice...
+```
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `VALIDATION.mdc` - Code validation rules

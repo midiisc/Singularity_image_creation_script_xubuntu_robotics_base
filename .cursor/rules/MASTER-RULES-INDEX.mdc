@@ -1,7 +1,7 @@
 ---
 name: Master Rules Index - Single Source of Truth
-description: Master index pointing to consolidated rule files (PART1 and PART2)
-version: "3.0"
+description: Master index pointing to modular rule files
+version: "4.0"
 alwaysApply: true
 globs:
   - "**/*"
@@ -13,9 +13,7 @@ globs:
 
 **THIS IS THE MASTER INDEX FOR ALL AGENT RULES.**
 
-**All rules are consolidated into two files (both under 500 lines for proper context):**
-- `MASTER-RULES-PART1.mdc` - Core Principles, Agent Behavior, Git Workflow
-- `MASTER-RULES-PART2.mdc` - Validation, Merge, Cloud, Communication, Best Practices
+**All rules are organized into focused modules (each under 500 lines for proper context):**
 
 **These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
 
@@ -23,60 +21,117 @@ globs:
 
 ---
 
-## 📋 CONSOLIDATED RULE FILES
+## 📋 MODULAR RULE FILES
 
 **Single Source of Truth Structure**:
 
-1. **MASTER-RULES-PART1.mdc** (~450 lines)
+### Core Modules:
+1. **CORE-AUTOMATION.mdc** (~200 lines)
    - Full Automation Principle
-   - Part 1: Agent Behavior (file creation, response mode, planning, code review, core files)
-   - Part 2: Git Workflow & Branch Management (pre-work steps, PR workflow, git operations, workflow sequence, mandatory reporting)
+   - Automation scope and guarantees
+   - Batching requirements
+   - Exceptions to automation
 
-2. **MASTER-RULES-PART2.mdc** (~450 lines)
-   - Part 3: Code Quality & Validation (validation triggers, bash script validation, CoT check auto-trigger, pattern learning)
-   - Part 4: Automated Merge & Conflict Resolution (merge attempt, clean merge, conflict auto-resolution, sequential PR merging)
-   - Part 5: Cloud Agent Specifics (identification, initial response, PR lifecycle, cursor/* branch handling, multi-agent coordination)
-   - Part 6: User Communication & Feedback (immediate feedback, feedback level, error reporting)
-   - Part 7: Best Practices Compliance (Cursor IDE, Git workflow, automation, user communication, build tree cleanliness, early error detection, context management)
+2. **AGENT-BEHAVIOR.mdc** (~200 lines)
+   - File creation restrictions
+   - Response mode
+   - Planning approach
+   - Code review protocol
+   - Core files list (primary and secondary)
 
-**Benefits of Consolidated Structure**:
-- ✅ Single source of truth (2 files instead of 7)
-- ✅ Both files under 500 lines (proper context maintenance)
+3. **GIT-WORKFLOW.mdc** (~300 lines)
+   - Mandatory pre-work steps
+   - Target branch determination
+   - Pull request workflow
+   - Git operations (fully automated)
+   - Commit → Push → Validation → Merge → Cleanup workflow
+   - Commit & push reporting templates
+
+4. **VALIDATION.mdc** (~300 lines)
+   - Validation triggers (pre-commit hooks + post-push agent)
+   - Bash script validation
+   - Advanced CoT check auto-trigger (with classification criteria)
+   - Pattern learning & error prevention
+   - Error handling & recovery
+
+5. **MERGE-CONFLICTS.mdc** (~200 lines)
+   - Merge attempt after push
+   - Clean merge process
+   - Conflict auto-resolution
+   - Sequential PR merging
+   - Merge reporting
+
+6. **CLOUD-AGENTS.mdc** (~200 lines)
+   - Cloud agent identification
+   - Initial response requirements
+   - PR lifecycle (cloud agent)
+   - Cursor/* branch handling
+   - Multi-agent coordination
+
+7. **COMMUNICATION.mdc** (~250 lines)
+   - Immediate feedback requirements (informational only)
+   - Feedback level guidelines
+   - Error reporting (with auto-fix)
+   - Status update format
+   - User action required (rare cases)
+
+8. **BEST-PRACTICES.mdc** (~300 lines)
+   - Cursor IDE best practices
+   - Git workflow best practices
+   - Automation best practices
+   - User communication best practices
+   - Build tree cleanliness
+   - Early error detection
+   - Context management
+   - Error recovery procedures
+   - Pattern learning best practices
+   - Compliance checklist
+
+**Benefits of Modular Structure**:
+- ✅ Single source of truth (8 focused modules)
+- ✅ All modules under 500 lines (proper context maintenance)
 - ✅ Easier to modify and maintain
 - ✅ Clear organization and references
 - ✅ No conflicts or duplication
+- ✅ Better context management
 
 ---
 
 ## 🔗 RELATED FILES
 
-**This index points to the consolidated rule files:**
+**This index points to the modular rule files:**
 
-- `.cursor/rules/MASTER-RULES-PART1.mdc` - Core Principles, Agent Behavior, Git Workflow
-- `.cursor/rules/MASTER-RULES-PART2.mdc` - Validation, Merge, Cloud, Communication, Best Practices
-- `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Quick reference pointing to this index
+- `.cursor/rules/CORE-AUTOMATION.mdc` - Full automation principles
+- `.cursor/rules/AGENT-BEHAVIOR.mdc` - Agent behavior rules
+- `.cursor/rules/GIT-WORKFLOW.mdc` - Git operations and workflow
+- `.cursor/rules/VALIDATION.mdc` - Code validation rules
+- `.cursor/rules/MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+- `.cursor/rules/CLOUD-AGENTS.mdc` - Cloud agent specifics
+- `.cursor/rules/COMMUNICATION.mdc` - User communication and feedback
+- `.cursor/rules/BEST-PRACTICES.mdc` - Best practices compliance
+- `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Quick reference and pre-work checklist
 - `.cursorrules` - Points to this index
 - `prompts/Code_check_prompt_manual.txt` - Bash validation checklist
-- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt
+- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt (or PART1/PART2/PART3)
 - `prompts/Pattern-Learning-Repository.md` - Learned error patterns (auto-updated)
 
 ---
 
 ## 📚 QUICK REFERENCE
 
-**Before creating a file**:
-- Is it a core file? → Check MASTER-RULES-PART1.mdc (Part 1.5)
+### Before creating a file:
+- Is it a core file? → Check `AGENT-BEHAVIOR.mdc` (Core Files section)
 - Is it documentation/summary/plan? → Require explicit user request
 - Unsure? → ASK USER FIRST
 
-**Before git operation**:
-- Verify branch aligns with task requirements
+### Before git operation:
+- Verify branch aligns with task requirements (see `GIT-WORKFLOW.mdc` - Target Branch Determination)
 - Verify files (core files only)
-- All git operations are fully automated (no user approval needed)
-- Never assume permission
+- All git operations are fully automated (see `CORE-AUTOMATION.mdc`)
+- Never assume permission (but automation is default)
 
-**Before completing work**:
-- Verify all checklist items
+### Before completing work:
+- Verify all checklist items (see `BEST-PRACTICES.mdc` - Compliance Checklist)
 - Verify branch and files
 - Verify no rules violated
 - Verify PR branch deleted and PR closed (only main and beta remain)
@@ -88,16 +143,16 @@ globs:
 **If you violate these rules**:
 1. **STOP immediately** - Do not complete the violating action
 2. **EXPLAIN the violation** - Clearly state what rule was violated
-3. **ASK for explicit permission** - Request user approval
+3. **ASK for explicit permission** - Request user approval (only if truly needed)
 4. **WAIT for confirmation** - Do not proceed until explicitly approved
 
 **THESE RULES ARE AUTOMATICALLY ENFORCED. VIOLATIONS WILL BE DETECTED.**
 
 ---
 
-**REMEMBER: FULL AUTOMATION - AI HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**
+## 🤖 FULL AUTOMATION PRINCIPLE
 
-**CRITICAL AUTOMATION PRINCIPLES**:
+**CRITICAL AUTOMATION PRINCIPLES** (see `CORE-AUTOMATION.mdc` for details):
 - ✅ **ALL validation errors** → Auto-fixed automatically (no user prompts)
 - ✅ **ALL hook failures** → Auto-fixed and re-run automatically
 - ✅ **ALL critical issues** → Auto-resolved automatically
@@ -116,3 +171,23 @@ globs:
 - ✅ Push ONCE after all fixes: `git push origin <pr-branch>`
 - ✅ **NEVER**: Multiple commits/pushes for fixes (batches into one)
 - ✅ **RESULT**: Clean git history, minimal pushes, clean build tree
+
+---
+
+## 📖 READING ORDER
+
+**For new agents or when in doubt, read in this order:**
+
+1. **000-MANDATORY-READ-FIRST.mdc** - Pre-work checklist and quick reference
+2. **CORE-AUTOMATION.mdc** - Understand automation principles (CRITICAL)
+3. **AGENT-BEHAVIOR.mdc** - Understand what you can/cannot do
+4. **GIT-WORKFLOW.mdc** - Understand git operations and workflow
+5. **VALIDATION.mdc** - Understand validation and auto-fix
+6. **MERGE-CONFLICTS.mdc** - Understand merge and conflict resolution
+7. **CLOUD-AGENTS.mdc** - If you're a cloud agent
+8. **COMMUNICATION.mdc** - Understand how to communicate with user
+9. **BEST-PRACTICES.mdc** - Review best practices and compliance checklist
+
+---
+
+**REMEMBER: FULL AUTOMATION - AI HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**

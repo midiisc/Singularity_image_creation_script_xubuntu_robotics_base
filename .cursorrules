@@ -5,21 +5,34 @@
 ### 🔴 CRITICAL: Read Master Rules
 
 **BEFORE ANY WORK:**
-1. Read `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX & SINGLE SOURCE OF TRUTH)
+1. Read `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX - SINGLE SOURCE OF TRUTH)
 2. Check branch: `git branch --show-current`
-3. Pull latest: `git pull origin beta`
+3. Pull latest: `git pull origin <target-branch>` (typically `beta`)
 
 ### Quick Reference
 
-**Complete rules are in**: `.cursor/rules/MASTER-RULES-INDEX.mdc` (master index with focused modules)
+**Complete rules are in**: `.cursor/rules/MASTER-RULES-INDEX.mdc` (master index with modular rule files)
 
 **Key points**:
+- ✅ **FULL AUTOMATION**: All git operations, validation, and fixes are automatic (see `CORE-AUTOMATION.mdc`)
 - ✅ Feature branches with PRs (not direct beta commits)
 - ✅ Bash validation on push (auto-fix errors, batched)
 - ✅ Automated merge with conflict resolution
 - ✅ Sequential PR merging (one at a time)
 - ✅ Immediate feedback in chat (informational only)
 - ✅ **Batching**: All fixes collected → Single commit → Single push (clean build tree)
+
+### Modular Rule Structure
+
+**8 focused modules (all under 500 lines):**
+- `CORE-AUTOMATION.mdc` - Full automation principles (READ FIRST)
+- `AGENT-BEHAVIOR.mdc` - File creation, response mode, core files
+- `GIT-WORKFLOW.mdc` - Git operations, PR workflow, branch management
+- `VALIDATION.mdc` - Validation triggers, bash validation, CoT checks
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
+- `CLOUD-AGENTS.mdc` - Cloud agent specifics
+- `COMMUNICATION.mdc` - User communication and feedback
+- `BEST-PRACTICES.mdc` - Best practices compliance
 
 ### When in Doubt
 

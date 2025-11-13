@@ -1,0 +1,170 @@
+---
+name: Automated Merge & Conflict Resolution
+description: Merge process, conflict auto-resolution, sequential PR merging
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🔀 AUTOMATED MERGE & CONFLICT RESOLUTION
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**See `CORE-AUTOMATION.mdc` for automation principles (all merges and conflicts are auto-resolved).**
+
+---
+
+## MERGE ATTEMPT AFTER PUSH
+
+**After push and validation pass:**
+
+1. **Fetch latest**:
+   ```bash
+   git fetch origin
+   ```
+
+2. **Attempt dry-run merge**:
+   ```bash
+   git checkout <target-branch>
+   git pull origin <target-branch>
+   git merge --no-commit --no-ff origin/<pr-branch>
+   ```
+
+3. **Check merge result**:
+   - If clean: Proceed to actual merge (Clean Merge Process below)
+   - If conflicts: Attempt auto-resolution (Conflict Auto-Resolution below)
+
+---
+
+## CLEAN MERGE PROCESS
+
+**If merge is clean:**
+
+1. **Complete merge**:
+   ```bash
+   git merge --no-ff <pr-branch>
+   ```
+
+2. **Push target branch**:
+   ```bash
+   git push origin <target-branch>
+   ```
+
+3. **Report in chat**:
+   ```
+   ✅ Merge successful
+   - PR branch merged into <target-branch>
+   - <target-branch> branch pushed to remote
+   - Proceeding with cleanup...
+   ```
+
+4. **Cleanup** (see `GIT-WORKFLOW.mdc`):
+   - Delete PR branch locally and remotely
+   - Close PR
+   - Verify only permanent branches remain
+
+---
+
+## CONFLICT AUTO-RESOLUTION
+
+**If conflicts detected:**
+
+1. **Analyze conflicts**: 
+   - List conflicting files
+   - Identify conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`)
+   - Understand context of each conflict
+   - Determine conflict type (content, whitespace, both)
+
+2. **Attempt auto-resolution (MANDATORY - FULL AUTOMATION)**:
+   - Use AI agent context to resolve conflicts intelligently
+   - **AUTOMATIC**: Apply resolutions automatically without asking
+   - **AUTOMATIC**: Stage resolved files: `git add <resolved-files>`
+   - **AUTOMATIC**: Complete merge: `git commit -m "merge: auto-resolved conflicts"`
+   - **AUTOMATIC**: Push merged changes: `git push origin <target-branch>`
+   - **Report only**: "Conflicts auto-resolved and merged. Proceeding with cleanup..."
+   - **NO USER APPROVAL**: AI agent handles all conflict resolution automatically
+
+3. **Conflict Resolution Strategies**:
+   - **Content conflicts**: Choose version based on context, prefer newer changes, merge both if complementary
+   - **Whitespace conflicts**: Normalize whitespace, prefer consistent formatting
+   - **Both content and whitespace**: Resolve content first, then normalize whitespace
+   - **Binary file conflicts**: Report to user (cannot auto-resolve binary conflicts)
+
+4. **If auto-resolution succeeds (NORMAL CASE)**:
+   - **AUTOMATIC**: All steps completed automatically
+   - Report: "Conflicts auto-resolved and merged. Proceeding with cleanup..."
+
+5. **If auto-resolution fails (RARE EXCEPTION - ONLY THEN ASK USER)**:
+   - **ONLY IF**: Multiple valid resolution strategies exist with different pros/cons
+   - Present options with pros/cons clearly
+   - Wait for user choice
+   - **AUTOMATIC**: Implement chosen resolution automatically
+   - **If truly unfixable** (extremely rare):
+     - Abort merge: `git merge --abort`
+     - Report conflicts with specific guidance
+     - Provide exact commands for manual resolution (last resort only)
+
+---
+
+## SEQUENTIAL PR MERGING
+
+**Multiple PRs handling**:
+- ✅ **ALWAYS merge sequentially** (one PR at a time)
+- ❌ **NEVER merge PRs in parallel**
+
+### Process:
+1. When multiple PRs exist:
+   - List PRs in order (by creation time or priority)
+   - Merge first PR completely (merge → push → cleanup)
+   - Then proceed to next PR
+   - Report progress after each merge
+
+2. **After each merge**:
+   - Pull latest from the target branch before merging the next PR
+   - Ensure clean state before proceeding
+   - Verify no conflicts with previously merged PRs
+
+3. **Conflict with previously merged PR**:
+   - If conflicts detected with already-merged PR:
+     - Rebase current PR branch on top of target branch
+     - Resolve conflicts during rebase (auto-resolve)
+     - Force push rebased branch: `git push --force-with-lease origin <pr-branch>`
+     - Proceed with merge
+
+---
+
+## MERGE REPORTING
+
+**After every merge (clean or with conflicts), report:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ MERGE COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPOSITORY: <repo-name> (<absolute-path>)
+MERGE TYPE: Clean / Auto-resolved conflicts
+SOURCE BRANCH: <pr-branch-name>
+TARGET BRANCH: <target-branch>
+MERGE COMMIT: <hash>
+
+CONFLICTS RESOLVED: <count> (if applicable)
+  - <file1>: <resolution-strategy>
+  - <file2>: <resolution-strategy>
+  ...
+
+STATUS: ✅ SUCCESS / ❌ FAILED
+NEXT ACTION: <cleanup, next PR merge, etc.>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `VALIDATION.mdc` - Code validation rules

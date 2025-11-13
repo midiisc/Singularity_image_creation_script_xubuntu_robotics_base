@@ -1,0 +1,207 @@
+---
+name: Code Quality & Validation
+description: Validation triggers, bash script validation, CoT checks, pattern learning
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# ✅ CODE QUALITY & VALIDATION
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**See `CORE-AUTOMATION.mdc` for automation principles (all validation errors are auto-fixed).**
+
+---
+
+## VALIDATION TRIGGERS: COMMIT (HOOKS) + PUSH (AGENT)
+
+**Two-stage validation with FULL AI automation - NO USER INTERVENTION REQUIRED:**
+
+### Stage 1: Pre-commit Hooks (Automatic with AI Auto-Fix)
+- Git hooks run automatically on every `git commit`
+- Pre-commit hooks validate staged changes before commit completes
+- **CRITICAL**: If validation fails, AI agent MUST automatically:
+  1. Analyze the validation errors
+  2. Auto-fix all fixable issues automatically
+  3. Stage the fixes: `git add <fixed-files>`
+  4. Re-run validation to confirm fixes
+  5. If validation passes, allow commit to proceed
+  6. If validation still fails (unfixable), report to user with specific guidance
+- Hooks include: CMake flag validation, AI-assisted review (if configured)
+- **Early error detection + auto-correction**: Catches and fixes issues before commit
+- **User intervention ONLY**: When multiple solution options exist with different pros/cons
+
+### Stage 2: Post-push Agent Validation (Automatic with Full Auto-Fix + Batching)
+- Agent runs validation immediately after each automated push
+- Extract diff: `git diff origin/<target-branch>..<pr-branch>`
+- Filter bash files: Only `.sh` files in the diff
+- Run comprehensive bash validation (see Bash Script Validation below)
+- **AUTOMATIC**: Auto-fix ALL errors found without asking user
+- **BATCH ALL FIXES**: Collect all fixes before committing/pushing
+- **AUTOMATIC**: Stage ALL fixes together, commit once, push once
+- **CLEAN BUILD TREE**: Single push per validation cycle (minimal pushes)
+- Report results inline in chat (informational only, no user action required)
+
+**Benefits of two-stage validation**:
+- Pre-commit hooks catch errors early (before commit) + AI auto-fixes
+- Post-push validation ensures comprehensive checks (full diff review) + AI auto-fixes
+- Redundant checks ensure nothing slips through
+- **FULL AUTOMATION**: AI handles all fixes automatically at both stages
+- **ZERO USER INTERVENTION**: User only notified of actions taken, not asked for approval
+
+---
+
+## BASH SCRIPT VALIDATION
+
+**Validation uses**: `prompts/Code_check_prompt_manual.txt`
+
+### Process:
+1. For each bash file in diff:
+   - Walk checklist A-O sequentially from `Code_check_prompt_manual.txt`
+   - Check each item: PASS/FAIL
+   - Document findings
+
+2. **Auto-correction (MANDATORY - FULL AUTOMATION)**:
+   - **For ALL errors found**: MUST automatically correct without asking user
+   - Apply fixes directly to files immediately
+   - Document what was fixed and why (for reporting only)
+   - **NO USER PROMPTS**: Fix everything automatically
+   - **ONLY EXCEPTION**: If multiple solution options exist with different pros/cons, then:
+     - Present options with pros/cons clearly
+     - Wait for user choice
+     - Implement chosen solution automatically
+   - **Default behavior**: Choose best solution automatically if no significant trade-offs
+
+3. **Critical issues (AUTO-RESOLVE)**:
+   - If critical issues found: Auto-resolve using agent's best judgment
+   - Apply fixes immediately without user confirmation
+   - Report what was fixed (informational, not asking permission)
+   - **User intervention ONLY**: When multiple valid solutions exist with meaningful trade-offs
+
+4. **Report format**: Show file, line ranges, PASS/FAIL status, auto-fixed issues with before/after, summary (total checks, passed, auto-fixed, remaining issues).
+
+5. **After auto-correction (BATCHED AUTOMATIC WORKFLOW)**:
+   - **CRITICAL**: Collect ALL fixes before pushing (minimal pushes, clean build tree)
+   - **AUTOMATIC**: If files were modified:
+     1. Stage ALL fixes: `git add <all-fixed-files>`
+     2. **BATCH**: Wait for all validation passes before committing
+     3. **SINGLE COMMIT**: Commit all fixes together: `git commit -m "fix: auto-corrected validation errors"`
+     4. **SINGLE PUSH**: Push once after all corrections: `git push origin <pr-branch>`
+     5. Re-run validation to confirm all issues resolved
+   - **Report only**: "Auto-fixes applied (N issues), batched into single commit, pushed. Validation re-run: PASSED"
+   - **NO USER APPROVAL REQUIRED**: All fixes handled automatically by AI agent
+   - **BUILD TREE CLEAN**: Single push per validation cycle (not multiple pushes)
+
+---
+
+## ADVANCED COT CHECK AUTO-TRIGGER
+
+**CoT check triggers automatically when**:
+- Commit is substantial (agent determines by parsing code)
+- Commit is large/complex (agent classifies)
+- Commit introduces completely new feature
+- Agent determines code is "worthy" of detailed CoT check
+
+### Classification Criteria (Agent Decides):
+
+**Worthy of CoT** (run Advanced CoT audit):
+- New feature introduction
+- Complex logic changes (>50 lines of logic)
+- HPC optimizations
+- Security-sensitive code
+- Architecture changes
+- Performance-critical modifications
+- Multi-file coordinated changes
+
+**Simple bash check sufficient** (run bash validation only):
+- Bug fixes (<20 lines)
+- Minor refactoring
+- Documentation updates
+- Comment improvements
+- Formatting changes
+- Simple variable renames
+
+**CoT check uses**: `prompts/Advanced-CoT-Multi-Agent-Prompt.md` (or PART1/PART2/PART3 if split)
+
+### Process (FULL AUTOMATION):
+1. Agent analyzes commit diff automatically
+2. Agent classifies: CoT-worthy or simple bash check sufficient
+3. If CoT-worthy:
+   - Run Advanced CoT audit automatically
+   - Report findings inline (informational)
+   - **AUTOMATIC**: Auto-resolve ALL critical issues immediately
+   - **BATCH ALL FIXES**: Collect all fixes before committing/pushing
+   - **AUTOMATIC**: Apply all fixes, stage all together, commit once, push once
+   - **ONLY EXCEPTION**: Ask user for choice ONLY if multiple solutions exist with different pros/cons
+   - **CLEAN BUILD TREE**: Single push per validation cycle
+4. If simple bash check sufficient:
+   - Run bash validation only (see Bash Script Validation above) with full auto-fix and batching
+
+**Manual CoT trigger**:
+- User can explicitly request CoT check: "run CoT check on this commit"
+- Agent will run CoT regardless of classification
+
+---
+
+## PATTERN LEARNING & ERROR PREVENTION
+
+**Pattern-Based Learning System**: Automatically activated when agent solves error during commit/validation.
+
+### Process:
+1. **Error Classification**: Identify error type, severity, and context
+2. **Pattern Extraction**: 
+   - Create unique pattern ID
+   - Categorize (syntax, logic, security, performance, etc.)
+   - Document detection method
+   - Document prevention method
+3. **Pattern Storage**: Add to `prompts/Pattern-Learning-Repository.md`
+4. **Pattern Integration**: Check patterns in future code reviews automatically
+5. **Pattern Evolution**:
+   - Track frequency of pattern occurrence
+   - Refine detection/prevention methods
+   - Promote frequently occurring patterns
+   - Deprecate outdated patterns
+
+### Pattern Format:
+```markdown
+## Pattern ID: <unique-id>
+- **Category**: <category>
+- **Detection**: <how to detect>
+- **Prevention**: <how to prevent>
+- **Frequency**: <count>
+- **Last Updated**: <date>
+```
+
+---
+
+## ERROR HANDLING & RECOVERY
+
+### Auto-fix Retry Logic:
+- **Maximum retry attempts**: 3 attempts per validation cycle
+- **Retry conditions**: 
+  - Validation still fails after auto-fix
+  - New errors introduced by auto-fix
+  - Transient errors (network, API timeouts)
+- **Escalation**: After 3 failed attempts, report to user with specific guidance
+
+### Timeout Handling:
+- **Pre-commit hooks**: 60 second timeout per hook
+- **Post-push validation**: 300 second timeout total
+- **CoT audit**: 600 second timeout
+- **On timeout**: Report timeout, suggest manual review, continue with next validation stage
+
+### API Failure Handling:
+- **AI review API fails**: Fall back to basic bash validation only
+- **Multiple provider setup**: Fall back to secondary provider if primary fails
+- **All providers fail**: Report error, suggest manual review, allow commit to proceed with warning
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `MERGE-CONFLICTS.mdc` - Merge and conflict resolution

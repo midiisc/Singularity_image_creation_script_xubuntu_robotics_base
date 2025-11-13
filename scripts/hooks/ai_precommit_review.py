@@ -24,7 +24,6 @@ from urllib.request import Request, urlopen
 
 class Provider(str):
     OPENAI = "openai"
-    CURSOR = "cursor"
     ANTHROPIC = "anthropic"
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -62,7 +61,6 @@ DEFAULT_COMPLEXITY_CHAR_THRESHOLD = 6000
 DEFAULT_COMPLEXITY_HUNK_THRESHOLD = 3
 OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
 OPENAI_DEFAULT_API_URL = "https://api.openai.com/v1/chat/completions"
-CURSOR_DEFAULT_API_URL = "https://api.cursor.sh/v1/chat/completions"
 ANTHROPIC_API_VERSION = "2023-06-01"
 
 
@@ -77,12 +75,6 @@ class ProviderConfig:
 
 PROVIDER_TOKEN_ENV_NAMES = {
     Provider.ANTHROPIC: ["AI_REVIEW_TOKEN", "ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
-    Provider.CURSOR: [
-        "AI_REVIEW_SECONDARY_TOKEN",
-        "CURSOR_API_KEY",
-        "CURSOR_AGENT_KEY",
-        "AI_REVIEW_CURSOR_TOKEN",
-    ],
     Provider.OPENAI: [
         "AI_REVIEW_SECONDARY_TOKEN",
         "OPENAI_API_KEY",
@@ -93,14 +85,12 @@ PROVIDER_TOKEN_ENV_NAMES = {
 PROVIDER_DEFAULTS = {
     Provider.ANTHROPIC: {
         "api_url": "https://api.anthropic.com/v1/messages",
-        "model": "claude-3.5-sonnet-latest",
+        # Valid model names: claude-3-opus-20240229, claude-3-sonnet-20240229, claude-3-haiku-20240307
+        # Note: "claude-3.5-sonnet-latest" format is NOT supported - use specific version dates
+        "model": "claude-3-opus-20240229",  # Using working model; override with AI_REVIEW_MODEL env var
     },
     Provider.OPENAI: {
         "api_url": OPENAI_DEFAULT_API_URL,
-        "model": OPENAI_DEFAULT_MODEL,
-    },
-    Provider.CURSOR: {
-        "api_url": CURSOR_DEFAULT_API_URL,
         "model": OPENAI_DEFAULT_MODEL,
     },
 }
@@ -108,7 +98,6 @@ PROVIDER_DEFAULTS = {
 PROVIDER_DEFAULT_MAX_TOKENS = {
     Provider.ANTHROPIC: DEFAULT_MAX_TOKENS,
     Provider.OPENAI: DEFAULT_SECONDARY_MAX_TOKENS,
-    Provider.CURSOR: DEFAULT_SECONDARY_MAX_TOKENS,
 }
 
 
@@ -378,7 +367,8 @@ def review_chunk(
     user_prompt: str,
     timeout: int,
     cache_disabled: bool,
-) -> Dict[str, object]:
+    is_secondary: bool = False,
+) -> Optional[Dict[str, object]]:
     provider = config.provider
     if not config.token:
         raise ReviewFailure(
@@ -397,36 +387,49 @@ def review_chunk(
         if cached is not None:
             return cached
 
-    if provider == Provider.ANTHROPIC:
-        response = call_anthropic_api(
-            api_url=config.api_url,
-            api_token=config.token,
-            model=config.model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            timeout=timeout,
-            max_tokens=config.max_tokens,
-        )
-    elif provider in (Provider.OPENAI, Provider.CURSOR):
-        response = call_openai_api(
-            api_url=config.api_url,
-            api_token=config.token,
-            model=config.model,
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            timeout=timeout,
-            max_tokens=config.max_tokens,
-        )
-    else:
-        raise ReviewFailure(f"Unsupported AI provider: {provider}")
+    try:
+        if provider == Provider.ANTHROPIC:
+            response = call_anthropic_api(
+                api_url=config.api_url,
+                api_token=config.token,
+                model=config.model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                timeout=timeout,
+                max_tokens=config.max_tokens,
+            )
+        elif provider == Provider.OPENAI:
+            response = call_openai_api(
+                api_url=config.api_url,
+                api_token=config.token,
+                model=config.model,
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                timeout=timeout,
+                max_tokens=config.max_tokens,
+            )
+        else:
+            raise ReviewFailure(f"Unsupported AI provider: {provider}")
 
-    content = extract_review_content(response, provider)
-    parsed = parse_review_json(content)
+        content = extract_review_content(response, provider)
+        parsed = parse_review_json(content)
 
-    if not cache_disabled:
-        write_cache(cache_identifier, parsed)
+        if not cache_disabled:
+            write_cache(cache_identifier, parsed)
 
-    return parsed
+        return parsed
+    except HTTPError as exc:
+        # For secondary providers, gracefully handle 404/API errors by returning None
+        # This allows fallback to primary provider
+        if is_secondary and exc.code in (404, 403, 401):
+            print(
+                f"Warning: Secondary provider '{provider}' API request failed with HTTP {exc.code}."
+            )
+            print(f"Reason: {exc.reason}")
+            print("Falling back to primary provider or skipping secondary review.")
+            return None
+        # For primary provider or non-404 errors, raise the exception
+        raise
 
 
 def format_user_prompt(
@@ -664,13 +667,41 @@ def collect_reviews(
                 chunk_index=idx,
                 chunk_total=len(chunks),
             )
+            is_secondary = (
+                secondary_provider
+                and provider_config.provider == secondary_provider
+            )
             review = review_chunk(
                 config=provider_config,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 timeout=timeout,
                 cache_disabled=cache_disabled,
+                is_secondary=is_secondary,
             )
+            # If secondary provider failed (returned None), fall back to primary
+            if review is None and is_secondary and primary_provider in configs:
+                print(
+                    f"Retrying with primary provider '{primary_provider}'..."
+                )
+                primary_config = configs[primary_provider]
+                review = review_chunk(
+                    config=primary_config,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    timeout=timeout,
+                    cache_disabled=cache_disabled,
+                    is_secondary=False,
+                )
+                provider_config = primary_config
+            
+            # Skip if review is still None (both providers failed)
+            if review is None:
+                print(
+                    f"Warning: Skipping review for {path} (chunk {idx + 1}) - all providers failed"
+                )
+                continue
+                
             review_results.append(
                 (
                     pretty_chunk_header(path, idx, len(chunks)),
@@ -738,7 +769,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
         "--provider",
         type=str,
         default=os.getenv("AI_REVIEW_PROVIDER", Provider.ANTHROPIC),
-        help="Primary AI provider to use (anthropic|cursor|openai).",
+        help="Primary AI provider to use (anthropic|openai).",
     )
     parser.add_argument(
         "--max-tokens",
@@ -749,7 +780,7 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--secondary-provider",
         type=str,
-        default=os.getenv("AI_REVIEW_SECONDARY_PROVIDER", Provider.CURSOR),
+        default=os.getenv("AI_REVIEW_SECONDARY_PROVIDER", Provider.OPENAI),
         help="Secondary AI provider to use for smaller/simple chunks.",
     )
     parser.add_argument(
@@ -798,15 +829,14 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
 
 def detect_provider(explicit_provider: str, api_url: str) -> str:
     provider = (explicit_provider or "").strip().lower()
-    if provider in (Provider.ANTHROPIC, Provider.OPENAI, Provider.CURSOR):
+    if provider in (Provider.ANTHROPIC, Provider.OPENAI):
         return provider
     if "anthropic" in api_url.lower():
         return Provider.ANTHROPIC
-    if "cursor" in api_url.lower():
-        return Provider.CURSOR
     if "openai" in api_url.lower():
         return Provider.OPENAI
-    return Provider.CURSOR
+    # Default to Anthropic if unable to detect
+    return Provider.ANTHROPIC
 
 
 def main(argv: List[str]) -> int:
@@ -815,7 +845,6 @@ def main(argv: List[str]) -> int:
     skip_flag = str(os.getenv("SKIP_AI_REVIEW", "0")).strip().lower()
     if skip_flag in {"1", "true", "yes"}:
         print("AI review skipped due to SKIP_AI_REVIEW being set.")
-        return 0
         return 0
 
     primary_api_url_env = os.getenv("AI_REVIEW_API_URL", "")

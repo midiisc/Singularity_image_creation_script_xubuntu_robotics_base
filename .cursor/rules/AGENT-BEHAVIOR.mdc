@@ -1,0 +1,143 @@
+---
+name: Agent Behavior Rules
+description: Agent behavior rules - file creation, response mode, planning, code review, core files
+version: "4.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 📋 AGENT BEHAVIOR RULES
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**See `CORE-AUTOMATION.mdc` for automation principles.**
+
+---
+
+## FILE CREATION RESTRICTIONS
+
+### FORBIDDEN FILE TYPES - Never create these automatically:
+- `summary.md`, `SUMMARY.txt`, `overview.*`
+- `steps.md`, `plan.md`, `roadmap.md`, `TODO.md`
+- `notes.md`, `documentation.md`, `guide.md`
+- `analysis.md`, `report.md`, `findings.md`
+- `review.md`, `code-review.md`
+- Any `.txt` or `.md` file not explicitly requested
+
+### ALLOWED without explicit request:
+- Source code files (`.sh`, `.py`, `.cpp`, `.ts`, `.js`, etc.) when implementing features
+- Configuration files when setting up tools/frameworks
+- Test files when asked to write tests
+- Modifications to existing files when requested
+
+### VALID USER REQUEST PHRASES (must contain one of these):
+- "create a file"
+- "write a summary file"
+- "generate steps file"
+- "save this to a file"
+- "export to file"
+- "create documentation"
+
+**IF USER DOES NOT USE ONE OF THESE PHRASES, DO NOT CREATE THE FILE.**
+
+---
+
+## RESPONSE MODE
+
+**Always respond inline in the chat**:
+- Provide explanations, code snippets, or solutions directly in the conversation
+- Never write responses to new files automatically
+- Use code references for existing code, markdown code blocks for new code
+
+---
+
+## PLANNING APPROACH
+
+**First Plan, Then Execute**:
+1. When asked to implement something:
+   - Create a plan first (inline in chat, NOT as a file)
+   - Wait for user confirmation or proceed if the plan is clear and straightforward
+   - Execute the plan step by step
+   - Do NOT create separate plan files unless explicitly requested
+
+2. **Never create plan files automatically**:
+   - Plans should be presented in chat conversation
+   - Only create plan files if user says "save this plan to a file" or similar
+
+---
+
+## CODE REVIEW PROTOCOL
+
+**Chunked Review Approach**:
+1. **For large code reviews**:
+   - Break the review into logical chunks (by file, by feature, by module)
+   - Review one chunk at a time
+   - Present findings inline in chat
+   - Wait for user feedback before moving to next chunk
+
+2. **Review Format**:
+   - Use inline code references for existing code
+   - Provide specific line numbers and file paths
+   - Focus on actionable feedback
+   - Prioritize critical issues first
+
+3. **Never create separate review files**:
+   - All review feedback should be in chat
+   - Only create review files if explicitly requested
+
+---
+
+## CORE FILES ONLY
+
+### PRIMARY CORE FILES (Always editable):
+- `build_xubuntu_robotics_base.sh`
+- `config.sh`
+- `create_writable_overlay.sh`
+- `run_on_best_node.sh`
+- `setup_conda_environments.sh`
+- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- `README.md`
+
+### SECONDARY CORE FILES (Editable for maintenance):
+- `scripts/hooks/ai_precommit_review.py` - Pre-commit hook implementation
+- `scripts/hooks/pre-commit` - Pre-commit hook configuration
+- `scripts/hooks/pre-commit-cmake-validator` - CMake validator
+- Files in `container-scripts/` - Container build scripts
+- Files in `scripts/helpers/` - Helper scripts
+
+### ABSOLUTE PROHIBITIONS:
+- ❌ **NO new files** unless explicitly requested by user
+- ❌ **NO patch scripts** - All fixes go into core files
+- ❌ **NO workflow files** - Keep repository clean
+- ❌ **NO temporary files** - Repository must stay minimal and clutter-free
+- ❌ **NO documentation files** (unless explicitly requested)
+- ❌ **NO analysis files** (unless explicitly requested)
+
+### WHEN IN DOUBT:
+- Ask user before creating or modifying non-core files
+- Prefer modifying existing core files over creating new ones
+
+---
+
+## FILE MODIFICATION GUIDELINES
+
+### Before modifying any file:
+1. Verify it's a core file (primary or secondary)
+2. If not a core file, ask user for explicit permission
+3. Check if modification is necessary or if existing file can be used
+4. Ensure modification aligns with repository structure
+
+### Modification priorities:
+1. **Primary core files** - Always allowed for feature implementation
+2. **Secondary core files** - Allowed for maintenance and bug fixes
+3. **Other files** - Require explicit user request
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `GIT-WORKFLOW.mdc` - Git operations and workflow
+- `VALIDATION.mdc` - Code validation rules

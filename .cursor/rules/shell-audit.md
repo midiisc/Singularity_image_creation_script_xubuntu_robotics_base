@@ -321,27 +321,31 @@ For each issue, show:
 - Verify all suggested patterns against actual shell behavior
 - Cross-reference with ShellCheck recommendations when applicable
 
-## 5. CRITICAL: SUGGESTIONS ONLY - NO AUTO-APPLY
+## 5. CRITICAL: AI AGENT AUTO-FIX BEHAVIOR
 
-- **DO NOT auto-apply any corrections**
-- **ONLY suggest corrections** in the report format above
-- All edits must be **visible and require manual approval**
-- Show suggestions in [5] Corrected/Improved Code Suggestion section with before/after
-- User will manually review and apply changes if desired
-- Suggestions appear in IDE for manual approval/rejection
-- Treat this as a code review, not an auto-fix tool
+**NOTE**: This audit rule is used by the AI pre-commit hook (`scripts/hooks/ai_precommit_review.py`).
+
+**The hook behavior**:
+- The hook **blocks commits** when critical issues are found
+- The hook **reports findings** in structured format
+- **AI Agent (Cursor) then auto-fixes** all fixable issues automatically (see `CORE-AUTOMATION.mdc`)
+- **Full automation**: All validation errors are auto-fixed, batched, committed, and pushed automatically
+- **User intervention ONLY**: When multiple solutions exist with different pros/cons
+
+**This audit provides the structured review format** - the AI agent handles auto-fix per automation principles.
 
 ## 6. Mode of Operation
 
-This audit runs automatically before every git commit. The agent automatically runs through all eight stages exhaustively and outputs the final structured report. The developer reviews the report, approves/rejects recommended fixes manually, and then continues with the commit.
+This audit runs automatically before every git commit. The agent automatically runs through all eight stages exhaustively and outputs the final structured report.
 
-**Execution Flow:**
+**Execution Flow (FULLY AUTOMATED):**
 1. Pre-commit hook triggers audit
 2. All 8 stages execute sequentially
 3. Structured report generated
-4. Developer reviews report in IDE
-5. Developer manually applies approved fixes
-6. Commit proceeds after review
+4. **AI Agent auto-fixes all fixable issues automatically** (see `CORE-AUTOMATION.mdc`)
+5. **All fixes batched** → Single commit → Single push
+6. Commit proceeds automatically after auto-fixes
+7. **User intervention ONLY**: When multiple solutions exist with different pros/cons
 
 ## 7. Completeness Guarantee
 
