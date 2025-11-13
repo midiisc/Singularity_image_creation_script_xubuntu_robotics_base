@@ -1,0 +1,333 @@
+---
+name: Master Rules - Part 1 (Core Principles, Agent Behavior, Git Workflow)
+description: Single source of truth - Part 1: Core automation principles, agent behavior, and git workflow
+version: "3.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🚨 MASTER RULES - PART 1: CORE PRINCIPLES, AGENT BEHAVIOR & GIT WORKFLOW
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**THIS IS THE SINGLE SOURCE OF TRUTH FOR ALL AGENT RULES - PART 1**
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**VIOLATION OF THESE RULES IS STRICTLY PROHIBITED.**
+
+**See `MASTER-RULES-PART2.mdc` for Validation, Merge, Cloud, Communication, and Best Practices.**
+
+---
+
+## 🤖 FULL AUTOMATION PRINCIPLE - CRITICAL
+
+**AI AGENT (CURSOR) HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**
+
+**MANDATORY AUTOMATION REQUIREMENTS**:
+- ✅ **ALL validation errors** → Auto-fixed automatically (NO user prompts)
+- ✅ **ALL pre-commit hook failures** → Auto-fixed and re-run automatically
+- ✅ **ALL post-push validation errors** → Auto-fixed, batched, committed, pushed automatically
+- ✅ **ALL critical issues** → Auto-resolved automatically
+- ✅ **ALL merge conflicts** → Auto-resolved automatically
+- ✅ **ALL fixes** → Batched together → Single commit → Single push (minimal pushes)
+- ✅ **BATCHING CRITICAL** → Collect ALL fixes before pushing (clean build tree)
+- ✅ **ALL validation** → Auto-re-run after fixes automatically
+- ✅ **ALL workflow steps** → Continue automatically after fixes
+
+**USER INTERVENTION ONLY WHEN**:
+- Multiple solution options exist with **different pros/cons** (present options, wait for choice, then implement automatically)
+- **RARE**: Truly unfixable issues (extremely rare, last resort)
+
+**USER NOTIFICATION**:
+- Informational only: "What was done" (not asking permission)
+- Status updates: "Action → Result → Next Step"
+- No approval requests for fixes (all automatic)
+
+**APPLIES TO ALL STAGES**:
+- Pre-commit hooks → Auto-fix failures automatically (batch all fixes)
+- Commit hooks → Auto-fix failures automatically (batch all fixes)
+- Push hooks → Auto-fix failures automatically (batch all fixes)
+- Post-push validation → Auto-fix all errors automatically (batch all fixes)
+- Merge conflicts → Auto-resolve automatically
+- All corrections → Batch together → Single commit → Single push (minimal pushes)
+- **CRITICAL**: Always batch fixes before pushing (clean build tree requirement)
+
+---
+
+## PART 1: AGENT BEHAVIOR
+
+### 1.1 File Creation Restrictions
+
+**FORBIDDEN FILE TYPES** - Never create these automatically:
+- `summary.md`, `SUMMARY.txt`, `overview.*`
+- `steps.md`, `plan.md`, `roadmap.md`, `TODO.md`
+- `notes.md`, `documentation.md`, `guide.md`
+- `analysis.md`, `report.md`, `findings.md`
+- `review.md`, `code-review.md`
+- Any `.txt` or `.md` file not explicitly requested
+
+**ALLOWED without explicit request**:
+- Source code files (`.sh`, `.py`, `.cpp`, `.ts`, `.js`, etc.) when implementing features
+- Configuration files when setting up tools/frameworks
+- Test files when asked to write tests
+- Modifications to existing files when requested
+
+**VALID USER REQUEST PHRASES** (must contain one of these):
+- "create a file"
+- "write a summary file"
+- "generate steps file"
+- "save this to a file"
+- "export to file"
+- "create documentation"
+
+**IF USER DOES NOT USE ONE OF THESE PHRASES, DO NOT CREATE THE FILE.**
+
+### 1.2 Response Mode
+
+**Always respond inline in the chat**:
+- Provide explanations, code snippets, or solutions directly in the conversation
+- Never write responses to new files automatically
+- Use code references for existing code, markdown code blocks for new code
+
+### 1.3 Planning Approach
+
+**First Plan, Then Execute**:
+1. When asked to implement something:
+   - Create a plan first (inline in chat, NOT as a file)
+   - Wait for user confirmation or proceed if the plan is clear and straightforward
+   - Execute the plan step by step
+   - Do NOT create separate plan files unless explicitly requested
+
+2. **Never create plan files automatically**:
+   - Plans should be presented in chat conversation
+   - Only create plan files if user says "save this plan to a file" or similar
+
+### 1.4 Code Review Protocol
+
+**Chunked Review Approach**:
+1. **For large code reviews**:
+   - Break the review into logical chunks (by file, by feature, by module)
+   - Review one chunk at a time
+   - Present findings inline in chat
+   - Wait for user feedback before moving to next chunk
+
+2. **Review Format**:
+   - Use inline code references for existing code
+   - Provide specific line numbers and file paths
+   - Focus on actionable feedback
+   - Prioritize critical issues first
+
+3. **Never create separate review files**:
+   - All review feedback should be in chat
+   - Only create review files if explicitly requested
+
+### 1.5 Core Files Only
+
+**ONLY edit these core files** (no exceptions):
+- `build_xubuntu_robotics_base.sh`
+- `config.sh`
+- `create_writable_overlay.sh`
+- `run_on_best_node.sh`
+- `setup_conda_environments.sh`
+- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- `README.md`
+
+**ABSOLUTE PROHIBITIONS**:
+- ❌ **NO new files** unless explicitly requested by user
+- ❌ **NO patch scripts** - All fixes go into core files
+- ❌ **NO workflow files** - Keep repository clean
+- ❌ **NO temporary files** - Repository must stay minimal and clutter-free
+- ❌ **NO documentation files** (unless explicitly requested)
+- ❌ **NO analysis files** (unless explicitly requested)
+
+---
+
+## PART 2: GIT WORKFLOW & BRANCH MANAGEMENT
+
+### 2.1 Mandatory Pre-Work Steps (NO EXCEPTIONS)
+
+**BEFORE performing ANY action, you MUST execute these commands in this exact order:**
+
+```bash
+# 1. Check current branch
+git branch --show-current
+
+# 2. Switch to appropriate branch (as specified by user or project requirements)
+git checkout <target-branch>
+
+# 3. Pull latest changes from the target branch
+git pull origin <target-branch>
+
+# 4. Verify workspace state
+git status
+```
+
+**DO NOT SKIP THESE STEPS. THEY ARE MANDATORY.**
+**Note**: The target branch should be determined by user instructions or project requirements, not hardcoded to `beta`.
+
+### 2.2 Pull Request Workflow
+
+**PR-per-agent requirement**:
+- Every agent MUST operate through a dedicated open PR targeting the appropriate branch (typically `beta` but may vary based on user/project requirements).
+- The PR branch MAY follow the historical `feature/<description>-<timestamp>` pattern, but naming is no longer enforced; the existence of the PR is the contractual requirement.
+- One agent → one active PR. Close or merge the existing PR before starting a new one.
+
+**Establishing or resuming a PR**:
+1. After syncing the target branch, either:
+   - Check out the branch backing the agent's existing PR, **or**
+   - Create a new branch for the PR (choose any descriptive name) if none exists yet.
+2. Push the branch and open the PR immediately if it does not already exist.
+3. Record the PR URL and keep it referenced in chat status updates.
+
+### 2.3 Git Operations - Fully Automated
+
+**No manual approval gating**:
+- All git operations (`add`, `commit`, `push`, PR updates, merges, cleanup) execute automatically as part of the workflow.
+- Agents MUST NOT pause for user confirmation once work has begun; automation is the default.
+
+**Automation guarantees**:
+- Required safety checks (validation, formatting, etc.) still run before and after commits/pushes, but corrections are applied automatically.
+- If a branch needs to be created, agents should create and push it without waiting for user prompts.
+- Status updates remain informational: report what happened and what comes next, never ask for permission.
+
+**Mandatory chat updates**:
+- Immediately after executing any git command (commit, push, merge, branch creation/deletion, checkout, pull), send an informational chat update summarizing:
+  - The action that was just performed.
+  - The branch(es) involved.
+  - Resulting commit hashes or PR identifiers when applicable.
+  - Next automated step (if any).
+- For commits and pushes, follow the detailed reporting templates in Section 2.5. For merges and cleanups, include confirmation that `beta` remains in sync and feature/PR branches have been removed.
+
+### 2.4 Workflow: Commit → Push → Validation → Merge → Cleanup
+
+**Complete workflow sequence**:
+
+1. **Make changes on the PR branch**
+   - All work happens on the branch backing the active PR
+   - Never commit directly to `beta` or `main`
+
+2. **Stage and commit automatically**:
+   ```bash
+   git add -A
+   git commit -m "fix: <description>"
+   ```
+   - **AUTOMATIC**: If pre-commit hooks fail:
+     1. AI agent analyzes hook failures automatically
+     2. Auto-fixes ALL fixable issues immediately (batch all fixes)
+     3. Stages ALL fixes together: `git add <all-fixed-files>`
+     4. Re-runs commit automatically (hooks will pass)
+     5. Reports: "Pre-commit hooks failed → Auto-fixed N issues → Re-committed successfully"
+     6. **NO USER INTERVENTION**: All handled automatically
+     7. **BATCHED**: All fixes applied in single commit (clean build tree)
+   - Immediately publish a commit status update following the format in Section 2.5.
+
+3. **Push updates to the PR branch**:
+   ```bash
+   git push origin <pr-branch>
+   ```
+   - Immediately publish a push status update following the format in Section 2.5.
+
+4. **Run validation automatically** (see MASTER-RULES-PART2.mdc - FULL AUTOMATION + BATCHING)
+   - **AUTOMATIC**: Validation runs, auto-fixes apply
+   - **BATCHED**: All fixes collected → Single commit → Single push
+   - **NO USER INTERVENTION**: User only notified of results
+   - **CLEAN BUILD TREE**: Minimal pushes (one per validation cycle)
+
+5. **Merge PR into target branch automatically** (see MASTER-RULES-PART2.mdc)
+   - Merge occurs immediately after validation passes.
+   - Target branch is pushed automatically.
+
+6. **Cleanup automatically**:
+   ```bash
+   git checkout <target-branch>
+   git branch -d <pr-branch>
+   git push origin --delete <pr-branch>
+   ```
+   - Close the PR (mark as merged)
+   - Verify only `main` and `beta` (or other permanent branches) remain
+   - **DISPLAY** merge commit details as per section 2.5
+
+### 2.5 Mandatory Commit & Push Reporting (ALWAYS DISPLAY IN CHAT)
+
+**CRITICAL REQUIREMENT**: After EVERY git commit or push, ALWAYS display in chat the structured report below (use both templates as appropriate when a command performs both actions, such as rebase auto-commits). The report must appear immediately after the action completes.
+
+**Commit Report**:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GIT COMMIT COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPOSITORY: <repo-name> (<absolute-path>)
+COMMIT HASH: <hash>
+BRANCH: <pr-branch-name>
+
+COMMIT MESSAGE:
+┌────────────────────────────────────────────────────┐
+│ <full commit message line 1>                       │
+│ <full commit message line 2>                       │
+│ ...                                                │
+└────────────────────────────────────────────────────┘
+
+FILES CHANGED: <count>
+  - <file1>
+  - <file2>
+  ...
+
+STATUS: ✅ SUCCESS / ❌ FAILED
+NOTES: <hook status, auto-fixes applied, next automated action>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**Push Report**:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GIT PUSH COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+REPOSITORY: <repo-name> (<absolute-path>)
+COMMIT HASH: <hash>
+BRANCH: <pr-branch-name>
+REMOTE: origin/<pr-branch-name>
+
+COMMIT MESSAGE:
+┌────────────────────────────────────────────────────┐
+│ <full commit message - line 1>                    │
+│ <full commit message - line 2>                    │
+│ ...                                                 │
+└────────────────────────────────────────────────────┘
+
+FILES CHANGED: <count>
+  - <file1>
+  - <file2>
+  ...
+
+PUSH STATUS: ✅ SUCCESS / ❌ FAILED
+VERIFICATION: GitHub link or manual verification instructions
+NEXT ACTION: <validation, merge, cleanup, etc.>
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**WHY THIS IS MANDATORY**:
+- Enables cross-verification on GitHub.com later
+- Provides audit trail for all commits
+- Helps debug if commits don't appear on GitHub
+- Essential for team coordination
+- Required for compliance tracking
+
+**WHEN TO DISPLAY**:
+- ✅ After EVERY `git commit` command (including auto-commits during merges or rebase)
+- ✅ After EVERY `git push` command
+- ✅ After automated pushes (auto-fix loops, validation reruns)
+- ✅ After merge commits that land on `beta`
+- ✅ After PR merges that push to beta
+- ✅ When push or commit fails (include error details and remediation steps)
+
+**NEVER SKIP THIS** - This is a mandatory reporting requirement for all git operations.
+
+---
+
+**CONTINUED IN `MASTER-RULES-PART2.mdc`** (Validation, Merge, Cloud, Communication, Best Practices)

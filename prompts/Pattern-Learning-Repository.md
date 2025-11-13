@@ -483,14 +483,10 @@ Patterns can be:
 
 ## Future Enhancements
 
-1. **Automated Pattern Mining**: Scan git history for repeated fixes
-2. **Pattern Confidence Scoring**: Track false positive rate per pattern
-3. **Pattern Clustering**: Group related patterns automatically
-4. **AI-Suggested Patterns**: Agent proposes patterns proactively
-5. **Cross-Project Patterns**: Share patterns across repositories
-6. **Pattern Testing**: Unit tests for detection regex/logic
+- Automated pattern mining from git history
+- Pattern confidence scoring and false positive tracking
+- Pattern clustering and AI-suggested patterns
+- Cross-project pattern sharing
+- Pattern testing with unit tests
 
----
-
-**Last Updated**: 2025-11-13
-**Next Review**: 2025-11-20 (weekly review of pattern effectiveness)
+**Last Updated**: 2025-11-13 | **Next Review**: 2025-11-20

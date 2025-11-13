@@ -69,16 +69,12 @@ globs:
 **YOU MUST READ THESE FILES:**
 
 **`.cursor/rules/MASTER-RULES-INDEX.mdc`** - MASTER INDEX & SINGLE SOURCE OF TRUTH
+   - Points to consolidated rule files (PART1 and PART2)
    - **🤖 Full Automation Principle** - AI handles ALL validation/corrections automatically (READ FIRST)
-   - References all focused rule modules below
 
-**Rule Modules** (all under `.cursor/rules/`):
-   - `MASTER-RULES-WORKFLOW.mdc` - Part 1: Agent Behavior + Part 2: Git Workflow
-   - `MASTER-RULES-VALIDATION.mdc` - Part 3: Code Quality & Validation (FULL AUTOMATION)
-   - `MASTER-RULES-MERGE.mdc` - Part 4: Automated Merge & Conflict Resolution (FULL AUTOMATION)
-   - `MASTER-RULES-CLOUD.mdc` - Part 5: Cloud Agent Specifics
-   - `MASTER-RULES-COMMUNICATION.mdc` - Part 6: User Communication & Feedback (INFORMATIONAL ONLY)
-   - `MASTER-RULES-BEST-PRACTICES.mdc` - Part 7: Best Practices Compliance
+**Consolidated Rule Files** (both under 500 lines for proper context):
+   - `MASTER-RULES-PART1.mdc` - Core Principles, Agent Behavior, Git Workflow
+   - `MASTER-RULES-PART2.mdc` - Validation, Merge, Cloud, Communication, Best Practices
 
 
 ## 🔴 ENFORCEMENT REMINDER
@@ -114,18 +110,19 @@ globs:
 
 **THIS FILE SERVES AS A REMINDER. THE ACTUAL RULES ARE IN:**
 - `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX - SINGLE SOURCE OF TRUTH)
-- `.cursor/rules/MASTER-RULES-*.mdc` (Focused rule modules, all under 500 lines)
+- `.cursor/rules/MASTER-RULES-PART1.mdc` (Core Principles, Agent Behavior, Git Workflow)
+- `.cursor/rules/MASTER-RULES-PART2.mdc` (Validation, Merge, Cloud, Communication, Best Practices)
 
-**READ THAT FILE FOR COMPLETE RULES.**
+**READ THOSE FILES FOR COMPLETE RULES.**
 
 ## 🌩️ SPECIAL NOTE FOR CLOUD AGENTS
 
 **If you are a Cursor Cloud Agent or Background Agent:**
 - You MUST read `.cursor/rules/MASTER-RULES-INDEX.mdc` (master index)
-- You MUST read `.cursor/rules/MASTER-RULES-CLOUD.mdc` (Cloud Agent Specifics)
+- You MUST read `.cursor/rules/MASTER-RULES-PART1.mdc` and `MASTER-RULES-PART2.mdc` (all rules)
 - You MUST confirm the correct branch with the user or project owner
 - You MUST sync the latest changes for that branch before starting
-- You MUST follow the feature-branch lifecycle (creation → push → validation → merge → cleanup)
-- You MUST obtain explicit approval before pushing to any remote branch
+- You MUST follow the PR lifecycle (PR creation → push → validation → merge → cleanup)
+- All git operations are fully automated (no user approval needed)
 - You MUST create pull requests as part of initialization workflow
 - You MUST NEVER create cursor/* branches unless explicitly directed
