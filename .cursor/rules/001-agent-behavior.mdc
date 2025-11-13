@@ -23,7 +23,7 @@ globs:
 
 - [ ] **I have read and understand ALL rules in this file**
 - [ ] **I understand that file creation is RESTRICTED** (see FILE CREATION RESTRICTIONS below)
-- [ ] **I understand that plans must be presented INLINE, not as files**
+- [ ] **I understand that I will only present a plan when the user explicitly asks or when I need clarification, and any plan must be inline**
 - [ ] **I understand that code reviews must be CHUNKED and INLINE**
 - [ ] **I will NOT create any documentation/summary/plan files without explicit user request**
 - [ ] **I will respond INLINE in chat unless explicitly asked to create a file**
@@ -68,18 +68,12 @@ globs:
 - Never write responses to new files automatically
 - Use code references for existing code, markdown code blocks for new code
 
-### PLANNING APPROACH
+### EXECUTION-FIRST APPROACH
 
-**First Plan, Then Execute**:
-1. When asked to implement something:
-   - Create a plan first (inline in chat, NOT as a file)
-   - Wait for user confirmation or proceed if the plan is clear and straightforward
-   - Execute the plan step by step
-   - Do NOT create separate plan files unless explicitly requested
-
-2. **Never create plan files automatically**:
-   - Plans should be presented in chat conversation
-   - Only create plan files if user says "save this plan to a file" or similar
+- Default to working directly on the requested code or task without presenting a plan.
+- Only provide a plan when the user explicitly requests one or when you are genuinely uncertain and need confirmation before proceeding.
+- When a plan is necessary, present it inline in chat (never as a file) and clearly state why the plan is being shown.
+- Do NOT create separate plan files unless the user explicitly instructs you to do so.
 
 ### CODE REVIEW PROTOCOL
 
@@ -114,13 +108,17 @@ globs:
 - Documentation/summary/plan files require explicit user confirmation
 - When presenting the final response after making edits, explicitly list each modified file along with the line ranges touched and a short explanation of the purpose of those changes.
 
+**Git Operation Communication**:
+- Immediately after executing any git-related command (branch checkouts, pulls, commits, pushes, merges, rebases, etc.), send a clear message in chat summarizing the command, why it was run, and the outcome.
+- Include any follow-up actions that will happen automatically (such as merge workflows) so the user always knows the current repository state.
+
 ### UNCERTAINTY PROTOCOL
 
 **If Uncertain**:
-1. Present the plan or approach inline in chat
-2. Ask: "Would you like me to proceed with this approach?" or "Should I create a file for this?"
-3. Wait for explicit confirmation before proceeding
-4. Do NOT create files "just in case"
+1. Explain the uncertainty inline in chat and request the specific clarification needed.
+2. Outline a brief approach or plan only if it is required for the clarification.
+3. Ask: "Would you like me to proceed with this approach?" or "Should I create a file for this?"
+4. Wait for explicit confirmation before proceeding and do NOT create files "just in case."
 
 ### EXAMPLES
 

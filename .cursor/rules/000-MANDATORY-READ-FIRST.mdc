@@ -47,11 +47,13 @@ globs:
 - [ ] **I understand I MUST NOT run `git commit` without explicit user permission**
 - [ ] **I understand I MUST NOT run `git push` without explicit user permission**
 - [ ] **I understand I MUST verify branch and files before any git operation**
+- [ ] **I understand I MUST announce every git operation in chat, including the command, the reason, and the outcome**
 
 ### Workflow Principles
-- [ ] **I understand plans must be presented INLINE, not as files**
+- [ ] **I understand I will only present a plan when the user explicitly asks or I need clarification, and any plan must be inline**
 - [ ] **I understand code reviews must be CHUNKED and INLINE**
 - [ ] **I understand I MUST get user approval before committing**
+- [ ] **I understand that once a commit/push sequence is approved I must immediately perform the automated merge workflow into `beta` without waiting for additional prompts**
 - [ ] **I understand I MUST verify all checklist items before completing work**
 
 ## 🚨 IF YOU ARE UNSURE

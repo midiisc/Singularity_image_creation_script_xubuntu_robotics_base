@@ -52,6 +52,7 @@ globs:
 - **All subsequent work must occur through that PR; do not commit directly to `beta` or `main`**
 - **Avoid `cursor/*` branches unless explicitly directed to use them**
 - **Main branch work**: Only when the user explicitly instructs you to promote changes from `beta` to `main`
+- **Once a user approves a commit/push, you must execute the full merge workflow into `beta` (audit → push → merge-feasibility → merge → cleanup) immediately, without waiting for additional prompts.**
 
 #### BEFORE STARTING ANY WORK - MANDATORY STEPS (NO EXCEPTIONS)
 
@@ -116,20 +117,21 @@ globs:
 - ✅ `git status` - To check repository status
 - ✅ `git checkout <branch>` - To switch to the user-approved branch
 - ✅ `git pull origin <branch>` - To sync the approved branch before starting work
+- 📣 After every git command you run, you must post an explicit message that includes the command, the reason for running it, and the outcome so the user always knows the repository state.
 
 **When user explicitly requests commit/push**:
 1. Run the Advanced CoT audit on the current diff using `prompts/Advanced-CoT-Multi-Agent-Prompt.md` and summarize the findings (or lack thereof) in chat.
-2. Stage and commit: `git add -A && git commit -m "fix: Description of changes"` (only after user approval).
-3. Push to the active PR branch immediately: `git push origin <feature-branch>` (only after user approval).
-4. Run a merge-feasibility check against `origin/beta` after the push:
+2. Stage and commit: `git add -A && git commit -m "fix: Description of changes"` (only after user approval), then immediately announce the command and result.
+3. Push to the active PR branch immediately: `git push origin <feature-branch>` (only after user approval) and report the push outcome right away.
+4. Run a merge-feasibility check against `origin/beta` after the push without waiting for further instruction:
    - `git fetch origin`
    - `git checkout beta`
    - `git pull origin beta`
    - `git merge --no-commit --no-ff origin/<feature-branch>`
    - Report the outcome (clean vs. conflicts and affected files)
    - `git merge --abort` to reset the dry-run state.
-5. If the feasibility check is clean, proceed to merge the PR branch into `beta`, push `beta`, and delete the merged branch (see “Merge & Cleanup Sequence” below). If conflicts occur, stop and coordinate with the user before retrying.
-6. ONLY if explicitly instructed, push to additional branches (e.g., `main`).
+5. If the feasibility check is clean, proceed immediately to merge the PR branch into `beta`, push `beta`, and delete the merged branch (see “Merge & Cleanup Sequence” below). If conflicts occur, stop and coordinate with the user before retrying, reporting each command you ran and its outcome.
+6. ONLY if explicitly instructed, push to additional branches (e.g., `main`), announcing each command and result.
 
 #### Commit Process - USER APPROVAL REQUIRED
 
@@ -159,9 +161,9 @@ globs:
    - Keep commits focused; follow core-file restrictions unless user expands scope
 3. **Request approval to stage/commit/push**
    - Run the Advanced CoT audit on the diff and summarize results.
-   - After approval: `git add`, `git commit -m "<type>: <summary>"`, then immediately `git push origin feature/<scope>-<timestamp)`
+   - After approval: `git add`, `git commit -m "<type>: <summary>"`, then immediately `git push origin feature/<scope>-<timestamp)`—announce each command and its outcome as you run it.
 4. **Run merge-feasibility after every approved push**
-   - Perform the dry-run merge into updated `beta`; report clean vs. conflicts and reset with `git merge --abort`
+   - Perform the dry-run merge into updated `beta` right away; report clean vs. conflicts, include the commands used, and reset with `git merge --abort`
    - If conflicts surface, coordinate with the user before proceeding
 5. **Merge & Cleanup Sequence (once work is approved for landing)**
    - `git checkout beta`
@@ -172,6 +174,7 @@ globs:
      - `git branch -d feature/<scope>-<timestamp>`
      - `git push origin --delete feature/<scope>-<timestamp)`
    - Confirm only `main` and `beta` remain on the remote
+   - Announce every command executed during this sequence and confirm each result immediately.
 6. **Close the PR**
    - Mark the PR as merged/closed and report status to the user
 7. **Main branch promotions**
@@ -214,6 +217,8 @@ Before finishing any task, verify:
 - [ ] Repository remains minimal and clean
 - [ ] User has been asked for approval before any git operations
 - [ ] Associated feature branch PR has been merged or closed, and the feature branch deleted locally and remotely (confirm only `main` and `beta` remain)
+- [ ] Every git command executed (status, checkout, pull, commit, push, merge, cleanup) has been announced with its purpose and outcome
+- [ ] After the approved push, the automatic merge workflow into `beta` was completed immediately without waiting for extra prompts
 
 #### MANDATORY ENFORCEMENT PROTOCOL - STRICTLY ENFORCED
 
