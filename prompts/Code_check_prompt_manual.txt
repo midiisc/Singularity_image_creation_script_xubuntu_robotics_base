@@ -78,6 +78,50 @@ D. Quoting & Expansion Safety
   - Detection: `grep -n 'echo.*|.*grep' script.sh` to find all occurrences
   - Performance: Here-string avoids pipeline overhead (no subshell fork)
   - Example error caught in audit: Line 8026 used `echo "${LDCONFIG_CACHE}" | grep` instead of `grep <<< "${LDCONFIG_CACHE}"`
+- D4. **SED CHARACTER CLASS ESCAPING**: Validate sed bracket expressions for correct escaping and error handling:
+  - **CRITICAL**: Bracket expressions must escape brackets correctly: `[][]` for literal `[` or `]`
+  - **CRITICAL**: All command substitutions with sed MUST have error fallback: `|| echo ""`
+  - **COMMON ERRORS TO DETECT**:
+    - WRONG: `sed 's/[[\/&]/\\&/g'` (malformed bracket class - `[[` is invalid)
+    - WRONG: `sed 's/[[\.*^$()+?{|]/\\&/g'` (malformed bracket class)
+    - WRONG: `var="$(... | sed '...')"` (no error fallback with `set -u`)
+    - RIGHT: `sed 's/[][\\\/&]/\\&/g' || echo ""` (correct bracket class + fallback)
+    - RIGHT: `sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo ""` (correct escaping + fallback)
+  - **BRACKET CLASS SYNTAX**:
+    - To match literal `[` or `]`: Use `[][]` (opening `[`, closing `]`, then `[` again)
+    - Example: `[][]` matches one of: `[` or `]`
+    - To include backslash: `\\` (doubled for shell escaping)
+    - To include forward slash: `\/` (escaped for sed)
+    - Full pattern for URL escaping: `s/[][\\\/&]/\\&/g`
+  - **ERROR FALLBACK REQUIREMENT**:
+    - When `set -u` is active, command substitution failure leaves variable unset → fatal error
+    - ALWAYS add `|| echo ""` to sed/awk/grep in command substitutions
+    - Pattern: `var="$(command | sed '...' || echo "")"` or `var=$(printf '%s' "$x" | sed '...' || echo "")`
+  - **CONSISTENCY CHECK**:
+    - All similar escaping operations must use identical patterns
+    - If escaping URLs in 5 places, all 5 must use same sed pattern
+    - Inconsistent patterns indicate copy-paste errors or incomplete fixes
+  - **DETECTION COMMANDS**:
+    - Find malformed bracket classes: `grep -nE "sed 's/\[\[" script.sh`
+    - Find sed without fallback: `grep -nE '\$\(.*sed.*\)' script.sh | grep -v '|| echo'`
+    - Find all sed escaping: `grep -nE "sed 's/\[.*\]/\\\\&/g'" script.sh`
+  - **REAL-WORLD ERROR CAUGHT**:
+    - Line 945: `fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g')"`
+    - Problem 1: `[[\/&]` is malformed - should be `[][\\\/&]`
+    - Problem 2: No `|| echo ""` fallback - crashes with `set -u` if sed fails
+    - Impact: Script fatally terminated after "Updated /etc/apt/sources.list" message
+    - Root cause: Unset variable used in lines 951-957 due to sed failure
+    - Fix: `sed 's/[][\\\/&]/\\&/g' || echo ""`
+  - **TESTING VERIFICATION**:
+    - Test pattern with URLs: `echo "http://example.com/path&query" | sed 's/[][\\\/&]/\\&/g'`
+    - Expected output: `http:\/\/example.com\/path\&query`
+    - Test pattern with brackets: `echo "[test]" | sed 's/[][\\\/&]/\\&/g'`
+    - Expected output: `\[test\]`
+  - **PREVENTION STRATEGY**:
+    - Before using any sed bracket expression, test it with `echo "test[input]" | sed 'pattern'`
+    - If script uses `set -u`, REQUIRE `|| echo ""` on ALL command substitutions
+    - Create sed pattern library for common escaping tasks (URLs, regex chars, etc.)
+    - Code review checklist: "Are all sed patterns consistent? Do all have error fallbacks?"
 
 E. Here-docs & Here-strings
 - E1. Use of quoted delimiters (`<<'EOF'`) where literal content is intended.
