@@ -65,8 +65,9 @@ globs:
    - Part 2: Git Workflow & Branch Management (pre-work steps, feature branches, git operations, workflow sequence)
 
 2. **MASTER-RULES-VALIDATION.mdc** - Code Quality & Validation
-   - Part 3: Code Quality & Validation (validation triggers, bash script validation, CoT check auto-trigger)
+   - Part 3: Code Quality & Validation (validation triggers, bash script validation, CoT check auto-trigger, pattern learning)
    - **FULL AUTOMATION** - All validation errors auto-fixed, batched, committed, pushed automatically
+   - **PATTERN LEARNING** - Learns from errors, adds to future checks automatically (Section 3.4)
 
 3. **MASTER-RULES-MERGE.mdc** - Automated Merge & Conflict Resolution
    - Part 4: Automated Merge & Conflict Resolution (merge attempt, clean merge, conflict auto-resolution, sequential PR merging)
@@ -92,6 +93,7 @@ globs:
 - `.cursorrules` - Points to this index
 - `prompts/Code_check_prompt_manual.txt` - Bash validation checklist
 - `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt
+- `prompts/Pattern-Learning-Repository.md` - Learned error patterns (auto-updated)
 
 ---
 

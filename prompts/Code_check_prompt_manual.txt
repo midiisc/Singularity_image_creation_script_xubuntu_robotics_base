@@ -20,6 +20,8 @@ Step 1 – Context Review
 
 Step 2 – Sequential Audit Checklist
 For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. State whether the block satisfies the requirement. If it fails, correct the code, explain the fix, and mark it as resolved.
+
+**IMPORTANT**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository.md` for learned error patterns. Verify code against all active patterns using their detection methods. Report any violations with Pattern ID and prevention approach.
 Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project’s resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
 Whenever you perform this replacement, include a short note in the review explicitly comparing the before/after approach and confirm that the helper function guards multi-arch and held-package cases.
 Maintain a running symbol table covering variables, functions, and exported values encountered so far. For each usage, ensure a single declaration exists before first use (pulling the definition earlier if required), eliminate redundant redeclarations encountered in later chunks, assign meaningful defaults to variables at their declaration site to avoid unbound-value failures downstream, and mark entries resolved once safe usage is verified so the table stays lean. Document any adjustments you make.
@@ -430,3 +432,47 @@ Step 4 – Finalization
 
 Customization Reminder
 - Replace the placeholder code block and line numbers before issuing the prompt to the reviewing agent.
+
+**PATTERN LEARNING INTEGRATION**
+
+Before executing Steps 3-4 above, perform pattern learning check:
+
+1. **Pattern Repository Check**:
+   - Read `prompts/Pattern-Learning-Repository.md` for all active patterns
+   - For each pattern, apply detection method (regex, semantic check, build verification)
+   - Report violations with Pattern ID (e.g., "P-20251113-002: Echo pipe to grep at line 1234")
+   - Apply prevention methods automatically
+
+2. **Pattern Extraction** (if solving recurring error):
+   - Check git history: Has this error occurred 2+ times?
+   - If yes, extract pattern:
+     * Generate Pattern ID (P-YYYYMMDD-NNN)
+     * Document: error description, root cause, detection method, prevention, example
+     * Add to Pattern-Learning-Repository.md with initial frequency=1
+     * Link to related checklist items (A-O, M items)
+
+3. **Pattern Evolution**:
+   - If pattern detected: Increment frequency in Pattern-Learning-Repository.md
+   - If frequency ≥20: Note for promotion to core checklist
+   - If false positives: Suggest pattern refinement
+
+4. **Finalization Update**:
+   - In Step 4, add Pattern Learning Summary:
+     * Confirm Pattern-Learning-Repository.md was checked
+     * List patterns detected/fixed (with IDs)
+     * List new patterns extracted (with IDs)
+     * Note frequency updates
+   - Update Step 4.5 to state: "Block fully audited and corrected. Pattern learning complete."
+   - Update Step 4.6 tools list to include "Pattern-Learning-Repository.md"
+
+**Current Active Patterns** (check Pattern-Learning-Repository.md for full list):
+- P-20251113-001: Bash 4+ uppercase ${var^^}
+- P-20251113-002: Echo pipe to grep
+- P-20251113-003: Local keyword outside function
+- P-20251113-004: Unbound variables in set -u
+- P-20251113-005: Invalid CMake flags
+- P-20251113-006: Mixed MKL/OpenBLAS
+- P-20251113-007: MKL TBB vs System TBB
+- P-20251113-008: HTTP error codes not checked
+- P-20251113-009: Single-phase library verification
+- P-20251113-010: Multi-phase logic without documentation
