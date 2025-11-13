@@ -943,21 +943,35 @@ probe_and_set_mirrors() {
     #   \\&  - Replacement: prefix with backslash (\)
     #   g    - Global: replace all occurrences
     # Example: "http://mirror.com/ubuntu" → "http:\/\/mirror.com\/ubuntu"
+    # CRITICAL: Must have error fallback to prevent unset variable with set -u
     local fastest_mirror_sed_escaped
-    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
     
-    # Multiple replacement patterns to catch all variations:
-    # 1. Specifically target archive.ubuntu.com (most common issue)
-    #    Pattern 'https\\?' matches http or https (? makes 's' optional)
-    #    Pattern '\\.ubuntu\\.com' matches literal dots (escaped for sed)
-    sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-    sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-    # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-    #    '/security\\.ubuntu\\.com/!' is address negation - skip lines with security.ubuntu.com
-    #    Pattern '[a-zA-Z0-9.-]*' matches any subdomain: mirrors.ubuntu.com, us.archive.ubuntu.com, etc.
-    sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-    sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-    echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+    # CRITICAL: Guard against empty escaped value - if sed failed, use FASTEST_MIRROR directly with minimal escaping
+    if [ -z "${fastest_mirror_sed_escaped:-}" ]; then
+      echo "[warn] sed escaping failed, using FASTEST_MIRROR with minimal escaping"
+      # Fallback: minimal escaping (just escape forward slashes and ampersands)
+      fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
+    fi
+    
+    # Only proceed with sed replacements if we have a valid escaped value
+    if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Multiple replacement patterns to catch all variations:
+      # 1. Specifically target archive.ubuntu.com (most common issue)
+      #    Pattern 'https\\?' matches http or https (? makes 's' optional)
+      #    Pattern '\\.ubuntu\\.com' matches literal dots (escaped for sed)
+      sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
+      #    '/security\\.ubuntu\\.com/!' is address negation - skip lines with security.ubuntu.com
+      #    Pattern '[a-zA-Z0-9.-]*' matches any subdomain: mirrors.ubuntu.com, us.archive.ubuntu.com, etc.
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+    else
+      echo "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
+      echo "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
+    fi
     
     # Verify the update was successful (more robust check)
     # Extract base URL without protocol for flexible matching
@@ -968,6 +982,7 @@ probe_and_set_mirrors() {
     mirror_no_protocol="${mirror_no_protocol#https://}"
     
     # Escape special regex characters for safe use in grep patterns
+    # CRITICAL: All sed command substitutions must have error fallback to prevent unset variables with set -u
     local mirror_base_escaped mirror_no_protocol_escaped fastest_mirror_escaped
     if [ -n "${mirror_base:-}" ]; then
       mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
@@ -979,7 +994,7 @@ probe_and_set_mirrors() {
     else
       mirror_no_protocol_escaped=""
     fi
-    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
   
     # Check if mirror appears in active (non-commented) deb lines
     if [ -n "${mirror_base_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_base_escaped}" 2>/dev/null; then
@@ -1012,14 +1027,15 @@ probe_and_set_mirrors() {
       echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
       # Recompute mirror_no_protocol if not already set
       if [ -z "${mirror_no_protocol:-}" ]; then
-        mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+        mirror_no_protocol=$(echo "${FASTEST_MIRROR:-}" | sed 's|http://||; s|https://||' || echo "")
       fi
       # Escape special sed characters in mirror_no_protocol for safe replacement
+      # CRITICAL: Must have error fallback to prevent unset variable with set -u
       local mirror_sed_escaped
       if [ -n "${mirror_no_protocol:-}" ]; then
         mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
         if [ -n "${mirror_sed_escaped:-}" ]; then
-          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list
+          sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list || true
           # Verify again after additional replacement
           if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
             echo "[warn] ⚠ archive.ubuntu.com still present after replacement attempt"
@@ -1038,12 +1054,19 @@ probe_and_set_mirrors() {
   echo "[info] Updating sources.list.d/ files with fastest mirror (excluding PPAs)..."
   if [ -d /etc/apt/sources.list.d ]; then
     # Escape FASTEST_MIRROR for safe use in sed
+    # CRITICAL: Must have error fallback to prevent unset variable with set -u
     local fastest_mirror_sed_escaped
-    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+    
+    # CRITICAL: Guard against empty escaped value
+    if [ -z "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Fallback: minimal escaping
+      fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
+    fi
     
     # Compute mirror_no_protocol once for reuse
     local mirror_no_protocol
-    mirror_no_protocol=$(echo "${FASTEST_MIRROR}" | sed 's|http://||; s|https://||' || echo "")
+    mirror_no_protocol=$(echo "${FASTEST_MIRROR:-}" | sed 's|http://||; s|https://||' || echo "")
     
     # Enable nullglob to handle case where no files exist
     shopt -s nullglob
@@ -1062,17 +1085,17 @@ probe_and_set_mirrors() {
       # Multiple replacement patterns for sources.list.d files too
       # 1. Specifically target archive.ubuntu.com
       if grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
-        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
-          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
-          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+        if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           echo "[info] Updated archive.ubuntu.com in: $(basename "${sources_file}")"
         fi
       fi
       # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
       if grep -q "https\\?://[a-zA-Z0-9.-]*/ubuntu" "${sources_file}" 2>/dev/null; then
-        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
-          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
-          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+        if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
+          sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           echo "[info] Updated: $(basename "${sources_file}")"
         fi
       fi
@@ -1080,11 +1103,12 @@ probe_and_set_mirrors() {
       # Final check - remove any remaining archive.ubuntu.com references
       if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
         # Escape special sed characters in mirror_no_protocol for safe replacement
+        # CRITICAL: Must have error fallback to prevent unset variable with set -u
         local mirror_sed_escaped
         if [ -n "${mirror_no_protocol:-}" ]; then
           mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
           if [ -n "${mirror_sed_escaped:-}" ]; then
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}" || true
             echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
           fi
         fi
@@ -1106,19 +1130,19 @@ probe_and_set_mirrors() {
       if grep -qE "^URIs=.*archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
         # Replace archive.ubuntu.com in URIs= lines (deb822 format)
         # Pattern: URIs=http://archive.ubuntu.com/ubuntu
-        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
-          sed -i "s|^URIs=https\\?://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
-          sed -i "s|^URIs=http://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}"
+        if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+          sed -i "s|^URIs=https\\?://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
+          sed -i "s|^URIs=http://archive\\.ubuntu\\.com/ubuntu|URIs=${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           echo "[info] Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
         fi
       fi
       
       # Also handle multi-line URIs= entries (space-separated)
       if grep -qE "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
-        if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
+        if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
           # Replace in URIs= lines that may have multiple URIs
-          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
-          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}"
+          sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
+          sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           echo "[info] Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
         fi
       fi
@@ -1129,7 +1153,7 @@ probe_and_set_mirrors() {
           local mirror_sed_escaped
           mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
           if [ -n "${mirror_sed_escaped:-}" ]; then
-            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
+            sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}" || true
             echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
           fi
         fi
@@ -1273,12 +1297,19 @@ reapply_fastest_mirror() {
   echo "[info] Re-applying fastest mirror to all Ubuntu repositories..."
   
   # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
+  # CRITICAL: Must have error fallback to prevent unset variable with set -u
   local fastest_mirror_sed_escaped
-  fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+  fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+  
+  # CRITICAL: Guard against empty escaped value
+  if [ -z "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+    fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
+  fi
   
   # Compute mirror_no_protocol once for reuse (strip both http:// and https://)
   local mirror_no_protocol
-  mirror_no_protocol="${FASTEST_MIRROR#http://}"
+  mirror_no_protocol="${FASTEST_MIRROR:-}"
+  mirror_no_protocol="${mirror_no_protocol#http://}"
   mirror_no_protocol="${mirror_no_protocol#https://}"
   
   local mirror_no_protocol_escaped=""
@@ -1290,19 +1321,19 @@ reapply_fastest_mirror() {
   if [ -f /etc/apt/sources.list ]; then
     # Multiple replacement patterns to catch all variations:
     # 1. Specifically target archive.ubuntu.com (what add-apt-repository adds)
-    if [ -n "${fastest_mirror_sed_escaped:-}" ]; then
-      sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-      sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+    if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       # 2. General pattern for any Ubuntu mirror (excluding security.ubuntu.com)
-      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+      sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
     fi
     
     # Also verify no archive.ubuntu.com remains
     if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
       if [ -n "${mirror_no_protocol_escaped:-}" ]; then
-        sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list
+        sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list || true
       fi
     fi
     echo "[info] ✓ Updated /etc/apt/sources.list"
@@ -1441,13 +1472,19 @@ reapply_fastest_mirror() {
       export FASTEST_MIRROR
       
       # Re-apply default mirror
+      # CRITICAL: Must have error fallback to prevent unset variable with set -u
       local fastest_mirror_sed_escaped
-      fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+      fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
+      
+      # CRITICAL: Guard against empty escaped value
+      if [ -z "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+        fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
+      fi
       
       # Revert sources.list
-      if [ -f /etc/apt/sources.list ]; then
-        sed -i "s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
-        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list
+      if [ -f /etc/apt/sources.list ] && [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+        sed -i "s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
+        sed -i "/security\\.ubuntu\\.com/! s|https\\?://[^[:space:]]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       fi
       
       # Revert sources.list.d/ files
