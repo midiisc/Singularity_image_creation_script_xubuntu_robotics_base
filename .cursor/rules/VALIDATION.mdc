@@ -19,7 +19,7 @@ globs:
 
 ## VALIDATION TRIGGERS: COMMIT (HOOKS) + PUSH (AGENT)
 
-**Two-stage validation with FULL AI automation - NO USER INTERVENTION REQUIRED:**
+**Three-stage validation with FULL AI automation - NO USER INTERVENTION REQUIRED:**
 
 ### Stage 1: Pre-commit Hooks (Automatic with AI Auto-Fix)
 - Git hooks run automatically on every `git commit`
@@ -35,7 +35,36 @@ globs:
 - **Early error detection + auto-correction**: Catches and fixes issues before commit
 - **User intervention ONLY**: When multiple solution options exist with different pros/cons
 
-### Stage 2: Post-push Agent Validation (Automatic with Full Auto-Fix + Batching)
+### Stage 2: Documentation Validation (Automatic with Full Auto-Fix)
+- **CRITICAL**: Before commit, ALL code files are validated for documentation
+- **Checks included**:
+  - File header documentation → Auto-added if missing
+  - Function documentation (functions > 10 lines) → Validated, warnings if missing
+  - Complex logic documentation → Phase markers validated
+  - Inline comment coverage → Comment density checked (minimum 25%)
+  - Comment quality → Comments must explain WHY, not WHAT
+- **AUTOMATIC**: Auto-fix missing header documentation immediately
+- **AUTOMATIC**: Stage documentation fixes automatically
+- **AUTOMATIC**: Blocks commit if critical documentation missing
+- **RATIONALE**: Good documentation improves code readability, maintainability, and enables AI agents to work more effectively
+
+### Stage 3: Comprehensive CI Checks (Automatic with Full Auto-Fix + Retry Loop)
+- **CRITICAL**: Before commit, ALL GitHub Actions checks run locally
+- **Checks included**:
+  - Unsafe pipe patterns (echo | grep) → Auto-fixed to here-strings
+  - CMake flag validation → Validated against documentation
+  - Multi-phase logic documentation → Warns if missing
+  - TBB verification blocks → Ensures all HPC libraries have verification
+  - Heredoc syntax → Warns about unquoted delimiters
+  - Bash compatibility → Auto-fixes Bash 4+ features
+  - ShellCheck linting → Reports linting errors
+- **AUTOMATIC**: Auto-fix all fixable issues immediately
+- **AUTOMATIC**: Retry loop (up to 3 attempts) until all checks pass
+- **AUTOMATIC**: Extract error patterns and enhance prompts before commit
+- **AUTOMATIC**: Stage fixes, re-run checks, commit only when all pass
+- **NO COMMIT UNTIL ALL CHECKS PASS**: Commit is blocked until validation succeeds
+
+### Stage 4: Post-push Agent Validation (Automatic with Full Auto-Fix + Batching)
 - Agent runs validation immediately after each automated push
 - Extract diff: `git diff origin/<target-branch>..<pr-branch>`
 - Filter bash files: Only `.sh` files in the diff
@@ -149,7 +178,38 @@ globs:
 
 ## PATTERN LEARNING & ERROR PREVENTION
 
-**Pattern-Based Learning System**: Automatically activated when agent solves error during commit/validation.
+**Pattern-Based Learning System**: Automatically activated when CI checks fail or agent solves error during commit/validation.
+
+### Automatic Pattern Extraction (Dual Source):
+Patterns are extracted from **BOTH** CI failures and AI review findings:
+
+#### Source 1: CI Pipeline Failures
+- **Trigger**: When any CI check fails during pre-commit validation
+- **Process**:
+  1. CI check failures are captured as JSON
+  2. Pattern extractor analyzes failures
+  3. Patterns extracted and added to repository
+  4. Prompts automatically enhanced
+
+#### Source 2: AI Agent Code Review Findings
+- **Trigger**: When AI review finds critical/major issues during code review
+- **Process**:
+  1. AI review findings (critical/major severity) are analyzed
+  2. Patterns extracted from finding titles, details, and suggested fixes
+  3. Covers ALL error types: syntax, logic, configuration, structural, runtime, scope, documentation
+  4. Patterns automatically added to repository
+  5. Prompts automatically enhanced
+- **Result**: Patterns learned from both automated checks AND human-AI interactions
+
+#### Unified Pattern Learning Process:
+1. **Pattern Extraction**: From CI failures OR AI review findings
+2. **Pattern Storage**: Added to `prompts/Pattern-Learning-Repository.md`
+3. **Prompt Enhancement**:
+   - `Code_check_prompt_manual.txt` - Adds new checklist items
+   - `Advanced-CoT-Multi-Agent-Prompt-PART1.md` - Adds pattern checks
+   - `Enhanced-Code-Review-Prompt-PART1.md` - Adds review criteria
+4. **Library Analysis**: Updated if library-related issues found
+5. **Future Prevention**: All patterns automatically checked in future commits/reviews
 
 ### Process:
 1. **Error Classification**: Identify error type, severity, and context

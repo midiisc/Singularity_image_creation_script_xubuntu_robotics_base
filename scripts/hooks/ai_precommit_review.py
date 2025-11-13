@@ -54,14 +54,14 @@ ALLOWED_SUFFIXES = {
 }
 
 DEFAULT_MAX_CHUNK_LINES = 400
-DEFAULT_MAX_TOKENS = 2048
-DEFAULT_SECONDARY_MAX_TOKENS = 1024
+DEFAULT_MAX_TOKENS = 8192  # Increased to allow complete JSON responses with detailed findings
+DEFAULT_SECONDARY_MAX_TOKENS = 4096  # Increased for secondary provider
 DEFAULT_COMPLEXITY_LINE_THRESHOLD = 150
 DEFAULT_COMPLEXITY_CHAR_THRESHOLD = 6000
 DEFAULT_COMPLEXITY_HUNK_THRESHOLD = 3
 OPENAI_DEFAULT_MODEL = "gpt-4.1-mini"
 OPENAI_DEFAULT_API_URL = "https://api.openai.com/v1/chat/completions"
-ANTHROPIC_API_VERSION = "2023-06-01"
+ANTHROPIC_API_VERSION = "2023-06-01"  # Anthropic API version header (keep for compatibility)
 
 
 @dataclass(frozen=True)
@@ -85,9 +85,15 @@ PROVIDER_TOKEN_ENV_NAMES = {
 PROVIDER_DEFAULTS = {
     Provider.ANTHROPIC: {
         "api_url": "https://api.anthropic.com/v1/messages",
-        # Valid model names: claude-3-opus-20240229, claude-3-sonnet-20240229, claude-3-haiku-20240307
-        # Note: "claude-3.5-sonnet-latest" format is NOT supported - use specific version dates
-        "model": "claude-3-opus-20240229",  # Using working model; override with AI_REVIEW_MODEL env var
+        # Valid model names (2025 official list):
+        # Claude 4.x: claude-opus-4-1, claude-opus-4-1-20250805, claude-opus-4, claude-opus-4-20250514
+        # Claude 4.x: claude-sonnet-4, claude-sonnet-4-20250514, claude-sonnet-4-5
+        # Claude 3.7: claude-3-7-sonnet-latest, claude-3-7-sonnet-20250219
+        # Claude 3.5: claude-3-5-sonnet-latest, claude-3-5-sonnet-20241022, claude-3-5-haiku-latest, claude-3-5-haiku-20241022
+        # Claude 3: claude-3-opus-20240229, claude-3-sonnet-20240229, claude-3-haiku-20240307
+        # Note: Some models support "-latest" suffix (3.5, 3.7), newer 4.x models use different format
+        # Note: Sonnet 4 or 4.5 recommended as default for most use cases
+        "model": "claude-sonnet-4",  # Default to Claude Sonnet 4 (fast, context-aware, good default); override with AI_REVIEW_MODEL env var
     },
     Provider.OPENAI: {
         "api_url": OPENAI_DEFAULT_API_URL,
@@ -113,6 +119,95 @@ def run_git(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def is_non_functional_file(path: str) -> bool:
+    """
+    Check if a file is non-functional using AI-based reasoning.
+    Uses content analysis, docstring checks, and purpose detection.
+    Returns True if the file should be rejected.
+    """
+    import subprocess
+    import re
+    
+    file_path = REPO_ROOT / path
+    if not file_path.exists():
+        return False
+    
+    # Skip ALL core files (primary and secondary) - they are essential to the repository
+    # PRIMARY CORE FILES (from AGENT-BEHAVIOR.mdc)
+    primary_core_files = [
+        "build_xubuntu_robotics_base.sh",
+        "config.sh",
+        "create_writable_overlay.sh",
+        "run_on_best_node.sh",
+        "setup_conda_environments.sh",
+        "xubuntu_robotics_base_post_ULTRA_CLEANED.sh",
+        "README.md",
+    ]
+    # SECONDARY CORE FILES (from AGENT-BEHAVIOR.mdc)
+    secondary_core_files = [
+        "scripts/hooks/ai_precommit_review.py",
+        "scripts/hooks/pre-commit",
+        "scripts/hooks/pre-commit-cmake-validator",
+        "scripts/hooks/ai_file_purpose_checker.py",
+        "scripts/hooks/extract_and_enhance_patterns.py",
+        "scripts/hooks/run_all_ci_checks.sh",
+        "scripts/hooks/validate_control_structure_markers.sh",
+        "scripts/hooks/validate_documentation.sh",
+    ]
+    # Core files in subdirectories
+    if path in primary_core_files or path in secondary_core_files:
+        return False
+    if path.startswith("scripts/helpers/") or path.startswith("container-scripts/"):
+        return False
+    if path.startswith(".cursor/rules/") and path.endswith(".mdc"):
+        return False
+    if path.startswith("prompts/") and (path.endswith(".txt") or path.endswith(".md")):
+        return False
+    
+    # First: Quick filename pattern check (fast)
+    basename = Path(path).name.lower()
+    forbidden_patterns = [
+        r'.*summary.*\.(md|txt)$',
+        r'.*audit.*\.(md|txt)$',
+        r'.*report.*\.(md|txt)$',
+        r'.*findings.*\.(md|txt)$',
+        r'.*analysis.*\.(md|txt)$',
+        r'.*test_results.*\.(md|txt)$',
+        r'.*fixes_summary.*\.(md|txt)$',
+        r'.*removal_summary.*\.(md|txt)$',
+        r'.*endpoint.*summary.*\.(md|txt)$',
+        r'.*endpoint.*results.*\.(md|txt)$',
+    ]
+    
+    for pattern in forbidden_patterns:
+        if re.match(pattern, basename):
+            return True
+    
+    # Second: AI-based content analysis (more thorough)
+    ai_checker = REPO_ROOT / "scripts" / "hooks" / "ai_file_purpose_checker.py"
+    if ai_checker.exists():
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ai_checker), str(file_path)],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            # If exit code is 1, file is non-functional
+            if result.returncode == 1:
+                return True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            # Fall back to pattern matching if AI checker fails
+            pass
+    
+    # Fallback: Check for standalone test files (not in test directories)
+    if re.match(r'^test_.*\.(sh|py)$', basename):
+        if not any(part in path.lower() for part in ['test', 'tests', 'spec']):
+            return True
+    
+    return False
 
 
 def get_staged_files() -> List[str]:
@@ -250,18 +345,36 @@ def call_anthropic_api(
     timeout: int,
     max_tokens: int,
 ) -> Dict[str, object]:
+    """
+    Call Anthropic Claude API with correct format.
+    
+    API endpoint: https://api.anthropic.com/v1/messages
+    Headers: x-api-key (required), anthropic-version (required)
+    Model names: Use hyphens (e.g., claude-sonnet-4, claude-3-5-sonnet-20241022)
+    """
     effective_tokens = normalize_max_tokens(max_tokens, DEFAULT_MAX_TOKENS)
+    
+    # Ensure API URL is correct format
+    if not api_url.startswith("https://"):
+        raise ReviewFailure(f"Invalid API URL format: {api_url}. Must start with https://")
+    if not api_url.endswith("/messages"):
+        # Auto-correct if missing /messages suffix
+        if api_url.endswith("/v1"):
+            api_url = f"{api_url}/messages"
+        elif not api_url.endswith("/v1/messages"):
+            api_url = f"{api_url.rstrip('/')}/v1/messages"
+    
     payload = {
         "model": model,
         "max_tokens": effective_tokens,
         "system": system_prompt,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
+        "messages": [{"role": "user", "content": user_prompt}],  # Simplified: content as string (also supports array format)
         "temperature": 0,
     }
     headers = {
         "x-api-key": api_token,
         "anthropic-version": ANTHROPIC_API_VERSION,
-        "content-type": "application/json",
+        "Content-Type": "application/json",  # Ensure proper case
     }
     return perform_request(
         api_url=api_url,
@@ -305,8 +418,19 @@ def perform_request(
             )
         ) from exc
     except URLError as exc:
-        raise ReviewFailure(f"AI review request failed: {exc.reason}") from exc
-    except (TimeoutError, ValueError) as exc:
+        error_msg = str(exc.reason) if exc.reason else str(exc)
+        if "timed out" in error_msg.lower() or "timeout" in error_msg.lower():
+            raise ReviewFailure(
+                f"AI review request timed out after {timeout} seconds. "
+                f"Consider increasing timeout with --timeout flag or AI_REVIEW_TIMEOUT environment variable."
+            ) from exc
+        raise ReviewFailure(f"AI review request failed: {error_msg}") from exc
+    except TimeoutError as exc:
+        raise ReviewFailure(
+            f"AI review request timed out after {timeout} seconds. "
+            f"Consider increasing timeout with --timeout flag or AI_REVIEW_TIMEOUT environment variable."
+        ) from exc
+    except ValueError as exc:
         raise ReviewFailure(f"AI review request failed: {exc}") from exc
 
 
@@ -341,20 +465,165 @@ def extract_review_content(response: Dict[str, object], provider: str) -> str:
 def parse_review_json(content: str) -> Dict[str, object]:
     """
     Attempt to parse structured JSON from the AI's response.
+    Handles cases where JSON is embedded in markdown code blocks or text.
     """
+    import re
+    
+    # Try direct parsing first
     try:
         return json.loads(content)
-    except json.JSONDecodeError as exc:
-        raise ReviewFailure(
-            textwrap.dedent(
-                f"""\
-                AI response is not valid JSON.
-                Response content:
-                {content}
-                Error: {exc}
-                """
-            )
-        ) from exc
+    except json.JSONDecodeError:
+        pass
+    
+    # Try extracting JSON from markdown code blocks (```json ... ``` or ``` ... ```)
+    # First, try to find content that starts with ```json
+    if content.strip().startswith('```json'):
+        # Find the start of JSON content (after ```json\n)
+        json_start_marker = '```json'
+        start_pos = content.find(json_start_marker)
+        if start_pos != -1:
+            # Find the first newline after ```json
+            content_start = content.find('\n', start_pos)
+            if content_start == -1:
+                content_start = start_pos + len(json_start_marker)
+            else:
+                content_start += 1  # Skip the newline
+            
+            # Find closing ``` (might be at end of content)
+            closing_pos = content.find('```', content_start)
+            if closing_pos == -1:
+                # No closing found, use everything from content_start to end
+                json_candidate = content[content_start:].strip()
+            else:
+                # Extract content between ```json\n and closing ```
+                json_candidate = content[content_start:closing_pos].strip()
+            
+            if json_candidate:
+                try:
+                    return json.loads(json_candidate)
+                except json.JSONDecodeError:
+                    # If JSON parsing fails, try balanced brace extraction on the candidate
+                    # This handles cases where JSON might be incomplete or have extra content
+                    brace_start = json_candidate.find('{')
+                    if brace_start != -1:
+                        brace_count = 0
+                        brace_end = -1
+                        in_string = False
+                        escape_next = False
+                        
+                        for i in range(brace_start, len(json_candidate)):
+                            char = json_candidate[i]
+                            
+                            if escape_next:
+                                escape_next = False
+                                continue
+                            
+                            if char == '\\':
+                                escape_next = True
+                                continue
+                            
+                            if char in ('"', "'") and not escape_next:
+                                in_string = not in_string
+                                continue
+                            
+                            if not in_string:
+                                if char == '{':
+                                    brace_count += 1
+                                elif char == '}':
+                                    brace_count -= 1
+                                    if brace_count == 0:
+                                        brace_end = i
+                                        break
+                        
+                        if brace_end != -1:
+                            try:
+                                return json.loads(json_candidate[brace_start:brace_end + 1])
+                            except json.JSONDecodeError:
+                                pass
+    
+    # Try standard regex patterns for code blocks
+    json_block_patterns = [
+        r'```json\s*\n(.*?)\n\s*```',  # ```json ... ``` (with newlines)
+        r'```json\s*(.*?)\s*```',      # ```json ... ``` (flexible)
+        r'```\s*\n(.*?)\n\s*```',      # ``` ... ``` (with newlines)
+        r'```\s*(.*?)\s*```',          # ``` ... ``` (flexible)
+    ]
+    for pattern in json_block_patterns:
+        matches = re.findall(pattern, content, re.DOTALL)
+        for match in matches:
+            cleaned = match.strip()
+            if cleaned:
+                try:
+                    parsed = json.loads(cleaned)
+                    return parsed
+                except json.JSONDecodeError:
+                    continue
+    
+    # Try finding JSON object in text (look for { ... } with balanced braces)
+    # This handles cases like "Here is the JSON: { ... }"
+    # Also handles cases where JSON is in code blocks but extraction failed
+    brace_start = content.find('{')
+    if brace_start != -1:
+        brace_count = 0
+        brace_end = -1
+        in_string = False
+        escape_next = False
+        
+        for i in range(brace_start, len(content)):
+            char = content[i]
+            
+            # Handle string escaping
+            if escape_next:
+                escape_next = False
+                continue
+            
+            if char == '\\':
+                escape_next = True
+                continue
+            
+            # Track string boundaries (handle both single and double quotes)
+            if char in ('"', "'") and not escape_next:
+                in_string = not in_string
+                continue
+            
+            # Only count braces when not inside a string
+            if not in_string:
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        brace_end = i
+                        break
+        
+        if brace_end != -1:
+            json_candidate = content[brace_start:brace_end + 1]
+            try:
+                return json.loads(json_candidate)
+            except json.JSONDecodeError:
+                pass
+    
+    # If all extraction attempts fail, raise error with helpful message
+    # Show more context to help debug
+    preview = content[:2000] if len(content) > 2000 else content
+    raise ReviewFailure(
+        textwrap.dedent(
+            f"""\
+            AI response is not valid JSON and could not extract JSON from response.
+            
+            Response content preview ({len(content)} total chars, showing first {len(preview)}):
+            {preview}
+            
+            Tried extraction methods:
+            1. Direct JSON parsing
+            2. Markdown code block extraction (```json ... ```)
+            3. Balanced brace extraction
+            
+            If JSON appears to be truncated, the API response may be incomplete.
+            Check API timeout settings or response size limits.
+            """
+        )
+    )
 
 
 def pretty_chunk_header(path: str, index: int, total: int) -> str:
@@ -440,9 +709,72 @@ def format_user_prompt(
     chunk_index: int,
     chunk_total: int,
 ) -> str:
+    # Optimize manual inclusion: Use condensed version to prevent timeout
+    # Include header + checklist structure but condense verbose examples
+    import re
+    
+    # Extract key parts: header, checklist items (A-O), and critical patterns
+    manual_lines = manual_text.split('\n')
+    header_end = 0
+    for i, line in enumerate(manual_lines):
+        if line.strip().startswith('A. Structure & Syntax'):
+            header_end = i
+            break
+    
+    # Get header (first ~30 lines) + condensed checklist
+    header_section = '\n'.join(manual_lines[:min(header_end, 30)])
+    
+    # Extract all A-O checklist items (just the titles, not full details)
+    checklist_items = []
+    current_section = None
+    for line in manual_lines[header_end:]:
+        # Match section headers like "A. Structure & Syntax" or "A1. ..."
+        if re.match(r'^([A-O])\.\s+', line):
+            current_section = line.strip()
+            checklist_items.append(current_section)
+        elif re.match(r'^- ([A-O][0-9]+)\.', line):
+            # Sub-item like "A1. ..."
+            checklist_items.append('  ' + line.strip())
+        elif line.strip().startswith('-') and current_section:
+            # Sub-item under a section
+            if len(line.strip()) < 100:  # Only short items to keep it concise
+                checklist_items.append('  ' + line.strip()[:100])
+    
+    # Create condensed manual (header + checklist structure)
+    manual_preview = header_section + "\n\n" + "Step 2 – Sequential Audit Checklist\n" + "\n".join(checklist_items[:50])  # Limit to 50 items
+    if len(checklist_items) > 50:
+        manual_preview += f"\n\n[... {len(checklist_items) - 50} more checklist items - see full manual at prompts/Code_check_prompt_manual.txt ...]"
+    
     guidelines = textwrap.dedent(
         """\
+        **MANDATORY**: The Manual (Code_check_prompt_manual.txt) is the AUTHORITATIVE SOURCE.
+        You MUST follow it STRICTLY and check EVERY checklist item A1 through O4 sequentially.
+        Do NOT skip any items. Document PASS/FAIL for each item with specific line references.
+        
         Review each diff chunk as an independent audit gate.
+        
+        **MANDATORY EXECUTION PROTOCOL**:
+        1. Reference the Manual structure provided below (full manual available at prompts/Code_check_prompt_manual.txt)
+        2. Check Pattern-Learning-Repository.md patterns BEFORE starting A-O phases
+        3. Execute EVERY checklist item A1 through O4 sequentially from the Manual
+        4. Document PASS/FAIL for each item with specific line references
+        5. Do not skip any items - the Manual is comprehensive and all items apply
+        
+        CRITICAL: Check if any NEW FILES being added are non-functional:
+        - Reject files matching patterns: *summary*, *audit*, *report*, *findings*, *analysis*, *test_results*
+        - Reject standalone test files (test_*.sh, test_*.py) not in test directories
+        - All analysis/documentation must be inline in chat, not committed as files
+        - Repository must remain lean and purely functional
+        
+        CRITICAL: Check documentation coverage:
+        - File header documentation: Every code file MUST have header comment/docstring
+        - Function documentation: All functions > 10 lines MUST have documentation
+        - Complex logic: Multi-phase logic MUST have phase markers (# Phase 1: ..., # Phase 2: ...)
+        - Inline comments: Non-trivial blocks SHOULD have explanatory comments
+        - Comment quality: Comments explain WHY (rationale, assumptions), not WHAT
+        - Control structure markers: All if-fi, for-done, while-done, case-esac pairs MUST have closing markers (# ENDIF: ..., # ENDFOR: ..., etc.)
+        - Reject if critical documentation is missing (header docs, function docs for large functions, control structure markers)
+        
         Respond in JSON with the following schema:
         {
           "status": "approve" | "reject",
@@ -464,9 +796,9 @@ def format_user_prompt(
         Repository: {repo_name}
         File: {path}
         Chunk: {chunk_index + 1} / {chunk_total}
-        Manual:
+        Manual Reference (condensed - full manual at prompts/Code_check_prompt_manual.txt):
         ```
-        {manual_text}
+        {manual_preview}
         ```
         Guidelines:
         ```
@@ -639,8 +971,36 @@ def collect_reviews(
     if not staged_files:
         return True, []
 
+    # Check for non-functional files and reject them
+    non_functional_files = [f for f in staged_files if is_non_functional_file(f)]
+    if non_functional_files:
+        print("\n" + "=" * 70)
+        print("⚠️  NON-FUNCTIONAL FILES DETECTED")
+        print("=" * 70)
+        for file in non_functional_files:
+            print(f"  ✗ {file}")
+        print("\nThese files serve no functional purpose and should be removed.")
+        print("Repository must remain lean and purely functional.")
+        print("=" * 70 + "\n")
+        # Return failure to block commit
+        return False, []
+
     review_results: List[Tuple[str, str, Dict[str, object]]] = []
     all_passed = True
+    
+    # Count total chunks for progress tracking
+    total_chunks = 0
+    for path in staged_files:
+        diff = get_staged_diff(path)
+        chunks = chunk_diff(diff, max_chunk_lines)
+        total_chunks += len([c for c in chunks if c.strip()])
+    
+    if total_chunks == 0:
+        return True, []
+    
+    current_chunk = 0
+    print(f"Reviewing {total_chunks} chunk(s) across {len(staged_files)} file(s) with timeout {timeout}s per request...")
+    print("")
 
     for path in staged_files:
         diff = get_staged_diff(path)
@@ -650,6 +1010,9 @@ def collect_reviews(
         for idx, chunk in enumerate(chunks):
             if not chunk.strip():
                 continue
+            current_chunk += 1
+            print(f"[{current_chunk}/{total_chunks}] Reviewing {pretty_chunk_header(path, idx, len(chunks))}...")
+            
             provider_config = choose_provider(
                 chunk=chunk,
                 configs=configs,
@@ -671,14 +1034,20 @@ def collect_reviews(
                 secondary_provider
                 and provider_config.provider == secondary_provider
             )
-            review = review_chunk(
-                config=provider_config,
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                timeout=timeout,
-                cache_disabled=cache_disabled,
-                is_secondary=is_secondary,
-            )
+            try:
+                review = review_chunk(
+                    config=provider_config,
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    timeout=timeout,
+                    cache_disabled=cache_disabled,
+                    is_secondary=is_secondary,
+                )
+            except ReviewFailure as exc:
+                error_msg = str(exc)
+                if "timed out" in error_msg.lower():
+                    print(f"  ⚠️  Timeout after {timeout}s - consider increasing AI_REVIEW_TIMEOUT")
+                raise
             # If secondary provider failed (returned None), fall back to primary
             if review is None and is_secondary and primary_provider in configs:
                 print(
@@ -711,6 +1080,37 @@ def collect_reviews(
             )
             if review.get("status") != "approve":
                 all_passed = False
+
+    # Extract patterns from AI review findings (for pattern learning)
+    if review_results:
+        try:
+            import sys
+            pattern_extractor_path = REPO_ROOT / "scripts" / "hooks" / "extract_and_enhance_patterns.py"
+            if pattern_extractor_path.exists():
+                # Import the module
+                import importlib.util
+                spec = importlib.util.spec_from_file_location("extract_and_enhance_patterns", pattern_extractor_path)
+                if spec and spec.loader:
+                    extract_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(extract_module)
+                    
+                    ai_patterns = extract_module.extract_patterns_from_ai_findings(review_results)
+                    if ai_patterns:
+                        print("\n[PATTERN LEARNING] Extracting patterns from AI review findings...")
+                        # Update pattern repository (for record-keeping)
+                        if extract_module.update_pattern_repository(ai_patterns):
+                            print(f"✓ Updated Pattern-Learning-Repository.md with {len(ai_patterns)} pattern(s)")
+                        # CRITICAL: Enhance Code_check_prompt_manual.txt FIRST (authoritative source)
+                        # Then enhance other prompts that reference the manual
+                        for pattern in ai_patterns:
+                            if extract_module.enhance_code_check_prompt(pattern):
+                                print(f"✓ Enhanced Code_check_prompt_manual.txt (AUTHORITATIVE) with {pattern['id']}")
+                            if extract_module.enhance_advanced_cot_prompt(pattern):
+                                print(f"✓ Enhanced Advanced-CoT prompt with {pattern['id']}")
+                        print("[PATTERN LEARNING] Pattern extraction completed\n")
+        except Exception as e:
+            # Don't fail review if pattern extraction fails
+            print(f"Warning: Pattern extraction from AI findings failed: {e}")
 
     return all_passed, review_results
 
@@ -756,8 +1156,8 @@ def parse_args(argv: List[str]) -> argparse.Namespace:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=int(os.getenv("AI_REVIEW_TIMEOUT", "60")),
-        help="API request timeout in seconds.",
+        default=int(os.getenv("AI_REVIEW_TIMEOUT", "120")),  # Increased from 60 to 120 for large diffs
+        help="API request timeout in seconds (default: 120).",
     )
     parser.add_argument(
         "--disable-cache",
@@ -840,6 +1240,13 @@ def detect_provider(explicit_provider: str, api_url: str) -> str:
 
 
 def main(argv: List[str]) -> int:
+    """
+    Main entry point for AI-assisted pre-commit review.
+    
+    NOTE: AI review is DISABLED by default and requires explicit opt-in.
+    To enable: ENABLE_AI_REVIEW=1 git commit
+    Or export: export ENABLE_AI_REVIEW=1
+    """
     args = parse_args(argv)
 
     skip_flag = str(os.getenv("SKIP_AI_REVIEW", "0")).strip().lower()
@@ -855,6 +1262,20 @@ def main(argv: List[str]) -> int:
     )
     primary_api_url = primary_api_url_env or primary_defaults["api_url"]
     primary_model = os.getenv("AI_REVIEW_MODEL", primary_defaults["model"])
+    
+    # Validate and correct Claude model name format
+    if primary_provider == Provider.ANTHROPIC:
+        # Fix common format errors: dots (3.5) should be hyphens (3-5) for API model names
+        if "3.5" in primary_model or "3.7" in primary_model:
+            corrected_model = primary_model.replace("3.5", "3-5").replace("3.7", "3-7")
+            if corrected_model != primary_model:
+                print(
+                    f"⚠️  WARNING: Model name '{primary_model}' uses dots (3.5/3.7) which is incorrect.\n"
+                    f"   Anthropic API requires hyphens (3-5/3-7). Corrected to: '{corrected_model}'",
+                    file=sys.stderr,
+                )
+                primary_model = corrected_model
+    
     primary_max_tokens = normalize_max_tokens(
         args.max_tokens,
         PROVIDER_DEFAULT_MAX_TOKENS.get(primary_provider, DEFAULT_MAX_TOKENS),

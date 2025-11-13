@@ -136,8 +136,9 @@ FOR EACH ISSUE, ALWAYS EXPLAIN:
 - HOW to prevent it next time
 
 POST-REVIEW CHECKLIST:
-- Confirm all A–O/M–O checklist items evaluated (PASS/FAIL/N/A documented).
-- For Bash snippets, explicitly walk the `prompts/Code_check_prompt_manual.txt` checklist line by line, citing outcomes for every requirement.
+- **MANDATORY**: Confirm all A–O/M–O checklist items from `prompts/Code_check_prompt_manual.txt` evaluated (PASS/FAIL/N/A documented).
+- **MANDATORY**: For Bash snippets, explicitly walk the `prompts/Code_check_prompt_manual.txt` checklist line by line, citing outcomes for EVERY requirement (A1 through O4). Do NOT skip any items.
+- **MANDATORY**: Verify that Pattern-Learning-Repository.md patterns were checked BEFORE starting A-O phases.
 - Record tools used (shellcheck, clang-tidy, custom linters, etc.).
 - Verify any temporary artifacts created during analysis have been deleted; note cleanup completion in the summary.
 

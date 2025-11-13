@@ -121,7 +121,14 @@ def solve_sparse_linear_mkl(A: scipy.sparse.csr_matrix,
     return x
 ```
 
-#### B2. Function/Class Documentation Checklist
+#### B1. File Header Documentation (MANDATORY):
+- ✅ **REQUIRED**: Every code file MUST have header comment/docstring
+- ✅ **Format**: Language-appropriate (Doxygen for C++, Sphinx for Python, header comments for shell)
+- ✅ **Content**: Purpose, description, author/date (optional), key dependencies
+- ✅ **AUTO-FIX**: Pre-commit hook automatically adds missing headers
+- ✅ **VALIDATION**: Documentation validator blocks commit if missing
+
+#### B2. Function/Class Documentation Checklist (MANDATORY for functions > 10 lines):
 
 Every **non-trivial** function must include:
 
@@ -133,6 +140,17 @@ Every **non-trivial** function must include:
 - ✅ **Performance notes:** Complexity, threading, GPU acceleration
 - ✅ **Examples:** Minimal runnable snippet
 - ✅ **Related:** Links to similar functions or documentation
+- ✅ **AUTO-FIX**: Pre-commit hook can add basic function documentation templates
+- ✅ **VALIDATION**: Documentation validator checks function documentation coverage
+- ✅ **RATIONALE**: Good documentation enables AI agents to understand context and make better edits
+
+#### B3. Complex Logic Documentation (MANDATORY):
+- ✅ **REQUIRED**: Multi-phase detection/configuration logic MUST have phase markers
+- ✅ **Format**: `# Phase 1: ...`, `# Phase 2: ...`, etc.
+- ✅ **REQUIRED**: Long conditionals/loops MUST have explanatory comments
+- ✅ **REQUIRED**: Comment density minimum 25% in complex code sections
+- ✅ **BEST PRACTICE**: Comments explain WHY (rationale, assumptions), not WHAT
+- ✅ **VALIDATION**: Documentation validator checks for phase markers in complex logic
 
 ---
 

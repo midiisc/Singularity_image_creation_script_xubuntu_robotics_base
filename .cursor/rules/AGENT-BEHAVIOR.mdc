@@ -20,12 +20,18 @@ globs:
 ## FILE CREATION RESTRICTIONS
 
 ### FORBIDDEN FILE TYPES - Never create these automatically:
-- `summary.md`, `SUMMARY.txt`, `overview.*`
+- `summary.md`, `SUMMARY.txt`, `overview.*`, `OVERVIEW.*`
 - `steps.md`, `plan.md`, `roadmap.md`, `TODO.md`
 - `notes.md`, `documentation.md`, `guide.md`
-- `analysis.md`, `report.md`, `findings.md`
-- `review.md`, `code-review.md`
+- `analysis.md`, `report.md`, `findings.md`, `audit.*`, `AUDIT.*`
+- `review.md`, `code-review.md`, `*_REVIEW.md`
+- `*_SUMMARY.md`, `*_TEST_RESULTS.md`, `*_FIXES_SUMMARY.md`
+- `*_ANALYSIS.md`, `*_REPORT.md`, `*_FINDINGS.md`
 - Any `.txt` or `.md` file not explicitly requested
+- Test files that are no longer needed (must be cleaned up after testing)
+- Temporary files created during development or debugging
+- Dry-run or test output files
+- Any file created for analysis, investigation, or documentation that serves no functional purpose
 
 ### ALLOWED without explicit request:
 - Source code files (`.sh`, `.py`, `.cpp`, `.ts`, `.js`, etc.) when implementing features
@@ -115,6 +121,90 @@ globs:
 - ❌ **NO temporary files** - Repository must stay minimal and clutter-free
 - ❌ **NO documentation files** (unless explicitly requested)
 - ❌ **NO analysis files** (unless explicitly requested)
+- ❌ **NO summary/audit/report files** - All analysis must be inline in chat
+- ❌ **NO test files that outlive their utility** - Clean up immediately after testing
+- ❌ **NO dry-run output files** - Delete before commit
+- ❌ **NO investigation/analysis artifacts** - Repository must remain purely functional
+
+### MANDATORY FILE CLEANUP BEFORE COMMIT:
+- ✅ **Before ANY commit**: Review all staged files
+- ✅ **Delete non-functional files**: Remove summaries, reports, test artifacts, temporary files
+- ✅ **Clean up test files**: If test files were created, delete them after testing completes
+- ✅ **Verify file purpose**: Every file must serve a functional purpose in the repository
+- ✅ **AI agent reasoning**: AI must reason about each new file being committed and reject non-functional ones
+
+### MANDATORY DOCUMENTATION REQUIREMENTS:
+
+#### 1. File Header Documentation (REQUIRED):
+- ✅ **ALL code files MUST have header comments/docstrings** describing their purpose
+- ✅ **Purpose**: Helps identify file functionality, prevents non-functional files, provides context for AI agents
+- ✅ **Required for**: `.sh`, `.py`, `.cpp`, `.c`, `.h`, `.hpp`, `.js`, `.ts`, `.java`, `.go`, `.rs` files
+- ✅ **Format**:
+  - **Shell scripts**: `# Purpose: ...` or `# Description: ...` in header comment block
+  - **Python**: `"""Docstring"""` or `'''Docstring'''` at module level
+  - **C/C++**: `/* Purpose: ... */` or `// Purpose: ...` in header comment
+  - **Other languages**: Language-appropriate docstring/comment format
+- ✅ **Pre-commit hook blocks commits** if files are missing docstrings
+- ✅ **AI file purpose checker** analyzes content to verify docstring presence and file purpose
+
+#### 2. Function Documentation (REQUIRED for functions > 10 lines):
+- ✅ **All functions > 10 lines MUST have documentation**
+- ✅ **Format**: Comment block before function describing:
+  - Purpose/functionality
+  - Parameters (if any)
+  - Return values (if any)
+  - Side effects or important behavior
+- ✅ **Example**:
+  ```bash
+  # Purpose: Install package with retry logic and error handling
+  # Parameters: $1 = package name, $2 = max retries (default: 3)
+  # Returns: 0 on success, 1 on failure
+  install_package_resilient() {
+    ...
+  }
+  ```
+
+#### 3. Complex Logic Documentation (REQUIRED):
+- ✅ **Multi-phase detection/configuration logic MUST have phase markers**
+- ✅ **Format**: `# Phase 1: ...`, `# Phase 2: ...`, etc.
+- ✅ **Long conditionals/loops MUST have explanatory comments**
+- ✅ **Rationale**: Helps AI agents understand context and make better edits
+
+#### 3a. Control Structure Markers (REQUIRED):
+- ✅ **ALL control structures MUST have closing markers** to track pairings
+- ✅ **Format**:
+  - `if ... then` → `# ENDIF: <condition description>` before `fi`
+  - `for ... in` → `# ENDFOR: <loop variable>` before `done`
+  - `while ... do` → `# ENDWHILE: <condition description>` before `done`
+  - `case ... in` → `# ENDCASE: <case variable>` before `esac`
+- ✅ **Purpose**: Helps debug missing if-fi, for-done, while-done, case-esac pairings
+- ✅ **Example**:
+  ```bash
+  if [ -n "${VAR}" ]; then
+    # ... code ...
+  # ENDIF: VAR check
+  fi
+  
+  for item in "${ARRAY[@]}"; do
+    # ... code ...
+  # ENDFOR: item
+  done
+  ```
+- ✅ **Pre-commit hook auto-adds missing markers**
+- ✅ **Rationale**: Makes it easier to identify which closing statement belongs to which opening, especially in nested structures
+
+#### 4. Inline Comments (BEST PRACTICE):
+- ✅ **Non-trivial blocks (loops, conditionals, traps) SHOULD have comments**
+- ✅ **Comment density**: Minimum 25% comments in complex code sections
+- ✅ **Comments explain WHY, not WHAT** (code should be self-documenting)
+- ✅ **Update comments when code changes** (stale comments are worse than no comments)
+
+#### 5. Documentation Best Practices:
+- ✅ **Follow language-specific standards**: Doxygen for C++, Sphinx/Google style for Python, etc.
+- ✅ **Keep comments up-to-date**: Comments must match code behavior
+- ✅ **Use clear, concise language**: Comments should aid understanding, not confuse
+- ✅ **Document edge cases and assumptions**: Help future maintainers and AI agents
+- ✅ **Reference external documentation**: Link to relevant docs when applicable
 
 ### WHEN IN DOUBT:
 - Ask user before creating or modifying non-core files

@@ -58,6 +58,11 @@ export SINGULARITY_DEF_PATH="Singularity.def"
 # ===== DOCUMENTATION STANDARDS =====
 export DOC_FORMAT="doxygen"  # doxygen, sphinx, javadoc
 export COMMENT_RATIO_MIN=0.25  # minimum 25% comments in non-trivial code
+export ENFORCE_HEADER_DOCS=true  # require header comments/docstrings
+export ENFORCE_FUNCTION_DOCS=true  # require function documentation (>10 lines)
+export ENFORCE_PHASE_MARKERS=true  # require phase markers for complex logic
+export ENFORCE_INLINE_COMMENTS=true  # require comments for non-trivial blocks
+export DOC_AUTO_FIX=true  # auto-fix missing documentation in pre-commit hook
 export DOC_COVERAGE_MIN=85     # documentation coverage %
 
 # ===== SECURITY & COMPLIANCE =====
@@ -70,6 +75,22 @@ source "${CODEREVIEWRC_CUSTOM:-/dev/null}" 2>/dev/null || true
 
 echo "✅ Code review configuration loaded"
 ```
+
+---
+
+## PART 0: MANDATORY - Code_check_prompt_manual.txt is the Authoritative Source
+
+**CRITICAL REQUIREMENT**: `prompts/Code_check_prompt_manual.txt` is the **central, comprehensive, grounded prompt** for all code checking in this repository. It is the **single source of truth** for all validation criteria.
+
+**MANDATORY PROTOCOL**:
+1. **ALWAYS load and reference** `prompts/Code_check_prompt_manual.txt` at the start of every review
+2. **STRICTLY follow** the sequential audit checklist (A-O) defined in the manual
+3. **CHECK EVERY ITEM** A1 through O4 sequentially - do not skip any items
+4. **DOCUMENT PASS/FAIL** for each checklist item with specific line references
+5. **ENHANCE THE MANUAL FIRST**: When new patterns are discovered from AI corrections, chats, or CI checks, they MUST be added to `Code_check_prompt_manual.txt` FIRST before being referenced in other prompts
+6. **PATTERN LEARNING**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository.md` for learned error patterns and verify code against all active patterns
+
+**This prompt (Enhanced Code Review) provides multi-language extensions and HPC-specific checks, but the manual checklist is MANDATORY and must be executed completely for all Bash code.**
 
 ---
 
@@ -179,6 +200,15 @@ mark_resolved() {
 ---
 
 ## PART 2: Enhanced Sequential Audit Checklist
+
+**CRITICAL**: The checklist below provides multi-language extensions and HPC-specific checks. However, for Bash code, you MUST load and follow the ACTUAL `prompts/Code_check_prompt_manual.txt` file, which is the authoritative source. This section provides language-specific examples, but the manual contains the complete, up-to-date checklist with all learned patterns.
+
+**MANDATORY EXECUTION FOR BASH CODE**:
+1. Load `prompts/Code_check_prompt_manual.txt` at the start of review
+2. Execute EVERY checklist item A1 through O4 sequentially from the manual
+3. Document PASS/FAIL for each item with line references
+4. Do not skip any items - the manual is comprehensive and all items apply
+5. Use the language-specific examples below as supplements, not replacements
 
 ### A. Structure & Syntax (Updated for Multi-Language)
 

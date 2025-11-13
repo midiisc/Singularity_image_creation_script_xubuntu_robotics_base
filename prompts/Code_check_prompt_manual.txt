@@ -1,3 +1,13 @@
+**AUTHORITATIVE SOURCE**: This file (`Code_check_prompt_manual.txt`) is the **central, comprehensive, grounded prompt** for all code checking in this repository. It is the **single source of truth** for all validation criteria.
+
+**MANDATORY FOR ALL REVIEWS**: 
+- ALL other review prompts (Advanced CoT, Enhanced Code Review, etc.) MUST reference and strictly follow this manual
+- This manual MUST be enhanced FIRST when new patterns are discovered from AI corrections, chats, or CI checks
+- All checklist items A1 through O4 MUST be checked sequentially - do not skip any items
+- Pattern learning updates MUST be added to this manual FIRST before being referenced elsewhere
+
+---
+
 You will be given a Bash script segment for audit and correction, specified by a line range or a distinct code block that may differ from earlier reviews.
 
 When responding, follow each checklist item explicitly, indicating pass/fail (and corrections, if needed) before moving to the next item. Do not skip or merge items.
@@ -9,29 +19,14 @@ Step 1 – Context Review
 2. Note any visible dependencies on earlier/later script sections that may influence this block.
 3. If the supplied slice exceeds ~500 lines or mixes multiple logical units, split it before proceeding. Aim for 400–600 line chunks, respect natural boundaries (functions, classes), and include a 10–20 line overlap so context is preserved. Document the chosen splits. Track any symbols (functions, globals, exported variables) that originate in an earlier chunk but are referenced later, capturing their scope (local/global/exported) so you explicitly carry their context forward during review. As soon as a definition is confirmed and safe usage verified, mark it resolved in your tracking table so only active dependencies are carried forward, minimizing retained context and memory overhead.
 4. Identify the logical blocks that form self-contained operations (functions, guarded sections, case arms, long loops). Confirm each block is clearly delineated with surrounding whitespace, consistent indentation, and an opening comment that states its purpose and any preconditions or context carried in from earlier chunks. Add or refresh comments when the intent is unclear, and note the updates in your summary.
-   - Example split for a 1,200-line file:
-     - Chunk A: lines 1–520 (covers `configure_env()` definition)
-     - Chunk B: lines 501–1,020 (overlap retains tail of `configure_env()` and head of `init_cache()`)
-     - Chunk C: lines 1,001–1,200 (overlap carries `init_cache()` context)
-   - Symbol table sketch:
-     - `GLOBAL_CACHE_DIR` (global, declared 42, first use 108, chunk B) → active
-     - `install_packages_resilient` (function, declared 360, first use 420, chunk B) → resolved after verifying keyword usage
-     - `LOCAL_TMP` (local, declared 615 inside `init_cache`, resolved at line 640) → resolved
 
 Step 2 – Sequential Audit Checklist
 For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. State whether the block satisfies the requirement. If it fails, correct the code, explain the fix, and mark it as resolved.
 
 **IMPORTANT**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository.md` for learned error patterns. Verify code against all active patterns using their detection methods. Report any violations with Pattern ID and prevention approach.
-Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project’s resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
-Whenever you perform this replacement, include a short note in the review explicitly comparing the before/after approach and confirm that the helper function guards multi-arch and held-package cases.
+Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project's resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
 Maintain a running symbol table covering variables, functions, and exported values encountered so far. For each usage, ensure a single declaration exists before first use (pulling the definition earlier if required), eliminate redundant redeclarations encountered in later chunks, assign meaningful defaults to variables at their declaration site to avoid unbound-value failures downstream, and mark entries resolved once safe usage is verified so the table stays lean. Document any adjustments you make.
-As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Update or add comments where intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
-   - Example replacements:
-     - Before: `if dpkg -l | grep -q "^ii.*libfoo-dev"; then`
-       After: `if dpkg_resolve_installed_package "libfoo-dev" >/dev/null; then`
-     - Before: `pkg_version=$(dpkg -l | awk '/^ii\s+mytool/{print $3; exit}')`
-       After: `pkg_version=$(dpkg_get_installed_version "mytool" || true)`
-   - Tools to verify replacements: `grep` for lingering `dpkg -l`, `shellcheck` (SC2143) to catch unquoted pipe patterns.
+As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Update or add comments when intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
 
 A. Structure & Syntax
 - A1. Shebang compatibility, POSIX/Bash feature alignment.
@@ -40,11 +35,10 @@ A. Structure & Syntax
 - A4. Declaration order: functions and variables are defined before first use (or accompanied by guards) to avoid relying on implicit forward declarations.
 - A5. Favor POSIX-safe command patterns; when Bash-specific constructs are required, document the justification and ensure degradations are gracefully handled.
 - A6. **BASH VERSION COMPATIBILITY**: Check for Bash 4+ features that may not work in older versions:
-  - FORBIDDEN: `${var^^}` (uppercase conversion) - use `tr '[:lower:]' '[:upper:]'` or `awk '{print toupper($0)}'` instead
-  - FORBIDDEN: `${var,,}` (lowercase conversion) - use `tr '[:upper:]' '[:lower:]'` or `awk '{print tolower($0)}'` instead
+  - FORBIDDEN: `${var^^}` (uppercase) - use `tr '[:lower:]' '[:upper:]'` instead
+  - FORBIDDEN: `${var,,}` (lowercase) - use `tr '[:upper:]' '[:lower:]'` instead
   - FORBIDDEN: Associative arrays (`declare -A`) without version check
   - When using Bash 4+ features, add explicit version check: `if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then ... else ... fi`
-  - Example replacement: `lib_upper=$(echo "${lib}" | tr '[:lower:]' '[:upper:]')` instead of `lib_upper=${lib^^}`
 
 B. Shell Options & Execution Controls
 - B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
@@ -56,18 +50,14 @@ C. Variables & Defaults
   - **CRITICAL**: NEVER use `local` keyword outside a function - this causes error "local: can only be used in a function"
   - Check every `local` declaration is inside a function body
   - For global variables, use plain assignment or `declare` (without `local`)
-  - Example error pattern: `local apt_update_output` at top-level scope (line 2033 error)
   - Suggested commands: `grep -n '^[[:space:]]*local ' script.sh` to find `local` declarations, verify each is inside a function
 - C3. Safe handling of arrays, indexes, and `IFS` mutations (restore defaults after use).
 - C4. Each variable is declared once, with an explicit, meaningful default or guard. Later redeclarations are removed in favor of the carried-forward definition, and usages reference the original declaration.
-  - Example: Replace `FOO=${FOO:-}` + repeated assignments with a single `FOO="${FOO:-/opt/default}"` near the declaration, then update later sections to reuse `FOO`.
-  - Suggested commands: `grep -R "FOO="`; `rg --fixed-strings "local FOO"` to detect duplicates.
 - C5. **UNBOUND VARIABLE PROTECTION**: When using `set -u` or expecting unbound variables, ensure all variables have defaults:
   - Use `${VAR:-default_value}` pattern consistently
   - For environment variables that may not be set: `CACHE_DIR="${CONTAINER_APT_CACHE:-/var/cache/apt/archives}"`
   - Export critical variables in profile scripts: `/etc/profile.d/*.sh` and `/etc/environment`
   - Add fallback detection logic for missing environment variables before first use
-  - Example error: "CONTAINER_APT_CACHE: unbound variable" - fix with detection and fallback logic
 
 D. Quoting & Expansion Safety
 - D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
@@ -76,54 +66,16 @@ D. Quoting & Expansion Safety
   - UNSAFE: `if echo "${VARIABLE}" | grep -q "pattern"; then` (creates unnecessary subshell, potential echo flag interpretation)
   - SAFE: `if grep -q "pattern" <<< "${VARIABLE}"; then` (here-string, no subshell, explicit quoting)
   - SAFE: `if [[ "${VARIABLE}" =~ pattern ]]; then` (Bash regex, no external command)
-  - Rationale: Here-strings are more efficient, safer (no echo interpretation of flags like -n or -e), and more explicit about quoting
   - Detection: `grep -n 'echo.*|.*grep' script.sh` to find all occurrences
-  - Performance: Here-string avoids pipeline overhead (no subshell fork)
-  - Example error caught in audit: Line 8026 used `echo "${LDCONFIG_CACHE}" | grep` instead of `grep <<< "${LDCONFIG_CACHE}"`
 - D4. **SED CHARACTER CLASS ESCAPING**: Validate sed bracket expressions for correct escaping and error handling:
   - **CRITICAL**: Bracket expressions must escape brackets correctly: `[][]` for literal `[` or `]`
   - **CRITICAL**: All command substitutions with sed MUST have error fallback: `|| echo ""`
-  - **COMMON ERRORS TO DETECT**:
-    - WRONG: `sed 's/[[\/&]/\\&/g'` (malformed bracket class - `[[` is invalid)
-    - WRONG: `sed 's/[[\.*^$()+?{|]/\\&/g'` (malformed bracket class)
-    - WRONG: `var="$(... | sed '...')"` (no error fallback with `set -u`)
-    - RIGHT: `sed 's/[][\\\/&]/\\&/g' || echo ""` (correct bracket class + fallback)
-    - RIGHT: `sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo ""` (correct escaping + fallback)
-  - **BRACKET CLASS SYNTAX**:
-    - To match literal `[` or `]`: Use `[][]` (opening `[`, closing `]`, then `[` again)
-    - Example: `[][]` matches one of: `[` or `]`
-    - To include backslash: `\\` (doubled for shell escaping)
-    - To include forward slash: `\/` (escaped for sed)
-    - Full pattern for URL escaping: `s/[][\\\/&]/\\&/g`
-  - **ERROR FALLBACK REQUIREMENT**:
-    - When `set -u` is active, command substitution failure leaves variable unset → fatal error
-    - ALWAYS add `|| echo ""` to sed/awk/grep in command substitutions
-    - Pattern: `var="$(command | sed '...' || echo "")"` or `var=$(printf '%s' "$x" | sed '...' || echo "")`
-  - **CONSISTENCY CHECK**:
-    - All similar escaping operations must use identical patterns
-    - If escaping URLs in 5 places, all 5 must use same sed pattern
-    - Inconsistent patterns indicate copy-paste errors or incomplete fixes
-  - **DETECTION COMMANDS**:
-    - Find malformed bracket classes: `grep -nE "sed 's/\[\[" script.sh`
-    - Find sed without fallback: `grep -nE '\$\(.*sed.*\)' script.sh | grep -v '|| echo'`
-    - Find all sed escaping: `grep -nE "sed 's/\[.*\]/\\\\&/g'" script.sh`
-  - **REAL-WORLD ERROR CAUGHT**:
-    - Line 945: `fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g')"`
-    - Problem 1: `[[\/&]` is malformed - should be `[][\\\/&]`
-    - Problem 2: No `|| echo ""` fallback - crashes with `set -u` if sed fails
-    - Impact: Script fatally terminated after "Updated /etc/apt/sources.list" message
-    - Root cause: Unset variable used in lines 951-957 due to sed failure
-    - Fix: `sed 's/[][\\\/&]/\\&/g' || echo ""`
-  - **TESTING VERIFICATION**:
-    - Test pattern with URLs: `echo "http://example.com/path&query" | sed 's/[][\\\/&]/\\&/g'`
-    - Expected output: `http:\/\/example.com\/path\&query`
-    - Test pattern with brackets: `echo "[test]" | sed 's/[][\\\/&]/\\&/g'`
-    - Expected output: `\[test\]`
-  - **PREVENTION STRATEGY**:
-    - Before using any sed bracket expression, test it with `echo "test[input]" | sed 'pattern'`
-    - If script uses `set -u`, REQUIRE `|| echo ""` on ALL command substitutions
-    - Create sed pattern library for common escaping tasks (URLs, regex chars, etc.)
-    - Code review checklist: "Are all sed patterns consistent? Do all have error fallbacks?"
+  - **COMMON ERRORS**: `sed 's/[[\/&]/\\&/g'` (malformed - should be `sed 's/[][\\\/&]/\\&/g' || echo ""`)
+  - **BRACKET CLASS SYNTAX**: Use `[][]` to match literal `[` or `]`, `\\` for backslash, `\/` for forward slash
+  - **ERROR FALLBACK**: When `set -u` is active, ALWAYS add `|| echo ""` to sed/awk/grep in command substitutions
+  - **CONSISTENCY**: All similar escaping operations must use identical patterns
+  - **DETECTION**: `grep -nE "sed 's/\[\[" script.sh` (malformed), `grep -nE '\$\(.*sed.*\)' script.sh | grep -v '|| echo'` (no fallback)
+  - **REAL ERROR**: Line 945 used `sed 's/[[\/&]/\\&/g'` without fallback → script crashed with `set -u` → Fix: `sed 's/[][\\\/&]/\\&/g' || echo ""`
 
 E. Here-docs & Here-strings
 - E1. Use of quoted delimiters (`<<'EOF'`) where literal content is intended.
@@ -141,8 +93,6 @@ G. Functions & Modularization
 - G3. Proper use of `trap` within functions and restoration of environment on exit.
 - G4. Functions grouped logically; helper functions declared ahead of dependents or referenced safely via sourcing order checks.
 - G5. Each function is defined exactly once before first use; if discovered later in the file, relocate the definition earlier and remove duplicates, updating references to match the retained definition.
-  - Example: Move `init_cache()` definition (found at line 900) above its first invocation at line 450; replace the later duplicate with comments pointing to the canonical definition.
-  - Suggested commands: `ctags -x --c-kinds=f script.sh` or `rg "^\s*(function\s+)?[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)"` to inventory functions.
 
 H. Error Handling & Observability
 - H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
@@ -153,28 +103,14 @@ I. Timeouts, Retries, & Robustness
 - I1. Long-running operations (e.g., `ldconfig`, package managers, service checks) wrapped with `timeout`, retries, or backoff.
 - I2. Graceful degradation/fallback behavior documented when timeouts or partial failures occur.
 - I3. Handling of transient network or IO failures, including retries and validation of results.
-  - Tools: `grep -n "curl"` / `grep -n "wget"` to confirm retry flags; ensure `timeout` or `retry` loops exist.
 - I4. **HTTP ERROR HANDLING**: All curl/wget operations must check HTTP status codes and handle errors:
   - Capture HTTP status codes: `curl -w "%{http_code}" -o output_file URL`
   - Check for HTTP errors: 403 (Forbidden/Blocked), 404 (Not Found), 5xx (Server Errors)
   - Detect connection errors: timeouts, connection refused, DNS failures
   - Implement fallback logic when primary source fails (e.g., fallback to archive.ubuntu.com for mirrors)
   - Use temporary files to capture both stdout and stderr separately for proper error analysis
-  - Example pattern:
-    ```bash
-    temp_out=$(mktemp)
-    temp_err=$(mktemp)
-    if curl_output=$(curl -sS -w "%{http_code}" -o "${temp_out}" URL 2>"${temp_err}"); then
-      http_code=$(echo "${curl_output}" | tail -n1)
-      if [[ "${http_code}" =~ ^[45][0-9][0-9]$ ]]; then
-        # Handle HTTP error
-      fi
-    fi
-    rm -f "${temp_out}" "${temp_err}"
-    ```
   - Validate HTTP codes are 3-digit numbers before checking: `[[ "${http_code}" =~ ^[0-9]{3}$ ]]`
   - Always provide user-visible error messages explaining the specific failure (403, timeout, etc.)
-  - Mirror/URL validation should exclude failed sources from selection (score 999.9 or similar marker)
 
 J. Edge Cases & Resiliency
 - J1. Input validation, file/directory existence checks, and permissions (`umask`) where relevant.
@@ -192,88 +128,34 @@ L. Performance & Maintainability
 - L1. Avoid needless subshells, command substitutions in tight loops, prefer built-ins (`printf` over `echo -e`).
 - L2. Clear comments for intentional complexity, avoidance of duplicated logic.
 - L3. Readability: consistent naming, structure, modularization, and comment density that explains non-trivial control flow. Refresh stale comments or insert concise summaries when logic evolves.
-- L4. Evaluate opportunities to extract reusable functions or helpers that improve efficiency, clarity, and testability.
+- L4. **DOCUMENTATION COVERAGE REQUIREMENT**: 
+  - **MANDATORY**: Every function > 10 lines MUST have documentation comment before definition
+  - **MANDATORY**: Complex logic blocks (multi-phase, nested conditionals, long loops) MUST have explanatory comments
+  - **BEST PRACTICE**: Minimum 25% comment density in complex code sections
+  - **REQUIRED**: Comments explain WHY (rationale, assumptions, edge cases), not WHAT (code is self-documenting)
+  - **REQUIRED**: Update comments when code changes (stale comments are worse than no comments)
+  - **AUTO-FIX**: Pre-commit hook automatically adds missing header documentation
+  - **VALIDATION**: Documentation validator checks all code files before commit
 - L5. **MULTI-PHASE LOGIC DOCUMENTATION**: Complex detection/configuration logic with multiple phases MUST be documented:
   - REQUIRED: Header comment explaining overall strategy and number of phases
   - REQUIRED: Phase markers (e.g., "# Phase 1: ...") before each distinct phase
   - REQUIRED: Final decision comment explaining how phases combine
-  - Example pattern (3-phase SDK detection):
-    ```bash
-    # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
-    # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
-    # Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK
-    # Phase 2: Search common header locations for nvcuvid.h (may be system-installed)
-    # Phase 3: Verify runtime libraries are available via ldconfig (driver-provided)
-    # All three conditions must pass to enable NVDEC/NVENC hardware acceleration
-    
-    # Phase 1: Explicit SDK installation check
-    if [ -d "/opt/Video_Codec_SDK" ]; then
-      ...
-    fi
-    
-    # Phase 2: Fallback header search
-    for candidate in ...; do
-      ...
-    done
-    
-    # Phase 3: Verify runtime libraries
-    if grep -q "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
-      ...
-    fi
-    
-    # Final decision: Enable only if all three phases passed
-    if [ -n "${HEADER}" ] && [ "${LIB1}" = "true" ] && [ "${LIB2}" = "true" ]; then
-      ...
-    fi
-    ```
+  - Example pattern (3-phase SDK detection): Header comment → Phase 1 marker → Phase 2 marker → Phase 3 marker → Final decision comment
   - Rationale: Multi-phase logic is complex; without clear phase markers, maintainers cannot understand the detection strategy
-  - Detection: Look for multiple `if` blocks checking related conditions without explanatory comments
-  - Error caught in audit: Lines 7996-8057 had 3-phase detection without phase markers (corrected)
-- L5. Respect local context: ensure comments adjacent to blocks reflect actual behavior, nested scopes are visually separated, and reviewers can follow control flow without scanning distant sections. Treat mismatched or missing comments as defects to be corrected.
+- L5a. **CONTROL STRUCTURE MARKERS (REQUIRED)**: All control structures MUST have closing markers to track pairings:
+  - **MANDATORY**: `if ... then` → `# ENDIF: <condition description>` comment before `fi`
+  - **MANDATORY**: `for ... in` → `# ENDFOR: <loop variable>` comment before `done`
+  - **MANDATORY**: `while ... do` → `# ENDWHILE: <condition description>` comment before `done`
+  - **MANDATORY**: `case ... in` → `# ENDCASE: <case variable>` comment before `esac`
+  - **PURPOSE**: Helps debug missing if-fi, for-done, while-done, case-esac pairings
+  - **AUTO-FIX**: Pre-commit hook automatically adds missing markers
+  - **VALIDATION**: Control structure marker validator checks all pairs
 - L6. When documenting updates, call out the self-contained blocks you touched (e.g., loop, trap handler, function) and confirm their comments, whitespace, and readability were brought in line with project conventions.
 
 M. Environment & Dependencies
 - M1. Validation that required external commands/binaries exist (`command -v`, `hash`) and version-sensitive behavior is documented.
 - M2. Verification of environment assumptions (shell, OS, distro, architecture, locale, `LANG`, `LC_ALL`, `PATH`, proxy settings).
-- **M-TOOLS**: When analyzing library dependencies, CMake flags, or bundled components, consider using `prompts/Library-Analysis-Tool.md` for automated comprehensive analysis before manual verification. Tool outputs structured data about bundling, version changes, and dependency recommendations.
-  - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats:
-    - Legacy format: `/etc/apt/sources.list` and `/etc/apt/sources.list.d/*.list` (one-line deb format)
-    - Modern format: `/etc/apt/sources.list.d/*.sources` (deb822 format, Ubuntu 24.04+)
-    - Parse both `deb http://...` lines AND `URIs: http://...` fields from .sources files
-    - Update mirror URLs in BOTH formats when modifying apt sources
-    - Validate changes in BOTH formats after modifications
-    - Example: When replacing mirrors, process both `sed` on .list files AND `URIs=` field updates in .sources files
 - M3. Safe handling of configuration files, credentials, and secrets (no accidental logging, enforce permissions).
-- M11. **CMAKE FLAG VALIDATION**: All CMake flags MUST be validated against official library documentation:
-  - REQUIRED: Before adding CMake flags, verify against library's official documentation (e.g., docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
-  - FORBIDDEN: Using undocumented or library-specific prefixed flags (e.g., `Ceres_ENABLE_CUDA` → use `USE_CUDA`)
-  - FORBIDDEN: Passing framework-specific flags to libraries that don't support them (e.g., `MKL_ROOT` to Ceres)
-  - REQUIRED: Use standard CMake variables (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES) for BLAS/LAPACK configuration
-  - VALIDATION: Run `scripts/helpers/validate_cmake_flags.sh` on script before commit
-  - Example errors caught today:
-    - `Ceres_ENABLE_CUDA=ON` → Invalid, should be `USE_CUDA=ON`
-    - `Ceres_USE_EIGEN_MKL=ON` → Invalid, MKL controlled via BLA_VENDOR
-    - `MKL_ROOT=...` passed to Ceres → Invalid, Ceres doesn't use this variable
-  - Prevention: Always check library's CMakeLists.txt or official docs before adding flags
-  - Tool: `grep -r "option(" library/CMakeLists.txt` to find valid flags
-- M12. **HPC LIBRARY CONFLICT DETECTION**: When configuring HPC libraries (MKL, OpenBLAS, TBB), detect and prevent conflicts:
-  - MKL/OpenBLAS conflict: NEVER link both MKL BLAS and OpenBLAS in same library
-    - Detection: `if [ -n "${MKLROOT}" ] && command -v openblas-config >/dev/null; then warn "Both MKL and OpenBLAS detected"; fi`
-  - TBB conflict: Ensure system TBB is used, NOT MKL's bundled TBB
-    - Check: `TBB_LIBRARIES` must point to `/usr/lib/x86_64-linux-gnu/libtbb.so`, NOT `/opt/intel/*/tbb`
-    - CMake flags: `-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB -DCMAKE_IGNORE_PATH=/opt/intel`
-  - BLAS vendor consistency: All libraries in dependency chain must use same BLAS (all MKL or all OpenBLAS)
-  - Verification: After CMake configure, check `CMakeCache.txt`:
-    ```bash
-    if grep -q "MKL" CMakeCache.txt && grep -q "openblas" CMakeCache.txt; then
-      echo "ERROR: Mixed MKL/OpenBLAS detected"
-      exit 1
-    fi
-    ```
-  - Example errors caught today:
-    - OpenCV was picking up MKL's TBB instead of system TBB (lines 8073-8102)
-    - GTSAM needed explicit MKL threading layer configuration
-  - Prevention: Always verify library paths after configuration, not just "found" status
 - M4. Package detection/checking uses resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) instead of brittle parsing of `dpkg -l` or similar command output; replace and verify during the audit.
 - M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
 - M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
@@ -282,131 +164,53 @@ M. Environment & Dependencies
   - Add pre-configuration CMake cache files to force correct settings before CMake runs
   - Verify linker flags contain required libraries: `CMAKE_SHARED_LINKER_FLAGS`, `CMAKE_EXE_LINKER_FLAGS`
   - Use `CMAKE_*_LINKER_FLAGS_INIT` to ensure flags apply to all targets from the start
-  - Patch CMakeLists.txt files when automatic detection fails (with clear documentation)
   - Post-build verification: check built libraries with `ldd` to confirm required libraries are linked
-  - Example: Force `-lm` linking with `CMAKE_SHARED_LINKER_FLAGS_INIT="-lm"` and verify `NO_LIBM=OFF`
-  - Create CMake config files for libraries that don't install them (SuiteSparseConfig.cmake, OpenBLASConfig.cmake)
-  - Tooling tips: `rg --json "dpkg -l"` to locate legacy patterns; run `shellcheck` (SC2143, SC2145) to catch unsafe parsing.
 - M8. **CMAKE FLAG DOCUMENTATION REQUIREMENT**: BEFORE compiling ANY library with CMake, verify comprehensive flag documentation exists:
   - **MANDATORY**: Documentation file MUST exist at `docs/flags/LIBRARY_VERSION_CMAKE_FLAGS_DOCUMENTATION.md`
   - **MANDATORY**: Documentation MUST include: library version, source repository, source commit hash, generation date, CMake minimum version
   - **MANDATORY**: ALL CMake flags used in build script MUST be documented with: flag type (OPTION/STRING/PATH/CACHE), default value, description, usage example
-  - **MANDATORY**: Build script MUST include inline comment referencing the documentation file (e.g., `# Reference: docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md`)
-  - **VALIDATION**: If documentation doesn't exist, WARN user and PROMPT to create it by:
-    - Pulling the library source repository at the specific commit/tag being compiled
-    - Parsing ALL CMakeLists.txt files recursively to extract CMake options, cache variables, and find_package calls
-    - Documenting each flag with full details (type, default, description, constraints, dependencies)
-    - Organizing by category (Core Options, Dependencies, Linear Algebra, Performance, Testing, etc.)
-    - Including usage examples showing common flag combinations
+  - **MANDATORY**: Build script MUST include inline comment referencing the documentation file
+  - **VALIDATION**: If documentation doesn't exist, WARN user and PROMPT to create it
   - **ERROR PREVENTION**: This check prevents using undocumented/invalid flags that are silently ignored by CMake
-  - Example validation: `if [ ! -f "docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md" ]; then echo "ERROR: Flag documentation missing"; exit 1; fi`
-  - Tools: Use `prompts/Library-Analysis-Tool.md` to generate documentation; `rg "option\\(|set\\(.*CACHE"` to extract flags from CMakeLists.txt
 - M9. **CMAKE FLAG CROSS-REFERENCE VALIDATION**: For EVERY CMake flag used (-D FLAG=VALUE), verify against documentation:
   - **MANDATORY**: Each `-D FLAG=VALUE` in cmake command MUST be listed in corresponding docs/flags/*.md file
   - **MANDATORY**: Flag name MUST match exactly (case-sensitive) - e.g., `USE_CUDA` NOT `Ceres_ENABLE_CUDA`
   - **MANDATORY**: Flag type in script must match documented type (OPTION for ON/OFF, STRING for paths/values)
-  - **RECOMMENDED**: If overriding default value, add inline comment explaining why and noting original default
-  - **RECOMMENDED**: For performance flags (SCHUR_SPECIALIZATIONS, CUSTOM_BLAS, etc.), document expected performance impact
-  - **VALIDATION PATTERN**: Before cmake command execution, extract all -D flags and cross-check against docs/flags/*.md
-  - **COMMON ERRORS TO PREVENT**:
-    - Using prefix that doesn't exist (e.g., `Ceres_USE_EIGEN_MKL` instead of standard `BLA_VENDOR`)
-    - Using old/deprecated flag names from previous library versions
-    - Using "assumed" flags that are never actually defined in library's CMakeLists.txt
-    - Passing library-specific flags to dependencies (e.g., Ceres flags to PyCeres - should inherit automatically)
-  - Example validation: Extract all -D flags with `grep -oP '\-D\s*\K[A-Z_]+=' cmake_command`, then verify each exists in docs/flags/*.md
-  - Tools: `rg "option\(${FLAG_NAME}" library-source/CMakeLists.txt` to confirm flag is actually defined
+  - **COMMON ERRORS TO PREVENT**: Using prefix that doesn't exist, using old/deprecated flag names, using "assumed" flags that are never actually defined
 - M10. **VERSION-SPECIFIC FLAG VALIDATION**: When upgrading library versions, verify all CMake flags are still valid:
-  - **MANDATORY**: When changing library version (e.g., Ceres 2.1.0 → 2.2.0), regenerate flag documentation for new version
+  - **MANDATORY**: When changing library version, regenerate flag documentation for new version
   - **MANDATORY**: Compare old vs new flag documentation to identify deprecated/removed/renamed flags
   - **MANDATORY**: Update build script to use new flag names and remove deprecated flags
-  - **MANDATORY**: Update documentation filename to reflect new version (e.g., CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
-  - **VALIDATION**: Check git history of docs/flags/*.md to detect version changes without flag revalidation
-  - Example: If upgrading from v1.0 to v2.0, diff docs/flags/LIBRARY_1.0.0_*.md vs LIBRARY_2.0.0_*.md
-  - Prevention: Catches breaking changes in CMake API between library versions
-- M11. **LIBRARY BUNDLED COMPONENT DETECTION**: Before linking external libraries, verify what's bundled vs what needs separate linking:
+- M11. **CMAKE FLAG VALIDATION**: All CMake flags MUST be validated against official library documentation:
+  - REQUIRED: Before adding CMake flags, verify against library's official documentation (e.g., docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
+  - FORBIDDEN: Using undocumented or library-specific prefixed flags (e.g., `Ceres_ENABLE_CUDA` → use `USE_CUDA`)
+  - FORBIDDEN: Passing framework-specific flags to libraries that don't support them (e.g., `MKL_ROOT` to Ceres)
+  - REQUIRED: Use standard CMake variables (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES) for BLAS/LAPACK configuration
+  - VALIDATION: Run `scripts/helpers/validate_cmake_flags.sh` on script before commit
+- M12. **HPC LIBRARY CONFLICT DETECTION**: When configuring HPC libraries (MKL, OpenBLAS, TBB), detect and prevent conflicts:
+  - MKL/OpenBLAS conflict: NEVER link both MKL BLAS and OpenBLAS in same library
+  - TBB conflict: Ensure system TBB is used, NOT MKL's bundled TBB (check `TBB_LIBRARIES` points to `/usr/lib/x86_64-linux-gnu/libtbb.so`, NOT `/opt/intel/*/tbb`)
+  - BLAS vendor consistency: All libraries in dependency chain must use same BLAS (all MKL or all OpenBLAS)
+  - Verification: After CMake configure, check `CMakeCache.txt` for mixed BLAS/TBB
+  - Prevention: Always verify library paths after configuration, not just "found" status
+- M13. **LIBRARY BUNDLED COMPONENT DETECTION**: Before linking external libraries, verify what's bundled vs what needs separate linking:
   - **CRITICAL**: Check library documentation and repository to identify bundled dependencies (e.g., SuiteSparse bundles METIS in newer versions)
-  - **MANDATORY CHECKS**:
-    1. Parse library's CMakeLists.txt for FetchContent_Declare, add_subdirectory with external projects
-    2. Check library's CHANGELOG/RELEASES for "now includes", "bundled", "integrated" keywords
-    3. Verify library's official documentation for dependency requirements by version
-    4. Inspect installed library headers/binaries for bundled components (e.g., `nm -D lib*.so | grep symbol`)
-    5. Cross-reference with pkg-config files (.pc) for actual dependencies vs documented ones
-  - **VERSION AWARENESS**: Different versions may have different bundling strategies
-    - Example: SuiteSparse < 7.0 requires separate METIS, >= 7.1 bundles METIS
-    - Check Git tags and commits between versions for dependency changes
-    - Parse version-specific documentation (README for that tag/release)
-  - **CHANGELOG ANALYSIS**: Required pattern for version transitions:
-    ```bash
-    # Example: Check what changed between versions
-    git clone --depth 50 https://github.com/library/repo.git /tmp/lib_check
-    cd /tmp/lib_check
-    git log v7.0.0..v7.1.0 --grep="METIS\|dependency\|bundle\|include" --oneline
-    git diff v7.0.0..v7.1.0 -- CMakeLists.txt
-    ```
-  - **PROS/CONS REASONING**: Document why bundled vs separate is chosen:
-    - **Bundled Pros**: Simplified builds, version compatibility guaranteed, no external dep hunting
-    - **Bundled Cons**: Larger binaries, potential symbol conflicts if dep used elsewhere, harder updates
-    - **Separate Pros**: Shared libraries save disk, easier security updates, centralized dep management
-    - **Separate Cons**: Version mismatches possible, complex dep resolution, build complexity
-  - **DETECTION PATTERNS**:
-    ```bash
-    # Check if library bundles dependency
-    if grep -rq "add_subdirectory.*metis" CMakeLists.txt; then
-      echo "METIS bundled as subdirectory"
-    fi
-    if find . -type d -name "external" -o -name "third_party" -o -name "3rdparty"; then
-      echo "Check external/ directory for bundled deps"
-    fi
-    # Check installed library for symbols
-    if nm -D /usr/local/lib/libsuitesparseconfig.so | grep -q "metis_"; then
-      echo "METIS symbols present in library (bundled)"
-    else
-      echo "METIS not bundled, requires separate linking"
-    fi
-    ```
-  - **OFFICIAL SOURCE VERIFICATION**: Always check multiple reliable sources:
-    1. Library's official website (installation instructions)
-    2. GitHub repository README (especially for version being built)
-    3. Library's CMake config files (LibraryConfig.cmake) for find_dependency calls
-    4. Distribution package metadata (apt show, rpm -qi) for system packages
-    5. Build system output (CMake configure logs) for actual dependency resolution
-  - **DOCUMENTATION REQUIREMENT**: When integrating library, document in comments:
-    ```bash
-    # Library: SuiteSparse 7.8.3
-    # Bundled: METIS (since 7.1), AMD, CAMD, COLAMD (always bundled)
-    # Separate: BLAS, LAPACK (user must provide)
-    # Source: https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/v7.8.3
-    # Verified: 2025-11-13 via CMakeLists.txt analysis and CHANGELOG review
-    # Decision: Use bundled METIS (simpler, no version conflicts)
-    # Trade-off: Slightly larger binary, but guaranteed compatibility
-    ```
-  - **PREVENTION**: Avoid issues like "libcolmap-metis not detected" by:
-    1. Always check library version being built
-    2. Parse that version's documentation and CMakeLists.txt
-    3. Don't assume dependencies from older versions apply
-    4. Verify after build with ldd, nm, pkg-config
-  - **AUTOMATED ANALYSIS TOOL**: Use `prompts/Library-Analysis-Tool.md` to automate bundled component detection:
-    - Run: `./analyze-library.sh --library <name>` to generate comprehensive dependency analysis
-    - Tool outputs: `bundled_components.md` (what's bundled), `version_changes.md` (changelog analysis), `dependency_recommendations.md` (pros/cons)
-    - Review generated analysis before writing detection logic in build scripts
-    - Reference: See "PART 1: EXECUTABLE BASH SCRIPT" in Library-Analysis-Tool.md for usage
-  - **Real Error Example**: SuiteSparse 7.8.3 check showed METIS not detected, but investigation revealed:
-    - METIS bundled since v7.1.0 (2023-12-20)
-    - No separate METIS linking needed
-    - Detection logic needed update to check for bundled symbols
-    - Fix: Updated detection to check library itself, not just external packages
-    - **Could have been prevented**: Running Library Analysis Tool would have revealed METIS bundling immediately
+  - **MANDATORY CHECKS**: Parse CMakeLists.txt for FetchContent_Declare/add_subdirectory, check CHANGELOG/RELEASES for "bundled"/"integrated" keywords, verify official docs, inspect installed library headers/binaries (`nm -D lib*.so | grep symbol`), cross-reference with pkg-config files
+  - **VERSION AWARENESS**: Different versions may have different bundling strategies (e.g., SuiteSparse < 7.0 requires separate METIS, >= 7.1 bundles METIS)
+  - **CHANGELOG ANALYSIS**: Use `git log v7.0.0..v7.1.0 --grep="METIS\|dependency\|bundle"` and `git diff` to check version transitions
+  - **PROS/CONS**: Document decision rationale (bundled: simpler build, version compatibility vs larger binary; separate: shared libs, easier updates vs version mismatch risks)
+  - **DETECTION PATTERNS**: Check for `add_subdirectory.*metis` in CMakeLists.txt, look for external/third_party directories, verify symbols with `nm -D`
+  - **OFFICIAL SOURCE VERIFICATION**: Check library website, GitHub README, CMake config files, distribution package metadata, build system output
+  - **DOCUMENTATION REQUIREMENT**: When integrating library, document in comments: library version, bundled components, separate components, source URL, verification date, decision rationale
+  - **AUTOMATED ANALYSIS TOOL**: Use `prompts/Library-Analysis-Tool.md` to automate bundled component detection
+- M-TOOLS: When analyzing library dependencies, CMake flags, or bundled components, consider using `prompts/Library-Analysis-Tool.md` for automated comprehensive analysis before manual verification.
+  - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats (legacy: `/etc/apt/sources.list` and `*.list` files; modern: `*.sources` deb822 format for Ubuntu 24.04+). Parse both `deb http://...` lines AND `URIs: http://...` fields from .sources files. Update mirror URLs in BOTH formats when modifying apt sources.
 
 Helper Reference – Robust Package Checks
 ----------------------------------------
-- Preferred presence check:
-  - `if dpkg_resolve_installed_package "pkg-name" >/dev/null; then ...`
-- Preferred version retrieval:
-  - `pkg_version=$(dpkg_get_installed_version "pkg-name" || true)`
-  - Follow with a guard for empty values when the version is optional.
-- When converting legacy patterns (example below), note the original command in your response and confirm the helper handles held packages, multi-arch names, and exit-code semantics.
-  - Legacy: `dpkg -l | grep "^ii.*libfoo-dev" | awk '{print $3}'`
-  - Replacement: `pkg_version=$(dpkg_get_installed_version "libfoo-dev" || true)`
+- Preferred presence check: `if dpkg_resolve_installed_package "pkg-name" >/dev/null; then ...`
+- Preferred version retrieval: `pkg_version=$(dpkg_get_installed_version "pkg-name" || true)`
+- Legacy pattern: `dpkg -l | grep "^ii.*libfoo-dev" | awk '{print $3}'` → Replacement: `dpkg_get_installed_version "libfoo-dev" || true`
 
 N. Resource Management & Cleanup
 - N1. Proper creation and teardown of temporary directories/files (`mktemp`, `trap` cleanup).
@@ -428,38 +232,11 @@ O. Testing, Validation & Graceful Degradation
   - **MANDATORY**: Detailed debug logging at each phase showing what was checked and why it passed/failed
   - **SINGLE-CHECK ANTI-PATTERN**: Do NOT rely solely on ldconfig cache check - files can exist but not be in cache (transient failures)
   - **ERROR HANDLING**: On failure, provide actionable debug output (file listing, cache contents, suggestions)
-  - Example multi-phase pattern:
-    ```bash
-    # Phase 1: File existence
-    if [ ! -f "/usr/local/lib/libg2o_core.so" ]; then
-      echo "FAILED: libg2o_core.so not found in /usr/local/lib"
-      ls -la /usr/local/lib/libg2o*.so 2>/dev/null || echo "No g2o libraries found"
-      PHASE_SUCCESS=false
-    else
-      echo "✓ Library file exists"
-      # Phase 2: Linker cache check
-      if ! timeout 5 ldconfig -p | grep -q "libg2o_core.so"; then
-        echo "⚠ Library exists but not in cache, refreshing..."
-        run_ldconfig_refresh
-        # Phase 3: Retry after refresh
-        if ! timeout 5 ldconfig -p | grep -q "libg2o_core.so"; then
-          echo "FAILED: Still not in cache after refresh"
-          ldconfig -p | grep "libg2o" || echo "No g2o in cache"
-          PHASE_SUCCESS=false
-        else
-          echo "✓ Library now in cache"
-        fi
-      else
-        echo "✓ Library verified in cache"
-      fi
-    fi
-    ```
   - **RELIABILITY IMPROVEMENT**: Single-phase checks are ~70% reliable, multi-phase with retry are ~95% reliable
   - **PREVENTS**: False negatives from stale ldconfig cache, race conditions, transient filesystem issues
-  - Tools: `ldd /path/to/binary` to verify runtime linking, `ldconfig -v` for verbose cache rebuild
 
 Step 3 – Corrections Summary
-1. List each correction with the corresponding checklist ID(s) (e.g., “C1, D1: Added default guard for `$FOO` and quoted expansion”). Reference line numbers for clarity.
+1. List each correction with the corresponding checklist ID(s) (e.g., "C1, D1: Added default guard for `$FOO` and quoted expansion"). Reference line numbers for clarity.
 2. Provide the corrected Bash code snippet for the audited block.
 3. Present this summary directly in the chat response; do not create or modify any additional files to capture it.
 4. If the block was split into multiple chunks, enumerate the chunk line ranges you reviewed (including overlaps), list the shared symbols (functions, globals, exported variables) whose context was carried across chunks, and confirm each chunk satisfied the checklist.
@@ -467,14 +244,10 @@ Step 3 – Corrections Summary
 6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`) so the audit trail shows how issues were validated.
 
 Step 4 – Finalization
-1. Confirm explicitly that every checklist item from A1 through L4 has been evaluated and passes after corrections.
-2. Confirm that items M1 through O3 have been evaluated and pass.
-3. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
-4. State: “Block fully audited and corrected.”
-5. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
-6. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation.
-
-Customization Reminder
-- Replace the placeholder code block and line numbers before issuing the prompt to the reviewing agent.
+1. Confirm explicitly that every checklist item from A1 through O4 has been evaluated and passes after corrections.
+2. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
+3. State: "Block fully audited and corrected."
+4. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
+5. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation.
 
 **PATTERN LEARNING INTEGRATION**: Before Steps 3-4, check `prompts/Pattern-Learning-Repository.md` for active patterns. Apply detection methods, report violations with Pattern ID, auto-fix. If solving recurring error (2+ occurrences), extract pattern (ID, description, detection, prevention) and add to repository. Track frequency, promote to core checklist if ≥20 occurrences. In Step 4, add Pattern Learning Summary and update tools list to include repository.

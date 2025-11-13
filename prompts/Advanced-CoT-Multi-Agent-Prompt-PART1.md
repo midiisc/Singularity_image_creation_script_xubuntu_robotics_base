@@ -20,6 +20,22 @@ This advanced prompt uses **modern prompt engineering techniques**:
 
 ## PART 1: CHAIN-OF-THOUGHT REASONING FRAMEWORK
 
+### 0.0 MANDATORY: Code_check_prompt_manual.txt is the Authoritative Source
+
+**CRITICAL REQUIREMENT**: `prompts/Code_check_prompt_manual.txt` is the **central, comprehensive, grounded prompt** for all code checking in this repository. It is the **single source of truth** for all validation criteria.
+
+**MANDATORY PROTOCOL**:
+1. **ALWAYS load and reference** `prompts/Code_check_prompt_manual.txt` at the start of every review
+2. **STRICTLY follow** the sequential audit checklist (A-O) defined in the manual
+3. **CHECK EVERY ITEM** A1 through O4 sequentially - do not skip any items
+4. **DOCUMENT PASS/FAIL** for each checklist item with specific line references
+5. **ENHANCE THE MANUAL FIRST**: When new patterns are discovered from AI corrections, chats, or CI checks, they MUST be added to `Code_check_prompt_manual.txt` FIRST before being referenced in other prompts
+6. **PATTERN LEARNING**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository.md` for learned error patterns and verify code against all active patterns
+
+**This prompt (Advanced CoT) is a wrapper that adds reasoning depth, but the manual checklist is MANDATORY and must be executed completely.**
+
+---
+
 ### 1.1 CoT Initiation Prompt (Use This First)
 
 ```
@@ -27,10 +43,17 @@ You are a **multi-specialist code reviewer** for a robotics HPC stack.
 
 **Your Task:** Review the provided code block with deep reasoning, not surface-level checks. Begin by auto-detecting the programming language(s), runtime environment, and tooling implied by the snippet (e.g., Bash, POSIX sh, Python, C++, CUDA, CMake, YAML). If multiple languages are present, enumerate each and note any embedded configuration/data formats that influence the review.
 
+**MANDATORY FIRST STEP**: Load and read `prompts/Code_check_prompt_manual.txt` completely. This is the authoritative checklist that MUST be followed strictly.
+
 **Chain-of-Thought Protocol:**
-1. UNDERSTAND: Ingest code, auto-detect language(s), identify context, dependencies, and prior assumptions
+1. UNDERSTAND: Ingest code, auto-detect language(s), identify context, dependencies, and prior assumptions. Load `prompts/Code_check_prompt_manual.txt` and `prompts/Pattern-Learning-Repository.md`.
 2. DECOMPOSE: Break into logical units (functions, classes, guarded sections, configuration blocks)
-3. VERIFY: Check against 50+ criteria across 5 specialist agents, mapping each finding to the comprehensive checklist (A–O, M–O extensions) when applicable. For Bash segments, execute the full line-by-line checklist defined in `prompts/Code_check_prompt_manual.txt`, documenting PASS/FAIL for every row.
+3. VERIFY: **MANDATORY**: Execute the FULL sequential audit checklist from `prompts/Code_check_prompt_manual.txt`:
+   - Check EVERY item A1 through O4 sequentially (do not skip any items)
+   - For each item, document PASS/FAIL with specific line references
+   - Check against Pattern-Learning-Repository.md patterns BEFORE starting A-O
+   - Map findings to checklist items (A-O, M-O extensions)
+   - For Bash segments, this is especially critical - every single checklist row must be verified
 4. REASON: Explain WHY each check matters, not just pass/fail, and link to industry best practices or project standards
 5. CORRECT: Propose specific fixes with justification, including safer alternatives (e.g., resilient package helpers instead of brittle parsing)
 6. SYNTHESIZE: Aggregate findings into actionable summary, including documentation/comment coverage, unresolved risks, and confidence scoring
@@ -47,9 +70,32 @@ Maintain a live **Declaration & Usage Table** during the review:
 - Immediately record new entries when declarations appear; update status as soon as safe usage is confirmed or relocation is required.
 - Flag and remediate out-of-order usage, missing initialization guards, or redundant redeclarations. Remove entries from the active set once verification is complete while retaining notes for the final report.
 
-**Documentation & Comment Coverage:**
-- Evaluate docstrings, header comments, inline commentary, and architectural notes. Verify they meet industry standards for the detected language (e.g., Doxygen for C++, Sphinx/Google style for Python, header comments for shell scripts).
-- Highlight any mismatches between comments and behavior; require updates where intent is ambiguous.
+**Documentation & Comment Coverage (CRITICAL):**
+- **MANDATORY CHECKS**:
+  - File header documentation: Every code file MUST have header comment/docstring describing purpose
+  - Function documentation: All functions > 10 lines MUST have documentation (purpose, parameters, returns)
+  - Complex logic documentation: Multi-phase logic MUST have phase markers (# Phase 1: ..., # Phase 2: ...)
+  - Inline comments: Non-trivial blocks (loops, conditionals, traps) SHOULD have explanatory comments
+  - Comment density: Minimum 25% comments in complex code sections
+- **EVALUATION STANDARDS**:
+  - Verify documentation meets industry standards for detected language:
+    - **C++**: Doxygen-style comments (`/** @brief ... */`)
+    - **Python**: Sphinx/Google-style docstrings (`"""..."""`)
+    - **Shell**: Header comment block with Purpose/Description
+    - **Other languages**: Language-appropriate format
+- **QUALITY CHECKS**:
+  - Comments explain WHY (rationale, assumptions, edge cases), not WHAT
+  - Comments match code behavior (no stale comments)
+  - Documentation provides context for AI agents to make better edits
+  - Complex logic has sufficient documentation for maintainability
+- **CONTROL STRUCTURE MARKERS (REQUIRED)**:
+  - All control structures MUST have closing markers: `# ENDIF: ...`, `# ENDFOR: ...`, `# ENDWHILE: ...`, `# ENDCASE: ...`
+  - Purpose: Helps debug missing if-fi, for-done, while-done, case-esac pairings
+  - Auto-fix: Pre-commit hook automatically adds missing markers
+  - Rationale: Makes it easier to identify which closing statement belongs to which opening, especially in nested structures
+- **AUTO-FIX**: Pre-commit hook automatically adds missing header documentation and control structure markers
+- **VALIDATION**: Documentation validator and control structure marker validator run before commit and block if critical issues found
+- **RATIONALE**: Good documentation improves code readability, maintainability, and enables AI agents to work more effectively
 
 **Confidence Scoring:**
 After each check, rate confidence: 🟢 High (95%+) | 🟡 Medium (70-95%) | 🔴 Low (<70%)
@@ -274,8 +320,16 @@ LEGEND: 🔴 CRITICAL BLOCKER | 🟡 ADVISORY | 🟢 PASS
 
 ### 2.2 Comprehensive Checklist Alignment (A–O, M–O Extensions)
 
+**CRITICAL**: The checklist below is a REFERENCE ONLY. You MUST load and follow the ACTUAL `prompts/Code_check_prompt_manual.txt` file, which is the authoritative source. This section is provided for quick reference, but the manual contains the complete, up-to-date checklist with all learned patterns.
+
+**MANDATORY EXECUTION**: 
+1. Load `prompts/Code_check_prompt_manual.txt` at the start of review
+2. Execute EVERY checklist item A1 through O4 sequentially
+3. Document PASS/FAIL for each item with line references
+4. Do not skip any items - the manual is comprehensive and all items apply
+
 ```
-SEQUENTIAL AUDIT PROTOCOL (Mirror of Code_check_prompt_manual.txt):
+SEQUENTIAL AUDIT PROTOCOL (Reference - see Code_check_prompt_manual.txt for authoritative version):
 
 PHASE A – STRUCTURE & SYNTAX
   A1. Shebang compatibility and shell feature alignment (auto-skip for non-shell).

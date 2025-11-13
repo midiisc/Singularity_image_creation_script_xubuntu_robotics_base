@@ -997,11 +997,14 @@ probe_and_set_mirrors() {
     fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
   
     # Check if mirror appears in active (non-commented) deb lines
-    if [ -n "${mirror_base_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_base_escaped}" 2>/dev/null; then
+    # D3: Use here-string instead of pipe pattern for safety and efficiency
+    local sources_content
+    sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
+    if [ -n "${mirror_base_escaped:-}" ] && grep -qE "(deb|deb-src).*${mirror_base_escaped}" <<< "${sources_content}" 2>/dev/null; then
       echo "[info] ✓ Verified: sources.list now uses ${FASTEST_MIRROR}"
-    elif [ -n "${mirror_no_protocol_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qE "(deb|deb-src).*${mirror_no_protocol_escaped}" 2>/dev/null; then
+    elif [ -n "${mirror_no_protocol_escaped:-}" ] && grep -qE "(deb|deb-src).*${mirror_no_protocol_escaped}" <<< "${sources_content}" 2>/dev/null; then
       echo "[info] ✓ Verified: sources.list uses mirror (format may vary)"
-    elif [ -n "${fastest_mirror_escaped:-}" ] && grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -qF "${FASTEST_MIRROR}" 2>/dev/null; then
+    elif [ -n "${fastest_mirror_escaped:-}" ] && grep -qF "${FASTEST_MIRROR}" <<< "${sources_content}" 2>/dev/null; then
       echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
     else
       # Check if file is actually empty or only has comments
@@ -1018,12 +1021,14 @@ probe_and_set_mirrors() {
         echo "[warn] ✗ Verification failed: sources.list may not have been updated correctly"
         echo "[info]   Checking for alternative mirror formats..."
         # Show what we actually found
-        grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -E "(deb|deb-src)" | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
+        # D3: Use here-string instead of pipe pattern
+        grep -E "(deb|deb-src)" <<< "${sources_content}" 2>/dev/null | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
       fi
     fi
     
     # Also verify no archive.ubuntu.com remains in active lines
-    if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+    # D3: Use here-string instead of pipe pattern
+    if grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
       # Recompute mirror_no_protocol if not already set
       if [ -z "${mirror_no_protocol:-}" ]; then
@@ -1037,7 +1042,9 @@ probe_and_set_mirrors() {
         if [ -n "${mirror_sed_escaped:-}" ]; then
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list || true
           # Verify again after additional replacement
-          if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com" 2>/dev/null; then
+          # D3: Re-read sources content and use here-string
+          sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
+          if grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
             echo "[warn] ⚠ archive.ubuntu.com still present after replacement attempt"
           else
             echo "[info] ✓ Additional replacement successful"
@@ -1101,7 +1108,10 @@ probe_and_set_mirrors() {
       fi
       
       # Final check - remove any remaining archive.ubuntu.com references
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      local file_content
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         # Escape special sed characters in mirror_no_protocol for safe replacement
         # CRITICAL: Must have error fallback to prevent unset variable with set -u
         local mirror_sed_escaped
@@ -1112,6 +1122,7 @@ probe_and_set_mirrors() {
             echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
           fi
         fi
+      # ENDIF: archive.ubuntu.com check
       fi
     done
     
@@ -1148,7 +1159,9 @@ probe_and_set_mirrors() {
       fi
       
       # Final check for remaining archive.ubuntu.com
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol:-}" ]; then
           local mirror_sed_escaped
           mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
@@ -1190,23 +1203,27 @@ verify_fastest_mirror() {
   # Check main sources.list
   if [ -f /etc/apt/sources.list ]; then
     # Escape FASTEST_MIRROR for safe use in grep pattern
+    # C5: Add default to prevent unbound variable
     local fastest_mirror_escaped
-    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+    
+    # D3: Use here-string instead of pipe pattern
+    sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
     
     # Count lines using fastest mirror (use -F for fixed string if escaping fails)
     local fast_count
     if [ -n "${fastest_mirror_escaped:-}" ]; then
-      fast_count=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -cF "${FASTEST_MIRROR}" 2>/dev/null || echo "0")
+      fast_count=$(grep -cF "${FASTEST_MIRROR:-}" <<< "${sources_content}" 2>/dev/null || echo "0")
     else
       fast_count="0"
     fi
     # Count lines using archive.ubuntu.com
     local slow_count
-    slow_count=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -c "deb.*archive\.ubuntu\.com" 2>/dev/null || echo "0")
+    slow_count=$(grep -c "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
     
     if [ "${slow_count:-0}" -gt 0 ]; then
       echo "[ERROR] Found ${slow_count} lines still using archive.ubuntu.com in sources.list:"
-      grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+      grep "archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null | sed 's/^/  /' || true
       issues_found=$((issues_found + slow_count))
     else
       echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
@@ -1235,10 +1252,13 @@ verify_fastest_mirror() {
       fi
       
       # Check for archive.ubuntu.com in non-PPA files
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in $(basename "${sources_file}"):"
-        grep -v "^#" "${sources_file}" 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
         found_issues=1
+      # ENDIF: archive.ubuntu.com check
       fi
     done
     
@@ -1252,9 +1272,11 @@ verify_fastest_mirror() {
       fi
       
       # Check for archive.ubuntu.com in URIs= lines or anywhere in file
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\.ubuntu\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in deb822 file $(basename "${sources_file}"):"
-        grep -v "^#" "${sources_file}" 2>/dev/null | grep "archive\.ubuntu\.com" | sed 's/^/  /' || true
+        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
         found_issues=1
       fi
     done
@@ -1330,11 +1352,14 @@ reapply_fastest_mirror() {
     fi
     
     # Also verify no archive.ubuntu.com remains
-    if grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+    # D3: Use here-string instead of pipe pattern
+    sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
+    if grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
       if [ -n "${mirror_no_protocol_escaped:-}" ]; then
         sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list || true
       fi
+    # ENDIF: archive.ubuntu.com check
     fi
     echo "[info] ✓ Updated /etc/apt/sources.list"
   else
@@ -1377,11 +1402,14 @@ reapply_fastest_mirror() {
       fi
       
       # Final check - remove any remaining archive.ubuntu.com references
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}"
           echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
         fi
+      # ENDIF: archive.ubuntu.com check
       fi
     done
     
@@ -1409,11 +1437,14 @@ reapply_fastest_mirror() {
       fi
       
       # Final check for remaining archive.ubuntu.com
-      if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
+      # D3: Use here-string instead of pipe pattern
+      file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
+      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}"
           echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
         fi
+      # ENDIF: archive.ubuntu.com check
       fi
     done
     
@@ -16320,7 +16351,10 @@ detect_vgl_display() {
         vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     else
-      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
+      # D3: Use here-string instead of pipe pattern
+      local ps_output
+      ps_output=$(ps aux 2>/dev/null || echo "")
+      vnc_display=$(grep -v grep <<< "${ps_output}" 2>/dev/null | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
     fi
     
     # Method 2: Check for vncserver processes
@@ -16331,7 +16365,9 @@ detect_vgl_display() {
           vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
         fi
       else
-        vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
+        # D3: Use here-string instead of pipe pattern
+        ps_output=$(ps aux 2>/dev/null || echo "")
+        vnc_display=$(grep -v grep <<< "${ps_output}" 2>/dev/null | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     fi
     
