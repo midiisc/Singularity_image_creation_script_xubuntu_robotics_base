@@ -87,6 +87,10 @@ AGENT SYSTEM: Five Specialized Reviewers
 │ - Version-aware dependency verification                     │
 │ - Changelog analysis for dependency changes                 │
 │ - Pros/cons reasoning for bundled vs separate linking       │
+│ TOOLS AVAILABLE:                                            │
+│ - Library Analysis Tool (prompts/Library-Analysis-Tool.md)  │
+│   Automates: bundling detection, changelog parsing, version │
+│   analysis. Recommended BEFORE manual library integration.  │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -484,14 +488,26 @@ PHASE M – ENVIRONMENT & DEPENDENCIES
         * Investigation: Checked v7.8.3 CMakeLists.txt → found add_subdirectory(METIS)
         * Solution: Updated detection to check for bundled symbols, not external package
         * Prevention: This M13 check would have caught it during code review
+      - **AUTOMATED ANALYSIS RECOMMENDATION**:
+        * **BEFORE manual analysis**, Agent 2 SHOULD run Library Analysis Tool for comprehensive automated analysis
+        * Tool: `prompts/Library-Analysis-Tool.md` provides executable script `analyze-library.sh`
+        * Usage: `./analyze-library.sh --library <name> --output ./analysis/<name>`
+        * Generates: 
+          - `bundled_components.md` - Automatic detection of bundled dependencies
+          - `version_changes.md` - Git log analysis of dependency changes between versions
+          - `dependency_recommendations.md` - Pros/cons tables and best practices
+        * Benefit: Eliminates manual repo cloning/parsing, provides structured analysis for agent reasoning
+        * Agent should review tool output FIRST, then perform manual verification as needed
+        * Reference tool output in agent's final analysis report
       - **AGENT EXIT CRITERIA**:
         1. ✅ All external library integrations analyzed for bundling
         2. ✅ Version being built explicitly identified
-        3. ✅ Changelog reviewed for dependency changes
+        3. ✅ Changelog reviewed for dependency changes (or Library Analysis Tool output reviewed)
         4. ✅ Binary inspection confirms linking strategy
         5. ✅ Pros/cons documented for approach chosen
         6. ✅ Comments in code reference verification sources
         7. ✅ Detection logic handles both bundled and separate cases
+        8. ✅ If Library Analysis Tool used, output files referenced in review documentation
 
 PHASE N – RESOURCE MANAGEMENT & CLEANUP
   N1. Create/destroy temp resources safely (`mktemp`, `trap`).

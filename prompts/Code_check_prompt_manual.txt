@@ -189,6 +189,7 @@ L. Performance & Maintainability
 M. Environment & Dependencies
 - M1. Validation that required external commands/binaries exist (`command -v`, `hash`) and version-sensitive behavior is documented.
 - M2. Verification of environment assumptions (shell, OS, distro, architecture, locale, `LANG`, `LC_ALL`, `PATH`, proxy settings).
+- **M-TOOLS**: When analyzing library dependencies, CMake flags, or bundled components, consider using `prompts/Library-Analysis-Tool.md` for automated comprehensive analysis before manual verification. Tool outputs structured data about bundling, version changes, and dependency recommendations.
   - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats:
     - Legacy format: `/etc/apt/sources.list` and `/etc/apt/sources.list.d/*.list` (one-line deb format)
     - Modern format: `/etc/apt/sources.list.d/*.sources` (deb822 format, Ubuntu 24.04+)
@@ -338,11 +339,17 @@ M. Environment & Dependencies
     2. Parse that version's documentation and CMakeLists.txt
     3. Don't assume dependencies from older versions apply
     4. Verify after build with ldd, nm, pkg-config
+  - **AUTOMATED ANALYSIS TOOL**: Use `prompts/Library-Analysis-Tool.md` to automate bundled component detection:
+    - Run: `./analyze-library.sh --library <name>` to generate comprehensive dependency analysis
+    - Tool outputs: `bundled_components.md` (what's bundled), `version_changes.md` (changelog analysis), `dependency_recommendations.md` (pros/cons)
+    - Review generated analysis before writing detection logic in build scripts
+    - Reference: See "PART 1: EXECUTABLE BASH SCRIPT" in Library-Analysis-Tool.md for usage
   - **Real Error Example**: SuiteSparse 7.8.3 check showed METIS not detected, but investigation revealed:
     - METIS bundled since v7.1.0 (2023-12-20)
     - No separate METIS linking needed
     - Detection logic needed update to check for bundled symbols
     - Fix: Updated detection to check library itself, not just external packages
+    - **Could have been prevented**: Running Library Analysis Tool would have revealed METIS bundling immediately
 
 Helper Reference – Robust Package Checks
 ----------------------------------------
