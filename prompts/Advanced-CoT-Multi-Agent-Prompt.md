@@ -82,6 +82,15 @@ AGENT SYSTEM: Five Specialized Reviewers
 │ - CMake flag validation against library documentation       │
 │ - MKL/OpenBLAS/TBB conflict detection                      │
 │ - Multi-phase detection logic documentation                │
+│ NEW CHECKS (2025-11-13):                                    │
+│ - Library bundled component detection and analysis          │
+│ - Version-aware dependency verification                     │
+│ - Changelog analysis for dependency changes                 │
+│ - Pros/cons reasoning for bundled vs separate linking       │
+│ TOOLS AVAILABLE:                                            │
+│ - Library Analysis Tool (prompts/Library-Analysis-Tool.md)  │
+│   Automates: bundling detection, changelog parsing, version │
+│   analysis. Recommended BEFORE manual library integration.  │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -406,6 +415,99 @@ PHASE M – ENVIRONMENT & DEPENDENCIES
       - Real errors caught: OpenCV using MKL TBB (lines 8073-8102), GTSAM MKL config (commit c9e14c6)
       - Verification: Check library paths, not just "found" status
       - Tool: Parse CMakeCache.txt with `grep -E "^(BLAS|LAPACK|TBB)_"` after configure
+  M13. **LIBRARY BUNDLED COMPONENT DETECTION AND ANALYSIS** (NEW - Added 2025-11-13):
+      - CRITICAL: Before linking external libraries, verify what's bundled vs what needs separate linking
+      - Agent 2 (HPC Specialist) MUST perform this analysis for ALL library integrations
+      - **MANDATORY MULTI-SOURCE VERIFICATION**:
+        1. Repository Analysis: Clone library repo at specific version/tag being built
+           ```bash
+           git clone --depth 50 --branch v7.8.3 https://github.com/library/repo.git
+           cd repo
+           # Parse CMakeLists.txt for FetchContent_Declare, add_subdirectory
+           grep -r "FetchContent_Declare\|add_subdirectory.*external" .
+           # Check for bundled dependencies in external/ or third_party/ directories
+           find . -type d \( -name "external" -o -name "third_party" -o -name "3rdparty" \)
+           ```
+        2. Changelog Analysis: Compare versions for dependency changes
+           ```bash
+           git log v7.0.0..v7.8.3 --grep="bundle\|include\|integrate\|metis\|dependency" --oneline
+           git diff v7.0.0..v7.8.3 -- CMakeLists.txt | grep -i "find_package\|target_link"
+           ```
+        3. Official Documentation: Check README, INSTALL, website for version-specific deps
+           - Look for "Requirements", "Dependencies", "Building", "Third-party" sections
+           - Verify against official website installation guide for that version
+        4. Binary Inspection: After build, verify what's actually linked
+           ```bash
+           nm -D /usr/local/lib/libsuitesparse.so | grep "metis_"  # Check for bundled symbols
+           ldd /usr/local/lib/libsuitesparse.so  # Check runtime dependencies
+           pkg-config --libs suitesparse  # Check what pkg-config says to link
+           ```
+        5. CMake Config Files: Inspect installed LibraryConfig.cmake
+           ```bash
+           grep "find_dependency" /usr/local/lib/cmake/SuiteSparse/SuiteSparseConfig.cmake
+           # If find_dependency(METIS) absent → METIS bundled
+           ```
+      - **VERSION AWARENESS**: Agent MUST check WHICH version is being built
+        - Different versions = different bundling strategies (critical insight!)
+        - Example: SuiteSparse < 7.1 needs separate METIS, >= 7.1 bundles METIS
+        - Agent must parse version from CMakeLists.txt or git tag
+        - Compare with known version transitions (git log between versions)
+      - **PROS/CONS REASONING**: Agent MUST document decision rationale
+        - **BUNDLED APPROACH**:
+          * ✅ Pros: Simpler build, guaranteed version compatibility, no dep hunting
+          * ❌ Cons: Larger binary size, potential symbol conflicts, harder security updates
+          * Use when: Rapid deployment, version sensitivity, limited sysadmin control
+        - **SEPARATE APPROACH**:
+          * ✅ Pros: Shared libraries save disk, easier updates, centralized dep management
+          * ❌ Cons: Version mismatch risks, complex resolution, build system complexity
+          * Use when: System integration important, multiple apps share dep, security-critical
+        - Agent output format:
+          ```
+          LIBRARY DEPENDENCY ANALYSIS: SuiteSparse 7.8.3
+          
+          METIS Dependency:
+          - Status: BUNDLED (since v7.1.0, 2023-12-20)
+          - Detection Method: 
+            1. Checked CMakeLists.txt: add_subdirectory(METIS) found
+            2. Checked CHANGELOG: "METIS is now bundled" in v7.1.0 release notes
+            3. Verified binary: nm shows metis_* symbols in libsuitesparseconfig.so
+          - Decision: Use bundled version (no separate linking needed)
+          - Rationale: Simplifies build, eliminates METIS version conflicts
+          - Trade-off: +500KB binary size, acceptable for HPC deployment
+          - Verification: pkg-config suitesparse does NOT list -lmetis
+          ```
+      - **COMMON PITFALLS** (Agent must check for these):
+        * Assuming older version docs apply to newer version
+        * Not checking CHANGELOG between versions
+        * Relying only on find_package() without verifying bundling
+        * Not inspecting built binaries (nm, ldd) to confirm
+        * Missing version-specific README differences
+      - **REAL ERROR CASE STUDY**: SuiteSparse/METIS confusion
+        * Problem: Detection script looked for separate libmetis, didn't find it
+        * Root cause: Assumed separate METIS needed (from old docs)
+        * Investigation: Checked v7.8.3 CMakeLists.txt → found add_subdirectory(METIS)
+        * Solution: Updated detection to check for bundled symbols, not external package
+        * Prevention: This M13 check would have caught it during code review
+      - **AUTOMATED ANALYSIS RECOMMENDATION**:
+        * **BEFORE manual analysis**, Agent 2 SHOULD run Library Analysis Tool for comprehensive automated analysis
+        * Tool: `prompts/Library-Analysis-Tool.md` provides executable script `analyze-library.sh`
+        * Usage: `./analyze-library.sh --library <name> --output ./analysis/<name>`
+        * Generates: 
+          - `bundled_components.md` - Automatic detection of bundled dependencies
+          - `version_changes.md` - Git log analysis of dependency changes between versions
+          - `dependency_recommendations.md` - Pros/cons tables and best practices
+        * Benefit: Eliminates manual repo cloning/parsing, provides structured analysis for agent reasoning
+        * Agent should review tool output FIRST, then perform manual verification as needed
+        * Reference tool output in agent's final analysis report
+      - **AGENT EXIT CRITERIA**:
+        1. ✅ All external library integrations analyzed for bundling
+        2. ✅ Version being built explicitly identified
+        3. ✅ Changelog reviewed for dependency changes (or Library Analysis Tool output reviewed)
+        4. ✅ Binary inspection confirms linking strategy
+        5. ✅ Pros/cons documented for approach chosen
+        6. ✅ Comments in code reference verification sources
+        7. ✅ Detection logic handles both bundled and separate cases
+        8. ✅ If Library Analysis Tool used, output files referenced in review documentation
 
 PHASE N – RESOURCE MANAGEMENT & CLEANUP
   N1. Create/destroy temp resources safely (`mktemp`, `trap`).

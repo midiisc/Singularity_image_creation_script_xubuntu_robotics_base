@@ -586,6 +586,306 @@ extract_cpp_defines() {
     log_success "Macro extraction complete → ${CPP_DEFINES_FILE}"
 }
 
+analyze_bundled_components() {
+    log_info "Step 5a: Analyzing bundled components..."
+    local bundled_analysis_file="${OUTPUT_DIR}/bundled_components.md"
+    : > "${bundled_analysis_file}"
+    
+    {
+        echo "# Bundled Component Analysis"
+        echo ""
+        echo "_Generated on $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
+        echo ""
+        echo "## Detection Strategy"
+        echo ""
+        echo "This analysis identifies dependencies that are bundled within the library versus those requiring separate installation."
+        echo ""
+        
+        # Check for external/third_party directories
+        echo "## Bundled Dependencies (Subdirectories)"
+        echo ""
+        local bundled_dirs=$(find "${ANALYSIS_ROOT}" -type d \( -name "external" -o -name "third_party" -o -name "3rdparty" -o -name "vendor" \) 2>/dev/null || true)
+        if [[ -n "$bundled_dirs" ]]; then
+            echo "$bundled_dirs" | while IFS= read -r dir; do
+                local relpath=$(realpath --relative-to="${ANALYSIS_ROOT}" "$dir" 2>/dev/null || echo "$dir")
+                echo "### $relpath"
+                echo ""
+                # List subdirectories in external/
+                if [[ -d "$dir" ]]; then
+                    find "$dir" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | while IFS= read -r subdir; do
+                        local subname=$(basename "$subdir")
+                        echo "- **${subname}**: Bundled as subdirectory"
+                        # Try to detect version
+                        if [[ -f "$subdir/CMakeLists.txt" ]]; then
+                            local version=$(grep -m1 -E "project.*VERSION|set.*VERSION" "$subdir/CMakeLists.txt" 2>/dev/null | sed -E 's/.*VERSION[[:space:]]+([0-9.]+).*/\1/' || echo "unknown")
+                            if [[ "$version" != "unknown" && -n "$version" ]]; then
+                                echo "  - Version: ${version}"
+                            fi
+                        fi
+                    done
+                    echo ""
+                fi
+            done
+        else
+            echo "- No standard bundled dependency directories found (external/, third_party/, 3rdparty/)"
+        fi
+        echo ""
+        
+        # Check for add_subdirectory calls that reference external projects
+        echo "## Bundled via add_subdirectory"
+        echo ""
+        local subdirs=$(grep -rh "add_subdirectory" "${CMAKE_FILES[@]}" 2>/dev/null | grep -vE "^\s*#" | grep -E "add_subdirectory\(" || true)
+        if [[ -n "$subdirs" ]]; then
+            echo "$subdirs" | sed -E 's/.*add_subdirectory\(([^)]+)\).*/- \1/' | sort -u | while IFS= read -r subdir; do
+                # Skip common internal directories
+                if [[ ! "$subdir" =~ ^(src|test|tests|examples|samples|docs|doc|cmake|scripts)$ ]]; then
+                    echo "- ${subdir}"
+                fi
+            done
+        else
+            echo "- (none detected)"
+        fi
+        echo ""
+        
+        # Check for FetchContent (downloaded at configure time)
+        echo "## FetchContent Dependencies (Downloaded)"
+        echo ""
+        local fetch_content=$(grep -rh "FetchContent_Declare" "${CMAKE_FILES[@]}" 2>/dev/null || true)
+        if [[ -n "$fetch_content" ]]; then
+            echo "$fetch_content" | grep -oE "FetchContent_Declare\([^)]*\)" | while IFS= read -r decl; do
+                local dep_name=$(echo "$decl" | sed -E 's/FetchContent_Declare\(([^ )]+).*/\1/')
+                local git_repo=$(echo "$decl" | grep -oE "GIT_REPOSITORY [^ )]*" | sed 's/GIT_REPOSITORY //' || echo "")
+                local git_tag=$(echo "$decl" | grep -oE "GIT_TAG [^ )]*" | sed 's/GIT_TAG //' || echo "")
+                echo "- **${dep_name}**"
+                if [[ -n "$git_repo" ]]; then
+                    echo "  - Repository: ${git_repo}"
+                fi
+                if [[ -n "$git_tag" ]]; then
+                    echo "  - Version/Tag: ${git_tag}"
+                fi
+            done
+        else
+            echo "- (none detected)"
+        fi
+        echo ""
+    } >> "${bundled_analysis_file}"
+    
+    log_success "Bundled component analysis → ${bundled_analysis_file}"
+}
+
+analyze_version_changes() {
+    log_info "Step 5b: Analyzing version changes and changelogs..."
+    local changelog_file="${OUTPUT_DIR}/version_changes.md"
+    : > "${changelog_file}"
+    
+    {
+        echo "# Version Change Analysis"
+        echo ""
+        echo "_Generated on $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
+        echo ""
+        
+        if ! git -C "${ANALYSIS_ROOT}" rev-parse HEAD >/dev/null 2>&1; then
+            echo "_Not a git repository; version analysis skipped._"
+            log_warning "Not a git repository, skipping version analysis"
+            return
+        fi
+        
+        echo "## Current Version: ${RESOLVED_REF:-unknown}"
+        echo ""
+        
+        # Try to find recent tags
+        echo "## Recent Release Tags"
+        echo ""
+        local recent_tags=$(git -C "${ANALYSIS_ROOT}" tag --sort=-version:refname 2>/dev/null | head -n 10 || true)
+        if [[ -n "$recent_tags" ]]; then
+            echo "$recent_tags" | while IFS= read -r tag; do
+                local tag_date=$(git -C "${ANALYSIS_ROOT}" log -1 --format=%ai "$tag" 2>/dev/null || echo "unknown")
+                echo "- \`${tag}\` (${tag_date})"
+            done
+        else
+            echo "- (no tags found)"
+        fi
+        echo ""
+        
+        # Analyze dependency changes if we have tags
+        if [[ -n "$recent_tags" ]]; then
+            echo "## Dependency Changes Between Versions"
+            echo ""
+            local latest_tag=$(echo "$recent_tags" | head -n1)
+            local previous_tag=$(echo "$recent_tags" | sed -n '2p')
+            
+            if [[ -n "$previous_tag" && -n "$latest_tag" ]]; then
+                echo "### Changes from ${previous_tag} to ${latest_tag}"
+                echo ""
+                
+                # Look for dependency-related changes
+                local dep_changes=$(git -C "${ANALYSIS_ROOT}" log "${previous_tag}..${latest_tag}" \
+                    --grep="depend\|bundle\|include\|integrate\|external\|third.party" \
+                    --oneline 2>/dev/null | head -n 20 || true)
+                
+                if [[ -n "$dep_changes" ]]; then
+                    echo "**Dependency-related commits:**"
+                    echo '```'
+                    echo "$dep_changes"
+                    echo '```'
+                    echo ""
+                else
+                    echo "- No dependency-related commits found in git log"
+                    echo ""
+                fi
+                
+                # Check for CMakeLists.txt changes
+                local cmake_changes=$(git -C "${ANALYSIS_ROOT}" diff "${previous_tag}..${latest_tag}" -- CMakeLists.txt 2>/dev/null | grep -E "^\+.*find_package|^\+.*FetchContent|^\+.*add_subdirectory|^-.*find_package|^-.*FetchContent|^-.*add_subdirectory" | head -n 30 || true)
+                
+                if [[ -n "$cmake_changes" ]]; then
+                    echo "**CMakeLists.txt dependency changes:**"
+                    echo '```diff'
+                    echo "$cmake_changes"
+                    echo '```'
+                    echo ""
+                fi
+            fi
+        fi
+        
+        # Check for CHANGELOG file
+        echo "## Changelog Excerpts"
+        echo ""
+        local changelog=$(find "${ANALYSIS_ROOT}" -maxdepth 2 -type f -iname "CHANGELOG*" -o -iname "HISTORY*" -o -iname "RELEASES*" 2>/dev/null | head -n1)
+        if [[ -n "$changelog" && -f "$changelog" ]]; then
+            echo "Found changelog: $(basename "$changelog")"
+            echo ""
+            echo "**Recent entries mentioning dependencies:**"
+            echo '```'
+            grep -i -E "depend|bundle|include|integrate|external|third.party|metis|eigen|blas|lapack" "$changelog" 2>/dev/null | head -n 30 || echo "(no matches found)"
+            echo '```'
+        else
+            echo "- No CHANGELOG file found"
+        fi
+        echo ""
+    } >> "${changelog_file}"
+    
+    log_success "Version change analysis → ${changelog_file}"
+}
+
+create_dependency_recommendations() {
+    log_info "Step 5c: Creating dependency recommendations..."
+    local recommendations_file="${OUTPUT_DIR}/dependency_recommendations.md"
+    : > "${recommendations_file}"
+    
+    {
+        echo "# Dependency Management Recommendations"
+        echo ""
+        echo "_Generated on $(date -u +%Y-%m-%dT%H:%M:%SZ)_"
+        echo ""
+        
+        echo "## Bundled vs Separate: Pros & Cons"
+        echo ""
+        echo "### Bundled Dependencies"
+        echo ""
+        echo "**Advantages:**"
+        echo "- ✅ Simplified build process (fewer external dependencies to install)"
+        echo "- ✅ Guaranteed version compatibility (library tested with specific versions)"
+        echo "- ✅ Faster initial setup (no hunting for compatible dependency versions)"
+        echo "- ✅ Reproducible builds (same dependencies across all environments)"
+        echo "- ✅ Reduced dependency resolution conflicts"
+        echo ""
+        echo "**Disadvantages:**"
+        echo "- ❌ Larger binary sizes (dependencies compiled into library)"
+        echo "- ❌ Potential symbol conflicts if dependency used elsewhere"
+        echo "- ❌ Harder to apply security updates to bundled dependencies"
+        echo "- ❌ Duplicate libraries on system if multiple projects bundle same dependency"
+        echo "- ❌ More disk space usage"
+        echo ""
+        echo "**Best used when:**"
+        echo "- Rapid deployment is priority"
+        echo "- Version sensitivity is critical"
+        echo "- Limited system administration control"
+        echo "- Standalone application deployment"
+        echo ""
+        
+        echo "### Separate System Dependencies"
+        echo ""
+        echo "**Advantages:**"
+        echo "- ✅ Shared libraries save disk space"
+        echo "- ✅ Easier security updates (update once, affects all)"
+        echo "- ✅ Centralized dependency management"
+        echo "- ✅ Smaller application binaries"
+        echo "- ✅ System package manager handles updates"
+        echo ""
+        echo "**Disadvantages:**"
+        echo "- ❌ Version mismatch risks between library and dependencies"
+        echo "- ❌ Complex dependency resolution required"
+        echo "- ❌ Build system complexity increases"
+        echo "- ❌ Potential breakage from system updates"
+        echo "- ❌ Requires more setup documentation"
+        echo ""
+        echo "**Best used when:**"
+        echo "- System integration is important"
+        echo "- Multiple applications share dependencies"
+        echo "- Security updates are frequent/critical"
+        echo "- Long-term system maintenance is planned"
+        echo ""
+        
+        echo "## Detection Strategy"
+        echo ""
+        echo "When integrating a library, follow this verification process:"
+        echo ""
+        echo "1. **Check version being built**: Don't assume old documentation applies"
+        echo "   \`\`\`bash"
+        echo "   git describe --tags --exact-match 2>/dev/null || git rev-parse --abbrev-ref HEAD"
+        echo "   \`\`\`"
+        echo ""
+        echo "2. **Parse CMakeLists.txt for bundling indicators**:"
+        echo "   \`\`\`bash"
+        echo "   grep -r \"FetchContent_Declare\\|add_subdirectory.*external\" ."
+        echo "   find . -type d -name \"external\" -o -name \"third_party\""
+        echo "   \`\`\`"
+        echo ""
+        echo "3. **Check changelog between versions**:"
+        echo "   \`\`\`bash"
+        echo "   git log v7.0..v7.8 --grep=\"bundle\\|dependency\" --oneline"
+        echo "   \`\`\`"
+        echo ""
+        echo "4. **Verify built binaries**:"
+        echo "   \`\`\`bash"
+        echo "   nm -D /usr/local/lib/libname.so | grep \"dependency_symbol\""
+        echo "   ldd /usr/local/lib/libname.so"
+        echo "   pkg-config --libs library-name"
+        echo "   \`\`\`"
+        echo ""
+        echo "5. **Check CMake config files**:"
+        echo "   \`\`\`bash"
+        echo "   grep \"find_dependency\" /usr/local/lib/cmake/Library/LibraryConfig.cmake"
+        echo "   \`\`\`"
+        echo ""
+        
+        echo "## Documentation Template"
+        echo ""
+        echo "When documenting library integration, include:"
+        echo ""
+        echo "\`\`\`bash"
+        echo "# Library: [Name] [Version]"
+        echo "# Source: [URL to exact tag/commit]"
+        echo "# Verified: [Date] via [method]"
+        echo "#"
+        echo "# Bundled dependencies:"
+        echo "#   - [Dependency]: [version] (since [library version])"
+        echo "#   - Rationale: [why bundled is chosen]"
+        echo "#"
+        echo "# Separate dependencies:"
+        echo "#   - [Dependency]: User must provide [version range]"
+        echo "#   - Installation: apt install [package] OR build from [source]"
+        echo "#"
+        echo "# Decision rationale:"
+        echo "#   - [Explain bundled vs separate choice]"
+        echo "#   - Trade-offs accepted: [list]"
+        echo "\`\`\`"
+        echo ""
+    } >> "${recommendations_file}"
+    
+    log_success "Dependency recommendations → ${recommendations_file}"
+}
+
 extract_dependencies() {
     if [[ "$INCLUDE_DEPENDENCY_MAP" != true ]]; then
         log_info "Skipping dependency extraction (--no-deps specified)"
@@ -659,6 +959,12 @@ extract_dependencies() {
     } >> "${DEPENDENCIES_FILE}"
 
     rm -f "$tmp_find" "$tmp_link" "$tmp_fetch" "$tmp_pkg"
+    
+    # Run new enhanced analysis functions
+    analyze_bundled_components
+    analyze_version_changes
+    create_dependency_recommendations
+    
     log_success "Dependency extraction complete → ${DEPENDENCIES_FILE}"
 }
 
@@ -698,17 +1004,28 @@ create_summary() {
         echo ""
         echo "## Generated Artefacts"
         echo ""
+        echo "### Core Analysis Files"
         echo "- \`$(basename "${CMAKE_FLAGS_FILE}")\` – CMake flags and cache variables"
         echo "- \`$(basename "${CPP_DEFINES_FILE}")\` – C/C++ macro inventory"
         echo "- \`$(basename "${DEPENDENCIES_FILE}")\` – Dependency extraction"
+        echo ""
+        echo "### Enhanced Dependency Analysis"
+        echo "- \`bundled_components.md\` – Bundled vs separate dependency detection"
+        echo "- \`version_changes.md\` – Changelog and version transition analysis"
+        echo "- \`dependency_recommendations.md\` – Pros/cons and best practices"
+        echo ""
+        echo "### Documentation"
         echo "- \`$(basename "${DOC_FILE}")\` – Consolidated documentation"
         echo "- \`$(basename "${JSON_FILE}")\` – Machine-readable summary"
         echo ""
         echo "## Next Steps"
         echo ""
         echo "1. Review generated Markdown artefacts in ${OUTPUT_DIR}"
-        echo "2. Feed \`$(basename "${DOC_FILE}")\` to the Advanced Library Documentation prompt"
-        echo "3. Optionally rerun with \`--summary\` for condensed output"
+        echo "2. **Check bundled_components.md** to understand what's bundled vs separate"
+        echo "3. **Review version_changes.md** for dependency evolution across versions"
+        echo "4. **Read dependency_recommendations.md** for integration guidance"
+        echo "5. Feed \`$(basename "${DOC_FILE}")\` to the Advanced Library Documentation prompt"
+        echo "6. Optionally rerun with \`--summary\` for condensed output"
     } > "${REPORT_FILE}"
 
     log_success "Summary created → ${REPORT_FILE}"
@@ -787,6 +1104,9 @@ create_markdown_documentation() {
         echo "- [C/C++ Macros](#cc-macros)"
         if [[ "$INCLUDE_DEPENDENCY_MAP" == true ]]; then
             echo "- [Dependency Signals](#dependency-signals)"
+            echo "- [Bundled Components](#bundled-components)"
+            echo "- [Version Changes](#version-changes)"
+            echo "- [Dependency Recommendations](#dependency-recommendations)"
         fi
         echo "- [File Statistics](#file-statistics)"
         echo ""
@@ -802,6 +1122,30 @@ create_markdown_documentation() {
             echo "## Dependency Signals"
             echo ""
             cat "${DEPENDENCIES_FILE}"
+            echo ""
+            echo "## Bundled Components"
+            echo ""
+            if [[ -f "${OUTPUT_DIR}/bundled_components.md" ]]; then
+                cat "${OUTPUT_DIR}/bundled_components.md"
+            else
+                echo "_(Bundled component analysis not available)_"
+            fi
+            echo ""
+            echo "## Version Changes"
+            echo ""
+            if [[ -f "${OUTPUT_DIR}/version_changes.md" ]]; then
+                cat "${OUTPUT_DIR}/version_changes.md"
+            else
+                echo "_(Version change analysis not available)_"
+            fi
+            echo ""
+            echo "## Dependency Recommendations"
+            echo ""
+            if [[ -f "${OUTPUT_DIR}/dependency_recommendations.md" ]]; then
+                cat "${OUTPUT_DIR}/dependency_recommendations.md"
+            else
+                echo "_(Dependency recommendations not available)_"
+            fi
         fi
         echo ""
         echo "## File Statistics"
@@ -836,14 +1180,21 @@ main() {
     log_success "Analysis complete!"
     echo ""
     echo "Generated artefacts:"
-    echo "  - ${REPORT_FILE}"
-    echo "  - ${DOC_FILE}"
-    echo "  - ${CMAKE_FLAGS_FILE}"
-    echo "  - ${CPP_DEFINES_FILE}"
-    echo "  - ${DEPENDENCIES_FILE}"
-    echo "  - ${JSON_FILE}"
+    echo "  Core files:"
+    echo "    - ${REPORT_FILE}"
+    echo "    - ${DOC_FILE}"
+    echo "    - ${CMAKE_FLAGS_FILE}"
+    echo "    - ${CPP_DEFINES_FILE}"
+    echo "    - ${DEPENDENCIES_FILE}"
+    echo "    - ${JSON_FILE}"
+    if [[ "$INCLUDE_DEPENDENCY_MAP" == true ]]; then
+        echo "  Enhanced dependency analysis:"
+        echo "    - ${OUTPUT_DIR}/bundled_components.md"
+        echo "    - ${OUTPUT_DIR}/version_changes.md"
+        echo "    - ${OUTPUT_DIR}/dependency_recommendations.md"
+    fi
     echo ""
-    log_info "Next: Feed '${DOC_FILE}' into the Advanced Library Documentation prompt"
+    log_info "Next: Review dependency analysis files, then feed '${DOC_FILE}' into the Advanced Library Documentation prompt"
 }
 
 main "$@"
