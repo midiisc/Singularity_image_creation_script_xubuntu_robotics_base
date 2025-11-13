@@ -1,0 +1,139 @@
+---
+name: Master Rules - Communication (User Communication & Feedback)
+description: User communication and feedback rules - Part 6
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# PART 6: USER COMMUNICATION & FEEDBACK
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 6.1 Immediate Feedback Requirements (INFORMATIONAL ONLY)
+
+**Always provide immediate feedback in chat (informational, not asking permission)**:
+
+1. **After push**:
+   ```
+   ✅ Changes pushed to feature/<branch-name>
+   - Running bash validation automatically...
+   ```
+
+2. **After validation (with auto-fixes)**:
+   ```
+   ✅ Bash validation complete
+   - Checks passed: 18/20
+   - Auto-fixes applied: 2 (auto-committed and pushed)
+   - Validation re-run: PASSED
+   - Attempting merge automatically...
+   ```
+   **Note**: User NOT asked for approval - fixes handled automatically
+
+3. **After merge attempt**:
+   ```
+   ✅ Merge successful
+   - Feature branch merged into beta automatically
+   - Beta pushed to remote automatically
+   - Cleaning up feature branch automatically...
+   ```
+
+4. **After cleanup**:
+   ```
+   ✅ Cleanup complete
+   - Feature branch deleted (local and remote) automatically
+   - PR closed automatically
+   - Repository state: Only main and beta branches remain
+   ```
+
+5. **If hooks fail (auto-fix example)**:
+   ```
+   ⚠️ Pre-commit hooks failed → Auto-fixing issues...
+   ✅ Auto-fixes applied: 3 issues corrected
+   ✅ Fixed files staged automatically
+   ✅ Re-running commit (hooks will pass)...
+   ✅ Commit successful after auto-fixes
+   ```
+   **Note**: User NOT asked - all fixes handled automatically
+
+## 6.2 Feedback Level: Adequate but Not Overwhelming
+
+**DO provide**:
+- ✅ Action status (what happened)
+- ✅ Key results (pass/fail, merge success/failure)
+- ✅ Summary of fixes applied
+- ✅ Next steps
+- ✅ Any user action required
+
+**DON'T provide**:
+- ❌ Atomic-level details (every single git command)
+- ❌ Verbose intermediate steps
+- ❌ Redundant information
+- ❌ Overwhelming technical dumps
+
+**Example - GOOD (Informational, shows automation)**:
+```
+✅ Push complete → Validation passed (18/20 checks) → Auto-fixed 2 issues → 
+Auto-committed fixes → Auto-pushed fixes → Validation re-run: PASSED → 
+Merge successful → Beta updated → Feature branch deleted → PR closed
+```
+
+**Example - BAD (Too verbose, asking for approval)**:
+```
+Running git push...
+Pushing to origin...
+Counting objects...
+Writing objects...
+Push complete.
+Now running git fetch...
+Fetching from origin...
+Now checking out beta...
+Switching to beta branch...
+Now pulling latest...
+Would you like me to proceed with merge? [ASKING USER - BAD]
+```
+
+**Example - BAD (Asking for approval on fixes)**:
+```
+Validation found 2 errors. Should I fix them? [ASKING USER - BAD]
+Found merge conflicts. How would you like to resolve them? [ASKING USER - BAD]
+```
+
+## 6.3 Error Reporting (WITH AUTO-FIX)
+
+**When errors occur**:
+
+1. **Report immediately (informational)**:
+   ```
+   ⚠️ Error detected: <description>
+   - Auto-fixing automatically...
+   ```
+
+2. **Provide context (informational)**:
+   - What action was attempted
+   - What went wrong
+   - Relevant file/line numbers
+
+3. **AUTOMATIC resolution (BATCHED - no user prompts)**:
+   - **AUTOMATIC**: Auto-fix all fixable issues immediately
+   - **BATCH ALL FIXES**: Collect all fixes before committing/pushing
+   - **AUTOMATIC**: Apply all fixes, stage all together, commit once, push once
+   - **AUTOMATIC**: Re-run validation/checks automatically
+   - **Report**: "Auto-fixes applied successfully (N issues batched). Issue resolved."
+   - **NO USER ACTION**: All handled automatically
+   - **CLEAN BUILD TREE**: Single push per fix cycle (minimal pushes)
+
+4. **If multiple solutions exist (RARE)**:
+   - Present options with pros/cons clearly
+   - Wait for user choice
+   - **AUTOMATIC**: Implement chosen solution automatically
+
+5. **If truly unfixable (EXTREMELY RARE)**:
+   - Report specific issue clearly
+   - Provide exact commands for manual resolution (last resort)
+   - Explain why auto-fix failed
+
+---
+
+**See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and other rule modules.**

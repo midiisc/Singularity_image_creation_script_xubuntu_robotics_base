@@ -25,8 +25,7 @@
 **Implementation**: Comprehensive rules system with automatic enforcement and mandatory verification
 **Details**:
 - **Mandatory Pre-Work**: `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Mandatory verification checklist (READ FIRST)
-- **Behavior Rules**: `.cursor/rules/001-agent-behavior.mdc` - File creation, planning, code review protocols
-- **Workflow Rules**: `.cursor/rules/002-repository-workflow.mdc` - Git workflow, branch management, file editing
+- **Master Rules**: `.cursor/rules/MASTER-RULES-INDEX.mdc` - MASTER INDEX & SINGLE SOURCE OF TRUTH (references focused modules)
 - **Automatic Enforcement**: Cursor IDE automatically loads and enforces rules (`alwaysApply: true`)
 - **Single Source of Truth**: All rules centralized in `.mdc` files (no duplication)
 - **Mandatory Verification**: Pre-work checklists required before any action
@@ -87,7 +86,7 @@
    - Workflow principles verification
    - Automatically enforced by Cursor IDE (processed first)
 
-3. **`.cursor/rules/001-agent-behavior.mdc`**
+3. **`.cursor/rules/MASTER-RULES-WORKFLOW.mdc`** (Part 1: Agent Behavior)
    - AI behavior rules (source of truth)
    - File creation protocols (strictly enforced)
    - Planning approach (first plan, then execute, inline only)
@@ -96,7 +95,7 @@
    - Violation consequences
    - Automatically enforced by Cursor IDE
 
-4. **`.cursor/rules/002-repository-workflow.mdc`**
+4. **`.cursor/rules/MASTER-RULES-WORKFLOW.mdc`** (Part 2: Git Workflow)
    - Workflow rules (source of truth)
    - Git workflow and branch management (strictly enforced)
    - File editing restrictions (core files only)

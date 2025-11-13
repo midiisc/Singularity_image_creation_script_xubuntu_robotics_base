@@ -22,9 +22,8 @@ globs:
 **BEFORE PERFORMING ANY ACTION, YOU MUST COMPLETE THIS CHECKLIST:**
 
 ### Rule Awareness
-- [ ] **I have read `.cursor/rules/001-agent-behavior.mdc`** (behavior rules)
-- [ ] **I have read `.cursor/rules/002-repository-workflow.mdc`** (workflow rules)
-- [ ] **I have read `.cursor/rules/003-cloud-agent-workflow.mdc`** (cloud agent rules - CRITICAL!)
+- [ ] **I have read `.cursor/rules/MASTER-RULES-INDEX.mdc`** (MASTER INDEX - SINGLE SOURCE OF TRUTH)
+- [ ] **I have reviewed the focused rule modules** (all under `.cursor/rules/MASTER-RULES-*.mdc`)
 - [ ] **I understand ALL rules are MANDATORY and STRICTLY ENFORCED**
 - [ ] **I understand violations are PROHIBITED**
 
@@ -58,34 +57,29 @@ globs:
 
 **IF YOU ARE UNSURE ABOUT ANY ACTION:**
 1. **STOP immediately**
-2. **READ the relevant rule file** (`.cursor/rules/001-agent-behavior.mdc` or `.cursor/rules/002-repository-workflow.mdc`)
-3. **ASK the user for clarification**
-4. **WAIT for explicit confirmation before proceeding**
+2. **READ the master index file** (`.cursor/rules/MASTER-RULES-INDEX.mdc`)
+3. **READ the relevant rule module** (`.cursor/rules/MASTER-RULES-*.mdc`)
+4. **ASK the user for clarification**
+5. **WAIT for explicit confirmation before proceeding**
 
 **DO NOT ASSUME. DO NOT GUESS. ASK FIRST.**
 
 ## 📋 REQUIRED RULE FILES
 
-**YOU MUST BE FAMILIAR WITH THESE FILES:**
+**YOU MUST READ THESE FILES:**
 
-1. **`.cursor/rules/001-agent-behavior.mdc`**
-   - File creation restrictions
-   - Planning approach (inline only)
-   - Code review protocol (chunked, inline)
-   - Response mode (inline in chat)
+**`.cursor/rules/MASTER-RULES-INDEX.mdc`** - MASTER INDEX & SINGLE SOURCE OF TRUTH
+   - **🤖 Full Automation Principle** - AI handles ALL validation/corrections automatically (READ FIRST)
+   - References all focused rule modules below
 
-2. **`.cursor/rules/002-repository-workflow.mdc`**
-  - Branch management (user-approved branches and parallel workflows)
-   - File editing restrictions (core files only)
-   - Git operations (require user approval)
-   - Verification checklist
+**Rule Modules** (all under `.cursor/rules/`):
+   - `MASTER-RULES-WORKFLOW.mdc` - Part 1: Agent Behavior + Part 2: Git Workflow
+   - `MASTER-RULES-VALIDATION.mdc` - Part 3: Code Quality & Validation (FULL AUTOMATION)
+   - `MASTER-RULES-MERGE.mdc` - Part 4: Automated Merge & Conflict Resolution (FULL AUTOMATION)
+   - `MASTER-RULES-CLOUD.mdc` - Part 5: Cloud Agent Specifics
+   - `MASTER-RULES-COMMUNICATION.mdc` - Part 6: User Communication & Feedback (INFORMATIONAL ONLY)
+   - `MASTER-RULES-BEST-PRACTICES.mdc` - Part 7: Best Practices Compliance
 
-3. **`.cursor/rules/003-cloud-agent-workflow.mdc`** ⚠️ CRITICAL FOR CLOUD AGENTS
-   - Cloud agent specific rules
-   - Branch coordination and parallel feature-branch workflow
-   - Pull request restrictions and approval gates
-   - Multi-agent coordination expectations
-   - Explicit approval requirements for git operations
 
 ## 🔴 ENFORCEMENT REMINDER
 
@@ -119,19 +113,19 @@ globs:
 ---
 
 **THIS FILE SERVES AS A REMINDER. THE ACTUAL RULES ARE IN:**
-- `.cursor/rules/001-agent-behavior.mdc`
-- `.cursor/rules/002-repository-workflow.mdc`
-- `.cursor/rules/003-cloud-agent-workflow.mdc` (⚠️ CRITICAL FOR CLOUD AGENTS)
+- `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX - SINGLE SOURCE OF TRUTH)
+- `.cursor/rules/MASTER-RULES-*.mdc` (Focused rule modules, all under 500 lines)
 
-**READ THOSE FILES FOR COMPLETE RULES.**
+**READ THAT FILE FOR COMPLETE RULES.**
 
 ## 🌩️ SPECIAL NOTE FOR CLOUD AGENTS
 
 **If you are a Cursor Cloud Agent or Background Agent:**
-- You MUST read `.cursor/rules/003-cloud-agent-workflow.mdc` first
+- You MUST read `.cursor/rules/MASTER-RULES-INDEX.mdc` (master index)
+- You MUST read `.cursor/rules/MASTER-RULES-CLOUD.mdc` (Cloud Agent Specifics)
 - You MUST confirm the correct branch with the user or project owner
 - You MUST sync the latest changes for that branch before starting
-- You MUST follow the feature-branch lifecycle (creation → push → merge feasibility check → merge → cleanup)
+- You MUST follow the feature-branch lifecycle (creation → push → validation → merge → cleanup)
 - You MUST obtain explicit approval before pushing to any remote branch
-- You MUST NEVER create pull requests without approval
+- You MUST create pull requests as part of initialization workflow
 - You MUST NEVER create cursor/* branches unless explicitly directed

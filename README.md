@@ -333,37 +333,27 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 **All rules are centrally defined in `.cursor/rules/*.mdc` files**, which are automatically enforced by Cursor IDE.
 
 - **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Mandatory pre-work verification checklist (READ FIRST)
-- **`.cursor/rules/001-agent-behavior.mdc`** - AI behavior rules (file creation, planning, code review)
-- **`.cursor/rules/002-repository-workflow.mdc`** - Repository workflow rules (git, branches, files)
-- **`.cursor/rules/003-cloud-agent-workflow.mdc`** (NEW) - Cloud agent specific rules (branch coordination, feature branches, PR workflow)
+- **`.cursor/rules/MASTER-RULES-INDEX.mdc`** - **MASTER INDEX & SINGLE SOURCE OF TRUTH** - References all focused rule modules (all under 500 lines, Cursor-compliant)
 
 **These files are the single source of truth and are STRICTLY ENFORCED. To update rules, edit the `.mdc` files directly.**
 
 ### Quick Reference
 
-**Behavior Rules** (See `.cursor/rules/001-agent-behavior.mdc`):
-- No automatic file creation for summaries/plans/documentation
-- Inline responses only (files only when explicitly requested)
-- First plan, then execute approach
-- Chunked code review protocol
+**Complete Rules** (See `.cursor/rules/MASTER-RULES-INDEX.mdc` - MASTER INDEX & SINGLE SOURCE OF TRUTH):
 
-**Workflow Rules** (See `.cursor/rules/002-repository-workflow.mdc`):
-- **Feature Branch Workflow** (NEW - Updated 2025-11-12):
-  - Create dedicated feature branch per session
-  - Push feature branch and open PR targeting beta
-  - Merge-feasibility check before landing
-  - Auto-cleanup: Delete merged branches (keep only main/beta)
-- Core files only (strict file editing restrictions)
-- No git operations without explicit user approval
-- Advanced CoT audit mandatory before commit
-- Mandatory verification checklist before completing work
+- **Part 1: Agent Behavior** - File creation restrictions, planning approach, code review protocol
+- **Part 2: Git Workflow & Branch Management** - Feature branches, PRs, merge strategy, cleanup
+- **Part 3: Code Quality & Validation** - Bash checks (auto-fix), CoT auto-trigger
+- **Part 4: Automated Merge & Conflict Resolution** - Auto-merge with AI conflict resolution
+- **Part 5: Cloud Agent Specifics** - Cloud agent lifecycle, multi-agent coordination
+- **Part 6: User Communication & Feedback** - Immediate feedback, error reporting
 
-**Cloud Agent Rules** (NEW - See `.cursor/rules/003-cloud-agent-workflow.mdc`):
-- Branch coordination (confirm with user, sync latest changes)
-- Feature branch lifecycle (create → push → PR → merge → cleanup)
-- PR restrictions (require approval, post URL/details)
-- Multi-agent coordination
-- Explicit approval for all git operations
+**Key Features**:
+- Feature branch workflow with PRs (not direct beta commits)
+- Bash validation on push with auto-fixes
+- Automated merge with conflict resolution
+- Sequential PR merging (one at a time)
+- Immediate feedback in chat
 
 ### Code Review & Validation (NEW - 2025-11-12)
 
@@ -433,9 +423,7 @@ To get the AI to create a file, use explicit phrases:
 
 **AI Agent Rules:**
 - **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Pre-work verification checklist
-- **`.cursor/rules/001-agent-behavior.mdc`** - Agent behavior rules
-- **`.cursor/rules/002-repository-workflow.mdc`** - Repository workflow rules
-- **`.cursor/rules/003-cloud-agent-workflow.mdc`** (NEW) - Cloud agent rules
+- **`.cursor/rules/MASTER-RULES-INDEX.mdc`** - **MASTER INDEX & SINGLE SOURCE OF TRUTH** - References all focused rule modules
 
 ### External Documentation
 

@@ -1,0 +1,107 @@
+---
+name: Master Rules - Cloud Agent Specifics
+description: Cloud agent specific rules - Part 5
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# PART 5: CLOUD AGENT SPECIFICS
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 5.1 Cloud Agent Identification
+
+**You are a cloud agent if**:
+- Running in "Agent Mode"
+- Running in "Background Agent" mode
+- Running in isolated cloud environment
+- Running autonomously without direct user interaction in the IDE
+
+**If any of the above apply, you MUST follow these rules.**
+
+## 5.2 Initial Response Requirements
+
+**First response after initialization must explicitly report**:
+- Repository path (e.g., `/workspace` or `/home/user/repo`)
+- Branch that was pulled (e.g., `beta`)
+- Commit message from most recent `git pull`
+- Feature branch created (if applicable)
+- PR URL and details (if PR was created)
+
+**Only after providing this information may you proceed with additional context or actions.**
+
+## 5.3 Feature Branch Lifecycle (Cloud Agent)
+
+**Complete lifecycle**:
+
+1. **Initialize**:
+   - Check branch: `git branch --show-current`
+   - Pull latest: `git pull origin beta`
+   - Create feature branch: `feature/<issue>-<date>-<weekday>-<time>-<am/pm>`
+   - Push branch: `git push -u origin feature/<branch-name>`
+   - Create PR targeting `beta`
+   - Post PR details in chat
+
+2. **Work**:
+   - Make changes on feature branch
+   - Commit and push (with approval)
+   - Run validation (on push)
+   - Attempt merge (after validation)
+
+3. **Complete**:
+   - Merge into `beta` (if clean)
+   - Push `beta`
+   - Delete feature branch (local and remote)
+   - Close PR
+   - Verify only `main` and `beta` remain
+
+## 5.4 Cursor/* Branch Handling
+
+**If you find yourself on a `cursor/*` branch**:
+
+1. **STOP immediately**
+2. **Report to user**:
+   ```
+   ⚠️ WARNING: Currently on cursor/<branch-name>
+   This branch was not approved for this task.
+   ```
+3. **Ask user for permission**:
+   ```
+   I need to switch to beta branch. May I proceed?
+   Commands I will run:
+   1. git checkout beta
+   2. git pull origin beta
+   ```
+4. **WAIT for explicit approval**
+5. **ONLY after approval, switch to beta**:
+   ```bash
+   git checkout beta
+   git pull origin beta
+   ```
+6. **Continue work on beta**
+
+## 5.5 Multi-Agent Coordination
+
+**When multiple agents work in parallel**:
+
+- ✅ Assign distinct feature branches per agent
+- ✅ All agents confirm correct branch with user
+- ✅ All agents pull latest before starting work
+- ✅ All agents coordinate pushes to avoid conflicts
+- ✅ Merge sequentially (one agent at a time)
+- ❌ No unsanctioned branches
+- ❌ No parallel merges
+
+**Conflict Resolution**:
+- If push fails due to remote changes:
+  ```bash
+  git pull --rebase origin feature/<branch-name>
+  git push origin feature/<branch-name>
+  ```
+  - Only after user approval
+
+---
+
+**See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and other rule modules.**

@@ -1,0 +1,239 @@
+---
+name: Master Rules - Workflow (Agent Behavior & Git Workflow)
+description: Agent behavior and Git workflow rules - Part 1 & 2
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# PART 1: AGENT BEHAVIOR
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 1.1 File Creation Restrictions
+
+**FORBIDDEN FILE TYPES** - Never create these automatically:
+- `summary.md`, `SUMMARY.txt`, `overview.*`
+- `steps.md`, `plan.md`, `roadmap.md`, `TODO.md`
+- `notes.md`, `documentation.md`, `guide.md`
+- `analysis.md`, `report.md`, `findings.md`
+- `review.md`, `code-review.md`
+- Any `.txt` or `.md` file not explicitly requested
+
+**ALLOWED without explicit request**:
+- Source code files (`.sh`, `.py`, `.cpp`, `.ts`, `.js`, etc.) when implementing features
+- Configuration files when setting up tools/frameworks
+- Test files when asked to write tests
+- Modifications to existing files when requested
+
+**VALID USER REQUEST PHRASES** (must contain one of these):
+- "create a file"
+- "write a summary file"
+- "generate steps file"
+- "save this to a file"
+- "export to file"
+- "create documentation"
+
+**IF USER DOES NOT USE ONE OF THESE PHRASES, DO NOT CREATE THE FILE.**
+
+## 1.2 Response Mode
+
+**Always respond inline in the chat**:
+- Provide explanations, code snippets, or solutions directly in the conversation
+- Never write responses to new files automatically
+- Use code references for existing code, markdown code blocks for new code
+
+## 1.3 Planning Approach
+
+**First Plan, Then Execute**:
+1. When asked to implement something:
+   - Create a plan first (inline in chat, NOT as a file)
+   - Wait for user confirmation or proceed if the plan is clear and straightforward
+   - Execute the plan step by step
+   - Do NOT create separate plan files unless explicitly requested
+
+2. **Never create plan files automatically**:
+   - Plans should be presented in chat conversation
+   - Only create plan files if user says "save this plan to a file" or similar
+
+## 1.4 Code Review Protocol
+
+**Chunked Review Approach**:
+1. **For large code reviews**:
+   - Break the review into logical chunks (by file, by feature, by module)
+   - Review one chunk at a time
+   - Present findings inline in chat
+   - Wait for user feedback before moving to next chunk
+
+2. **Review Format**:
+   - Use inline code references for existing code
+   - Provide specific line numbers and file paths
+   - Focus on actionable feedback
+   - Prioritize critical issues first
+
+3. **Never create separate review files**:
+   - All review feedback should be in chat
+   - Only create review files if explicitly requested
+
+## 1.5 Core Files Only
+
+**ONLY edit these core files** (no exceptions):
+- `build_xubuntu_robotics_base.sh`
+- `config.sh`
+- `create_writable_overlay.sh`
+- `run_on_best_node.sh`
+- `setup_conda_environments.sh`
+- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- `README.md`
+
+**ABSOLUTE PROHIBITIONS**:
+- ❌ **NO new files** unless explicitly requested by user
+- ❌ **NO patch scripts** - All fixes go into core files
+- ❌ **NO workflow files** - Keep repository clean
+- ❌ **NO temporary files** - Repository must stay minimal and clutter-free
+- ❌ **NO documentation files** (unless explicitly requested)
+- ❌ **NO analysis files** (unless explicitly requested)
+
+---
+
+# PART 2: GIT WORKFLOW & BRANCH MANAGEMENT
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 2.1 Mandatory Pre-Work Steps (NO EXCEPTIONS)
+
+**BEFORE performing ANY action, you MUST execute these commands in this exact order:**
+
+```bash
+# 1. Check current branch
+git branch --show-current
+
+# 2. Switch to beta if not already on it
+git checkout beta
+
+# 3. Pull latest changes
+git pull origin beta
+
+# 4. Verify workspace state
+git status
+```
+
+**DO NOT SKIP THESE STEPS. THEY ARE MANDATORY.**
+
+## 2.2 Feature Branch Creation
+
+**Branch Naming Format**:
+```
+feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+```
+
+**Examples**:
+- `feature/glfw-include-fix-20251112-Tue-1530-pm`
+- `feature/suitesparse-metis-integration-20251113-Wed-0915-am`
+- `feature/cuda-mkl-conflict-resolution-20251114-Thu-1400-pm`
+
+**Naming Requirements**:
+- Must reflect the issue/feature being handled
+- Include date (YYYYMMDD)
+- Include weekday (Mon/Tue/Wed/Thu/Fri/Sat/Sun)
+- Include time (HHMM, 24-hour format)
+- Include am/pm indicator
+
+**Creation Process**:
+1. After pulling latest `beta`, create feature branch:
+   ```bash
+   git checkout -b feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+   ```
+2. Push feature branch immediately:
+   ```bash
+   git push -u origin feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+   ```
+3. Create PR targeting `beta` with descriptive title:
+   - Format: `feat: <issue-description> (<date> <weekday> <time> <am/pm>)`
+   - Example: `feat: glfw include fix (2025-11-12 Tue 15:30 PM)`
+4. Post PR details in chat immediately:
+   - PR URL
+   - Source branch
+   - Target branch (`beta`)
+   - PR title
+
+## 2.3 Git Operations - Explicit User Approval Required
+
+**NEVER run git commands without explicit user approval.**
+
+**Forbidden commands (without approval)**:
+- ❌ `git add`
+- ❌ `git commit`
+- ❌ `git push`
+- ❌ `git checkout -b` (branch creation)
+- ❌ `git branch <name>`
+
+**Allowed without explicit approval**:
+- ✅ `git branch --show-current` - To check current branch
+- ✅ `git status` - To check repository status
+- ✅ `git checkout <branch>` - To switch to approved branch
+- ✅ `git pull origin <branch>` - To sync before starting work
+
+**Required approval phrases from user**:
+- For commit: "commit this", "commit changes", "save changes", "add and commit"
+- For push: "push to <branch>", "push changes", "push this", "commit and push"
+- For branch creation: "create branch", "create feature branch", "start feature branch"
+
+**ONLY after hearing one of these phrases, you may proceed.**
+
+## 2.4 Workflow: Commit → Push → Validation → Merge → Cleanup
+
+**Complete workflow sequence**:
+
+1. **Make changes on feature branch**
+   - All work happens on the feature branch
+   - Never commit directly to `beta` or `main`
+
+2. **Request commit approval**
+   - Show summary of changes
+   - List modified files with line ranges and purpose
+   - Ask: "Would you like me to commit these changes?"
+
+3. **Upon approval, stage and commit**:
+   ```bash
+   git add -A
+   git commit -m "fix: <description>"
+   ```
+   - **AUTOMATIC**: If pre-commit hooks fail:
+     1. AI agent analyzes hook failures automatically
+     2. Auto-fixes ALL fixable issues immediately (batch all fixes)
+     3. Stages ALL fixes together: `git add <all-fixed-files>`
+     4. Re-runs commit automatically (hooks will pass)
+     5. Reports: "Pre-commit hooks failed → Auto-fixed N issues → Re-committed successfully"
+     6. **NO USER INTERVENTION**: All handled automatically
+     7. **BATCHED**: All fixes applied in single commit (clean build tree)
+
+4. **Request push approval**
+   - Ask: "Would you like me to push these changes to the PR branch?"
+
+5. **Upon push approval, push to feature branch**:
+   ```bash
+   git push origin feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+   ```
+
+6. **After push, run validation** (see MASTER-RULES-VALIDATION.mdc - FULL AUTOMATION + BATCHING)
+   - **AUTOMATIC**: Validation runs, auto-fixes apply
+   - **BATCHED**: All fixes collected → Single commit → Single push
+   - **NO USER INTERVENTION**: User only notified of results
+   - **CLEAN BUILD TREE**: Minimal pushes (one per validation cycle)
+
+7. **After validation passes, attempt merge** (see MASTER-RULES-MERGE.mdc)
+
+8. **After successful merge, cleanup**:
+   ```bash
+   git checkout beta
+   git branch -d feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+   git push origin --delete feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
+   ```
+   - Close PR (mark as merged)
+   - Verify only `main` and `beta` remain
+
+---
+
+**See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and other rule modules.**

@@ -62,7 +62,7 @@ The spec kit contains 7 main categories that track the complete development life
 
 #### constitution.md
 - **Core Principles**: Fundamental rules that don't change
-- **Branch Rules**: Workflow requirements (enforced by `.cursor/rules/002-repository-workflow.mdc`)
+- **Branch Rules**: Workflow requirements (enforced by `.cursor/rules/MASTER-RULES-WORKFLOW.mdc` Part 2)
 - **File Management**: What can and cannot be modified
 - **Quality Standards**: Expected code and documentation quality
 - **Rules System**: References to centralized rules (`.cursor/rules/*.mdc`)

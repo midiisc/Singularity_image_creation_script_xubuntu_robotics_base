@@ -1,0 +1,110 @@
+---
+name: Master Rules - Merge (Automated Merge & Conflict Resolution)
+description: Automated merge and conflict resolution rules - Part 4
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# PART 4: AUTOMATED MERGE & CONFLICT RESOLUTION
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 4.1 Merge Attempt After Push
+
+**After push and validation pass**:
+
+1. **Fetch latest**:
+   ```bash
+   git fetch origin
+   ```
+
+2. **Attempt dry-run merge**:
+   ```bash
+   git checkout beta
+   git pull origin beta
+   git merge --no-commit --no-ff origin/feature/<branch-name>
+   ```
+
+3. **Check merge result**:
+   - If clean: Proceed to actual merge (4.2)
+   - If conflicts: Attempt auto-resolution (4.3)
+
+## 4.2 Clean Merge Process
+
+**If merge is clean**:
+
+1. **Complete merge**:
+   ```bash
+   git merge --no-ff feature/<branch-name>
+   ```
+
+2. **Push beta**:
+   ```bash
+   git push origin beta
+   ```
+
+3. **Report in chat**:
+   ```
+   ✅ Merge successful
+   - Feature branch merged into beta
+   - Beta branch pushed to remote
+   - Proceeding with cleanup...
+   ```
+
+4. **Cleanup** (see MASTER-RULES-WORKFLOW.mdc Part 2.4 step 8)
+
+## 4.3 Conflict Auto-Resolution
+
+**If conflicts detected**:
+
+1. **Analyze conflicts**:
+   - List conflicting files
+   - Identify conflict markers
+   - Understand context using AI agent knowledge
+
+2. **Attempt auto-resolution (MANDATORY - FULL AUTOMATION)**:
+   - Use AI agent context to resolve conflicts intelligently
+   - **AUTOMATIC**: Apply resolutions automatically without asking
+   - **AUTOMATIC**: Stage resolved files: `git add <resolved-files>`
+   - **AUTOMATIC**: Complete merge: `git commit -m "merge: auto-resolved conflicts"`
+   - **AUTOMATIC**: Push merged changes: `git push origin beta`
+   - **Report only**: "Conflicts auto-resolved and merged. Proceeding with cleanup..."
+   - **NO USER APPROVAL**: AI agent handles all conflict resolution automatically
+
+3. **If auto-resolution succeeds (NORMAL CASE)**:
+   - **AUTOMATIC**: All steps completed automatically
+   - Report: "Conflicts auto-resolved and merged. Proceeding with cleanup..."
+
+4. **If auto-resolution fails (RARE EXCEPTION - ONLY THEN ASK USER)**:
+   - **ONLY IF**: Multiple valid resolution strategies exist with different pros/cons
+   - Present options with pros/cons clearly
+   - Wait for user choice
+   - **AUTOMATIC**: Implement chosen resolution automatically
+   - **If truly unfixable** (extremely rare):
+     - Abort merge: `git merge --abort`
+     - Report conflicts with specific guidance
+     - Provide exact commands for manual resolution (last resort only)
+
+## 4.4 Sequential PR Merging
+
+**Multiple PRs handling**:
+
+- ✅ **ALWAYS merge sequentially** (one PR at a time)
+- ❌ **NEVER merge PRs in parallel**
+
+**Process**:
+1. When multiple PRs exist:
+   - List PRs in order (by creation time or priority)
+   - Merge first PR completely (merge → push → cleanup)
+   - Then proceed to next PR
+   - Report progress after each merge
+
+2. **After each merge**:
+   - Pull latest `beta` before merging next PR
+   - Ensure clean state before proceeding
+
+---
+
+**See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and other rule modules.**

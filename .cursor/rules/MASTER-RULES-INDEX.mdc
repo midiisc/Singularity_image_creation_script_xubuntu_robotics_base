@@ -1,0 +1,151 @@
+---
+name: Master Rules Index - Single Source of Truth
+description: Master index and Full Automation Principle - references all rule modules
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🚨 MASTER RULES INDEX - SINGLE SOURCE OF TRUTH
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**THIS IS THE MASTER INDEX FOR ALL AGENT RULES.**
+
+**All rule modules are referenced from this index. To update rules, edit the appropriate module file.**
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**VIOLATION OF THESE RULES IS STRICTLY PROHIBITED.**
+
+---
+
+## 🤖 FULL AUTOMATION PRINCIPLE - CRITICAL
+
+**AI AGENT (CURSOR) HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**
+
+**MANDATORY AUTOMATION REQUIREMENTS**:
+- ✅ **ALL validation errors** → Auto-fixed automatically (NO user prompts)
+- ✅ **ALL pre-commit hook failures** → Auto-fixed and re-run automatically
+- ✅ **ALL post-push validation errors** → Auto-fixed, batched, committed, pushed automatically
+- ✅ **ALL critical issues** → Auto-resolved automatically
+- ✅ **ALL merge conflicts** → Auto-resolved automatically
+- ✅ **ALL fixes** → Batched together → Single commit → Single push (minimal pushes)
+- ✅ **BATCHING CRITICAL** → Collect ALL fixes before pushing (clean build tree)
+- ✅ **ALL validation** → Auto-re-run after fixes automatically
+- ✅ **ALL workflow steps** → Continue automatically after fixes
+
+**USER INTERVENTION ONLY WHEN**:
+- Multiple solution options exist with **different pros/cons** (present options, wait for choice, then implement automatically)
+- **RARE**: Truly unfixable issues (extremely rare, last resort)
+
+**USER NOTIFICATION**:
+- Informational only: "What was done" (not asking permission)
+- Status updates: "Action → Result → Next Step"
+- No approval requests for fixes (all automatic)
+
+**APPLIES TO ALL STAGES**:
+- Pre-commit hooks → Auto-fix failures automatically (batch all fixes)
+- Commit hooks → Auto-fix failures automatically (batch all fixes)
+- Push hooks → Auto-fix failures automatically (batch all fixes)
+- Post-push validation → Auto-fix all errors automatically (batch all fixes)
+- Merge conflicts → Auto-resolve automatically
+- All corrections → Batch together → Single commit → Single push (minimal pushes)
+- **CRITICAL**: Always batch fixes before pushing (clean build tree requirement)
+
+---
+
+## 📋 RULE MODULES
+
+**This index references the following focused rule modules** (all under `.cursor/rules/`):
+
+1. **MASTER-RULES-WORKFLOW.mdc** - Agent Behavior & Git Workflow
+   - Part 1: Agent Behavior (file creation, response mode, planning, code review, core files)
+   - Part 2: Git Workflow & Branch Management (pre-work steps, feature branches, git operations, workflow sequence)
+
+2. **MASTER-RULES-VALIDATION.mdc** - Code Quality & Validation
+   - Part 3: Code Quality & Validation (validation triggers, bash script validation, CoT check auto-trigger)
+   - **FULL AUTOMATION** - All validation errors auto-fixed, batched, committed, pushed automatically
+
+3. **MASTER-RULES-MERGE.mdc** - Automated Merge & Conflict Resolution
+   - Part 4: Automated Merge & Conflict Resolution (merge attempt, clean merge, conflict auto-resolution, sequential PR merging)
+   - **FULL AUTOMATION** - All conflicts auto-resolved automatically
+
+4. **MASTER-RULES-CLOUD.mdc** - Cloud Agent Specifics
+   - Part 5: Cloud Agent Specifics (identification, initial response, feature branch lifecycle, cursor/* branch handling, multi-agent coordination)
+
+5. **MASTER-RULES-COMMUNICATION.mdc** - User Communication & Feedback
+   - Part 6: User Communication & Feedback (immediate feedback, feedback level, error reporting)
+   - **INFORMATIONAL ONLY** - No approval requests, all fixes automatic
+
+6. **MASTER-RULES-BEST-PRACTICES.mdc** - Best Practices Compliance
+   - Part 7: Best Practices Compliance (Cursor IDE, Git workflow, automation, user communication, build tree cleanliness, early error detection)
+
+---
+
+## 🔗 RELATED FILES
+
+**This index is the single source of truth. Other files reference this:**
+
+- `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Quick reference pointing to this index
+- `.cursorrules` - Points to this index
+- `prompts/Code_check_prompt_manual.txt` - Bash validation checklist
+- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt
+
+---
+
+## 📚 QUICK REFERENCE
+
+**Before creating a file**:
+- Is it a core file? → Check MASTER-RULES-WORKFLOW.mdc (Part 1.5)
+- Is it documentation/summary/plan? → Require explicit user request
+- Unsure? → ASK USER FIRST
+
+**Before git operation**:
+- Verify branch aligns with task requirements
+- Verify files (core files only)
+- Get explicit user approval
+- Never assume permission
+
+**Before completing work**:
+- Verify all checklist items
+- Verify branch and files
+- Verify user approval obtained
+- Verify no rules violated
+- Verify feature branch deleted and PR closed
+
+---
+
+## 🔴 VIOLATION CONSEQUENCES
+
+**If you violate these rules**:
+1. **STOP immediately** - Do not complete the violating action
+2. **EXPLAIN the violation** - Clearly state what rule was violated
+3. **ASK for explicit permission** - Request user approval
+4. **WAIT for confirmation** - Do not proceed until explicitly approved
+
+**THESE RULES ARE AUTOMATICALLY ENFORCED. VIOLATIONS WILL BE DETECTED.**
+
+---
+
+**REMEMBER: FULL AUTOMATION - AI HANDLES ALL VALIDATION AND CORRECTIONS AUTOMATICALLY**
+
+**CRITICAL AUTOMATION PRINCIPLES**:
+- ✅ **ALL validation errors** → Auto-fixed automatically (no user prompts)
+- ✅ **ALL hook failures** → Auto-fixed and re-run automatically
+- ✅ **ALL critical issues** → Auto-resolved automatically
+- ✅ **ALL merge conflicts** → Auto-resolved automatically
+- ✅ **ALL fixes** → Batched together → Single commit → Single push (minimal pushes)
+- ✅ **BATCHING CRITICAL** → Collect ALL fixes before pushing (clean build tree)
+- ✅ **User intervention ONLY** → When multiple solutions exist with different pros/cons
+- ✅ **User notification** → Informational only (what was done, not asking permission)
+- ✅ **Keep repo clean** → Only main and beta branches remain
+
+**BATCHING REQUIREMENT (CRITICAL FOR CLEAN BUILD TREE)**:
+- ✅ Collect ALL fixes from validation before committing
+- ✅ Stage ALL fixes together: `git add <all-fixed-files>`
+- ✅ Commit ALL fixes together: Single commit with all corrections
+- ✅ Push ONCE after all fixes: `git push origin feature/<branch-name>`
+- ✅ **NEVER**: Multiple commits/pushes for fixes (batches into one)
+- ✅ **RESULT**: Clean git history, minimal pushes, clean build tree

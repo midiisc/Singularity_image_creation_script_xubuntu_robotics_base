@@ -90,7 +90,7 @@
 
 ### Feature Branch Workflow
 
-**Source:** `.cursor/rules/002-repository-workflow.mdc`
+**Source:** `.cursor/rules/MASTER-RULES-WORKFLOW.mdc` (Part 2: Git Workflow & Branch Management)
 
 #### Branch Rules
 - Create dedicated feature branch per session: `feature/<scope>-<timestamp>`
@@ -119,7 +119,7 @@
 
 ### Cloud Agent Rules
 
-**Source:** `.cursor/rules/003-cloud-agent-workflow.mdc`
+**Source:** `.cursor/rules/MASTER-RULES-CLOUD.mdc` (Part 5: Cloud Agent Specifics)
 
 #### Branch Coordination
 - Confirm correct branch with user before starting
@@ -152,16 +152,20 @@ All git operations require explicit user approval:
 
 ### Pre-Commit Audit
 
-**Source:** `.cursor/rules/002-repository-workflow.mdc`
+**Source:** `.cursor/rules/MASTER-RULES-WORKFLOW.mdc` (Part 2: Git Workflow & Branch Management)
 
-#### Advanced CoT Audit Requirement
-- **Mandatory:** Run Advanced CoT audit before staging any commit
-- **Prompt:** `prompts/Advanced-CoT-Multi-Agent-Prompt.md`
+#### Code Validation (Updated - 2025-11-12)
+- **Bash Validation:** Runs automatically on push (not every commit)
+- **Bash Checklist:** `prompts/Code_check_prompt_manual.txt`
+- **Auto-fix:** All errors automatically corrected
+- **CoT Auto-trigger:** Advanced CoT audit runs automatically for substantial/complex commits
+- **CoT Prompt:** `prompts/Advanced-CoT-Multi-Agent-Prompt.md`
 - **Process:**
-  1. Generate diff: `git diff`
-  2. Apply Advanced CoT framework to diff
-  3. Report findings in chat
-  4. Only after audit and user approval: stage and commit
+  1. On push: Extract diff and run bash validation
+  2. Auto-fix all errors found
+  3. Agent classifies: CoT-worthy or simple bash check sufficient
+  4. If CoT-worthy: Run Advanced CoT audit automatically
+  5. Report findings in chat
 
 #### Verification Checklist
 Before completing any work:
@@ -273,9 +277,7 @@ Before completing any work:
 
 ### Rule Files
 - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Pre-work verification checklist
-- `.cursor/rules/001-agent-behavior.mdc` - Agent behavior rules
-- `.cursor/rules/002-repository-workflow.mdc` - Repository workflow rules
-- `.cursor/rules/003-cloud-agent-workflow.mdc` - Cloud agent specific rules
+- `.cursor/rules/MASTER-RULES-INDEX.mdc` - **MASTER INDEX & SINGLE SOURCE OF TRUTH** - References all focused rule modules (all under 500 lines, Cursor-compliant)
 
 ### Tool Files
 - `scripts/helpers/validate_cmake_flags.sh` - CMake flag validator

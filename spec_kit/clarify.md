@@ -55,8 +55,7 @@
 ### Agent Instructions & Rules System
 - **Source of Truth**: `.cursor/rules/*.mdc` files (automatically enforced by Cursor IDE)
   - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Mandatory pre-work verification checklist (READ FIRST)
-  - `.cursor/rules/001-agent-behavior.mdc` - AI behavior rules (file creation, planning, code review)
-  - `.cursor/rules/002-repository-workflow.mdc` - Workflow rules (git, branches, files, commits)
+  - `.cursor/rules/MASTER-RULES-INDEX.mdc` - MASTER INDEX & SINGLE SOURCE OF TRUTH (references focused modules)
 - **Automatic Enforcement**: Rules are automatically loaded and enforced by Cursor IDE (`alwaysApply: true`)
 - **Mandatory**: All AI agents MUST follow rules (no manual configuration needed, strictly enforced)
 - **Verification**: Check branch, files, and commit process before completing work (mandatory checklist)

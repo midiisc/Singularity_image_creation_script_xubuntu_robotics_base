@@ -108,7 +108,7 @@ The rule hierarchy works as follows:
 
 When creating a new repository, you can:
 
-1. **Copy the template**: Copy `.cursor/rules/001-agent-behavior.mdc` from this repository to new repositories
+1. **Copy the template**: Copy `.cursor/rules/MASTER-RULES-INDEX.mdc` and all `MASTER-RULES-*.mdc` modules from this repository to new repositories
 2. **Customize as needed**: Modify repository-specific rules while keeping global protocol
 3. **Document in README**: Add a section about AI agent protocols (see README.md in this repo)
 
@@ -199,9 +199,8 @@ Plans are presented inline in chat. If you want a plan file, explicitly request 
 
 ### Updating Existing Rules
 
-1. **Edit the appropriate `.mdc` file**:
-   - Behavior rules → `.cursor/rules/001-agent-behavior.mdc`
-   - Workflow rules → `.cursor/rules/002-repository-workflow.mdc`
+1. **Edit the master rules file**:
+   - All rules → `.cursor/rules/MASTER-RULES-INDEX.mdc` (MASTER INDEX & SINGLE SOURCE OF TRUTH) + focused modules
 
 2. **Rules are automatically reloaded** by Cursor IDE
 3. **Changes apply immediately** to all AI agents

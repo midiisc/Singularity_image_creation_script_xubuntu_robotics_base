@@ -1,0 +1,150 @@
+---
+name: Master Rules - Best Practices Compliance
+description: Best practices compliance rules - Part 7
+version: "2.2"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# PART 7: BEST PRACTICES COMPLIANCE
+
+**Reference**: See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and module overview.
+
+## 7.1 Cursor IDE Best Practices
+
+**Rule File Structure**:
+- ✅ Single source of truth: `MASTER-RULES-INDEX.mdc` (master index with focused modules)
+- ✅ Proper YAML frontmatter: `alwaysApply: true`, `globs: ["**/*"]`
+- ✅ Clear organization: 7 parts split into focused modules (all under 500 lines)
+- ✅ No conflicts: Single source of truth, all references point to MASTER-RULES-INDEX.mdc
+- ✅ Actionable rules: Clear directives with examples
+- ✅ **Compliant with Cursor's 500-line recommendation**: All modules under 500 lines
+
+**Rule Module Structure**:
+- `MASTER-RULES-INDEX.mdc` (~150 lines) - Master index + Full Automation Principle
+- `MASTER-RULES-WORKFLOW.mdc` (~225 lines) - Parts 1 & 2: Agent Behavior + Git Workflow
+- `MASTER-RULES-VALIDATION.mdc` (~135 lines) - Part 3: Code Quality & Validation
+- `MASTER-RULES-MERGE.mdc` (~98 lines) - Part 4: Merge & Conflicts
+- `MASTER-RULES-CLOUD.mdc` (~95 lines) - Part 5: Cloud Agent Specifics
+- `MASTER-RULES-COMMUNICATION.mdc` (~195 lines) - Part 6: User Communication
+- `MASTER-RULES-BEST-PRACTICES.mdc` (~136 lines) - Part 7: Best Practices
+
+**Benefits of Modular Structure**:
+- ✅ Follows Cursor's 500-line recommendation
+- ✅ Better AI processing (focused context per module)
+- ✅ Easier maintenance (focused updates)
+- ✅ Single source of truth maintained via master index
+- ✅ No conflicts or duplication
+
+## 7.2 Git Workflow Best Practices
+
+**Feature Branch Workflow**:
+- ✅ Create feature branch per task
+- ✅ Open PR immediately after branch creation
+- ✅ All work through PR (no direct commits to beta/main)
+- ✅ Sequential PR merging (one at a time)
+- ✅ Clean branch tree (only main and beta remain)
+
+**Pre-commit Hooks (WITH AUTO-FIX)**:
+- ✅ CMake flag validator: `scripts/hooks/pre-commit-cmake-validator`
+- ✅ AI-assisted review: `scripts/hooks/ai_precommit_review.py` (optional)
+- ✅ Hooks run automatically on `git commit`
+- ✅ **AUTOMATIC**: If hooks fail, AI agent auto-fixes issues and re-runs hooks
+- ✅ **AUTOMATIC**: Fixed files auto-staged, commit proceeds automatically
+- ✅ Early error detection + auto-correction before code enters repository
+- ✅ **NO USER INTERVENTION**: AI handles all hook failures automatically
+
+**CI/CD Integration**:
+- ✅ GitHub Actions workflow: `.github/workflows/prompt-validation.yml`
+- ✅ 7 automated validation checks on PR/push
+- ✅ Comprehensive coverage: syntax, flags, documentation, compatibility
+
+## 7.3 Automation Best Practices
+
+**Maximum Automation**:
+- ✅ Auto-fix all errors found during validation
+- ✅ Auto-resolve conflicts when possible (AI-based)
+- ✅ Auto-merge when clean (no conflicts)
+- ✅ Auto-cleanup (delete feature branches after merge)
+- ✅ Auto-classify commits (CoT-worthy vs simple bash check)
+
+**User Intervention ONLY When**:
+- Multiple solution options exist with different pros/cons (present options, wait for choice, then implement automatically)
+- **RARE**: Auto-resolution truly fails AND multiple valid strategies exist (extremely rare)
+- Explicit approval required ONLY for initial git operations (commit/push approval - workflow gates)
+
+**AUTOMATIC HANDLING (NO USER INTERVENTION)**:
+- ✅ All validation errors → Auto-fixed automatically
+- ✅ All critical issues → Auto-resolved automatically  
+- ✅ All merge conflicts → Auto-resolved automatically
+- ✅ All fixes → Batched together → Single commit → Single push (minimal pushes)
+- ✅ All validation → Auto-re-run after fixes automatically
+- ✅ All workflow steps → Continue automatically after fixes
+- ✅ **BATCHING**: Collect ALL fixes before pushing (clean build tree requirement)
+
+## 7.4 User Communication Best Practices
+
+**Feedback Level**:
+- ✅ Immediate status updates after each major action
+- ✅ Adequate detail (not overwhelming, but informative)
+- ✅ Clear error messages with actionable guidance
+- ✅ Summary format: "Action → Result → Next Step"
+- ✅ Avoid atomic-level details (no verbose git command dumps)
+
+**Example Good Feedback**:
+```
+✅ Push complete → Validation passed (18/20 checks) → Auto-fixed 2 issues → 
+Merge successful → Beta updated → Feature branch deleted → PR closed
+```
+
+**Example Bad Feedback** (avoid):
+```
+Running git push...
+Pushing to origin...
+Counting objects...
+Writing objects...
+Push complete.
+Now running git fetch...
+[verbose step-by-step details]
+```
+
+## 7.5 Build Tree Cleanliness
+
+**Branch Management**:
+- ✅ Only `main` and `beta` branches remain after cleanup
+- ✅ Feature branches deleted immediately after merge
+- ✅ PRs closed immediately after merge
+- ✅ No orphaned branches or stale PRs
+
+**File Management**:
+- ✅ Only core files modified (strict list enforced)
+- ✅ No temporary files created
+- ✅ No patch scripts (all fixes in core files)
+- ✅ No workflow files (keep repository minimal)
+
+**Commit/Push Management (CRITICAL)**:
+- ✅ **BATCH ALL FIXES**: Collect all fixes before committing/pushing
+- ✅ **SINGLE COMMIT**: All fixes committed together (not multiple commits)
+- ✅ **SINGLE PUSH**: Push once after all corrections (minimal pushes)
+- ✅ **CLEAN HISTORY**: Avoid multiple fix commits (batch into one)
+- ✅ **BUILD TREE CLEAN**: Minimal pushes maintain clean git history
+
+## 7.6 Early Error Detection
+
+**Multi-Layer Validation**:
+1. **Pre-commit Hooks**: Catch errors before commit (early)
+2. **Post-push Agent Validation**: Comprehensive diff review (thorough)
+3. **CI/CD Checks**: Automated validation on PR (continuous)
+
+**Error Prevention**:
+- ✅ Auto-fix capabilities reduce manual intervention
+- ✅ Comprehensive checklists ensure nothing missed
+- ✅ Multiple validation stages catch different error types
+- ✅ Clear error messages guide fixes
+
+---
+
+**COMPLIANCE STATUS: ✅ ALL BEST PRACTICES MET**
+
+**See `MASTER-RULES-INDEX.mdc` for Full Automation Principle and other rule modules.**

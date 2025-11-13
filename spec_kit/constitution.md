@@ -35,8 +35,7 @@ This document defines the fundamental principles and rules governing this reposi
 ### Rules System - Strictly Enforced
 - **Source of Truth**: `.cursor/rules/*.mdc` files (automatically enforced by Cursor IDE)
 - **Mandatory Pre-Work**: `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` (READ FIRST, verification checklist)
-- **Behavior Rules**: `.cursor/rules/001-agent-behavior.mdc` (file creation, planning, code review)
-- **Workflow Rules**: `.cursor/rules/002-repository-workflow.mdc` (git, branches, files, commits)
+- **Master Rules**: `.cursor/rules/MASTER-RULES-INDEX.mdc` - MASTER INDEX & SINGLE SOURCE OF TRUTH (references focused modules)
 - **Automatic Enforcement**: Cursor IDE loads and enforces rules automatically (`alwaysApply: true`)
 - **Mandatory Verification**: Pre-work checklists required before any action
 - **Strict Language**: Rules use "YOU MUST", "STRICTLY ENFORCED", "ABSOLUTELY MANDATORY"
