@@ -935,14 +935,16 @@ probe_and_set_mirrors() {
 
   # Apply the fastest mirror to the main APT sources
   if [ -f /etc/apt/sources.list ]; then
-    # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: /, &, \, newlines)
-    # Pattern 's/[[\/&]/\\&/g' explained:
-    #   [[\/ &]  - Character class matching: [, \, /, &
-    #   \\&      - Replacement: prefix with backslash (\)
-    #   g        - Global: replace all occurrences
+    # Escape FASTEST_MIRROR for safe use in sed (escape special sed characters: [, ], \, /, &)
+    # Pattern 's/[][\\\/&]/\\&/g' explained:
+    #   [][] - Matches literal [ or ] (bracket expression for brackets)
+    #   \\\/ - Matches backslash or forward slash
+    #   &    - Matches ampersand
+    #   \\&  - Replacement: prefix with backslash (\)
+    #   g    - Global: replace all occurrences
     # Example: "http://mirror.com/ubuntu" → "http:\/\/mirror.com\/ubuntu"
     local fastest_mirror_sed_escaped
-    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g')"
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
     
     # Multiple replacement patterns to catch all variations:
     # 1. Specifically target archive.ubuntu.com (most common issue)
@@ -1011,7 +1013,7 @@ probe_and_set_mirrors() {
       # Escape special sed characters in mirror_no_protocol for safe replacement
       local mirror_sed_escaped
       if [ -n "${mirror_no_protocol:-}" ]; then
-        mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+        mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
         if [ -n "${mirror_sed_escaped:-}" ]; then
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" /etc/apt/sources.list
           # Verify again after additional replacement
@@ -1033,7 +1035,7 @@ probe_and_set_mirrors() {
   if [ -d /etc/apt/sources.list.d ]; then
     # Escape FASTEST_MIRROR for safe use in sed
     local fastest_mirror_sed_escaped
-    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\/&]/\\&/g' || echo "")"
+    fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
     
     # Compute mirror_no_protocol once for reuse
     local mirror_no_protocol
@@ -1076,7 +1078,7 @@ probe_and_set_mirrors() {
         # Escape special sed characters in mirror_no_protocol for safe replacement
         local mirror_sed_escaped
         if [ -n "${mirror_no_protocol:-}" ]; then
-          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
           if [ -n "${mirror_sed_escaped:-}" ]; then
             sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
             echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
@@ -1121,7 +1123,7 @@ probe_and_set_mirrors() {
       if grep -v "^#" "${sources_file}" 2>/dev/null | grep -q "archive\\.ubuntu\\.com"; then
         if [ -n "${mirror_no_protocol:-}" ]; then
           local mirror_sed_escaped
-          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[[\/&]/\\&/g' || echo "")
+          mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
           if [ -n "${mirror_sed_escaped:-}" ]; then
             sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_sed_escaped}|g" "${sources_file}"
             echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
@@ -1161,7 +1163,7 @@ verify_fastest_mirror() {
   if [ -f /etc/apt/sources.list ]; then
     # Escape FASTEST_MIRROR for safe use in grep pattern
     local fastest_mirror_escaped
-    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[[\.*^$()+?{|]/\\&/g' || echo "")
+    fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
     
     # Count lines using fastest mirror (use -F for fixed string if escaping fails)
     local fast_count
