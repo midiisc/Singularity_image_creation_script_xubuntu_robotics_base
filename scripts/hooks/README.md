@@ -23,6 +23,10 @@ This directory contains git hooks and validators for maintaining code quality.
 ```bash
 # From repository root
 ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+
+# Configure AI review environment (automated setup)
+./scripts/hooks/setup_ai_review_env.sh
+# Then edit .git/hooks/pre-commit.env and add your API keys
 ```
 
 **Automated Flow**:
@@ -48,6 +52,39 @@ ln -sf ../../scripts/hooks/pre-commit-cmake-validator .git/hooks/pre-commit
 ```
 
 **Note**: Use the comprehensive `pre-commit` hook instead for full validation.
+
+### 3. AI Review Environment Setup
+**File**: `setup_ai_review_env.sh`  
+**Purpose**: Automated configuration of AI review environment variables
+
+**Quick Setup**:
+```bash
+# Run the setup script (creates .git/hooks/pre-commit.env)
+./scripts/hooks/setup_ai_review_env.sh
+
+# Edit the created file and add your API keys
+nano .git/hooks/pre-commit.env
+```
+
+**Configuration Notes**:
+- **Primary Provider**: Anthropic (Claude) - REQUIRED
+  - Valid models: `claude-3-opus-20240229`, `claude-3-sonnet-20240229`, `claude-3-haiku-20240307`
+  - **DO NOT use "latest" model names** - they are not supported by the API
+- **Secondary Provider**: OpenAI (optional) or `none` (recommended)
+  - Cursor API is **NOT supported** (no chat/completion endpoints available)
+  - Set `AI_REVIEW_SECONDARY_PROVIDER="none"` to disable
+
+**Auto-Load in Shell Sessions**:
+Add to your `~/.bashrc` or `~/.zshrc`:
+```bash
+# Auto-load AI review environment variables
+PRE_COMMIT_ENV="$HOME/Documents/Singularity_image_creation_script_xubuntu_robotics_base/.git/hooks/pre-commit.env"
+if [ -f "$PRE_COMMIT_ENV" ] && [ -r "$PRE_COMMIT_ENV" ]; then
+    . "$PRE_COMMIT_ENV"
+fi
+```
+
+**Reference**: See `docs/AI_PRECOMMIT_HOOK.md` for complete documentation.
 
 ## Standalone Tools
 

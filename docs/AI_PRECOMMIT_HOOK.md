@@ -18,7 +18,7 @@ The hook runs two consecutive stages:
 - Filters staged files with extensions commonly used in this repository (`.sh`, `.py`, `.cpp`, `.yaml`, etc.).
 - Generates unified diffs (`git diff --cached --unified=0`) and splits them into chunks (default 400 diff lines).
 - Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` as the authoritative checklist.
-- Dynamically routes simple chunks to the secondary model (Cursor/OpenAI) when configured, reserving Claude for complex or long-context reviews.
+- Dynamically routes simple chunks to the secondary model (OpenAI) when configured, reserving Claude for complex or long-context reviews.
 - Calls the selected AI model (Claude by default) and expects JSON with `status`, `summary`, and structured `findings`.
 - Rejects the commit when any chunk returns `status: "reject"`; prints the AI feedback for each failing chunk.
 - Caches successful responses in `.git/.ai-review-cache/` to avoid re-reviewing unchanged chunks.
@@ -62,9 +62,9 @@ fi
 | `AI_REVIEW_DISABLE_CACHE` | Disable on-disk cache if set to `1` | Cache path: `.git/.ai-review-cache/`. |
 | `AI_REVIEW_PROVIDER` | Primary AI backend (`anthropic` or `openai`) | Defaults to `anthropic`. |
 | `AI_REVIEW_MAX_TOKENS` | Max response tokens for the primary model | Defaults to `2048`. |
-| `AI_REVIEW_SECONDARY_PROVIDER` | Secondary backend for lightweight chunks | Defaults to `cursor`. Set to `none` to disable. |
-| `AI_REVIEW_SECONDARY_TOKEN` | Secondary API token (Cursor/OpenAI) | Falls back to `CURSOR_API_KEY`, `CURSOR_AGENT_KEY`, then `OPENAI_API_KEY`. |
-| `AI_REVIEW_SECONDARY_API_URL` | Secondary endpoint URL | Defaults to `https://api.cursor.sh/v1/chat/completions`. |
+| `AI_REVIEW_SECONDARY_PROVIDER` | Secondary backend for lightweight chunks | Defaults to `openai`. Set to `none` to disable. |
+| `AI_REVIEW_SECONDARY_TOKEN` | Secondary API token (OpenAI) | Falls back to `OPENAI_API_KEY`, `OPENAI_API_TOKEN`. |
+| `AI_REVIEW_SECONDARY_API_URL` | Secondary endpoint URL | Defaults to `https://api.openai.com/v1/chat/completions`. |
 | `AI_REVIEW_SECONDARY_MODEL` | Secondary model name | Defaults to `gpt-4.1-mini`. |
 | `AI_REVIEW_SECONDARY_MAX_TOKENS` | Max tokens for the secondary model | Defaults to `1024`. |
 | `AI_REVIEW_COMPLEXITY_LINE_THRESHOLD` | Line-count heuristic for complex chunks | Defaults to `150`. |
@@ -79,10 +79,13 @@ export AI_REVIEW_API_URL="https://api.anthropic.com/v1/messages"
 export AI_REVIEW_MODEL="claude-3.5-sonnet-latest"
 export AI_REVIEW_PROVIDER="anthropic"
 
-export AI_REVIEW_SECONDARY_TOKEN="cursor-or-openai-token"
-export AI_REVIEW_SECONDARY_API_URL="https://api.cursor.sh/v1/chat/completions"
+export AI_REVIEW_SECONDARY_TOKEN="sk-your-openai-key"
+export AI_REVIEW_SECONDARY_API_URL="https://api.openai.com/v1/chat/completions"
 export AI_REVIEW_SECONDARY_MODEL="gpt-4.1-mini"
-export AI_REVIEW_SECONDARY_PROVIDER="cursor"
+export AI_REVIEW_SECONDARY_PROVIDER="openai"
+
+# Or disable secondary provider (recommended):
+export AI_REVIEW_SECONDARY_PROVIDER="none"
 ```
 
 ## Bypass and fallback options
@@ -109,6 +112,6 @@ export AI_REVIEW_SECONDARY_PROVIDER="cursor"
 - Update `prompts/Code_check_prompt_manual.txt` whenever the review policy evolves; the AI prompt pulls the file verbatim.
 - When introducing new file types, add their extensions to `ALLOWED_SUFFIXES` in `scripts/hooks/ai_precommit_review.py`.
 - If the API schema diverges from Anthropic’s Claude endpoint, update `call_anthropic_api()` / `extract_review_content()` accordingly. For alternate providers, extend the abstractions in `ai_precommit_review.py`.
-- Tune `AI_REVIEW_COMPLEXITY_*` thresholds if you need Claude to trigger more or less aggressively, or if you want Cursor usage to increase/decrease.
+- Tune `AI_REVIEW_COMPLEXITY_*` thresholds if you need Claude to trigger more or less aggressively, or if you want OpenAI usage to increase/decrease.
 - The runtime automatically sets `chmod 600` on `.git/hooks/pre-commit.env` before sourcing it. Keep the file within `.git/hooks/` so it never lands in version control.
 
