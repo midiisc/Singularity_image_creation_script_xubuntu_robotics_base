@@ -276,6 +276,73 @@ M. Environment & Dependencies
   - **VALIDATION**: Check git history of docs/flags/*.md to detect version changes without flag revalidation
   - Example: If upgrading from v1.0 to v2.0, diff docs/flags/LIBRARY_1.0.0_*.md vs LIBRARY_2.0.0_*.md
   - Prevention: Catches breaking changes in CMake API between library versions
+- M11. **LIBRARY BUNDLED COMPONENT DETECTION**: Before linking external libraries, verify what's bundled vs what needs separate linking:
+  - **CRITICAL**: Check library documentation and repository to identify bundled dependencies (e.g., SuiteSparse bundles METIS in newer versions)
+  - **MANDATORY CHECKS**:
+    1. Parse library's CMakeLists.txt for FetchContent_Declare, add_subdirectory with external projects
+    2. Check library's CHANGELOG/RELEASES for "now includes", "bundled", "integrated" keywords
+    3. Verify library's official documentation for dependency requirements by version
+    4. Inspect installed library headers/binaries for bundled components (e.g., `nm -D lib*.so | grep symbol`)
+    5. Cross-reference with pkg-config files (.pc) for actual dependencies vs documented ones
+  - **VERSION AWARENESS**: Different versions may have different bundling strategies
+    - Example: SuiteSparse < 7.0 requires separate METIS, >= 7.1 bundles METIS
+    - Check Git tags and commits between versions for dependency changes
+    - Parse version-specific documentation (README for that tag/release)
+  - **CHANGELOG ANALYSIS**: Required pattern for version transitions:
+    ```bash
+    # Example: Check what changed between versions
+    git clone --depth 50 https://github.com/library/repo.git /tmp/lib_check
+    cd /tmp/lib_check
+    git log v7.0.0..v7.1.0 --grep="METIS\|dependency\|bundle\|include" --oneline
+    git diff v7.0.0..v7.1.0 -- CMakeLists.txt
+    ```
+  - **PROS/CONS REASONING**: Document why bundled vs separate is chosen:
+    - **Bundled Pros**: Simplified builds, version compatibility guaranteed, no external dep hunting
+    - **Bundled Cons**: Larger binaries, potential symbol conflicts if dep used elsewhere, harder updates
+    - **Separate Pros**: Shared libraries save disk, easier security updates, centralized dep management
+    - **Separate Cons**: Version mismatches possible, complex dep resolution, build complexity
+  - **DETECTION PATTERNS**:
+    ```bash
+    # Check if library bundles dependency
+    if grep -rq "add_subdirectory.*metis" CMakeLists.txt; then
+      echo "METIS bundled as subdirectory"
+    fi
+    if find . -type d -name "external" -o -name "third_party" -o -name "3rdparty"; then
+      echo "Check external/ directory for bundled deps"
+    fi
+    # Check installed library for symbols
+    if nm -D /usr/local/lib/libsuitesparseconfig.so | grep -q "metis_"; then
+      echo "METIS symbols present in library (bundled)"
+    else
+      echo "METIS not bundled, requires separate linking"
+    fi
+    ```
+  - **OFFICIAL SOURCE VERIFICATION**: Always check multiple reliable sources:
+    1. Library's official website (installation instructions)
+    2. GitHub repository README (especially for version being built)
+    3. Library's CMake config files (LibraryConfig.cmake) for find_dependency calls
+    4. Distribution package metadata (apt show, rpm -qi) for system packages
+    5. Build system output (CMake configure logs) for actual dependency resolution
+  - **DOCUMENTATION REQUIREMENT**: When integrating library, document in comments:
+    ```bash
+    # Library: SuiteSparse 7.8.3
+    # Bundled: METIS (since 7.1), AMD, CAMD, COLAMD (always bundled)
+    # Separate: BLAS, LAPACK (user must provide)
+    # Source: https://github.com/DrTimothyAldenDavis/SuiteSparse/releases/tag/v7.8.3
+    # Verified: 2025-11-13 via CMakeLists.txt analysis and CHANGELOG review
+    # Decision: Use bundled METIS (simpler, no version conflicts)
+    # Trade-off: Slightly larger binary, but guaranteed compatibility
+    ```
+  - **PREVENTION**: Avoid issues like "libcolmap-metis not detected" by:
+    1. Always check library version being built
+    2. Parse that version's documentation and CMakeLists.txt
+    3. Don't assume dependencies from older versions apply
+    4. Verify after build with ldd, nm, pkg-config
+  - **Real Error Example**: SuiteSparse 7.8.3 check showed METIS not detected, but investigation revealed:
+    - METIS bundled since v7.1.0 (2023-12-20)
+    - No separate METIS linking needed
+    - Detection logic needed update to check for bundled symbols
+    - Fix: Updated detection to check library itself, not just external packages
 
 Helper Reference – Robust Package Checks
 ----------------------------------------
