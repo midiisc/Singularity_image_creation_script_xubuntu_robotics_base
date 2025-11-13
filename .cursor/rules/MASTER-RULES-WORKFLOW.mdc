@@ -217,6 +217,62 @@ feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
    git push origin feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
    ```
 
+## 2.5 Mandatory Commit & Push Reporting (ALWAYS DISPLAY IN CHAT)
+
+**CRITICAL REQUIREMENT**: After EVERY git push, ALWAYS display in chat:
+
+**Required Information**:
+1. **Full commit message** (exactly as committed)
+2. **Commit hash** (short or full)
+3. **Branch pushed to** (e.g., origin/beta, origin/feature/...)
+4. **Push status** (success/failure)
+5. **Files changed** (count and list)
+6. **GitHub verification link** (if available)
+
+**Display Format** (use this template):
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ GIT PUSH COMPLETE - VERIFICATION DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+COMMIT HASH: <hash>
+BRANCH: <branch-name>
+REMOTE: origin/<branch-name>
+
+COMMIT MESSAGE:
+┌────────────────────────────────────────────────────┐
+│ <full commit message - line 1>                    │
+│ <full commit message - line 2>                    │
+│ ...                                                 │
+└────────────────────────────────────────────────────┘
+
+FILES CHANGED: <count>
+  - <file1>
+  - <file2>
+  ...
+
+PUSH STATUS: ✅ SUCCESS / ❌ FAILED
+VERIFICATION: GitHub link or manual verification instructions
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+**WHY THIS IS MANDATORY**:
+- Enables cross-verification on GitHub.com later
+- Provides audit trail for all commits
+- Helps debug if commits don't appear on GitHub
+- Essential for team coordination
+- Required for compliance tracking
+
+**WHEN TO DISPLAY**:
+- ✅ After EVERY `git push` command
+- ✅ After automated push (in auto-fix loops)
+- ✅ After merge commits
+- ✅ After PR merges that push to beta
+- ✅ Even if push fails (show error details)
+
+**NEVER SKIP THIS** - This is a mandatory reporting requirement for all git operations.
+
 6. **After push, run validation** (see MASTER-RULES-VALIDATION.mdc - FULL AUTOMATION + BATCHING)
    - **AUTOMATIC**: Validation runs, auto-fixes apply
    - **BATCHED**: All fixes collected → Single commit → Single push
@@ -233,6 +289,7 @@ feature/<issue-description>-<date>-<weekday>-<time>-<am/pm>
    ```
    - Close PR (mark as merged)
    - Verify only `main` and `beta` remain
+   - **DISPLAY** merge commit details as per section 2.5
 
 ---
 
