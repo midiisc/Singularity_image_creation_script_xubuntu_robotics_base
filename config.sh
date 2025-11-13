@@ -92,6 +92,8 @@ export SUITESPARSE_INSTALL_PREFIX="/usr/local"
 export PYTORCH_VERSION="v2.6.0"    # Compatible with CUDA 12.6 and Ubuntu 24.04
 export ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"      # Legacy source build toggle (remains disabled)
 export ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-true}"  # Default: install CUDA+MKL wheels
+# BLAS provider preference: MKL (default) or OPENBLAS
+export DEFAULT_BLAS_PROVIDER="${DEFAULT_BLAS_PROVIDER:-MKL}"
 
 # 3D Reconstruction / SfM / NeRF
 export COLMAP_VERSION="3.12.6"

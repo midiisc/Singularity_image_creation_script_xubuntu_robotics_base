@@ -44,6 +44,15 @@ fi
 set -u
 
 #===============================================================================
+# BLAS PROVIDER SELECTION
+#===============================================================================
+# DEFAULT_BLAS_PROVIDER controls which implementation owns the system interfaces.
+# Supported values: MKL (default) or OPENBLAS. Case-insensitive.
+DEFAULT_BLAS_PROVIDER="${DEFAULT_BLAS_PROVIDER:-MKL}"
+DEFAULT_BLAS_PROVIDER="$(echo "${DEFAULT_BLAS_PROVIDER}" | tr '[:lower:]' '[:upper:]')"
+export DEFAULT_BLAS_PROVIDER
+
+#===============================================================================
 # BUILD LOGGING SYSTEM
 #===============================================================================
 # Purpose: Mirror all terminal output to timestamped log files
@@ -2921,7 +2930,37 @@ export MKL_LIB_DIR MKL_INCLUDE_DIR MKL_BLAS_LIBRARIES MKL_LINK_FLAGS
 export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 export LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 
-#--- Sub-block 12A.4: HPC MKL/CUDA tuning script ---
+#--- Sub-block 12A.4: Register MKL with alternatives system ---
+echo -e "${YELLOW}[12A.4] Registering Intel MKL with alternatives system...${NC}"
+
+MKL_ALT_PRIORITY=200
+if [ -f "${MKL_RT_LIB}" ]; then
+    echo "  Registering libmkl_rt.so (priority ${MKL_ALT_PRIORITY})..."
+    update-alternatives --install /usr/lib/x86_64-linux-gnu/libblas.so.3 \
+        libblas.so.3-x86_64-linux-gnu \
+        "${MKL_RT_LIB}" \
+        "${MKL_ALT_PRIORITY}" || {
+        echo -e "  ${YELLOW}⚠ Failed to register MKL as BLAS alternative${NC}"
+    }
+    update-alternatives --install /usr/lib/x86_64-linux-gnu/liblapack.so.3 \
+        liblapack.so.3-x86_64-linux-gnu \
+        "${MKL_RT_LIB}" \
+        "${MKL_ALT_PRIORITY}" || {
+        echo -e "  ${YELLOW}⚠ Failed to register MKL as LAPACK alternative${NC}"
+    }
+
+    if [ "${DEFAULT_BLAS_PROVIDER}" = "MKL" ]; then
+        echo "  Setting MKL as default provider (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})..."
+        update-alternatives --set libblas.so.3-x86_64-linux-gnu "${MKL_RT_LIB}" 2>/dev/null || true
+        update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${MKL_RT_LIB}" 2>/dev/null || true
+    else
+        echo -e "  ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; leaving existing default in place${NC}"
+    fi
+else
+    echo -e "  ${YELLOW}⚠ Skipping alternatives registration: ${MKL_RT_LIB} not found${NC}"
+fi
+
+#--- Sub-block 12A.5: HPC MKL/CUDA tuning script ---
 # Note: HPC tuning script is installed via install.sh from container-scripts/
 # The script (/etc/profile.d/hpc-mkl-tune.sh) provides runtime optimization settings
 # for HPC workloads (thread affinity, MKL tuning, CUDA settings, monitoring toggles).
@@ -2937,20 +2976,21 @@ esac
 # BLOCK 12: OPENBLAS COMPILATION AND INSTALLATION
 #===============================================================================
 # Purpose: Compile and install OpenBLAS with DYNAMIC_ARCH=1 for maximum performance
-#          and CPU portability. Make it the default BLAS/LAPACK implementation via
-#          alternatives system. Execute BEFORE any other package installations.
+#          and CPU portability. Register it with the alternatives system so it is
+#          available as a managed fallback while MKL remains the default BLAS/LAPACK
+#          provider (unless DEFAULT_BLAS_PROVIDER overrides the preference).
 # Self-contained: Yes (complete with verification and error handling)
 # Dependencies: 
 #   - Block 6.12: APT configuration
 #   - Block 6.12A: apt-aria wrapper (for accelerated downloads)
-# Outputs: Compiled OpenBLAS library, alternatives configuration, library paths
+# Outputs: Compiled OpenBLAS library, alternatives registration, library paths
 # Timing: CRITICAL - Must execute BEFORE PHASE 1 (any package installations)
 # Strategy: 
 #   1. Check base image for existing OpenBLAS (analysis shows none exists)
 #   2. Install build prerequisites (gcc, gfortran, libomp-dev, liblapack-dev)
 #   3. Compile OpenBLAS v0.3.30 with DYNAMIC_ARCH=1
 #   4. Install to /usr/local
-#   5. Update alternatives system (make OpenBLAS default)
+#   5. Register with alternatives (fallback role unless explicitly preferred)
 #   6. Configure library paths (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)
 #   7. Set up APT pinning (prevent system OpenBLAS installation)
 #   8. Verify installation and DYNAMIC_ARCH support
@@ -2994,7 +3034,7 @@ done
 
 if [ "${BASE_OPENBLAS_FOUND}" = true ]; then
     echo -e "${YELLOW}⚠ WARNING: OpenBLAS detected in base image${NC}"
-    echo -e "${YELLOW}  Strategy: Will compile our own OpenBLAS and make it default via alternatives${NC}"
+    echo -e "${YELLOW}  Strategy: Will compile our own OpenBLAS and register it with alternatives${NC}"
 else
     echo -e "${GREEN}✓ Base image uses reference BLAS (libblas3) - safe to install OpenBLAS${NC}"
 fi
@@ -3250,10 +3290,11 @@ fi
 echo ""
 
 #--- Sub-block 12.7: Update alternatives system ---
-# Purpose: Make OpenBLAS the default BLAS/LAPACK implementation
+# Purpose: Register OpenBLAS with the alternatives system (fallback role unless
+#          DEFAULT_BLAS_PROVIDER explicitly requests OpenBLAS as the default)
 # Dependencies: Block 6.12B.6 (verified OpenBLAS installation)
 # Outputs: Updated alternatives configuration
-echo -e "${YELLOW}[6.12B.7] Updating alternatives system to make OpenBLAS default...${NC}"
+echo -e "${YELLOW}[6.12B.7] Registering OpenBLAS with alternatives system...${NC}"
 
 # Find the actual OpenBLAS library file
 OPENBLAS_LIB_FILE=""
@@ -3272,18 +3313,16 @@ if [ -z "${OPENBLAS_LIB_FILE}" ]; then
 fi
 
 # Update BLAS alternatives
-echo "  Setting OpenBLAS as default BLAS implementation..."
+OPENBLAS_ALT_PRIORITY=100
+echo "  Registering OpenBLAS BLAS alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
 update-alternatives --install /usr/lib/x86_64-linux-gnu/libblas.so.3 \
     libblas.so.3-x86_64-linux-gnu \
-    "${OPENBLAS_LIB_FILE}" 100 || {
+    "${OPENBLAS_LIB_FILE}" "${OPENBLAS_ALT_PRIORITY}" || {
     echo -e "  ${YELLOW}⚠ Failed to set BLAS alternative (may already be set)${NC}"
 }
 
-# Set OpenBLAS as the default (non-interactive)
-update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_LIB_FILE}" 2>/dev/null || true
-
 # Update LAPACK alternatives (OpenBLAS includes LAPACK)
-echo "  Setting OpenBLAS as default LAPACK implementation..."
+echo "  Registering OpenBLAS LAPACK alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
 LAPACK_ALT_LIB=""
 for lapack_file in \
     "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0" \
@@ -3297,13 +3336,22 @@ done
 if [ -n "${LAPACK_ALT_LIB}" ]; then
     update-alternatives --install /usr/lib/x86_64-linux-gnu/liblapack.so.3 \
         liblapack.so.3-x86_64-linux-gnu \
-        "${LAPACK_ALT_LIB}" 100 || {
+        "${LAPACK_ALT_LIB}" "${OPENBLAS_ALT_PRIORITY}" || {
         echo -e "  ${YELLOW}⚠ Failed to set LAPACK alternative (may already be set)${NC}"
     }
-    update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${LAPACK_ALT_LIB}" 2>/dev/null || true
 fi
 
-echo -e "  ${GREEN}✓ Alternatives system updated${NC}"
+if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
+    echo "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; selecting OpenBLAS as default provider..."
+    update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_LIB_FILE}" 2>/dev/null || true
+    if [ -n "${LAPACK_ALT_LIB}" ]; then
+        update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${LAPACK_ALT_LIB}" 2>/dev/null || true
+    fi
+else
+    echo "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; OpenBLAS registered as fallback alternative"
+fi
+
+echo -e "  ${GREEN}✓ Alternatives system registration complete${NC}"
 echo ""
 
 #--- Sub-block 12.8: Configure library paths ---
@@ -3465,11 +3513,27 @@ echo -e "${YELLOW}[6.12B.10] Final verification...${NC}"
 
 # Check alternatives
 echo "  Checking alternatives system:"
-if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "link currently points to.*openblas"; then
-    echo -e "    ${GREEN}✓ OpenBLAS is default BLAS implementation${NC}"
+CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
+if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "${OPENBLAS_LIB_FILE}"; then
+    echo -e "    ${GREEN}✓ OpenBLAS registered with alternatives (priority ${OPENBLAS_ALT_PRIORITY})${NC}"
 else
-    CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
-    echo -e "    ${YELLOW}⚠ Current BLAS: ${CURRENT_BLAS}${NC}"
+    echo -e "    ${YELLOW}⚠ OpenBLAS not listed in BLAS alternatives${NC}"
+fi
+
+if [ "${DEFAULT_BLAS_PROVIDER}" = "MKL" ]; then
+    if echo "${CURRENT_BLAS}" | grep -qi "mkl"; then
+        echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
+    else
+        echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred MKL${NC}"
+    fi
+elif [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
+    if echo "${CURRENT_BLAS}" | grep -qi "openblas"; then
+        echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
+    else
+        echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred OpenBLAS${NC}"
+    fi
+else
+    echo -e "    ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; current BLAS points to ${CURRENT_BLAS}${NC}"
 fi
 
 # Check ldconfig
@@ -3496,10 +3560,11 @@ echo ""
 echo "Summary:"
 echo "  - OpenBLAS ${OPENBLAS_VERSION} compiled with DYNAMIC_ARCH=1"
 echo "  - Installed to: ${OPENBLAS_INSTALL_PREFIX}"
-echo "  - Set as default BLAS/LAPACK via alternatives system"
+echo "  - Registered with alternatives (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})"
+echo "  - Current default BLAS provider: ${CURRENT_BLAS}"
 echo "  - Library paths configured (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)"
 echo "  - APT pinning configured (prevents system OpenBLAS installation)"
-echo "  - All existing packages will automatically use OpenBLAS"
+echo "  - Applications can select OpenBLAS via update-alternatives if desired"
 echo ""
 
 # Clean up build directory (keep installed files)
@@ -10362,10 +10427,20 @@ if [ "${OPENBLAS_VERIFIED}" = true ]; then
     fi
     
     # Check alternatives system
-    if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "openblas"; then
-        echo -e "  ${GREEN}✓ OpenBLAS is default BLAS implementation${NC}"
+    if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "${OPENBLAS_LIB}"; then
+        echo -e "  ${GREEN}✓ OpenBLAS registered with alternatives${NC}"
+        CURRENT_BLAS_ALT=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
+        if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
+            if echo "${CURRENT_BLAS_ALT}" | grep -qi "openblas"; then
+                echo -e "  ${GREEN}✓ Default BLAS provider matches DEFAULT_BLAS_PROVIDER (${CURRENT_BLAS_ALT})${NC}"
+            else
+                echo -e "  ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=OPENBLAS but current provider is ${CURRENT_BLAS_ALT}${NC}"
+            fi
+        else
+            echo -e "  ${YELLOW}ℹ Default BLAS provider remains ${CURRENT_BLAS_ALT} (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})${NC}"
+        fi
     else
-        echo -e "  ${YELLOW}⚠ OpenBLAS may not be default BLAS (check alternatives)${NC}"
+        echo -e "  ${YELLOW}⚠ OpenBLAS not registered with alternatives (expected fallback unavailable)${NC}"
     fi
 else
     echo -e "  ${RED}✗ ERROR: OpenBLAS not found at /usr/local/lib${NC}"
