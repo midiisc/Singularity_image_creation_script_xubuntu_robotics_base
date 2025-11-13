@@ -4319,12 +4319,12 @@ EOF
 #--- Sub-block 12B.1: Install GMP, MPFR, and METIS (SuiteSparse prerequisites) ---
 # Critical:
 #   - SPEX (part of SuiteSparse) requires GMP >= 6.1.2 and MPFR >= 4.0.2
-#   - CHOLMOD's METIS interface (libcholmod_metis) requires libmetis-dev to be present *before* SuiteSparse builds
+#   - CHOLMOD's METIS interface is compiled into libcholmod when libmetis-dev is present *before* SuiteSparse builds
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages (libgmp-dev, libmpfr-dev, libmetis-dev)
 echo -e "${YELLOW}[6.12B.1] Installing GMP, MPFR, and METIS (SuiteSparse prerequisites)...${NC}"
 echo "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
-echo "CHOLMOD's METIS support requires libmetis-dev to ensure libcholmod_metis is built"
+echo "CHOLMOD's METIS support requires libmetis-dev so libcholmod exports METIS ordering"
 if ! apt-get install -y libgmp-dev libmpfr-dev libmetis-dev; then
     echo "  ✗ Failed to install GMP/MPFR/METIS packages"
     exit 1
@@ -5348,7 +5348,7 @@ find_suitesparse_library() {
 }
 
 declare -A suitesparse_lib_paths=()
-declare -a suitesparse_required_libraries=("suitesparseconfig" "amd" "camd" "colamd" "ccolamd" "cholmod" "cholmod_metis" "spqr")
+declare -a suitesparse_required_libraries=("suitesparseconfig" "amd" "camd" "colamd" "ccolamd" "cholmod" "spqr")
 declare -a suitesparse_optional_libraries=("umfpack" "klu" "btf" "graphblas" "lagraph")
 
 for lib in "${suitesparse_required_libraries[@]}"; do
@@ -5381,6 +5381,22 @@ for lib in "${suitesparse_optional_libraries[@]}"; do
         echo "  • Optional component lib${lib}.so detected"
     fi
 done
+
+CHOLMOD_LIB_PATH="${suitesparse_lib_paths[cholmod]:-}"
+if [ -n "${CHOLMOD_LIB_PATH}" ]; then
+    if command -v nm >/dev/null 2>&1; then
+        if nm -D --defined-only "${CHOLMOD_LIB_PATH}" 2>/dev/null | grep -q "cholmod_metis"; then
+            echo "  ✓ libcholmod.so exports cholmod_metis (METIS partitioning enabled)"
+        else
+            echo "  ✗ libcholmod.so missing cholmod_metis symbol (expected when METIS is enabled)"
+            echo "    → Ensure libmetis-dev was installed prior to configuring SuiteSparse"
+            echo "    → Rebuild SuiteSparse after confirming METIS development headers are present"
+            exit 1
+        fi
+    else
+        echo "  ⚠ nm not available, skipping libcholmod METIS symbol verification"
+    fi
+fi
 
 SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INSTALL_PREFIX}/include"
 SUITESPARSE_LIB_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib"
@@ -5438,14 +5454,6 @@ for component in "${!suitesparse_optional_component_libnames[@]}"; do
         fi
     fi
 done
-# Ensure CHOLMOD's METIS companion library is exposed to downstream consumers
-if [ -n "${suitesparse_lib_paths[cholmod_metis]:-}" ]; then
-    if [ -z "${SUITESPARSE_LIBRARY_LIST}" ]; then
-        SUITESPARSE_LIBRARY_LIST="${suitesparse_lib_paths[cholmod_metis]}"
-    else
-        SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST};${suitesparse_lib_paths[cholmod_metis]}"
-    fi
-fi
 SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST#;}"
 
 {
@@ -5468,12 +5476,6 @@ set(SuiteSparse_LIBRARY_DIR "${SUITESPARSE_LIB_DIR}")
 set(SuiteSparse_LIBRARY_DIRS "${SUITESPARSE_LIB_DIR}")
 set(SuiteSparse_LIBRARIES "${SUITESPARSE_LIBRARY_LIST}")
 EOF
-
-    if [ -n "${suitesparse_lib_paths[cholmod_metis]:-}" ]; then
-        cat <<EOF
-set(SuiteSparse_CHOLMOD_METIS_LIBRARY "${suitesparse_lib_paths[cholmod_metis]}")
-EOF
-    fi
 
     for component in "${suitesparse_component_order[@]}"; do
         lib_key="${suitesparse_component_libnames[${component}]}"
@@ -5553,8 +5555,6 @@ endif()
 EOF
 
 CHOLMOD_LIBRARY_PATH="${suitesparse_lib_paths[cholmod]}"
-CHOLMOD_METIS_LIBRARY_PATH="${suitesparse_lib_paths[cholmod_metis]:-}"
-CHOLMOD_METIS_LIBRARY="${CHOLMOD_METIS_LIBRARY_PATH}"
 SPQR_LIBRARY_PATH="${suitesparse_lib_paths[spqr]}"
 CHOLMOD_CONFIG_DIR="${SUITESPARSE_CMAKE_BASE}/CHOLMOD"
 mkdir -p "${CHOLMOD_CONFIG_DIR}" "${SUITESPARSE_CMAKE_BASE}/cholmod"
@@ -5572,12 +5572,6 @@ if(TARGET SuiteSparse::CHOLMOD)
   set(CHOLMOD_INCLUDE_DIRS "${SUITESPARSE_INCLUDE_DIR}")
   set(CHOLMOD_INCLUDE_DIRS_RELEASE "${SUITESPARSE_INCLUDE_DIR}")
 EOF
-if [ -n "${CHOLMOD_METIS_LIBRARY_PATH}" ]; then
-cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
-  set(CHOLMOD_METIS_LIBRARY "${CHOLMOD_METIS_LIBRARY_PATH}")
-  set(CHOLMOD_METIS_LIBRARY_RELEASE "${CHOLMOD_METIS_LIBRARY_PATH}")
-EOF
-fi
 cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<'EOF'
   if(NOT TARGET CHOLMOD::CHOLMOD)
     add_library(CHOLMOD::CHOLMOD INTERFACE IMPORTED)
@@ -5611,7 +5605,7 @@ includedir=\${prefix}/include
 Name: SuiteSparse
 Description: Suite of sparse matrix libraries
 Version: ${SUITESPARSE_VERSION_STR}
-Libs: -L\${libdir} -lcholmod -lcholmod_metis -lamd -lcamd -lcolamd -lccolamd -lumfpack -lspqr -lgraphblas -llagraph -lsuitesparseconfig
+Libs: -L\${libdir} -lcholmod -lamd -lcamd -lcolamd -lccolamd -lumfpack -lspqr -lgraphblas -llagraph -lsuitesparseconfig
 Cflags: -I\${includedir}
 Requires: openblas
 EOF
@@ -5633,16 +5627,13 @@ SUITESPARSE_INCLUDE_DIR_ENV="${SUITESPARSE_INCLUDE_DIR}"
 SUITESPARSE_LIBRARY_DIR_ENV="${SUITESPARSE_LIB_DIR}"
 CHOLMOD_DIR="${CHOLMOD_CONFIG_DIR}"
 CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARY_PATH}"
-if [ -n "${CHOLMOD_METIS_LIBRARY_PATH}" ]; then
-    CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES};${CHOLMOD_METIS_LIBRARY_PATH}"
-fi
 CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES#;}"
 
 export SuiteSparse_DIR SuiteSparse_ROOT SuiteSparse_LIBRARIES_ENV
 export SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR_ENV}"
 export SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR_ENV}"
 export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
-export CHOLMOD_DIR CHOLMOD_LIBRARY_PATH CHOLMOD_METIS_LIBRARY_PATH CHOLMOD_METIS_LIBRARY CHOLMOD_LIBRARIES
+export CHOLMOD_DIR CHOLMOD_LIBRARY_PATH CHOLMOD_LIBRARIES
 
 for env_entry in \
     "SuiteSparse_DIR=${SuiteSparse_DIR}" \
@@ -5652,8 +5643,6 @@ for env_entry in \
     "SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIB_DIR}" \
     "CHOLMOD_DIR=${CHOLMOD_DIR}" \
     "CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}" \
-    "CHOLMOD_METIS_LIBRARY_PATH=${CHOLMOD_METIS_LIBRARY_PATH}" \
-    "CHOLMOD_METIS_LIBRARY=${CHOLMOD_METIS_LIBRARY_PATH}" \
     "CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARIES}"; do
     key="${env_entry%%=*}"
     value="${env_entry#*=}"
@@ -5683,8 +5672,6 @@ export SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIBRARY_DIR_ENV}
 export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
 export CHOLMOD_DIR=${CHOLMOD_DIR}
 export CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY_PATH=${CHOLMOD_METIS_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY=${CHOLMOD_METIS_LIBRARY}
 export CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARIES}
 export CMAKE_PREFIX_PATH=${SuiteSparse_DIR}:${CHOLMOD_DIR}:${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
 EOF
@@ -6811,7 +6798,6 @@ cmake .. \
   -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
   -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
   -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES}" \
-  -D CHOLMOD_METIS_LIBRARY="${CHOLMOD_METIS_LIBRARY_PATH}" \
   -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
   -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
 
@@ -7059,7 +7045,6 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
     -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
     -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES}" \
-    -D CHOLMOD_METIS_LIBRARY="${CHOLMOD_METIS_LIBRARY_PATH}" \
     -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
     -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
 
