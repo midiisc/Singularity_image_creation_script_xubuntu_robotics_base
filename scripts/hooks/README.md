@@ -4,12 +4,19 @@ This directory contains git hooks and validators for maintaining code quality.
 
 ## Available Hooks
 
-### 1. Pre-Commit Hook (Comprehensive)
+### 1. Pre-Commit Hook (Fully Automated with Auto-Fix)
 **File**: `pre-commit`  
-**Implements**: Multiple validation checks on build scripts
+**Implements**: Automated validation and fixing with zero human intervention
 
-**Validations Performed**:
-- **D4**: Sed character class escaping validation
+**Features**:
+- **Automatic Detection**: Finds sed pattern errors and CMake issues
+- **Automatic Fixing**: Corrects malformed patterns without user input
+- **Auto-Staging**: Re-stages fixed files automatically
+- **Re-Validation**: Confirms fixes work before allowing commit
+- **Loop Control**: Max 3 fix attempts with clear reporting
+
+**Validations & Auto-Fixes**:
+- **D4**: Sed character class escaping validation + AUTO-FIX
 - **M8/M9/M10**: CMake flag documentation validation
 
 **Installation**:
@@ -18,10 +25,17 @@ This directory contains git hooks and validators for maintaining code quality.
 ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
 ```
 
-**What it checks**:
-- Malformed sed bracket expressions (e.g., `sed 's/[[...'`)
-- Missing error fallbacks in command substitutions
-- Undocumented or invalid CMake flags
+**Automated Flow**:
+1. **Detect** → Hook finds issues during commit
+2. **Fix** → Automatically corrects sed patterns
+3. **Re-stage** → Fixed files added to commit
+4. **Re-validate** → Confirms all fixes worked
+5. **Commit** → Proceeds automatically if clean
+
+**What it checks & fixes**:
+- ✅ **AUTO-FIXES**: Malformed sed bracket expressions `sed 's/[[...'` → `sed 's/[][]...'`
+- ✅ **AUTO-FIXES**: Missing error fallbacks `$(sed ...)` → `$(sed ... || echo "")`
+- ⚠️ **Manual**: Undocumented or invalid CMake flags (requires review)
 
 ### 2. CMake Validator Hook (Legacy)
 **File**: `pre-commit-cmake-validator`  
@@ -35,9 +49,27 @@ ln -sf ../../scripts/hooks/pre-commit-cmake-validator .git/hooks/pre-commit
 
 **Note**: Use the comprehensive `pre-commit` hook instead for full validation.
 
-## Standalone Validators
+## Standalone Tools
 
-### Sed Pattern Validator
+### 1. Sed Pattern Auto-Fix (NEW!)
+**File**: `../helpers/auto_fix_sed_patterns.sh`
+
+**Usage**:
+```bash
+# Preview fixes (dry-run mode)
+./scripts/helpers/auto_fix_sed_patterns.sh script.sh --dry-run
+
+# Apply fixes automatically
+./scripts/helpers/auto_fix_sed_patterns.sh script.sh
+```
+
+**What it fixes**:
+- Converts `sed 's/[[...'` → `sed 's/[][]...'`
+- Adds `|| echo ""` to command substitutions
+- Creates backup before making changes
+- Runs validation to confirm fixes
+
+### 2. Sed Pattern Validator
 **File**: `../helpers/validate_sed_patterns.sh`
 
 **Usage**:
