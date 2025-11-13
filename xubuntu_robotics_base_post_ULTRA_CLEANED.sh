@@ -991,7 +991,11 @@ probe_and_set_mirrors() {
     else
       # Check if file is actually empty or only has comments
       local active_lines
-      active_lines=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null | grep -v '^$' | wc -l)
+      active_lines=$(
+        { grep -v "^#" /etc/apt/sources.list 2>/dev/null || true; } |
+        { grep -v '^$' || true; } |
+        wc -l
+      )
       if [ "${active_lines:-0}" -eq 0 ]; then
         echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
         verification_passed=true
