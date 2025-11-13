@@ -47,6 +47,7 @@ set -u
 # BLAS PROVIDER SELECTION
 #===============================================================================
 # DEFAULT_BLAS_PROVIDER controls which implementation owns the system interfaces.
+# This is a repo-specific knob consumed by this script (not an upstream distro flag).
 # Supported values: MKL (default) or OPENBLAS. Case-insensitive.
 DEFAULT_BLAS_PROVIDER="${DEFAULT_BLAS_PROVIDER:-MKL}"
 DEFAULT_BLAS_PROVIDER="$(echo "${DEFAULT_BLAS_PROVIDER}" | tr '[:lower:]' '[:upper:]')"
