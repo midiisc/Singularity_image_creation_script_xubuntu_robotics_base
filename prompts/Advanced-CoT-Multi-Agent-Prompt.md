@@ -419,10 +419,38 @@ PHASE O – TESTING, VALIDATION & GRACEFUL DEGRADATION
   O2. Dry-run/verbose modes behave correctly; documented usage.
   O3. Outline manual validation steps when automation is insufficient.
 
+PHASE P – PATTERN LEARNING & PREVENTION (NEW - CRITICAL)
+  P1. **Pattern Repository Check**: Review `prompts/Pattern-Learning-Repository.md` for learned error patterns.
+  P2. **Pattern Matching**: Check code against all active patterns using detection methods (regex, semantic checks).
+  P3. **Pattern Violations**: Report violations with Pattern ID, description, and prevention method.
+  P4. **Pattern Extraction**: If solving new preventable error:
+      - Determine if error is recurring (check git history, frequency threshold: 2+ occurrences)
+      - Classify error category (syntax, config, logic, performance, security, etc.)
+      - Extract pattern components:
+        * Pattern ID (P-YYYYMMDD-NNN format)
+        * Error description and root cause
+        * Detection method (regex, AST pattern, semantic check, build verification)
+        * Prevention approach with before/after examples
+        * Related checklist items (A-O phases, M items)
+      - Add to Pattern-Learning-Repository.md with initial frequency count
+      - Link to related checklist items
+  P5. **Pattern Evolution**: If pattern detected:
+      - Increment frequency counter in Pattern-Learning-Repository.md
+      - Note if pattern should be promoted to core checklist (20+ occurrences)
+      - Suggest pattern refinement if false positives occur
+  P6. **Current Active Patterns** (as of 2025-11-13): 10 patterns covering:
+      - Syntax/Compatibility: Bash 4+ features (${var^^}), local keyword misuse
+      - Performance/Security: Echo pipe to grep, unbound variables
+      - Configuration/Build: Invalid CMake flags, MKL/OpenBLAS conflicts, MKL TBB vs system TBB
+      - Network: HTTP error code validation
+      - Testing: Single-phase vs multi-phase verification
+      - Documentation: Multi-phase logic without markers
+
 EXECUTION NOTES:
   - For non-shell languages, map equivalent standards (e.g., Python logging/error handling, C++ RAII, CUDA streams) and note which checklist items adapt or become N/A.
   - For each phase, record PASS/FAIL with reasoning. If failing, provide corrected code and prevention guidance.
   - Enforce comment/documentation quality across phases: ensure at least minimum coverage, sync comments with behavior, and flag stale or missing documentation.
+  - **PHASE P (Pattern Learning)**: ALWAYS check `prompts/Pattern-Learning-Repository.md` for active patterns before completing review. Report any pattern matches with Pattern ID, violation details, and auto-fix applied. If solving new recurring error, extract pattern automatically and add to repository.
 ```
 
 ---
