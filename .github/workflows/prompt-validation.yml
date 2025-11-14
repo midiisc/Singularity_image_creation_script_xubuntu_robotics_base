@@ -290,10 +290,60 @@ jobs:
             analysis
           check_together: 'yes'
 
+  ai-code-review:
+    name: AI Code Review (Claude)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch full history for proper diff comparison
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure Git for diff
+        run: |
+          git config --global --add safe.directory ${{ github.workspace }}
+          # Fetch base branch for PR diffs
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin ${{ github.base_ref }}:${{ github.base_ref }} || true
+          else
+            git fetch origin beta:beta || git fetch origin main:main || true
+          fi
+
+      - name: Run AI Code Review
+        env:
+          GITHUB_ACTIONS: "true"
+          GITHUB_BASE_REF: ${{ github.base_ref }}
+          GITHUB_DEFAULT_BRANCH: "beta"
+          AI_REVIEW_PROVIDER: "anthropic"
+          AI_REVIEW_MODEL: "claude-sonnet-4"
+          AI_REVIEW_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
+          AI_REVIEW_TIMEOUT: "180"
+          AI_REVIEW_MAX_LINES: "400"
+          AI_REVIEW_MAX_TOKENS: "8192"
+        run: |
+          echo "Running AI code review with Claude..."
+          python3 scripts/hooks/ai_precommit_review.py || {
+            EXIT_CODE=$?
+            if [ $EXIT_CODE -eq 1 ]; then
+              echo "::warning::AI review found issues. Review the output above for details."
+              echo "This is a non-blocking check. Fix issues before merging."
+              exit 0  # Don't fail the workflow, just warn
+            else
+              echo "::error::AI review failed with exit code $EXIT_CODE"
+              exit $EXIT_CODE
+            fi
+          }
+
   summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [check-pipe-patterns, validate-cmake-flags, check-multi-phase-docs, check-tbb-verification, check-heredoc-syntax, check-bash-compatibility]
+    needs: [check-pipe-patterns, validate-cmake-flags, check-multi-phase-docs, check-tbb-verification, check-heredoc-syntax, check-bash-compatibility, ai-code-review]
     if: always()
     steps:
       - name: Summary
@@ -309,3 +359,4 @@ jobs:
           echo "4. Ensure TBB verification exists for HPC libraries"
           echo "5. Quote heredoc delimiters for literal content"
           echo "6. Avoid Bash 4+ features or add version checks"
+          echo "7. Review AI code review findings (if any)"

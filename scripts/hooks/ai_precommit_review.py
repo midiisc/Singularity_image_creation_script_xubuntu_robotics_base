@@ -210,7 +210,31 @@ def is_non_functional_file(path: str) -> bool:
     return False
 
 
+def is_github_actions() -> bool:
+    """Check if running in GitHub Actions environment."""
+    return os.getenv("GITHUB_ACTIONS") == "true"
+
+
+def get_pr_base_ref() -> Optional[str]:
+    """Get the base ref for PR diff in GitHub Actions."""
+    # In GitHub Actions, we can get base ref from environment
+    # For PR events: GITHUB_BASE_REF contains the base branch name
+    # For push events: compare with previous commit or default branch
+    base_branch = os.getenv("GITHUB_BASE_REF")
+    if base_branch:
+        # Fetch the base branch first to ensure we can diff against it
+        run_git(["fetch", "origin", base_branch], check=False)
+        return f"origin/{base_branch}"
+    
+    # For push events, try to get default branch or use beta/main
+    default_branch = os.getenv("GITHUB_DEFAULT_BRANCH", "beta")
+    # Try to fetch default branch
+    run_git(["fetch", "origin", default_branch], check=False)
+    return f"origin/{default_branch}"
+
+
 def get_staged_files() -> List[str]:
+    """Get list of staged files (for local pre-commit)."""
     result = run_git(["diff", "--cached", "--name-only", "--diff-filter=ACMRT"])
     if result.returncode != 0:
         raise ReviewFailure(
@@ -227,7 +251,39 @@ def get_staged_files() -> List[str]:
     return paths
 
 
+def get_pr_files() -> List[str]:
+    """Get list of changed files in PR (for GitHub Actions)."""
+    base_ref = get_pr_base_ref()
+    if not base_ref:
+        # Fallback: compare with HEAD~1 (previous commit)
+        result = run_git(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD~1", "HEAD"])
+    else:
+        # Compare with base branch
+        # First ensure we have the base ref locally
+        result = run_git(["diff", "--name-only", "--diff-filter=ACMRT", base_ref, "HEAD"])
+    
+    if result.returncode != 0:
+        # If diff fails, try fallback to HEAD~1
+        print(f"Warning: Could not diff against {base_ref}, trying HEAD~1...")
+        result = run_git(["diff", "--name-only", "--diff-filter=ACMRT", "HEAD~1", "HEAD"])
+        if result.returncode != 0:
+            raise ReviewFailure(
+                f"Failed to enumerate PR files:\n{result.stderr.strip()}"
+            )
+    
+    paths = []
+    for line in result.stdout.splitlines():
+        path = line.strip()
+        if not path:
+            continue
+        if Path(path).suffix.lower() in ALLOWED_SUFFIXES:
+            if (REPO_ROOT / path).exists():
+                paths.append(path)
+    return paths
+
+
 def get_staged_diff(path: str) -> str:
+    """Get staged diff for a file (for local pre-commit)."""
     result = run_git(
         [
             "diff",
@@ -242,6 +298,56 @@ def get_staged_diff(path: str) -> str:
         raise ReviewFailure(
             f"Failed to obtain staged diff for {path}:\n{result.stderr.strip()}"
         )
+    return result.stdout.strip()
+
+
+def get_pr_diff(path: str) -> str:
+    """Get PR diff for a file (for GitHub Actions)."""
+    base_ref = get_pr_base_ref()
+    if not base_ref:
+        # Fallback: compare with HEAD~1
+        result = run_git(
+            [
+                "diff",
+                "--unified=0",
+                "--no-color",
+                "HEAD~1",
+                "HEAD",
+                "--",
+                path,
+            ]
+        )
+    else:
+        # Compare with base branch
+        result = run_git(
+            [
+                "diff",
+                "--unified=0",
+                "--no-color",
+                base_ref,
+                "HEAD",
+                "--",
+                path,
+            ]
+        )
+    
+    if result.returncode != 0:
+        # If diff fails, try fallback to HEAD~1
+        result = run_git(
+            [
+                "diff",
+                "--unified=0",
+                "--no-color",
+                "HEAD~1",
+                "HEAD",
+                "--",
+                path,
+            ]
+        )
+        if result.returncode != 0:
+            raise ReviewFailure(
+                f"Failed to obtain PR diff for {path}:\n{result.stderr.strip()}"
+            )
     return result.stdout.strip()
 
 
@@ -1018,12 +1124,23 @@ def collect_reviews(
 ) -> Tuple[bool, List[Tuple[str, str, Dict[str, object]]]]:
     repo_name = REPO_ROOT.name
     system_prompt = default_system_prompt()
-    staged_files = get_staged_files()
-    if not staged_files:
+    
+    # Detect environment and get appropriate files
+    in_github_actions = is_github_actions()
+    if in_github_actions:
+        print("Running in GitHub Actions - reviewing PR diff...")
+        changed_files = get_pr_files()
+        get_diff_func = get_pr_diff
+    else:
+        print("Running locally - reviewing staged files...")
+        changed_files = get_staged_files()
+        get_diff_func = get_staged_diff
+    
+    if not changed_files:
         return True, []
 
     # Check for non-functional files and reject them
-    non_functional_files = [f for f in staged_files if is_non_functional_file(f)]
+    non_functional_files = [f for f in changed_files if is_non_functional_file(f)]
     if non_functional_files:
         print("\n" + "=" * 70)
         print("⚠️  NON-FUNCTIONAL FILES DETECTED")
@@ -1041,8 +1158,8 @@ def collect_reviews(
     
     # Count total chunks for progress tracking
     total_chunks = 0
-    for path in staged_files:
-        diff = get_staged_diff(path)
+    for path in changed_files:
+        diff = get_diff_func(path)
         chunks = chunk_diff(diff, max_chunk_lines)
         total_chunks += len([c for c in chunks if c.strip()])
     
@@ -1050,11 +1167,11 @@ def collect_reviews(
         return True, []
     
     current_chunk = 0
-    print(f"Reviewing {total_chunks} chunk(s) across {len(staged_files)} file(s) with timeout {timeout}s per request...")
+    print(f"Reviewing {total_chunks} chunk(s) across {len(changed_files)} file(s) with timeout {timeout}s per request...")
     print("")
 
-    for path in staged_files:
-        diff = get_staged_diff(path)
+    for path in changed_files:
+        diff = get_diff_func(path)
         chunks = chunk_diff(diff, max_chunk_lines)
         if not chunks:
             continue

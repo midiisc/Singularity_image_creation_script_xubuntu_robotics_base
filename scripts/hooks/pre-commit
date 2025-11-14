@@ -599,52 +599,23 @@ if [ -x "$DOC_VALIDATOR" ]; then
 fi
 
 ################################################################################
-# AI-ASSISTED CODE REVIEW (Pattern Learning Enabled)
+# AI-ASSISTED CODE REVIEW (DISABLED - RUNS IN GITHUB ACTIONS ONLY)
 ################################################################################
 
-AI_REVIEW_SCRIPT="${WORKSPACE_ROOT}/scripts/hooks/ai_precommit_review.py"
-
-# AI Review is DISABLED by default (demand-based only)
-# To enable AI review, set: ENABLE_AI_REVIEW=1 git commit
-# Or export it: export ENABLE_AI_REVIEW=1
-if [ -x "$AI_REVIEW_SCRIPT" ] && [ "${ENABLE_AI_REVIEW:-0}" = "1" ]; then
-  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
-  echo -e "${CYAN}│  AI-ASSISTED CODE REVIEW (with Pattern Learning)               │${NC}"
-  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
-  echo ""
-  
-  # Run AI review with increased timeout for large diffs
-  # Use environment variable or default to 120 seconds (increased from 60)
-  AI_REVIEW_TIMEOUT="${AI_REVIEW_TIMEOUT:-120}"
-  echo -e "${BLUE}[INFO]${NC} AI review timeout: ${AI_REVIEW_TIMEOUT} seconds"
-  echo ""
-  
-  # Run AI review (this will extract patterns from findings automatically)
-  if ! python3 "$AI_REVIEW_SCRIPT" --timeout "${AI_REVIEW_TIMEOUT}" 2>&1; then
-    EXIT_CODE=$?
-    VALIDATION_FAILED=true
-    if [ $EXIT_CODE -eq 124 ] || [ $EXIT_CODE -eq 143 ]; then
-      echo -e "${RED}[✗]${NC} AI review timed out after ${AI_REVIEW_TIMEOUT} seconds"
-      echo -e "${YELLOW}[⚠]${NC} Consider increasing timeout: export AI_REVIEW_TIMEOUT=180"
-    else
-      echo -e "${RED}[✗]${NC} AI review found issues"
-    fi
-    echo ""
-    echo -e "${BLUE}[NOTE]${NC} Patterns from AI review findings are automatically extracted and"
-    echo "      added to Pattern-Learning-Repository.md for future prevention."
-    echo ""
-  else
-    echo -e "${GREEN}[✓]${NC} AI review passed"
-    echo ""
-  # ENDIF: AI review result
-  fi
-# ENDIF: AI_REVIEW_SCRIPT availability and ENABLE_AI_REVIEW flag
-elif [ -x "$AI_REVIEW_SCRIPT" ]; then
-  # AI review is available but disabled by default
-  echo -e "${BLUE}[INFO]${NC} AI review is disabled by default (demand-based only)"
-  echo -e "${BLUE}[INFO]${NC} To enable: ${YELLOW}ENABLE_AI_REVIEW=1 git commit${NC}"
-  echo ""
-fi
+# AI Review is COMPLETELY DISABLED in local pre-commit hooks.
+# AI review runs automatically in GitHub Actions on all PRs and pushes.
+#
+# This ensures:
+#   - No API costs on local commits
+#   - Consistent review across all contributors
+#   - Centralized review history in GitHub Actions
+#   - Cannot be bypassed (runs in CI/CD)
+#
+# AI review in GitHub Actions:
+#   - Runs automatically on all PRs and pushes to main/beta
+#   - Uses GitHub Secrets for API keys (secure)
+#   - Provides review findings in workflow logs
+#   - Cannot be bypassed
 
 ################################################################################
 # FINAL VERDICT

@@ -1,31 +1,99 @@
-# AI-Assisted Pre-Commit Hook
+# AI-Assisted Code Review
 
-The repository ships with a strict, AI-backed git pre-commit hook that builds on the existing `.cursor/pre-commit-audit.sh` shell review. This document explains how the hook works, how to configure the AI integration, and how to bypass it when necessary.
+This repository uses AI-powered code review via Claude (Anthropic) to ensure code quality and consistency. **AI review is now primarily run in GitHub Actions** on all PRs and pushes, ensuring consistent review across all contributors.
 
 ## Overview
 
-- Hook script: `.git/hooks/pre-commit`
+- **GitHub Actions**: AI review runs automatically on all PRs and pushes (primary method)
+- **Local pre-commit hook**: AI review is **DISABLED by default** (can be enabled with `ENABLE_AI_REVIEW=1`)
 - AI reviewer: `scripts/hooks/ai_precommit_review.py`
 - Prompt source: `prompts/Code_check_prompt_manual.txt`
 
-The hook runs two consecutive stages:
+## AI Review in GitHub Actions (Primary Method)
 
-1. `.cursor/pre-commit-audit.sh` – exhaustive static checks for shell scripts.
-2. `ai_precommit_review.py` – collects staged diffs, sends them to a configured AI model, and blocks commits when the AI finds critical issues.
+AI review runs automatically in GitHub Actions on:
+- All pull requests (PRs)
+- All pushes to `beta` and `main` branches
+
+### Configuration
+
+1. **Set GitHub Secret**: Add your Anthropic API key as a GitHub Secret:
+   - Go to: Repository Settings → Secrets and variables → Actions
+   - Add secret: `ANTHROPIC_API_KEY` with your API key value
+   - This is the same API key you use locally
+
+2. **Automatic Execution**: The AI review job runs automatically - no additional configuration needed.
+
+3. **Review Results**: 
+   - Review findings are displayed in the GitHub Actions workflow output
+   - Currently configured as **non-blocking** (warnings only)
+   - Review the output to see any issues found
+
+### Benefits of GitHub Actions AI Review
+
+- ✅ **Consistent**: All PRs get reviewed, cannot be bypassed
+- ✅ **Secure**: API keys stored in GitHub Secrets
+- ✅ **Centralized**: Review history visible in PR timeline
+- ✅ **Cost-effective**: Only runs on PRs/pushes, not every local commit
+- ✅ **Team-wide**: Same review standards for all contributors
+
+## Local Pre-Commit Hook (Optional)
+
+**AI review is DISABLED by default in local pre-commit hooks.**
+
+The pre-commit hook runs static checks only:
+1. Static validation checks (pipe patterns, CMake flags, etc.)
+2. ~~AI review~~ (disabled by default)
+
+### Enabling Local AI Review (Not Recommended)
+
+If you want to enable AI review locally (not recommended - use GitHub Actions instead):
+
+```bash
+# One-time enable for a commit
+ENABLE_AI_REVIEW=1 git commit
+
+# Or export for current session
+export ENABLE_AI_REVIEW=1
+git commit
+```
+
+**Why disabled locally?**
+- Avoids API costs on every local commit
+- Ensures consistent review in CI/CD
+- Prevents bypass of review requirements
+- Centralizes review history in PRs
 
 ## What the AI reviewer does
 
-- Filters staged files with extensions commonly used in this repository (`.sh`, `.py`, `.cpp`, `.yaml`, etc.).
-- Generates unified diffs (`git diff --cached --unified=0`) and splits them into chunks (default 400 diff lines).
-- Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` as the authoritative checklist.
-- Dynamically routes simple chunks to the secondary model (OpenAI) when configured, reserving Claude for complex or long-context reviews.
-- Calls the selected AI model (Claude by default) and expects JSON with `status`, `summary`, and structured `findings`.
-- Rejects the commit when any chunk returns `status: "reject"`; prints the AI feedback for each failing chunk.
-- Caches successful responses in `.git/.ai-review-cache/` to avoid re-reviewing unchanged chunks.
+The AI reviewer (`ai_precommit_review.py`) automatically detects the environment:
+
+- **GitHub Actions**: Reviews PR diffs (compares base branch to PR branch)
+- **Local**: Reviews staged files (when enabled with `ENABLE_AI_REVIEW=1`)
+
+Common behavior:
+- Filters files with extensions commonly used in this repository (`.sh`, `.py`, `.cpp`, `.yaml`, etc.)
+- Generates unified diffs and splits them into chunks (default 400 diff lines)
+- Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` as the authoritative checklist
+- Calls Claude (Anthropic) API and expects JSON with `status`, `summary`, and structured `findings`
+- Reports findings with severity levels (critical, major, minor)
+- In GitHub Actions: Outputs findings to workflow logs
+- In local mode: Blocks commit when critical issues found
 
 ## Configuration
 
-Set the following environment variables (e.g., in your shell profile or via `direnv`). For convenience, `scripts/hooks/pre-commit.env.example` can be copied to `.git/hooks/pre-commit.env` and customised; the example pins `SKIP_AI_REVIEW=0` so the AI review always runs unless you explicitly override it.
+### GitHub Actions Configuration (Required)
+
+1. **Add GitHub Secret**:
+   - Repository Settings → Secrets and variables → Actions
+   - Add secret: `ANTHROPIC_API_KEY`
+   - Value: Your Anthropic API key (same as you use locally)
+
+2. **Automatic Setup**: The workflow is already configured - no additional steps needed.
+
+### Local Configuration (Optional - Only if enabling local review)
+
+If you want to enable local AI review (not recommended), set the following environment variables:
 
 ### Auto-Loading Environment Variables
 
