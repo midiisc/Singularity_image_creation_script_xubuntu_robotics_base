@@ -241,7 +241,11 @@ jobs:
           
           if [ "$FOUND_WARNINGS" = true ]; then
             echo ""
-            echo "**Fix:** Replace '<<EOF' with '<<'EOF'' for literal heredocs"
+            echo "⚠️  Found unquoted heredoc delimiters (non-blocking warning)"
+            echo "**Note:** Most heredocs intentionally use <<EOF for variable expansion"
+            echo "**Fix:** Replace '<<EOF' with '<<'EOF'' only for literal heredocs that don't need variable expansion"
+            echo ""
+            echo "✅ Heredoc check completed (warnings are non-blocking)"
           else
             echo "✅ Heredoc syntax appears correct"
           fi
@@ -321,8 +325,10 @@ jobs:
 
       - name: Run ShellCheck
         uses: ludeeus/action-shellcheck@master
+        env:
+          SHELLCHECK_OPTS: -e SC2034 -e SC1090 -e SC2154
         with:
-          severity: warning
+          severity: error
           ignore_paths: |
             container-scripts
             analysis

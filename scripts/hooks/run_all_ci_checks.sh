@@ -503,7 +503,6 @@ check_shellcheck() {
   
   local shellcheck_failed=false
   local shellcheck_errors=""
-  local shellcheck_warnings=""
   
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"

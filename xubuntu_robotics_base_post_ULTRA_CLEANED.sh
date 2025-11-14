@@ -5775,7 +5775,7 @@ EOF
 set(SuiteSparse_CHOLMOD_METIS_LIBRARY "${suitesparse_lib_paths[cholmod_metis]}")
 EOF
     else
-        cat <<EOF
+        cat <<'EOF'
 # Modern SuiteSparse: METIS is embedded in libcholmod.so, no separate library
 EOF
     fi
@@ -8944,9 +8944,9 @@ lapack_libs_line=$(grep -E "^LAPACK_LIBRARIES" CMakeCache.txt 2>/dev/null | head
 if [ -n "${lapack_libs_line}" ]; then
   echo "  • ${lapack_libs_line}"
   # Verify MKL libraries are used (not OpenBLAS)
-  if echo "${lapack_libs_line}" | grep -qE "(mkl_intel_lp64|mkl_gnu_thread|mkl_core)"; then
+  if grep -qE "(mkl_intel_lp64|mkl_gnu_thread|mkl_core)" <<< "${lapack_libs_line}"; then
     echo -e "  ${GREEN}✓ LAPACK libraries verified: Using MKL (correct)${NC}"
-  elif echo "${lapack_libs_line}" | grep -qE "openblas"; then
+  elif grep -qE "openblas" <<< "${lapack_libs_line}"; then
     echo -e "  ${RED}✗ ERROR: LAPACK libraries point to OpenBLAS (should be MKL)${NC}"
   fi
 fi
