@@ -87,8 +87,15 @@ globs:
    - Pattern learning best practices
    - Compliance checklist
 
+9. **LOCAL-PRE-COMMIT-VALIDATION.mdc** (~300 lines)
+   - Local pre-commit validation for IDE commits
+   - Comprehensive CI checks before commit
+   - Auto-fix and retry logic
+   - ShellCheck integration
+   - Error reporting and commit blocking
+
 **Benefits of Modular Structure**:
-- ✅ Single source of truth (8 focused modules)
+- ✅ Single source of truth (9 focused modules)
 - ✅ All modules under 500 lines (proper context maintenance)
 - ✅ Easier to modify and maintain
 - ✅ Clear organization and references
@@ -109,6 +116,7 @@ globs:
 - `.cursor/rules/CLOUD-AGENTS.mdc` - Cloud agent specifics
 - `.cursor/rules/COMMUNICATION.mdc` - User communication and feedback
 - `.cursor/rules/BEST-PRACTICES.mdc` - Best practices compliance
+- `.cursor/rules/LOCAL-PRE-COMMIT-VALIDATION.mdc` - Local pre-commit validation
 - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Quick reference and pre-work checklist
 - `.cursorrules` - Points to this index
 - `prompts/Code_check_prompt_manual.txt` - Bash validation checklist

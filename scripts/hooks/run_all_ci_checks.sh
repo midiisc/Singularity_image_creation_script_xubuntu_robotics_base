@@ -189,8 +189,15 @@ check_multi_phase_docs() {
       continue
     fi
     
-    complex_blocks=$((complex_blocks + $(grep -c "for candidate in" "$script_path" 2>/dev/null || echo "0")))
-    phase_markers=$((phase_markers + $(grep -c "# Phase [0-9]:" "$script_path" 2>/dev/null || echo "0")))
+    local candidate_count
+    candidate_count=$(grep -c "for candidate in" "$script_path" 2>/dev/null || true)
+    candidate_count=${candidate_count:-0}
+    complex_blocks=$((complex_blocks + candidate_count))
+    
+    local phase_count
+    phase_count=$(grep -c "# Phase [0-9]:" "$script_path" 2>/dev/null || true)
+    phase_count=${phase_count:-0}
+    phase_markers=$((phase_markers + phase_count))
   done
   
   echo "  Found $complex_blocks complex blocks, $phase_markers phase markers"
@@ -270,7 +277,10 @@ check_heredoc_syntax() {
       continue
     fi
     
-    unquoted_count=$((unquoted_count + $(grep -c "<<EOF" "$script_path" 2>/dev/null | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" | wc -l || echo "0")))
+    local heredoc_count
+    heredoc_count=$(grep -c "<<EOF" "$script_path" 2>/dev/null | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" | wc -l || true)
+    heredoc_count=${heredoc_count:-0}
+    unquoted_count=$((unquoted_count + heredoc_count))
   done
   
   if [ "$unquoted_count" -gt 0 ]; then

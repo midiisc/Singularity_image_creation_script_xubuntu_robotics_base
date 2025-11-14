@@ -1,0 +1,311 @@
+---
+name: Local Pre-Commit Validation
+description: Run comprehensive validation locally before committing from IDE
+version: "1.0"
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+# 🔍 LOCAL PRE-COMMIT VALIDATION
+
+## ⚠️ CRITICAL ENFORCEMENT NOTICE
+
+**These rules are AUTOMATICALLY ENFORCED by Cursor IDE. MANDATORY and NON-NEGOTIABLE.**
+
+**This rule applies ONLY when committing from IDE (local development environment).**
+
+**See `CORE-AUTOMATION.mdc` for automation principles (all validation errors are auto-fixed).**
+
+---
+
+## MANDATORY PRE-COMMIT VALIDATION (IDE COMMITS ONLY)
+
+**BEFORE executing ANY `git commit` command from IDE, you MUST:**
+
+1. **Run comprehensive local validation**
+2. **Auto-fix all fixable issues**
+3. **Re-run validation until all checks pass**
+4. **Only then proceed with commit**
+
+**This ensures all checks pass BEFORE the git hook runs, preventing commit failures.**
+
+---
+
+## VALIDATION WORKFLOW
+
+### Step 1: Run Pre-Commit Hook Locally
+
+**MANDATORY**: Before committing, run the pre-commit hook locally:
+
+```bash
+# Get repository root
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+# Run pre-commit hook
+"${REPO_ROOT}/.git/hooks/pre-commit" || "${REPO_ROOT}/scripts/hooks/pre-commit"
+```
+
+**Expected behavior**:
+- Hook runs all validation checks
+- Auto-fixes fixable issues
+- Re-stages fixed files
+- Reports validation status
+
+**If hook fails**:
+- **AUTOMATIC**: Analyze failures
+- **AUTOMATIC**: Fix all fixable issues
+- **AUTOMATIC**: Re-stage fixes
+- **AUTOMATIC**: Re-run hook until it passes
+- **ONLY THEN**: Proceed with commit
+
+---
+
+### Step 2: Run Comprehensive CI Checks
+
+**MANDATORY**: Run all CI checks locally:
+
+```bash
+# Run comprehensive CI checks
+"${REPO_ROOT}/scripts/hooks/run_all_ci_checks.sh"
+```
+
+**Checks included**:
+1. **Unsafe pipe patterns** (echo | grep) → Auto-fixed to here-strings
+2. **CMake flag validation** → Validated against documentation
+3. **Multi-phase logic documentation** → Warns if missing
+4. **TBB verification blocks** → Ensures all HPC libraries have verification
+5. **Heredoc syntax** → Warns about unquoted delimiters
+6. **Bash compatibility** → Auto-fixes Bash 4+ features
+7. **ShellCheck linting** → Reports linting errors
+
+**Expected behavior**:
+- All checks run and report status
+- Auto-fixes applied automatically
+- Fixed files staged automatically
+- Validation re-run until all pass
+
+**If checks fail**:
+- **AUTOMATIC**: Fix all fixable issues
+- **AUTOMATIC**: Re-stage fixes
+- **AUTOMATIC**: Re-run checks (max 3 attempts)
+- **ONLY THEN**: Proceed with commit
+
+---
+
+### Step 3: Run ShellCheck (If Available)
+
+**OPTIONAL but RECOMMENDED**: Run ShellCheck on staged shell scripts:
+
+```bash
+# Check if shellcheck is available
+if command -v shellcheck >/dev/null 2>&1; then
+  # Get staged shell scripts
+  STAGED_SH_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.sh$' || true)
+  
+  if [ -n "$STAGED_SH_FILES" ]; then
+    # Run shellcheck on each file
+    for file in $STAGED_SH_FILES; do
+      shellcheck "$file" || {
+        echo "⚠️  ShellCheck found issues in $file"
+        # Auto-fix if possible (some issues can be auto-fixed)
+        # Report remaining issues
+      }
+    done
+  fi
+fi
+```
+
+**Expected behavior**:
+- ShellCheck runs on all staged `.sh` files
+- Errors reported with file:line:code format
+- Auto-fixable issues fixed automatically
+- Remaining issues reported for manual review
+
+---
+
+## AUTO-FIX REQUIREMENTS
+
+**ALL validation errors MUST be auto-fixed automatically:**
+
+### Auto-Fixable Issues:
+- ✅ Unsafe pipe patterns → Replace with here-strings
+- ✅ Missing documentation headers → Add header comments
+- ✅ Control structure markers → Add missing ENDIF/ENDFOR/etc.
+- ✅ Bash compatibility issues → Fix Bash 4+ features
+- ✅ Simple ShellCheck warnings → Fix automatically
+- ✅ CMake flag formatting → Normalize formatting
+
+### Manual Review Required (Report Only):
+- ❌ Complex logic errors (requires code review)
+- ❌ Security vulnerabilities (requires security review)
+- ❌ Architecture decisions (requires design review)
+
+**When auto-fix is applied**:
+1. **AUTOMATIC**: Apply fixes to files
+2. **AUTOMATIC**: Stage fixed files: `git add <fixed-files>`
+3. **AUTOMATIC**: Re-run validation
+4. **AUTOMATIC**: Continue until all checks pass
+5. **REPORT**: Inform user of fixes applied (informational only)
+
+---
+
+## VALIDATION RETRY LOGIC
+
+**Maximum 3 retry attempts per validation cycle:**
+
+```bash
+MAX_RETRIES=3
+RETRY_COUNT=0
+VALIDATION_PASSED=false
+
+while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$VALIDATION_PASSED" != true ]; do
+  RETRY_COUNT=$((RETRY_COUNT + 1))
+  
+  # Run validation
+  if run_validation; then
+    VALIDATION_PASSED=true
+  else
+    # Auto-fix issues
+    auto_fix_issues
+    
+    # Re-stage fixes
+    git add -u
+    
+    # Continue loop to re-validate
+  fi
+done
+
+if [ "$VALIDATION_PASSED" != true ]; then
+  echo "❌ Validation failed after $MAX_RETRIES attempts"
+  echo "⚠️  Some issues require manual review"
+  exit 1
+fi
+```
+
+---
+
+## COMMIT BLOCKING
+
+**Commit MUST be blocked if:**
+- Pre-commit hook fails after 3 retry attempts
+- CI checks fail after 3 retry attempts
+- Critical ShellCheck errors found (cannot be auto-fixed)
+- Security vulnerabilities detected
+- Architecture violations detected
+
+**Commit MAY proceed if:**
+- All checks pass
+- Only warnings remain (non-blocking)
+- All auto-fixable issues resolved
+
+---
+
+## ERROR REPORTING
+
+**When validation fails, report:**
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚠️  PRE-COMMIT VALIDATION FAILED
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Repository: <repo-name> (<absolute-path>)
+Validation Stage: <pre-commit-hook | ci-checks | shellcheck>
+
+FAILED CHECKS:
+  ✗ <check-name>: <error-description>
+    File: <file-path>:<line-number>
+    Issue: <specific-issue>
+    Auto-fix: <attempted | not-applicable>
+
+AUTO-FIXES APPLIED:
+  ✓ <fix-description> (file: <file-path>)
+  ✓ <fix-description> (file: <file-path>)
+
+REMAINING ISSUES (Manual Review Required):
+  ⚠️  <issue-description> (file: <file-path>:<line-number>)
+  ⚠️  <issue-description> (file: <file-path>:<line-number>)
+
+NEXT STEPS:
+  1. Review remaining issues above
+  2. Fix manually or request AI assistance
+  3. Re-run validation: ./scripts/hooks/run_all_ci_checks.sh
+  4. Commit when all checks pass
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+---
+
+## INTEGRATION WITH GIT WORKFLOW
+
+**This validation runs BEFORE the git commit command:**
+
+```bash
+# User requests: "commit this"
+# AI agent workflow:
+
+1. Check if committing from IDE (local environment)
+   → If yes, run local pre-commit validation
+   → If no (cloud agent), skip (hook will run on server)
+
+2. Run pre-commit hook locally
+   → Auto-fix issues
+   → Re-stage fixes
+   → Re-run until passes
+
+3. Run CI checks locally
+   → Auto-fix issues
+   → Re-stage fixes
+   → Re-run until passes
+
+4. Run ShellCheck (if available)
+   → Report issues
+   → Auto-fix if possible
+
+5. If all checks pass:
+   → Execute: git commit -m "..."
+   → Git hook will run (should pass since we pre-validated)
+
+6. If checks fail after 3 retries:
+   → Block commit
+   → Report errors
+   → Wait for user to fix or approve
+```
+
+---
+
+## WHEN TO SKIP LOCAL VALIDATION
+
+**Skip local validation ONLY when:**
+- Committing from cloud agent (hook will run on server)
+- User explicitly requests: `git commit --no-verify`
+- Emergency hotfix (with explicit user approval)
+
+**Otherwise, ALWAYS run local validation before committing.**
+
+---
+
+## SUMMARY
+
+**Before EVERY commit from IDE:**
+1. ✅ Run pre-commit hook locally
+2. ✅ Run comprehensive CI checks
+3. ✅ Run ShellCheck (if available)
+4. ✅ Auto-fix all fixable issues
+5. ✅ Re-run validation until all pass
+6. ✅ Only then execute `git commit`
+
+**This ensures:**
+- All checks pass before commit
+- No commit failures from hooks
+- Clean commit history
+- Consistent code quality
+
+---
+
+**See other rule modules:**
+- `CORE-AUTOMATION.mdc` - Automation principles
+- `VALIDATION.mdc` - Validation triggers and rules
+- `GIT-WORKFLOW.mdc` - Git operations and workflow

@@ -102,12 +102,19 @@ git status
    - All work happens on the branch backing the active PR
    - Never commit directly to `beta` or `main`
 
-2. **Stage and commit automatically**:
+2. **Run local pre-commit validation (IDE commits only)**:
+   - **MANDATORY**: Before committing from IDE, run local validation (see `LOCAL-PRE-COMMIT-VALIDATION.mdc`)
+   - Run pre-commit hook: `./scripts/hooks/pre-commit` or `.git/hooks/pre-commit`
+   - Run CI checks: `./scripts/hooks/run_all_ci_checks.sh`
+   - Auto-fix all issues and re-run until all checks pass
+   - **ONLY THEN**: Proceed with commit
+
+3. **Stage and commit automatically**:
    ```bash
    git add -A
    git commit -m "fix: <description>"
    ```
-   - **AUTOMATIC**: If pre-commit hooks fail:
+   - **AUTOMATIC**: If pre-commit hooks fail (should be rare since we pre-validated):
      1. AI agent analyzes hook failures automatically
      2. Auto-fixes ALL fixable issues immediately (batch all fixes)
      3. Stages ALL fixes together: `git add <all-fixed-files>`
@@ -229,4 +236,5 @@ NEXT ACTION: <validation, merge, cleanup, etc.>
 **See other rule modules:**
 - `CORE-AUTOMATION.mdc` - Automation principles
 - `VALIDATION.mdc` - Code validation rules
+- `LOCAL-PRE-COMMIT-VALIDATION.mdc` - Local pre-commit validation for IDE commits
 - `MERGE-CONFLICTS.mdc` - Merge and conflict resolution
