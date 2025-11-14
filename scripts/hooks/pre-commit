@@ -80,9 +80,12 @@ check_non_functional_files() {
        [[ "$file" == "run_on_best_node.sh" ]] || \
        [[ "$file" == "setup_conda_environments.sh" ]] || \
        [[ "$file" == "xubuntu_robotics_base_post_ULTRA_CLEANED.sh" ]] || \
+       [[ "$file" == "analyze-library.sh" ]] || \
        [[ "$file" == "README.md" ]]; then
       continue
     # ENDIF: skip primary core files
+    fi
+    
     # SECONDARY CORE FILES
     if [[ "$file" == "scripts/hooks/ai_precommit_review.py" ]] || \
        [[ "$file" == "scripts/hooks/pre-commit" ]] || \
@@ -94,16 +97,23 @@ check_non_functional_files() {
        [[ "$file" == "scripts/hooks/validate_documentation.sh" ]]; then
       continue
     # ENDIF: skip secondary core files
+    fi
+    
     # Core files in subdirectories
     if [[ "$file" == scripts/helpers/* ]] || [[ "$file" == container-scripts/* ]]; then
       continue
     # ENDIF: skip helper and container scripts
+    fi
+    
     if [[ "$file" == .cursor/rules/*.mdc ]]; then
       continue
     # ENDIF: skip cursor rules
+    fi
+    
     if [[ "$file" == prompts/*.txt ]] || [[ "$file" == prompts/*.md ]]; then
       continue
     # ENDIF: skip prompt files
+    fi
     
     # Quick filename pattern check (fast)
     local basename=$(basename "$file")

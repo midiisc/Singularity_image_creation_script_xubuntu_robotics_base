@@ -1,3 +1,4 @@
+#!/bin/bash
 # Example Configuration Template
 # Copy this file and modify as needed for your specific requirements
 

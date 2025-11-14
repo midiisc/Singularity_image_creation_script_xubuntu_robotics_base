@@ -7256,9 +7256,49 @@ PY
   cd / && rm -rf /tmp/pyceres
 fi
 
+#--- Sub-block 17.9b: Install QGLViewer dependencies for G2O visualization ---
+# Purpose: Install Qt5 and QGLViewer packages required for g2o_viewer application
+# Dependencies: Block 6 (APT configuration)
+# Outputs: Installed packages, library cache refresh
+if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
+  echo -e "\n${YELLOW}[PHASE 3 | QGLViewer] Installing dependencies for G2O visualization...${NC}"
+  
+  # Critical: Qt5 and QGLViewer packages required for g2o_viewer
+  QGLVIEWER_DEP_PACKAGES=(
+    "qt5-qmake"
+    "qt5-default"
+    "libqt5opengl5-dev"
+    "libqglviewer-dev"
+    "libqglviewer2"
+    "libglu1-mesa-dev"
+  )
+  
+  if ! install_packages_resilient "QGLViewer dependencies for G2O" "${QGLVIEWER_DEP_PACKAGES[@]}"; then
+    echo "⚠ Some QGLViewer dependencies unavailable (non-fatal - G2O will build without viewer)"
+  fi
+  
+  # Refresh library cache after installing QGLViewer (required for CMake detection)
+  if dpkg -l | grep -q "^ii.*libqglviewer"; then
+    echo "Refreshing library cache for QGLViewer..."
+    run_ldconfig_refresh
+    
+    # Verify QGLViewer installation
+    if pkg-config --exists libQGLViewer-qt5 2>/dev/null || \
+       [ -f /usr/include/QGLViewer/qglviewer.h ] || \
+       [ -f /usr/local/include/QGLViewer/qglviewer.h ]; then
+      echo -e "${GREEN}✓ QGLViewer dependencies installed successfully${NC}"
+    else
+      echo -e "${YELLOW}⚠ QGLViewer not found via pkg-config or standard paths${NC}"
+      echo "  G2O will attempt to build without viewer if QGLViewer is unavailable"
+    fi
+  else
+    echo -e "${YELLOW}⚠ QGLViewer packages not installed - G2O will build without viewer${NC}"
+  fi
+fi
+
 #--- Sub-block 17.10: Compile g2o (graph optimization) ---
 # Purpose: Graph optimization library (uses Ceres if available - compiled after Ceres)
-# Dependencies: PHASE 1 (Build tools), Sub-block 8.2 (Ceres Solver - optional but recommended)
+# Dependencies: PHASE 1 (Build tools), Sub-block 8.2 (Ceres Solver - optional but recommended), Sub-block 17.9b (QGLViewer dependencies)
 # Outputs: Configured system components
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "\n${YELLOW}[PHASE 3 | g2o] Compiling from source...${NC}"
@@ -7305,7 +7345,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   #   - Type System: Full SLAM2D/3D support including SBA, ICP, Sim3
   #   - Optimization: OpenMP enabled, SSE auto-detection
   #   - Logging: spdlog support (libspdlog-dev installed in Block 22)
-  #   - Visualization: OpenGL support for g2o_viewer
+  #   - Visualization: QGLViewer support enabled for g2o_viewer (Qt5-based 3D visualization)
   #
   # Get CUDA include directory (required for CHOLMOD CUDA headers)
   if [ -z "${CUDA_INCLUDE_DIR:-}" ] && [ -n "${CUDA_HOME:-}" ]; then
@@ -7334,7 +7374,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D G2O_BUILD_SBA_TYPES=ON \
     -D G2O_BUILD_ICP_TYPES=ON \
     -D G2O_BUILD_SIM3_TYPES=ON \
-    -D G2O_BUILD_APPS=OFF \
+    -D G2O_BUILD_APPS=ON \
     -D G2O_BUILD_EXAMPLES=OFF \
     -D BUILD_UNITTESTS=OFF \
     -D DO_SSE_AUTODETECT=ON \
@@ -7405,6 +7445,42 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       fi
     else
       echo -e "${GREEN}✓ g2o verification PASSED - ${g2o_soname} present in ldconfig cache${NC}"
+    fi
+  fi
+
+  #--- Sub-block 17.13b: Verify g2o_viewer executable (QGL Viewer) ---
+  # Critical: Confirm g2o_viewer is built and installed (requires G2O_BUILD_APPS=ON)
+  echo -e "${BLUE}[DEBUG] Verifying g2o_viewer executable...${NC}"
+  
+  g2o_viewer_candidates=(
+    "/usr/local/bin/g2o_viewer"
+    "/usr/local/bin/g2o_viewer-qt5"
+    "/tmp/g2o/build/bin/g2o_viewer"
+  )
+  g2o_viewer_path=""
+  for candidate in "${g2o_viewer_candidates[@]}"; do
+    if [ -x "${candidate}" ]; then
+      g2o_viewer_path="$(realpath "${candidate}" 2>/dev/null || echo "${candidate}")"
+      break
+    fi
+  done
+
+  if [ -z "${g2o_viewer_path}" ]; then
+    echo -e "${YELLOW}⚠ g2o_viewer executable not found${NC}"
+    echo -e "${YELLOW}[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:${NC}"
+    find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /usr/local"
+    find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /tmp/g2o"
+    echo -e "${YELLOW}  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev, qt5-qmake)${NC}"
+    echo -e "${YELLOW}  If QGLViewer is not available, G2O will build without viewer tools${NC}"
+  else
+    echo -e "${GREEN}✓ g2o_viewer executable found: ${g2o_viewer_path}${NC}"
+    # Check if QGLViewer is linked
+    if command -v ldd >/dev/null 2>&1; then
+      if ldd "${g2o_viewer_path}" 2>/dev/null | grep -q "libQGLViewer"; then
+        echo -e "${GREEN}✓ g2o_viewer linked with QGLViewer library${NC}"
+      else
+        echo -e "${YELLOW}⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)${NC}"
+      fi
     fi
   fi
 
@@ -9054,9 +9130,10 @@ echo "✓ pip configured to protect compiled libraries"
 #--- Sub-block 24.2: Install COLMAP dependencies ---
 # Note: libgoogle-glog-dev (system glog) installed via PKGS_CORE_DEPS in Block 2
 # Critical: Qt5, CGAL, FreeImage, and other build dependencies
+# Also includes QGLViewer dependencies for G2O visualization tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing COLMAP dependencies..."
+echo "Installing COLMAP dependencies (includes QGLViewer for G2O visualization)..."
 COLMAP_DEP_PACKAGES=(
     "libqt5core5a"
     "libqt5gui5"
@@ -9065,6 +9142,10 @@ COLMAP_DEP_PACKAGES=(
     "libqt5concurrent5"
     "qtbase5-dev"
     "qtbase5-dev-tools"
+    "qt5-qmake"
+    "qt5-default"
+    "libqglviewer-dev"
+    "libqglviewer2"
     "libcgal-dev"
     "libcgal-qt5-dev"
     "libfreeimage-dev"
@@ -9093,7 +9174,13 @@ if ! install_packages_resilient "COLMAP dependencies" "${COLMAP_DEP_PACKAGES[@]}
 fi
 # Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
-echo "✓ COLMAP dependencies installed"
+# Refresh library cache after installing QGLViewer (required for G2O viewer build)
+if dpkg -l | grep -q "^ii.*libqglviewer"; then
+    echo "Refreshing library cache for QGLViewer..."
+    run_ldconfig_refresh
+fi
+
+echo "✓ COLMAP dependencies installed (includes QGLViewer for G2O visualization)"
 
 #--- Sub-block 24.3: PRE-FLIGHT CHECKS - Verify glog and Ceres before COLMAP ---
 # CRITICAL: Verify dependency versions to prevent compilation failures

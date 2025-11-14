@@ -377,7 +377,12 @@ clone_repository() {
         GIT_REMOTE_URL=$(git -C "${ANALYSIS_ROOT}" config --get remote.origin.url 2>/dev/null || echo "N/A")
         GIT_COMMIT=$(git -C "${ANALYSIS_ROOT}" rev-parse HEAD 2>/dev/null || echo "N/A")
         if [[ -z "$RESOLVED_REF" ]]; then
-            RESOLVED_REF=$(git -C "${ANALYSIS_ROOT}" describe --tags --exact-match 2>/dev/null || git -C "${ANALYSIS_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || "")
+            local git_describe_output
+            git_describe_output=$(git -C "${ANALYSIS_ROOT}" describe --tags --exact-match 2>/dev/null || true)
+            if [[ -z "$git_describe_output" ]]; then
+                git_describe_output=$(git -C "${ANALYSIS_ROOT}" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+            fi
+            RESOLVED_REF="${git_describe_output:-}"
         fi
     fi
 

@@ -54,6 +54,7 @@ check_pipe_patterns() {
   
   local found_patterns=false
   local fixes_applied=0
+  local error_details=()
   
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"
@@ -61,23 +62,31 @@ check_pipe_patterns() {
       continue
     fi
     
-    # Find all echo | grep patterns
+    # Find all echo | grep patterns with file and line number
     while IFS= read -r line_info; do
       if [ -n "$line_info" ]; then
         found_patterns=true
-        local line_num=$(echo "$line_info" | cut -d: -f1)
-        local line_content=$(echo "$line_info" | cut -d: -f2-)
+        local line_num
+        line_num=$(echo "$line_info" | cut -d: -f1)
+        local line_content
+        line_content=$(echo "$line_info" | cut -d: -f2-)
         
-        echo -e "${YELLOW}  →${NC} Found at line $line_num: ${line_content:0:60}..."
+        # Store error details with file and line
+        error_details+=("${script}:${line_num}:${line_content}")
+        
+        echo -e "${YELLOW}  →${NC} ${script}:${line_num}: ${line_content:0:60}..."
         
         # Auto-fix: Replace echo | grep with here-string
         # Extract variable name and pattern
         if echo "$line_content" | grep -qE 'echo\s+"\$\{([^}]+)\}"\s+\|\s+grep'; then
-          local var_name=$(echo "$line_content" | sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p')
-          local grep_pattern=$(echo "$line_content" | sed -nE 's/.*grep\s+(-[a-z]*\s+)?["'\'']?([^"'\'']+)["'\'']?.*/\2/p')
+          local var_name
+          var_name=$(echo "$line_content" | sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p')
+          local grep_pattern
+          grep_pattern=$(echo "$line_content" | sed -nE 's/.*grep\s+(-[a-z]*\s+)?["'\'']?([^"'\'']+)["'\'']?.*/\2/p')
           
           # Create fixed version
-          local fixed_line=$(echo "$line_content" | sed -E "s|echo\s+\"\$\{${var_name}\}\"\s+\|\s+grep|grep <<< \"\${${var_name}}\"|g")
+          local fixed_line
+          fixed_line=$(echo "$line_content" | sed -E "s|echo\s+\"\$\{${var_name}\}\"\s+\|\s+grep|grep <<< \"\${${var_name}}\"|g")
           
           # Apply fix using sed
           sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
@@ -95,8 +104,18 @@ check_pipe_patterns() {
     return 0
   elif [ "$found_patterns" = true ]; then
     echo -e "${RED}[✗]${NC} Found unsafe pipe patterns (could not auto-fix)"
+    echo -e "${RED}[DETAILS]${NC} Unsafe pipe patterns found:"
+    for error_detail in "${error_details[@]}"; do
+      local file_name
+      file_name=$(echo "$error_detail" | cut -d: -f1)
+      local line_num_detail
+      line_num_detail=$(echo "$error_detail" | cut -d: -f2)
+      local line_content_detail
+      line_content_detail=$(echo "$error_detail" | cut -d: -f3-)
+      echo -e "${RED}    ✗${NC} ${file_name}:${line_num_detail}: ${line_content_detail}"
+    done
     CHECK_RESULTS[$check_name]="FAILED"
-    CHECK_ERRORS[$check_name]="Unsafe echo | grep patterns found"
+    CHECK_ERRORS[$check_name]="Unsafe echo | grep patterns found in: ${error_details[*]}"
     FAILED_CHECKS=$((FAILED_CHECKS + 1))
     return 1
   else
