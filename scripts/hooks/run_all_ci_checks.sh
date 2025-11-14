@@ -107,17 +107,18 @@ check_pipe_patterns() {
         
         echo -e "${YELLOW}  →${NC} ${script}:${line_num}: ${line_content:0:60}..."
         
-        # Auto-fix: Replace echo | grep with here-string
+        # Auto-fix: Replace echo | grep with here-string (D3: pipe pattern safety)
         # Extract variable name and pattern
-        if echo "$line_content" | grep -qE 'echo\s+"\$\{([^}]+)\}"\s+\|\s+grep'; then
+        # Use here-string instead of pipe to avoid subshell (D3)
+        if grep -qE 'echo\s+"\$\{([^}]+)\}"\s+\|\s+grep' <<< "$line_content"; then
           local var_name
-          var_name=$(echo "$line_content" | sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p')
+          var_name=$(sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p' <<< "$line_content")
           local grep_pattern
-          grep_pattern=$(echo "$line_content" | sed -nE 's/.*grep\s+(-[a-z]*\s+)?["'\'']?([^"'\'']+)["'\'']?.*/\2/p')
+          grep_pattern=$(sed -nE 's/.*grep\s+(-[a-z]*\s+)?["'\'']?([^"'\'']+)["'\'']?.*/\2/p' <<< "$line_content")
           
-          # Create fixed version
+          # Create fixed version (use here-string instead of pipe - D3)
           local fixed_line
-          fixed_line=$(echo "$line_content" | sed -E "s|echo\s+\"\$\{${var_name}\}\"\s+\|\s+grep|grep <<< \"\${${var_name}}\"|g")
+          fixed_line=$(sed -E "s|echo\s+\"\$\{${var_name}\}\"\s+\|\s+grep|grep <<< \"\${${var_name}}\"|g" <<< "$line_content")
           
           # Apply fix using sed
           sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
@@ -360,18 +361,28 @@ check_bash_compatibility() {
         echo -e "${YELLOW}  →${NC} Found Bash 4+ feature at line $line_num"
         
         # Auto-fix: Replace ${var^^} with tr
-        if echo "$line_content" | grep -qE '\$\{[^}]+\^\^'; then
-          local var_name=$(echo "$line_content" | sed -nE 's/.*\$\{([^}]+)\^\^\}.*/\1/p')
-          local fixed_line=$(echo "$line_content" | sed -E "s|\$\{${var_name}\^\^\}|\$(echo \"\${${var_name}}\" | tr '[:lower:]' '[:upper:]')|g")
+        # Check for Bash 4+ uppercase conversion (A6: Bash version compatibility)
+        # Use here-string instead of pipe (D3: pipe pattern safety)
+        if grep -qE '\$\{[^}]+\^\^' <<< "$line_content"; then
+          # Use here-string instead of pipe (D3: pipe pattern safety)
+          local var_name
+          var_name=$(sed -nE 's/.*\$\{([^}]+)\^\^\}.*/\1/p' <<< "$line_content")
+          local fixed_line
+          fixed_line=$(sed -E "s|\$\{${var_name}\^\^\}|\$(echo \"\${${var_name}}\" | tr '[:lower:]' '[:upper:]')|g" <<< "$line_content")
           sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
           fixes_applied=$((fixes_applied + 1))
           echo -e "${GREEN}    ✓${NC} Fixed: Replaced with tr command"
         fi
         
         # Auto-fix: Replace ${var,,} with tr
-        if echo "$line_content" | grep -qE '\$\{[^}]+,,'; then
-          local var_name=$(echo "$line_content" | sed -nE 's/.*\$\{([^}]+),,\}.*/\1/p')
-          local fixed_line=$(echo "$line_content" | sed -E "s|\$\{${var_name},,\}|\$(echo \"\${${var_name}}\" | tr '[:upper:]' '[:lower:]')|g")
+        # Check for Bash 4+ lowercase conversion (A6: Bash version compatibility)
+        # Use here-string instead of pipe (D3: pipe pattern safety)
+        if grep -qE '\$\{[^}]+,,' <<< "$line_content"; then
+          # Use here-string instead of pipe (D3: pipe pattern safety)
+          local var_name
+          var_name=$(sed -nE 's/.*\$\{([^}]+),,\}.*/\1/p' <<< "$line_content")
+          local fixed_line
+          fixed_line=$(sed -E "s|\$\{${var_name},,\}|\$(echo \"\${${var_name}}\" | tr '[:upper:]' '[:lower:]')|g" <<< "$line_content")
           sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
           fixes_applied=$((fixes_applied + 1))
           echo -e "${GREEN}    ✓${NC} Fixed: Replaced with tr command"

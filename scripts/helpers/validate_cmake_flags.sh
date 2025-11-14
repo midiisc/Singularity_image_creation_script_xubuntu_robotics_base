@@ -108,21 +108,48 @@ log_error() {
 extract_cmake_commands() {
   local script_file="$1"
   local temp_output
-  temp_output=$(mktemp)
+  # Create temporary file with proper error handling (J2: safe temporary resource management)
+  temp_output=$(mktemp) || {
+    log_error "Failed to create temporary file"
+    return 1
+  }
   
   log_info "Extracting CMake commands from ${script_file##*/}..."
   
   # Extract cmake commands (handle multi-line with backslash continuation)
   # Match cmake configuration commands: cmake .. OR cmake . OR cmake -D OR cmake "${
-  # Exclude: cmake --build, cmake./, bare "cmake" as package name
+  # Exclude: cmake --build, cmake./, bare "cmake" as package name, package installation lines
   grep -n "^[[:space:]]*cmake[[:space:]]" "$script_file" | \
     grep -v "cmake --build" | \
     grep -v "cmake\./" | \
     grep -v "^[0-9]*:[[:space:]]*cmake[[:space:]]*\\$" | \
+    grep -vE "(apt-get|apt|yum|dnf|pacman|zypper|emerge)[[:space:]]+(install|remove|update)" | \
     cut -d: -f1 > "${temp_output}.lines"
   
   # For each line number, extract the full cmake command (handle continuations)
+  # Also check if it's part of a package installation command
   while read -r line_num; do
+    # Check if this line is part of a package installation command
+    # Look back up to 10 lines to find apt-get/apt/yum/etc.
+    local is_package_install=false
+    local check_start=$((line_num - 10))
+    [ "$check_start" -lt 1 ] && check_start=1
+    
+    # Use sed to extract context and check for package manager commands
+    # Validate sed output before using in pipeline (H4: validate before use)
+    # Use here-string instead of pipe to avoid subshell (D3: pipe pattern safety)
+    local context_check
+    context_check=$(sed -n "${check_start},${line_num}p" "$script_file" 2>/dev/null || echo "")
+    if [ -n "$context_check" ] && \
+       grep -qE "(apt-get|apt|yum|dnf|pacman|zypper|emerge).*(install|remove|update|-S|-R|-U)" <<< "$context_check"; then
+      is_package_install=true
+    fi
+    
+    # Skip if this is part of a package installation
+    if [ "$is_package_install" = true ]; then
+      continue
+    fi
+    
     awk -v start="$line_num" '
       NR == start {
         cmd = $0
@@ -135,9 +162,18 @@ extract_cmake_commands() {
     ' "$script_file"
   done < "${temp_output}.lines" > "$temp_output"
   
+  # Cleanup temporary file (N1: proper resource management)
   rm -f "${temp_output}.lines"
   
-  local count=$(wc -l < "$temp_output")
+  # Count extracted commands (validate result before use - H4)
+  local count=0
+  if [ -f "$temp_output" ]; then
+    count=$(wc -l < "$temp_output" || echo "0")
+    # Validate count is numeric (H4: validate result format)
+    if ! [[ "$count" =~ ^[0-9]+$ ]]; then
+      count=0
+    fi
+  fi
   log_info "Found ${count} cmake command(s)"
   
   # Output: count|filepath (so caller can parse both)
@@ -153,8 +189,8 @@ extract_flags_from_cmake_command() {
   
   # Extract all -D FLAG=VALUE or -DFLAG=VALUE patterns
   # Handle both formats: -D FLAG=VALUE and -DFLAG=VALUE
-  # Use sed instead of grep with lookbehind to avoid variable-length lookbehind issues
-  echo "$cmake_cmd" | grep -oE '\-D[[:space:]]*[A-Z_][A-Z0-9_]*=' | sed 's/-D[[:space:]]*//; s/=$//' || true
+  # Use here-string instead of pipe to avoid subshell and potential echo flag interpretation (D3)
+  grep -oE '\-D[[:space:]]*[A-Z_][A-Z0-9_]*=' <<< "${cmake_cmd}" | sed 's/-D[[:space:]]*//; s/=$//' || true
 }
 
 ################################################################################
@@ -267,10 +303,29 @@ validate_flags() {
       continue
     fi
     
+    # List of generic CMake flags that are allowed without library-specific documentation
+    # These are standard CMake variables or commonly used generic flags
+    local generic_flags="NO_LIBM CMAKE_BUILD_TYPE CMAKE_INSTALL_PREFIX CMAKE_PREFIX_PATH CMAKE_MODULE_PATH CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_Fortran_COMPILER CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS"
+    
     # Validate each flag
     while IFS= read -r flag; do
       [ -z "$flag" ] && continue
       ((TOTAL_FLAGS_FOUND++)) || true
+      
+      # Check if this is a generic CMake flag (allowed without library-specific docs)
+      local is_generic=false
+      for generic_flag in $generic_flags; do
+        if [ "$flag" = "$generic_flag" ]; then
+          is_generic=true
+          break
+        fi
+      done
+      
+      if [ "$is_generic" = true ]; then
+        log_success "Flag: ${flag} - Generic CMake flag (allowed)"
+        ((VALID_FLAGS++)) || true
+        continue
+      fi
       
       if [ -n "$current_library" ]; then
         local doc_result

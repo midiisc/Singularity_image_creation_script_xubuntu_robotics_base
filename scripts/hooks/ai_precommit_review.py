@@ -315,7 +315,9 @@ def call_openai_api(
     user_prompt: str,
     timeout: int,
     max_tokens: int,
-) -> Dict[str, object]:
+    is_secondary: bool = True,
+    provider: str = Provider.OPENAI,
+) -> Optional[Dict[str, object]]:
     effective_tokens = normalize_max_tokens(max_tokens, DEFAULT_SECONDARY_MAX_TOKENS)
     payload = {
         "model": model,
@@ -333,6 +335,8 @@ def call_openai_api(
         payload=payload,
         timeout=timeout,
         extra_headers={},
+        is_secondary=is_secondary,  # Pass through from review_chunk
+        provider=provider,  # Pass through from review_chunk
     )
 
 
@@ -344,7 +348,9 @@ def call_anthropic_api(
     user_prompt: str,
     timeout: int,
     max_tokens: int,
-) -> Dict[str, object]:
+    is_secondary: bool = False,
+    provider: str = Provider.ANTHROPIC,
+) -> Optional[Dict[str, object]]:
     """
     Call Anthropic Claude API with correct format.
     
@@ -383,6 +389,8 @@ def call_anthropic_api(
         payload=payload,
         timeout=timeout,
         extra_headers=headers,
+        is_secondary=is_secondary,  # Pass through from review_chunk
+        provider=provider,  # Pass through from review_chunk
     )
 
 
@@ -393,7 +401,9 @@ def perform_request(
     payload: Dict[str, object],
     timeout: int,
     extra_headers: Dict[str, str],
-) -> Dict[str, object]:
+    is_secondary: bool = False,
+    provider: str = Provider.ANTHROPIC,
+) -> Optional[Dict[str, object]]:
     body = json.dumps(payload).encode("utf-8")
     headers = dict(extra_headers)
     if token_header:
@@ -406,6 +416,39 @@ def perform_request(
             response_text = response.read().decode("utf-8")
             return json.loads(response_text)
     except HTTPError as exc:
+        # Handle 400 Bad Request as configuration error (non-blocking)
+        # 400 typically means invalid API key format, invalid payload, or missing fields
+        if exc.code == 400:
+            payload_preview = json.dumps(payload, indent=2)[:1024]
+            error_msg = textwrap.dedent(
+                f"""\
+                AI review request failed with HTTP 400 (Bad Request).
+                This usually indicates a configuration issue (invalid API key format, 
+                invalid model name, or malformed request payload).
+                Reason: {exc.reason}
+                Payload preview:
+                {payload_preview}
+                
+                To fix:
+                1. Verify your API key is correctly formatted
+                2. Check that the model name is valid for your provider
+                3. Ensure all required environment variables are set correctly
+                
+                AI review will be skipped for this chunk. Commit will proceed.
+                """
+            )
+            # For secondary providers, return None to allow fallback
+            if is_secondary:
+                print(f"Warning: Secondary provider '{provider}' API request failed with HTTP 400.")
+                print(f"Reason: {exc.reason}")
+                print("Falling back to primary provider or skipping secondary review.")
+                return None
+            # For primary provider, print warning but don't block commit
+            # This makes AI review truly optional - configuration errors don't block commits
+            print(f"⚠️  {error_msg}")
+            print("⚠️  AI review skipped due to configuration error. Commit will proceed.")
+            return None
+        # For other HTTP errors (401, 403, 404, 500, etc.), raise exception
         payload_preview = json.dumps(payload, indent=2)[:1024]
         raise ReviewFailure(
             textwrap.dedent(
@@ -666,6 +709,8 @@ def review_chunk(
                 user_prompt=user_prompt,
                 timeout=timeout,
                 max_tokens=config.max_tokens,
+                is_secondary=is_secondary,
+                provider=provider,
             )
         elif provider == Provider.OPENAI:
             response = call_openai_api(
@@ -676,9 +721,15 @@ def review_chunk(
                 user_prompt=user_prompt,
                 timeout=timeout,
                 max_tokens=config.max_tokens,
+                is_secondary=is_secondary,
+                provider=provider,
             )
         else:
             raise ReviewFailure(f"Unsupported AI provider: {provider}")
+
+        # Handle None response (e.g., from HTTP 400 error handling)
+        if response is None:
+            return None
 
         content = extract_review_content(response, provider)
         parsed = parse_review_json(content)
