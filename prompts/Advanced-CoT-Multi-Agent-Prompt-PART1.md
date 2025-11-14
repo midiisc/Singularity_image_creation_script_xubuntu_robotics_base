@@ -341,6 +341,13 @@ PHASE A – STRUCTURE & SYNTAX
 PHASE B – SHELL OPTIONS & EXECUTION CONTROLS
   B1. Proper scoping of `set -euo pipefail` / `set -E -o errtrace`.
   B2. Document intentional relaxations (`set +e`, `|| true`, subshell guards).
+  B3. **STRICT MODE SILENT FAILURE PREVENTION**: In blocks with `set -e`/`set -euo pipefail`:
+    - CRITICAL: Silent failures in strict mode are EXTREMELY DANGEROUS
+    - FORBIDDEN: `|| true` or `|| echo ""` without validation in strict mode blocks
+    - REQUIRED: All masked failures MUST be logged and validated
+    - REQUIRED: Result files MUST be validated before parsing
+    - REQUIRED: Command substitutions MUST validate results
+    - See Code_check_prompt_manual.txt B3 for detailed requirements and edge cases
 
 PHASE C – VARIABLES & DEFAULTS
   C1. Guard unbound variables with `${var:-default}` or `${var:?error}`.
@@ -366,7 +373,11 @@ PHASE E – HEREDOCS & HERESTRINGS
 
 PHASE F – LOGIC & FLOW CONTROL
   F1. Correct conditionals (`[[` vs `[`], arithmetic contexts).
-  F2. Exit-code handling (`$?`, `||/&&`, negations).
+  F2. Exit-code handling (`$?`, `||/&&`, negations):
+    - CRITICAL: Command substitutions `$(command)` mask exit codes - always validate results
+    - REQUIRED: After `result=$(command || echo "")`, check both non-empty AND valid format
+    - ANTI-PATTERN: `if [ -n "$(command || echo "")" ]; then` - empty string passes even on failure
+    - See Code_check_prompt_manual.txt F2 for detailed patterns
   F3. Safe subshell/command group usage; manage background jobs with `wait`.
 
 PHASE G – FUNCTIONS & MODULARIZATION
@@ -380,6 +391,12 @@ PHASE H – ERROR HANDLING & OBSERVABILITY
   H1. Check exit status for external commands/pipelines with actionable logs.
   H2. Trap handlers clean up resources and re-raise signals appropriately.
   H3. Logging clarity; scoped `set -x` documented.
+  H4. **SILENT FAILURE PREVENTION**: Critical operations must not mask failures silently:
+    - FORBIDDEN: `|| true` or `|| echo ""` on critical operations without validation
+    - REQUIRED: Validate result files are non-empty and contain valid format before parsing
+    - REQUIRED: For parallel operations (`xargs -P`), check exit codes and validate result files
+    - REQUIRED: After masking failures, explicitly validate results before use
+    - See Code_check_prompt_manual.txt H4 for detailed examples and detection patterns
 
 PHASE I – TIMEOUTS, RETRIES, ROBUSTNESS
   I1. Wrap long-running operations with `timeout`, retries, exponential backoff.

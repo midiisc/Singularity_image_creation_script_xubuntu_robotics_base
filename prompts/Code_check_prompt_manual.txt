@@ -43,6 +43,71 @@ A. Structure & Syntax
 B. Shell Options & Execution Controls
 - B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
 - B2. Documentation of intentional relaxations (e.g., `set +e`, `|| true`) and local scoping for risky sections.
+- B3. **STRICT MODE SILENT FAILURE PREVENTION**: In blocks with strict error settings (`set -e`, `set -euo pipefail`), enforce stricter validation:
+  - **CRITICAL**: When `set -e` or `set -euo pipefail` is active, silent failures are EXTREMELY DANGEROUS
+  - **FORBIDDEN**: Using `|| true` or `|| echo ""` in strict mode blocks without explicit validation and logging
+  - **REQUIRED**: In strict mode blocks, ALL masked failures MUST be logged: `command || { echo "[ERROR] Operation failed: command"; exit 1; }`
+  - **REQUIRED**: Command substitutions in strict mode MUST validate results: `result=$(command) || { echo "[ERROR] Command failed"; exit 1; }` then validate result
+  - **REQUIRED**: When `set -u` is active, ALL command substitutions MUST have fallback: `result=$(command || echo "")` AND validate non-empty
+  - **REQUIRED**: Parallel operations (`xargs -P`) in strict mode MUST check result files: `[ -s "${RESULT_FILE}" ] || { echo "[ERROR] All operations failed"; exit 1; }`
+  - **EDGE CASE**: In strict mode, empty result from masked failure can cause `set -u` to trigger if variable is used unguarded
+  - **EDGE CASE**: Pipeline failures in strict mode with `set -o pipefail` will exit immediately - ensure all pipeline stages handle errors
+  - **EDGE CASE**: When `set -e` is active, `|| true` masks failures but script continues - must validate downstream operations don't use invalid results
+  - **DETECTION**: Find strict mode blocks: `grep -nE 'set -e|set -eo|set -euo' script.sh`, then check for masked failures within those blocks
+  - **VALIDATION PATTERN**: For each strict mode block:
+    1. Identify block boundaries (from `set -e` to `set +e` or end of function/file)
+    2. Find all `|| true` or `|| echo ""` patterns within block
+    3. Verify each has explicit validation/logging after the masked command
+    4. Verify result variables are validated before use
+    5. Verify result files are checked for non-empty before parsing
+  - **EXAMPLE - WRONG** (silent failure in strict mode):
+    ```bash
+    set -euo pipefail  # Strict mode active
+    xargs -P 6 -I{} command {} || true  # Masks failures silently
+    result=$(parse_results || echo "")   # Returns empty on failure
+    use_result "${result}"              # Uses empty result - may trigger set -u or cause logic error
+    ```
+  - **EXAMPLE - CORRECT** (explicit validation in strict mode):
+    ```bash
+    set -euo pipefail  # Strict mode active
+    
+    # Run operations with explicit error tracking
+    local failed_count=0
+    xargs -P 6 -I{} bash -c 'command "$1" || exit 1' _ {} || failed_count=$?
+    
+    # Validate result file BEFORE parsing
+    if [ ! -s "${RESULT_FILE}" ]; then
+      echo "[ERROR] ⚠ Result file empty - all operations failed (failed_count=${failed_count})"
+      exit 1  # Exit in strict mode
+    fi
+    
+    # Validate result format
+    if ! grep -qE '^expected_pattern' "${RESULT_FILE}"; then
+      echo "[ERROR] ⚠ Invalid result format in ${RESULT_FILE}"
+      exit 1
+    fi
+    
+    # Parse with validation
+    result=$(parse_results) || {
+      echo "[ERROR] ⚠ parse_results failed"
+      exit 1
+    }
+    
+    # Validate result is non-empty and valid
+    if [ -z "${result}" ] || ! validate_result "${result}"; then
+      echo "[ERROR] ⚠ Invalid or empty result from parse_results"
+      exit 1
+    fi
+    
+    # Safe to use result
+    use_result "${result}"
+    ```
+  - **STRICT MODE EDGE CASES**:
+    - **Case 1**: `set -u` + empty result from `$(command || echo "")` → Variable is empty string (not unset), but logic may fail
+    - **Case 2**: `set -e` + `|| true` → Script continues but invalid state may cause later failures
+    - **Case 3**: `set -o pipefail` + pipeline with masked failure → Pipeline succeeds but produces invalid output
+    - **Case 4**: Strict mode block + subshell with masked failure → Subshell exits 0 but parent may use invalid result
+    - **Prevention**: Always validate results, log failures explicitly, exit on validation failure in strict mode
 
 C. Variables & Defaults
 - C1. Detection/handling of unbound variables with `${var:-default}` or `${var:?message}` as appropriate.
@@ -84,7 +149,12 @@ E. Here-docs & Here-strings
 
 F. Logic & Flow Control
 - F1. Correct conditional expressions (`[[` vs `[`], `(( ))`), loops, and arithmetic.
-- F2. Correct treatment of exit codes (`$?`, `||/&&`, negated commands).
+- F2. Correct treatment of exit codes (`$?`, `||/&&`, negated commands):
+  - **CRITICAL**: Command substitutions `$(command)` mask exit codes - always validate results
+  - **REQUIRED**: After `result=$(command || echo "")`, check both non-empty AND valid format
+  - **REQUIRED**: For critical operations, capture exit code separately: `command; exit_code=$?` then validate
+  - **ANTI-PATTERN**: `if [ -n "$(command || echo "")" ]; then` - empty string passes this check even on failure
+  - **CORRECT PATTERN**: `result=$(command); if [ $? -eq 0 ] && [ -n "${result}" ] && validate_result "${result}"; then`
 - F3. Safe handling of subshells, command groups, and background jobs (`wait`, exit check).
 
 G. Functions & Modularization
@@ -98,6 +168,48 @@ H. Error Handling & Observability
 - H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
 - H2. `trap` handlers clean up resources (temp files, mounts, jobs) and re-raise signals when appropriate.
 - H3. Logging differentiates stdout/stderr where helpful; optional scoped `set -x` toggles documented.
+- H4. **SILENT FAILURE PREVENTION**: Critical operations must not mask failures silently:
+  - **FORBIDDEN**: Using `|| true` or `|| echo ""` on critical operations without explicit validation
+  - **FORBIDDEN**: Command substitutions that mask errors: `result=$(command || echo "")` without checking if result is valid
+  - **REQUIRED**: After masking failures with `|| true`, explicitly validate results before use
+  - **REQUIRED**: For parallel operations (`xargs -P`), check exit codes and validate result files contain expected data
+  - **REQUIRED**: Validate result files are non-empty and contain valid format before parsing
+  - **CRITICAL IN STRICT MODE**: When `set -e` or `set -euo pipefail` is active, silent failures are EXTREMELY DANGEROUS - see B3 for strict mode requirements
+  - **DETECTION**: `grep -nE '\|\| (true|echo "")' script.sh` to find masked failures, verify each has validation
+  - **STRICT MODE DETECTION**: For blocks with `set -e`/`set -euo pipefail`, use stricter validation (see B3)
+  - **EXAMPLE - WRONG** (silent failure):
+    ```bash
+    xargs -P 6 -I{} command {} || true  # Masks all failures
+    result=$(parse_results || echo "")   # Returns empty on failure
+    if [ -n "${result}" ]; then         # Empty string passes this check!
+      use_result "${result}"             # Uses empty/invalid result
+    fi
+    ```
+  - **EXAMPLE - CORRECT** (explicit validation):
+    ```bash
+    # Run parallel operations, capture failures
+    local failed_count=0
+    xargs -P 6 -I{} bash -c 'command "$1" || exit 1' _ {} || failed_count=$?
+    
+    # Validate result file exists and contains data
+    if [ ! -s "${RESULT_FILE}" ]; then
+      echo "[ERROR] Result file empty or missing - all operations may have failed"
+      return 1
+    fi
+    
+    # Parse with validation
+    result=$(parse_results 2>/dev/null)
+    if [ -z "${result}" ] || ! validate_result "${result}"; then
+      echo "[ERROR] Invalid or empty result from parse_results"
+      return 1
+    fi
+    use_result "${result}"
+    ```
+  - **MIRROR PROBE PATTERN**: When probing mirrors/endpoints in parallel:
+    - Check result file is non-empty: `[ -s "${PROBE_RESULTS}" ]`
+    - Validate result format before parsing: `grep -qE '^[0-9.]+ [a-z]+://' "${PROBE_RESULTS}"`
+    - Log failure count if all probes fail: `if [ ! -s "${PROBE_RESULTS}" ]; then echo "[ERROR] All probes failed"; fi`
+    - Never use empty result silently: Always check `[ -n "${result}" ]` AND validate format before use
 
 I. Timeouts, Retries, & Robustness
 - I1. Long-running operations (e.g., `ldconfig`, package managers, service checks) wrapped with `timeout`, retries, or backoff.
