@@ -326,6 +326,9 @@ jobs:
           ignore_paths: |
             container-scripts
             analysis
+            .github/workflows
+            **/*.yml
+            **/*.yaml
           check_together: 'yes'
 
   ai-code-review:

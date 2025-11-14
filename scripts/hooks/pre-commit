@@ -256,6 +256,12 @@ fi
 SCRIPTS_TO_VALIDATE=()
 for script in "${BUILD_SCRIPTS[@]}"; do
   if echo "$STAGED_FILES" | grep -q "^${script}$"; then
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping non-shell file: ${script}"
+      continue
+    # ENDIF: non-shell file check
+    fi
     SCRIPTS_TO_VALIDATE+=("${script}")
   # ENDIF: script in staged files
   fi

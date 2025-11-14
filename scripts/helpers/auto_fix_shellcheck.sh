@@ -37,6 +37,13 @@ if [ ! -f "$SCRIPT_FILE" ]; then
   exit 1
 fi
 
+# Safety check: Skip non-shell files (YAML, JSON, etc.)
+if [[ "$SCRIPT_FILE" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+  echo -e "${YELLOW}[SKIP]${NC} Skipping non-shell file: ${SCRIPT_FILE}"
+  echo -e "${YELLOW}[NOTE]${NC} ShellCheck only validates shell scripts (.sh, .bash)"
+  exit 0
+fi
+
 # Check if shellcheck is available
 if ! command -v shellcheck >/dev/null 2>&1; then
   echo -e "${YELLOW}[⚠]${NC} ShellCheck not available, skipping auto-fix"

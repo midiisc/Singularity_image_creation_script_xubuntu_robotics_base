@@ -93,6 +93,12 @@ check_pipe_patterns() {
       continue
     fi
     
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping non-shell file: ${script}"
+      continue
+    fi
+    
     # Find all echo | grep patterns with file and line number
     # Skip echo statements that are just displaying text (not executing commands)
     while IFS= read -r line_info; do
@@ -203,6 +209,11 @@ check_cmake_flags() {
       continue
     fi
     
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
     echo -e "  Validating: ${script}..."
     
     # Run validator (without --report-only to actually validate)
@@ -257,6 +268,11 @@ check_multi_phase_docs() {
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"
     if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
       continue
     fi
     
@@ -348,6 +364,11 @@ check_heredoc_syntax() {
       continue
     fi
     
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
     local heredoc_count
     # SC2126: Use grep -c instead of grep | wc -l
     heredoc_count=$(grep -c "<<EOF" "$script_path" 2>/dev/null | tr -d '\n' || echo "0")
@@ -394,6 +415,11 @@ check_bash_compatibility() {
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"
     if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
       continue
     fi
     
@@ -482,6 +508,11 @@ check_shellcheck() {
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"
     if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
       continue
     fi
     

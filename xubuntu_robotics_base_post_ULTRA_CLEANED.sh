@@ -8733,12 +8733,17 @@ OPENCV_CMAKE_ARGS=(
   "-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
   # LAPACK Headers: Required for OpenCV's LAPACK detection
   # OpenCV's OpenCVFindLAPACK.cmake requires mkl_cblas.h and mkl_lapack.h
-  "-DLAPACK_INCLUDE_DIRS=${MKLROOT}/include"
+  # CRITICAL: Both LAPACK_INCLUDE_DIR and LAPACK_INCLUDE_DIRS must be set for reliable detection
   "-DLAPACK_INCLUDE_DIR=${MKLROOT}/include"
+  "-DLAPACK_INCLUDE_DIRS=${MKLROOT}/include"
+  # MKL Root: Required for OpenCV's OpenCVFindMKL.cmake to locate MKL installation
   "-DMKL_ROOT=${MKLROOT}"
   # MKL Threading: GNU OpenMP (libgomp) for GCC toolchain compatibility
   # OpenCV's OpenCVFindMKL.cmake links mkl_gnu_thread when MKL_WITH_OPENMP=ON
   "-DMKL_THREADING_LAYER=${MKL_THREADING_LAYER}"
+  # CRITICAL: Explicitly enable MKL LAPACK (disable OpenBLAS fallback)
+  # This ensures OpenCV uses MKL (not OpenBLAS) for LAPACK operations
+  "-DOPENCV_LAPACK_DISABLE_MKL=OFF"
   "-DJlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/"
   "-DLAPACK_ENABLE_LAPACKE=ON"
   "-DWITH_VTK=ON"
@@ -8774,11 +8779,18 @@ OPENCV_CMAKE_ARGS=(
   # OpenCV's OpenCVDetectTBB.cmake searches for TBB via find_package(TBB) or environment
   # Required headers: tbb/tbb.h (legacy) or oneapi/tbb/version.h (oneTBB 2021+)
   # Version requirement: TBB_INTERFACE_VERSION >= 6000 (TBB 4.0+)
+  # CRITICAL: All TBB variables must be set explicitly for reliable detection
+  # TBB_DIR: Path to TBB CMake config directory (Ubuntu 24.04: /usr/lib/x86_64-linux-gnu/cmake/TBB)
   "-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  # TBB_ROOT_DIR: Root directory of TBB installation (fallback if TBB_DIR not found)
   "-DTBB_ROOT_DIR=/usr"
+  # TBB_LIBRARIES: Full path to TBB library (explicit override ensures correct library)
+  # CRITICAL: Must point to system TBB, NOT MKL TBB (/opt/intel/oneapi/tbb/lib/libtbb.so)
   "-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"
-  "-DTBB_INCLUDE_DIR=/usr/include/tbb"
-  "-DTBB_INCLUDE_DIRS=/usr/include/tbb"
+  # TBB_INCLUDE_DIR and TBB_INCLUDE_DIRS: Path to TBB headers
+  # Ubuntu 24.04 provides both legacy (/usr/include/tbb/tbb.h) and oneTBB (/usr/include/oneapi/tbb/version.h)
+  "-DTBB_INCLUDE_DIR=/usr/include"
+  "-DTBB_INCLUDE_DIRS=/usr/include"
   "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
   "-DCMAKE_C_STANDARD=17"
   "-DCMAKE_CXX_STANDARD=17"
@@ -8786,7 +8798,9 @@ OPENCV_CMAKE_ARGS=(
   "-DCMAKE_C_STANDARD_REQUIRED=ON"
   "-DCMAKE_CXX_STANDARD_REQUIRED=ON"
   "-DCMAKE_CUDA_STANDARD_REQUIRED=ON"
-  "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include"
+  # CMAKE_INCLUDE_PATH: Help CMake find headers for TBB and MKL
+  # Includes /usr/include for system TBB headers and MKLROOT/include for MKL headers
+  "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include:${MKLROOT:-}/include"
   "-DCMAKE_CXX_FLAGS=-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_C_FLAGS=-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_EXE_LINKER_FLAGS=-flto -fopenmp"
@@ -8803,9 +8817,13 @@ OPENCV_CMAKE_ARGS=(
   # Includes MKLROOT for MKL detection, /usr for system TBB
   # CRITICAL: Explicitly include compiled libraries (Ceres, SuiteSparse) to ensure OpenCV uses our builds
   # Order matters: /usr/local first (compiled libraries), then /usr (system libraries), then MKLROOT
+  # CRITICAL: MKLROOT must be in CMAKE_PREFIX_PATH for OpenCV's OpenCVFindMKL.cmake to detect MKL
+  # CRITICAL: /usr must be in CMAKE_PREFIX_PATH for OpenCV's OpenCVDetectTBB.cmake to detect system TBB
   "-DCMAKE_PREFIX_PATH=/usr/local:/opt/libcxxwrap-julia:/usr:${MKLROOT:-}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
   # Explicit paths for compiled libraries (ensures OpenCV uses our builds, not system versions)
   "-DCeres_DIR=/usr/local/lib/cmake/Ceres"
+  # CRITICAL: Use SuiteSparse_DIR (not SuiteSparse_ROOT) - CMake ignores SuiteSparse_ROOT for compatibility
+  # SuiteSparse_ROOT environment variable is set but ignored by CMake - only SuiteSparse_DIR is used
   "-DSuiteSparse_DIR=${SUITESPARSE_INSTALL_PREFIX:-/usr/local}/lib/cmake/SuiteSparse"
 )
 # Surface MKL CMake package location if available (helps CMake find_package workflows)
@@ -8815,10 +8833,15 @@ fi
 # CRITICAL: Exclude MKL TBB from search path to ensure system TBB is used
 # OpenCV must use system TBB (/usr/lib/x86_64-linux-gnu/libtbb.so), NOT MKL TBB
 # This prevents conflicts and ensures correct TBB version
+# CMAKE_IGNORE_PATH prevents CMake from finding MKL TBB when searching for TBB
 if [ -d "/opt/intel/oneapi/tbb" ]; then
   OPENCV_CMAKE_ARGS+=("-DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb")
   echo "[INFO] Excluding MKL TBB from search path (using system TBB)"
 fi
+# CRITICAL: Also add CMAKE_LIBRARY_PATH to help detection
+# This path helps CMake find libraries even if CMAKE_PREFIX_PATH is not sufficient
+# Note: CMAKE_INCLUDE_PATH is already set in the array above (line ~8801)
+OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:${MKLROOT:-}/lib/intel64")
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
 # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
 # Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK
