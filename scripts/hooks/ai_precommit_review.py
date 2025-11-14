@@ -866,56 +866,94 @@ def format_user_prompt(
     chunk_index: int,
     chunk_total: int,
 ) -> str:
-    # Optimize manual inclusion: Use condensed version to prevent timeout
-    # Include header + checklist structure but condense verbose examples
+    # Parse and include the FULL manual explicitly
+    # The manual is the AUTHORITATIVE SOURCE - include all checklist items A1-P5
     import re
     
-    # Extract key parts: header, checklist items (A-O), and critical patterns
     manual_lines = manual_text.split('\n')
+    
+    # Extract header section (before checklist starts)
     header_end = 0
     for i, line in enumerate(manual_lines):
         if line.strip().startswith('A. Structure & Syntax'):
             header_end = i
             break
     
-    # Get header (first ~30 lines) + condensed checklist
-    header_section = '\n'.join(manual_lines[:min(header_end, 30)])
+    header_section = '\n'.join(manual_lines[:header_end])
     
-    # Extract all A-O checklist items (just the titles, not full details)
-    checklist_items = []
+    # Extract ALL checklist items A1-P5 with full descriptions
+    # Include all sections: A-O (Structure through Testing) + P (Build Flag Analysis)
+    checklist_sections = []
     current_section = None
-    for line in manual_lines[header_end:]:
-        # Match section headers like "A. Structure & Syntax" or "A1. ..."
-        if re.match(r'^([A-O])\.\s+', line):
-            current_section = line.strip()
-            checklist_items.append(current_section)
-        elif re.match(r'^- ([A-O][0-9]+)\.', line):
-            # Sub-item like "A1. ..."
-            checklist_items.append('  ' + line.strip())
-        elif line.strip().startswith('-') and current_section:
-            # Sub-item under a section
-            if len(line.strip()) < 100:  # Only short items to keep it concise
-                checklist_items.append('  ' + line.strip()[:100])
+    current_items = []
+    in_checklist = False
     
-    # Create condensed manual (header + checklist structure)
-    manual_preview = header_section + "\n\n" + "Step 2 – Sequential Audit Checklist\n" + "\n".join(checklist_items[:50])  # Limit to 50 items
-    if len(checklist_items) > 50:
-        manual_preview += f"\n\n[... {len(checklist_items) - 50} more checklist items - see full manual at prompts/Code_check_prompt_manual.txt ...]"
+    for line in manual_lines[header_end:]:
+        # Match main section headers (A. through P.)
+        if re.match(r'^([A-P])\.\s+', line):
+            if current_section:
+                checklist_sections.append(f"{current_section}\n" + "\n".join(current_items))
+            current_section = line.strip()
+            current_items = []
+            in_checklist = True
+        # Match sub-items (A1., A2., etc. or - A1., - A2., etc.)
+        elif in_checklist and (re.match(r'^- ([A-P][0-9]+)\.', line) or re.match(r'^([A-P][0-9]+)\.', line)):
+            current_items.append(line.rstrip())
+        # Match sub-items with descriptions (indented lines after checklist items)
+        elif in_checklist and current_items and (line.startswith('  ') or line.startswith('    ')):
+            # Include full description lines (up to reasonable length to avoid token limits)
+            if len(line.strip()) > 0:
+                current_items.append(line.rstrip())
+        # Match critical patterns and examples (code blocks, examples)
+        elif in_checklist and current_items:
+            # Include code examples and critical patterns (they're important)
+            if line.strip().startswith('```') or line.strip().startswith('**'):
+                current_items.append(line.rstrip())
+            elif line.strip() and not line.strip().startswith('---'):
+                # Include continuation lines for checklist items
+                if len(current_items) > 0 and len(current_items[-1]) < 200:
+                    current_items.append(line.rstrip())
+    
+    # Add last section
+    if current_section:
+        checklist_sections.append(f"{current_section}\n" + "\n".join(current_items))
+    
+    # Combine header + all checklist sections
+    full_manual_content = header_section + "\n\n" + "Step 2 – Sequential Audit Checklist\n\n" + "\n\n".join(checklist_sections)
+    
+    # If manual is too long, include key sections and reference the rest
+    # But prioritize including ALL checklist item titles (A1-P5)
+    if len(full_manual_content) > 30000:  # Rough token estimate
+        # Include header + all section headers + all item titles
+        manual_preview = header_section + "\n\n" + "Step 2 – Sequential Audit Checklist\n\n"
+        for section in checklist_sections:
+            # Extract section header and item titles
+            section_lines = section.split('\n')
+            manual_preview += section_lines[0] + "\n"  # Section header
+            for line in section_lines[1:]:
+                if re.match(r'^- ([A-P][0-9]+)\.', line) or re.match(r'^([A-P][0-9]+)\.', line):
+                    manual_preview += line + "\n"
+                elif line.strip().startswith('**') or line.strip().startswith('```'):
+                    manual_preview += line + "\n"
+        manual_preview += f"\n\n[Full manual with complete descriptions available at prompts/Code_check_prompt_manual.txt]"
+    else:
+        manual_preview = full_manual_content
     
     guidelines = textwrap.dedent(
         """\
         **MANDATORY**: The Manual (Code_check_prompt_manual.txt) is the AUTHORITATIVE SOURCE.
-        You MUST follow it STRICTLY and check EVERY checklist item A1 through O4 sequentially.
+        You MUST follow it STRICTLY and check EVERY checklist item A1 through P5 sequentially.
         Do NOT skip any items. Document PASS/FAIL for each item with specific line references.
         
         Review each diff chunk as an independent audit gate.
         
         **MANDATORY EXECUTION PROTOCOL**:
-        1. Reference the Manual structure provided below (full manual available at prompts/Code_check_prompt_manual.txt)
-        2. Check Pattern-Learning-Repository.md patterns BEFORE starting A-O phases
-        3. Execute EVERY checklist item A1 through O4 sequentially from the Manual
+        1. The FULL Manual is provided below - this is the AUTHORITATIVE SOURCE for all validation
+        2. Check Pattern-Learning-Repository-PART1.md and PART2.md patterns BEFORE starting A-P phases
+        3. Execute EVERY checklist item A1 through P5 sequentially from the Manual (A1-A6, B1-B3, C1-C5, D1-D4, E1-E3, F1-F3, G1-G5, H1-H4, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14, N1-N5, O1-O4, P1-P5)
         4. Document PASS/FAIL for each item with specific line references
         5. Do not skip any items - the Manual is comprehensive and all items apply
+        6. Reference the checklist item ID (e.g., "A1", "D3", "M8") in your findings
         
         CRITICAL: Check if any NEW FILES being added are non-functional:
         - Reject files matching patterns: *summary*, *audit*, *report*, *findings*, *analysis*, *test_results*
@@ -953,10 +991,13 @@ def format_user_prompt(
         Repository: {repo_name}
         File: {path}
         Chunk: {chunk_index + 1} / {chunk_total}
-        Manual Reference (condensed - full manual at prompts/Code_check_prompt_manual.txt):
+        
+        **AUTHORITATIVE MANUAL - Code_check_prompt_manual.txt** (FULL CHECKLIST A1-P5):
         ```
         {manual_preview}
         ```
+        
+        **CRITICAL**: This manual is the SINGLE SOURCE OF TRUTH. You MUST check ALL items A1-P5 sequentially.
         Guidelines:
         ```
         {guidelines}
@@ -974,8 +1015,23 @@ def default_system_prompt() -> str:
         """\
         You are an automated pre-commit reviewer enforcing strict correctness,
         security, and style requirements. Operate as a deterministic auditor.
-        Approve only when the diff chunk fully complies with all checklist
-        items. When rejecting, include actionable guidance.
+        
+        **AUTHORITATIVE SOURCE**: You MUST use the Code_check_prompt_manual.txt provided
+        in the user prompt as the SINGLE SOURCE OF TRUTH for all validation criteria.
+        
+        **MANDATORY PROCESS**:
+        1. Parse the full manual provided in the user prompt
+        2. Check ALL checklist items A1 through P5 sequentially (do not skip any)
+        3. For each item, document PASS/FAIL with specific line references
+        4. Reference checklist item IDs (A1, D3, M8, etc.) in all findings
+        5. Approve only when the diff chunk fully complies with ALL checklist items
+        6. When rejecting, include actionable guidance with checklist item references
+        
+        **CHECKLIST COVERAGE**: A1-A6 (Structure), B1-B3 (Shell Options), C1-C5 (Variables),
+        D1-D4 (Quoting), E1-E3 (Heredocs), F1-F3 (Logic), G1-G5 (Functions), H1-H4 (Error Handling),
+        I1-I4 (Timeouts), J1-J3 (Edge Cases), K1-K3 (Security), L1-L6 (Performance/Docs),
+        M1-M14 (Environment/Dependencies), N1-N5 (Resource Management), O1-O4 (Testing),
+        P1-P5 (Build Flag Analysis).
         """
     )
 

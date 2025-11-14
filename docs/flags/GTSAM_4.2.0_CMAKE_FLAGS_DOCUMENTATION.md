@@ -438,16 +438,27 @@ GTSAM uses standard CMake `find_package()` for dependencies:
   - `TBB_DIR` (STRING): Path to TBB CMake config directory (preferred for modern TBB installations)
     - Example: `-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB`
     - Modern Ubuntu TBB packages provide CMake config files at this location
-    - If set, GTSAM's FindTBB.cmake will use this directly
+    - **IMPORTANT:** GTSAM's FindTBB.cmake may ignore `TBB_DIR` in some cases. If `TBB_DIR` is ignored, explicitly set `TBB_LIBRARIES` and `TBB_INCLUDE_DIR` (see below).
   - `TBB_ROOT_DIR` (STRING): Base directory of TBB installation (fallback if TBB_DIR not set)
     - Example: `-DTBB_ROOT_DIR=/usr`
     - Used by FindTBB.cmake to search for TBB headers and libraries
-  - `TBB_INCLUDE_DIR` (STRING): Directory containing TBB headers (optional override)
-  - `TBB_LIBRARY` (STRING): Directory containing TBB library files (optional override)
+  - `TBB_INCLUDE_DIR` (STRING): Directory containing TBB headers (explicit override - **RECOMMENDED if TBB_DIR is ignored**)
+    - Example: `-DTBB_INCLUDE_DIR=/usr/include/tbb`
+    - Explicitly sets TBB include path, bypassing FindTBB.cmake search logic
+  - `TBB_INCLUDE_DIRS` (STRING): Alternative name for `TBB_INCLUDE_DIR` (also supported)
+  - `TBB_LIBRARIES` (STRING): Full path to TBB library file (explicit override - **CRITICAL if TBB_DIR is ignored**)
+    - Example: `-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so`
+    - Explicitly sets TBB library path, ensuring FindTBB.cmake can locate TBB even if `TBB_DIR` is ignored
+    - **This is the key fix for "TBB_LIBRARIES not found" errors when TBB_DIR is ignored**
+  - `TBB_LIBRARY` (STRING): Alternative name for `TBB_LIBRARIES` (legacy, may not work with all FindTBB.cmake versions)
 - **Environment Variables (also supported):**
   - `TBBROOT`: Base directory of TBB installation
   - `TBB_INSTALL_DIR`: Alternative installation directory
-- **Note:** GTSAM requires TBB 4.4 or newer. Modern Ubuntu packages (libtbb-dev) provide TBB with CMake config files. Use `TBB_DIR` for best compatibility.
+- **Troubleshooting:**
+  - If `TBB_DIR` is ignored and `TBB_LIBRARIES` is not found, explicitly set both `TBB_LIBRARIES` and `TBB_INCLUDE_DIR`
+  - Use `CMAKE_IGNORE_PATH` to exclude MKL TBB paths: `-DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb`
+  - Verify TBB installation: `ls /usr/lib/x86_64-linux-gnu/libtbb.so` and `ls /usr/include/tbb`
+- **Note:** GTSAM requires TBB 4.4 or newer. Modern Ubuntu packages (libtbb-dev) provide TBB with CMake config files. Use `TBB_DIR` for best compatibility, but always explicitly set `TBB_LIBRARIES` and `TBB_INCLUDE_DIR` as a fallback.
 
 ### METIS (if `GTSAM_SUPPORT_NESTED_DISSECTION=ON`)
 - Uses `find_package(METIS)`

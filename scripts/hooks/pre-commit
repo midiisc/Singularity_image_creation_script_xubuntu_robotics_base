@@ -27,6 +27,8 @@ WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || cd "${SCRIPT_DIR
 SED_VALIDATOR="${WORKSPACE_ROOT}/scripts/helpers/validate_sed_patterns.sh"
 SED_AUTO_FIX="${WORKSPACE_ROOT}/scripts/helpers/auto_fix_sed_patterns.sh"
 CMAKE_VALIDATOR="${WORKSPACE_ROOT}/scripts/helpers/validate_cmake_flags.sh"
+SHELLCHECK_AUTO_FIX="${WORKSPACE_ROOT}/scripts/helpers/auto_fix_shellcheck.sh"
+CI_CHECKS_RUNNER="${WORKSPACE_ROOT}/scripts/hooks/run_all_ci_checks.sh"
 
 # Build scripts to check
 BUILD_SCRIPTS=(
@@ -116,12 +118,16 @@ check_non_functional_files() {
     fi
     
     # Quick filename pattern check (fast)
-    local basename=$(basename "$file")
-    local filename_lower=$(echo "$basename" | tr '[:upper:]' '[:lower:]')
+    local basename
+    basename=$(basename "$file")
+    # Use tr directly instead of echo | tr (D3: PIPE PATTERN SAFETY)
+    local filename_lower
+    filename_lower=$(tr '[:upper:]' '[:lower:]' <<< "$basename")
     
     # Check for forbidden patterns in filename
-    if echo "$basename" | grep -qiE "(summary|audit|report|findings|analysis|test_results|fixes_summary|removal_summary|endpoint.*summary|endpoint.*results)" && \
-       echo "$file" | grep -qE "\.(md|txt)$"; then
+    # Use here-strings instead of echo | grep (D3: PIPE PATTERN SAFETY)
+    if grep -qiE "(summary|audit|report|findings|analysis|test_results|fixes_summary|removal_summary|endpoint.*summary|endpoint.*results)" <<< "$basename" && \
+       grep -qE "\.(md|txt)$" <<< "$file"; then
       non_functional_files+=("$file")
       continue
     fi
@@ -345,6 +351,42 @@ run_validation_and_fix_loop() {
       return 0
     # ENDIF: SED_VALIDATOR availability
     fi
+    
+    ############################################################################
+    # STEP 2: Run ShellCheck auto-fix
+    ############################################################################
+    
+    if [ -x "$SHELLCHECK_AUTO_FIX" ] && command -v shellcheck >/dev/null 2>&1; then
+      echo -e "${BLUE}[AUTO-FIX]${NC} Running ShellCheck auto-fix..."
+      echo ""
+      
+      if "$SHELLCHECK_AUTO_FIX" "$script_path"; then
+        # Check if fixes were applied (exit code 0 means fixes applied or none needed)
+        # Re-stage the file if it was modified
+        if git diff --quiet "$script_path"; then
+          echo -e "${GREEN}[✓]${NC} No ShellCheck fixes needed"
+        else
+          echo -e "${GREEN}[✓]${NC} ShellCheck fixes applied"
+          echo ""
+          echo -e "${BLUE}[GIT]${NC} Re-staging fixed file..."
+          git add "$script_path"
+          echo -e "${GREEN}[✓]${NC} File re-staged: ${script_name}"
+        fi
+        echo ""
+      else
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck auto-fix encountered issues (non-fatal)"
+        echo ""
+      # ENDIF: shellcheck auto-fix execution
+      fi
+    else
+      if ! command -v shellcheck >/dev/null 2>&1; then
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck not available, skipping auto-fix"
+      else
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck auto-fix script not found, skipping"
+      fi
+      echo ""
+    # ENDIF: SHELLCHECK_AUTO_FIX availability
+    fi
   # ENDWHILE: fix loop
   done
   
@@ -420,12 +462,129 @@ if [ -x "$CMAKE_VALIDATOR" ]; then
 fi
 
 ################################################################################
-# COMPREHENSIVE CI CHECKS (All GitHub Actions Checks)
+# COMPREHENSIVE CI CHECKS (All GitHub Actions Checks with Auto-Fix Loop)
+################################################################################
+
+# Initialize CI validation state
+CI_VALIDATION_PASSED=false
+
+if [ -x "$CI_CHECKS_RUNNER" ] && [ ${#SCRIPTS_TO_VALIDATE[@]} -gt 0 ]; then
+  echo ""
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  COMPREHENSIVE CI VALIDATION (All GitHub Actions Checks)        │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  echo -e "${BLUE}[INFO]${NC} Running all CI checks with auto-fix iteration..."
+  echo -e "${BLUE}[INFO]${NC} This will run all checks, auto-fix issues, and iterate until all pass"
+  echo ""
+  
+  # Run all CI checks with JSON export for pattern extraction
+  CI_RESULTS_JSON="${WORKSPACE_ROOT}/.git/.ci-check-results.json"
+  export EXPORT_JSON="$CI_RESULTS_JSON"
+  
+  # Auto-fix loop: run checks, fix issues, re-run until all pass
+  MAX_CI_RETRIES=5
+  CI_RETRY_COUNT=0
+  
+  while [ $CI_RETRY_COUNT -lt $MAX_CI_RETRIES ] && [ "$CI_VALIDATION_PASSED" != true ]; do
+    CI_RETRY_COUNT=$((CI_RETRY_COUNT + 1))
+    
+    if [ $CI_RETRY_COUNT -gt 1 ]; then
+      echo ""
+      echo -e "${MAGENTA}[ITERATION $CI_RETRY_COUNT/$MAX_CI_RETRIES]${NC} Re-running CI checks after auto-fixes..."
+      echo ""
+      
+      # Re-stage any files that were modified by auto-fixes
+      for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+        script_path="${WORKSPACE_ROOT}/${script}"
+        if [ -f "$script_path" ] && ! git diff --quiet "$script_path" 2>/dev/null; then
+          echo -e "${BLUE}[GIT]${NC} Re-staging fixed file: ${script}"
+          git add "$script_path"
+        fi
+      done
+      echo ""
+    fi
+    
+    # Run all CI checks
+    if "$CI_CHECKS_RUNNER"; then
+      CI_VALIDATION_PASSED=true
+      echo ""
+      echo -e "${GREEN}[✓]${NC} All CI checks passed!"
+      echo ""
+      
+      # Clean up JSON file
+      rm -f "$CI_RESULTS_JSON"
+      break
+    else
+      # Some checks failed - auto-fixes should have been applied by run_all_ci_checks.sh
+      echo ""
+      echo -e "${YELLOW}[⚠]${NC} Some CI checks failed (iteration $CI_RETRY_COUNT/$MAX_CI_RETRIES)"
+      echo ""
+      
+      # Extract error patterns and enhance prompts (if JSON available)
+      PATTERN_EXTRACTOR="${WORKSPACE_ROOT}/scripts/hooks/extract_and_enhance_patterns.py"
+      if [ -x "$PATTERN_EXTRACTOR" ] && [ -f "$CI_RESULTS_JSON" ]; then
+        echo -e "${BLUE}[PATTERN EXTRACTION]${NC} Extracting error patterns..."
+        if json_data=$(cat "$CI_RESULTS_JSON" 2>/dev/null); then
+          python3 "$PATTERN_EXTRACTOR" "$json_data" 2>/dev/null || true
+        fi
+      fi
+      
+      # Check if any files were modified (indicating auto-fixes were applied)
+      FILES_MODIFIED=false
+      for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+        script_path="${WORKSPACE_ROOT}/${script}"
+        if [ -f "$script_path" ] && ! git diff --quiet "$script_path" 2>/dev/null; then
+          FILES_MODIFIED=true
+          break
+        fi
+      done
+      
+      if [ "$FILES_MODIFIED" = false ] && [ $CI_RETRY_COUNT -ge $MAX_CI_RETRIES ]; then
+        # No files were modified and we've reached max retries - manual fixes needed
+        echo -e "${RED}[✗]${NC} Max CI check iterations reached"
+        echo -e "${RED}[✗]${NC} Some issues could not be auto-fixed - manual review required"
+        echo ""
+        VALIDATION_FAILED=true
+        break
+      elif [ "$FILES_MODIFIED" = false ]; then
+        # No auto-fixes were applied - likely manual fixes needed
+        echo -e "${YELLOW}[⚠]${NC} No auto-fixes were applied - some issues may require manual fixes"
+        echo ""
+        # Continue to next iteration in case fixes were applied outside the script
+      fi
+      
+      # Continue to next iteration if we haven't reached max retries
+      if [ $CI_RETRY_COUNT -lt $MAX_CI_RETRIES ]; then
+        echo -e "${BLUE}[→]${NC} Continuing to next iteration..."
+        continue
+      fi
+    fi
+  done
+  
+  # Final check
+  if [ "$CI_VALIDATION_PASSED" != true ]; then
+    VALIDATION_FAILED=true
+    echo -e "${RED}[✗]${NC} CI validation failed after $MAX_CI_RETRIES iterations"
+    echo ""
+    echo -e "${YELLOW}[ACTION REQUIRED]${NC}"
+    echo "  Review the CI check errors above and fix manually"
+    echo "  Then re-run: git commit"
+    echo ""
+  fi
+  
+  # Clean up
+  rm -f "$CI_RESULTS_JSON"
+# ENDIF: CI_CHECKS_RUNNER availability
+fi
+
+################################################################################
+# LEGACY COMPREHENSIVE CI CHECKS (Fallback - kept for compatibility)
 ################################################################################
 
 CI_CHECKS_SCRIPT="${WORKSPACE_ROOT}/scripts/hooks/run_all_ci_checks.sh"
 
-if [ -x "$CI_CHECKS_SCRIPT" ]; then
+if [ -x "$CI_CHECKS_SCRIPT" ] && [ "$CI_VALIDATION_PASSED" != true ]; then
   echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
   echo -e "${CYAN}│  COMPREHENSIVE CI VALIDATION (All GitHub Actions Checks)        │${NC}"
   echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
@@ -660,10 +819,16 @@ else
   echo "  - Sed pattern validation: PASSED"
   echo "  - All malformed patterns: AUTO-FIXED"
   echo "  - All missing fallbacks: AUTO-ADDED"
+  echo "  - ShellCheck issues: AUTO-FIXED (if any)"
+  if [ "$CI_VALIDATION_PASSED" = true ]; then
+    echo "  - All CI checks: PASSED (pipe patterns, CMake, TBB, heredoc, bash compatibility, ShellCheck)"
+  fi
   echo "  - Fixed files: AUTO-STAGED"
   echo "  - Ready to commit: YES"
   echo ""
   echo -e "${GREEN}[✓]${NC} Proceeding with commit..."
+  echo ""
+  echo -e "${CYAN}[NOTE]${NC} AI review runs automatically in GitHub Actions (not locally)"
   echo ""
   exit 0
 # ENDIF: validation result

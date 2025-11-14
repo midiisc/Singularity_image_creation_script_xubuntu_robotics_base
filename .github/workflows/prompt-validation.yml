@@ -299,6 +299,12 @@ jobs:
     # To set: Repository Settings → Secrets and variables → Actions → New repository secret
     # Name: ANTHROPIC_API_KEY
     # Value: Your Anthropic API key (starts with sk-ant-api03-...)
+    #
+    # AI REVIEW USES AUTHORITATIVE MANUAL:
+    # - Explicitly parses and uses prompts/Code_check_prompt_manual.txt as SINGLE SOURCE OF TRUTH
+    # - Checks ALL checklist items A1-P5 sequentially (A1-A6, B1-B3, C1-C5, D1-D4, E1-E3, F1-F3, G1-G5, H1-H4, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14, N1-N5, O1-O4, P1-P5)
+    # - References checklist item IDs (A1, D3, M8, etc.) in all findings
+    # - Manual is loaded and included in full in the AI prompt
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     steps:
       - name: Checkout code
@@ -338,6 +344,16 @@ jobs:
             fi
           fi
 
+      - name: Verify Code_check_prompt_manual.txt exists
+        run: |
+          if [ ! -f "prompts/Code_check_prompt_manual.txt" ]; then
+            echo "::error::Code_check_prompt_manual.txt not found at prompts/Code_check_prompt_manual.txt"
+            exit 1
+          fi
+          echo "✓ Found authoritative manual: prompts/Code_check_prompt_manual.txt"
+          echo "  Manual will be parsed and used explicitly for all validation checks"
+          echo "  Checklist coverage: A1-P5 (all items from Structure through Build Flag Analysis)"
+
       - name: Run AI Code Review
         env:
           GITHUB_ACTIONS: "true"
@@ -358,6 +374,28 @@ jobs:
           echo "Provider: $AI_REVIEW_PROVIDER"
           echo "Model: $AI_REVIEW_MODEL"
           echo "API URL: $AI_REVIEW_API_URL"
+          echo ""
+          echo "📋 AI Review Configuration:"
+          echo "  - Authoritative Manual: prompts/Code_check_prompt_manual.txt (SINGLE SOURCE OF TRUTH)"
+          echo "  - Checklist Coverage: A1-P5 (all items)"
+          echo "    * A1-A6: Structure & Syntax"
+          echo "    * B1-B3: Shell Options"
+          echo "    * C1-C5: Variables & Defaults"
+          echo "    * D1-D4: Quoting & Expansion Safety"
+          echo "    * E1-E3: Here-docs & Here-strings"
+          echo "    * F1-F3: Logic & Flow Control"
+          echo "    * G1-G5: Functions & Modularization"
+          echo "    * H1-H4: Error Handling & Observability"
+          echo "    * I1-I4: Timeouts, Retries, & Robustness"
+          echo "    * J1-J3: Edge Cases & Resiliency"
+          echo "    * K1-K3: Security Posture"
+          echo "    * L1-L6: Performance & Maintainability"
+          echo "    * M1-M14: Environment & Dependencies"
+          echo "    * N1-N5: Resource Management & Cleanup"
+          echo "    * O1-O4: Testing, Validation & Graceful Degradation"
+          echo "    * P1-P5: Build Flag Analysis & CMake Configuration"
+          echo "  - Validation: Sequential check of all checklist items"
+          echo "  - Findings: Include checklist item IDs (A1, D3, M8, etc.)"
           echo ""
           python3 scripts/hooks/ai_precommit_review.py || {
             EXIT_CODE=$?

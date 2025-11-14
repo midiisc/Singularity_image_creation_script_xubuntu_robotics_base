@@ -27,7 +27,12 @@ GTSAM_CMAKE_ARGS=(
   "-D" "GTSAM_WITH_TBB=ON"
   "-D" "TBB_ROOT_DIR=/usr"                        # System TBB location
   "-D" "TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"  # Explicit CMake config path
-  # Exclude MKL TBB from search
+  # CRITICAL FIX: Explicitly set TBB_LIBRARIES and TBB_INCLUDE_DIR to ensure
+  # FindTBB.cmake can locate TBB even if TBB_DIR is ignored (common issue)
+  "-D" "TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"  # Explicit library path
+  "-D" "TBB_INCLUDE_DIR=/usr/include/tbb"         # Explicit include path
+  "-D" "TBB_INCLUDE_DIRS=/usr/include/tbb"       # Alternative include path name
+  # Exclude MKL TBB from search (prevents conflicts)
   # Add to CMAKE_IGNORE_PATH: /opt/intel/oneapi/tbb
   
   # MKL/Eigen configuration

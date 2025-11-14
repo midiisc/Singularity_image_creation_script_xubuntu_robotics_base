@@ -285,11 +285,18 @@ validate_flags() {
   local line_num=""
   local cmake_cmd=""
   
-  while IFS=: read -r line_num cmake_cmd; do
+  # Disable exit on error for this function to ensure we check all libraries
+  # We'll collect all errors and report at the end
+  set +e
+  
+  while IFS=: read -r line_num cmake_cmd || [ -n "$line_num" ]; do
+    # Skip empty lines
+    [ -z "$line_num" ] && continue
+    
     ((cmd_count++)) || true
     
-    # Detect library context
-    current_library=$(detect_library_from_context "$script_file" "$line_num")
+    # Detect library context (handle errors gracefully)
+    current_library=$(detect_library_from_context "$script_file" "$line_num" 2>/dev/null || echo "")
     
     if [ -n "$current_library" ]; then
       echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -301,9 +308,9 @@ validate_flags() {
       echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     fi
     
-    # Extract flags from this cmake command
+    # Extract flags from this cmake command (handle errors gracefully)
     local flags
-    flags=$(extract_flags_from_cmake_command "$cmake_cmd")
+    flags=$(extract_flags_from_cmake_command "$cmake_cmd" 2>/dev/null || echo "")
     
     if [ -z "$flags" ]; then
       log_warning "No -D flags found in cmake command"
@@ -328,8 +335,8 @@ validate_flags() {
     #   - Generator: CMAKE_GENERATOR (handled via -G flag, not -D)
     local generic_flags="NO_LIBM CMAKE_BUILD_TYPE CMAKE_INSTALL_PREFIX CMAKE_PREFIX_PATH CMAKE_MODULE_PATH BUILD_SHARED_LIBS CMAKE_POLICY_DEFAULT_CMP0069 CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_Fortran_COMPILER CMAKE_CUDA_COMPILER CMAKE_C_FLAGS CMAKE_CXX_FLAGS CMAKE_CUDA_FLAGS CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS CMAKE_INSTALL_RPATH CMAKE_INSTALL_RPATH_USE_LINK_PATH CMAKE_POSITION_INDEPENDENT_CODE CMAKE_INTERPROCEDURAL_OPTIMIZATION CMAKE_CXX_STANDARD CMAKE_CXX_STANDARD_REQUIRED CMAKE_CUDA_ARCHITECTURES CMAKE_CUDA_COMPILER_WORKS CMAKE_CUDA_RUNTIME_LIBRARY BLAS_LIBRARIES LAPACK_LIBRARIES MKL_ROOT_DIR MKL_INCLUDE_DIR MKL_LIBRARIES TBB_DIR TBB_ROOT_DIR"
     
-    # Validate each flag
-    while IFS= read -r flag; do
+    # Validate each flag (continue even if individual flag validation fails)
+    while IFS= read -r flag || [ -n "$flag" ]; do
       [ -z "$flag" ] && continue
       ((TOTAL_FLAGS_FOUND++)) || true
       
@@ -349,8 +356,9 @@ validate_flags() {
       fi
       
       if [ -n "$current_library" ]; then
+        # Handle documentation lookup errors gracefully
         local doc_result
-        doc_result=$(find_flag_documentation "$current_library" "$flag")
+        doc_result=$(find_flag_documentation "$current_library" "$flag" 2>/dev/null || echo "NOT_FOUND")
         
         case "$doc_result" in
           NO_DOCS)
@@ -385,10 +393,13 @@ validate_flags() {
         FAILED_FLAG_REASONS+=("Unknown library context")
         ((INVALID_FLAGS++)) || true
       fi
-    done <<< "$flags"
+    done <<< "$flags" || true
     
     echo ""
-  done < "$cmake_commands_file"
+  done < "$cmake_commands_file" || true
+  
+  # Re-enable exit on error for the rest of the script
+  set -e
 }
 
 ################################################################################

@@ -571,7 +571,8 @@ test_mirror() {
     
     # Read output from file
     CURL_OUTPUT=$(cat "${curl_stdout}" 2>/dev/null || echo "")
-    local curl_error=$(cat "${curl_stderr}" 2>/dev/null || echo "")
+    local curl_error
+    curl_error=$(cat "${curl_stderr}" 2>/dev/null || echo "")
     rm -f "${curl_stdout}" "${curl_stderr}" 2>/dev/null || true
     
     # Extract HTTP code and time from output (format: "HTTP_CODE|TIME")
@@ -705,6 +706,7 @@ LDCONF
 # Purpose: Always ensure /usr/local priority file exists before refreshing cache
 # Dependencies: ensure_compiled_lib_priority
 # Outputs: Updated dynamic linker cache
+# Note: Function accepts optional arguments passed to ldconfig (e.g., -v for verbose)
 run_ldconfig_refresh() {
   ensure_compiled_lib_priority
   ldconfig "$@"
@@ -2928,6 +2930,7 @@ if [ ! -f "${MKL_ENV_SCRIPT}" ]; then
 fi
 
 # Source MKL environment for current build session
+# shellcheck disable=SC1090
 source "${MKL_ENV_SCRIPT}"
 
 # Ensure MKLROOT is exported
@@ -7671,9 +7674,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   if [ ! -d "${TBB_CMAKE_DIR}" ]; then
     # Fallback: try to find TBB CMake config in standard locations
     # Phase 1: Find TBB CMake directory
+    # Use process substitution to avoid pipe subshell (D3: PIPE PATTERN SAFETY)
     tbb_found_dir=""
-    tbb_found_dir=$(find /usr -type d -path "*/cmake/TBB" 2>/dev/null | head -1 || echo "")
-    # Phase 2: Validate result before using
+    while IFS= read -r -d '' found_path && [ -z "${tbb_found_dir:-}" ]; do
+      if [ -n "${found_path:-}" ] && [ -d "${found_path}" ]; then
+        tbb_found_dir="${found_path}"
+        break
+      fi
+    done < <(find /usr -type d -path "*/cmake/TBB" -print0 2>/dev/null || true)
+    # Phase 2: Validate result before using (H1: Error Handling, B3: Strict Mode Validation)
     if [ -n "${tbb_found_dir:-}" ] && [ -d "${tbb_found_dir}" ]; then
       TBB_CMAKE_DIR="${tbb_found_dir}"
     else
@@ -7690,13 +7699,60 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # - TBB_DIR points to CMake config directory (preferred for modern TBB installations)
   # - TBB_ROOT_DIR points to the system TBB package base directory (fallback)
   # - MKL_ROOT_DIR/MKL_LIBRARIES align with GTSAM's bundled FindMKL.cmake logic
+  # CRITICAL FIX: GTSAM's FindTBB.cmake may ignore TBB_DIR, so we explicitly set
+  # TBB_LIBRARIES and TBB_INCLUDE_DIR (similar to OpenCV configuration) to ensure
+  # TBB is found even if TBB_DIR is ignored by CMake's find_package() mechanism.
   CMAKE_TBB_ARGS=()
+  TBB_LIB_PATH="/usr/lib/x86_64-linux-gnu/libtbb.so"
+  TBB_INCLUDE_PATH="/usr/include/tbb"
+  
+  # Verify TBB library exists (fallback search if default path doesn't exist)
+  if [ ! -f "${TBB_LIB_PATH}" ]; then
+    # Search for libtbb.so in standard library paths
+    tbb_lib_found=$(find /usr/lib* -name "libtbb.so" 2>/dev/null | head -1 || echo "")
+    if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
+      TBB_LIB_PATH="${tbb_lib_found}"
+    fi
+  fi
+  
+  # Verify TBB include directory exists
+  if [ ! -d "${TBB_INCLUDE_PATH}" ]; then
+    # Search for tbb include directory
+    tbb_include_found=$(find /usr/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
+    if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
+      TBB_INCLUDE_PATH="${tbb_include_found}"
+    fi
+  fi
+  
+  # Build TBB configuration arguments
   if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_DIR=${TBB_CMAKE_DIR}")
     echo "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
   else
     CMAKE_TBB_ARGS+=("-D" "TBB_ROOT_DIR=${TBBROOT}")
     echo "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
+  fi
+  
+  # CRITICAL: Explicitly set TBB_LIBRARIES and TBB_INCLUDE_DIR to ensure FindTBB.cmake
+  # can locate TBB even if TBB_DIR is ignored (this matches OpenCV's working configuration)
+  if [ -f "${TBB_LIB_PATH}" ]; then
+    CMAKE_TBB_ARGS+=("-D" "TBB_LIBRARIES=${TBB_LIB_PATH}")
+    echo "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
+  fi
+  if [ -d "${TBB_INCLUDE_PATH}" ]; then
+    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
+    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
+    echo "[INFO] Explicitly setting TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}"
+  fi
+  
+  # Exclude MKL TBB paths from CMake search to prevent conflicts
+  # This ensures system TBB is used, not MKL's bundled TBB
+  CMAKE_IGNORE_TBB_PATHS=""
+  if [ -d "/opt/intel/oneapi/tbb" ]; then
+    CMAKE_IGNORE_TBB_PATHS="/opt/intel/oneapi/tbb"
+  fi
+  if [ -d "/opt/intel/tbb" ]; then
+    CMAKE_IGNORE_TBB_PATHS="${CMAKE_IGNORE_TBB_PATHS}${CMAKE_IGNORE_TBB_PATHS:+;}/opt/intel/tbb"
   fi
   
   cmake .. \
@@ -7707,6 +7763,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D BUILD_SHARED_LIBS=ON \
     -D GTSAM_WITH_TBB=ON \
     "${CMAKE_TBB_ARGS[@]}" \
+    ${CMAKE_IGNORE_TBB_PATHS:+-D CMAKE_IGNORE_PATH="${CMAKE_IGNORE_TBB_PATHS}"} \
     -D GTSAM_WITH_EIGEN_MKL=ON \
     -D GTSAM_WITH_EIGEN_MKL_OPENMP=ON \
     -D GTSAM_USE_SYSTEM_EIGEN=ON \
@@ -8996,6 +9053,7 @@ PHASE5_SUCCESS=true
 # Critical: Load ROS 2 environment for colcon build tools
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# shellcheck disable=SC1090
 source /opt/ros/${ROS_DISTRO}/setup.bash
 
 #--- Sub-block 22.4: Create ROS overlay workspace ---

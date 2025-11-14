@@ -179,26 +179,50 @@ check_cmake_flags() {
     return 0
   fi
   
+  # Disable exit on error to continue checking all scripts even if one fails
+  set +e
+  
   local validation_failed=false
+  local validation_errors=()
+  
   for script in "${BUILD_SCRIPTS[@]}"; do
     local script_path="${REPO_ROOT}/${script}"
     if [ ! -f "$script_path" ]; then
       continue
     fi
     
-    if ! "$cmake_validator" "$script_path" --report-only 2>&1; then
+    echo -e "  Validating: ${script}..."
+    
+    # Run validator (without --report-only to actually validate)
+    # Capture output to show all errors
+    local validator_output
+    validator_output=$("$cmake_validator" "$script_path" 2>&1)
+    local validator_exit_code=$?
+    
+    # Display validator output (it will show all errors for all libraries)
+    echo "$validator_output"
+    
+    if [ $validator_exit_code -ne 0 ]; then
       validation_failed=true
+      validation_errors+=("${script}: Validation failed (see output above)")
     fi
   done
   
+  # Re-enable exit on error
+  set -e
+  
   if [ "$validation_failed" = true ]; then
-    echo -e "${RED}[✗]${NC} CMake flag validation failed"
+    echo -e "${RED}[✗]${NC} CMake flag validation failed for one or more scripts"
+    echo -e "${RED}[DETAILS]${NC} Validation errors:"
+    for error_detail in "${validation_errors[@]}"; do
+      echo -e "${RED}    ✗${NC} $error_detail"
+    done
     CHECK_RESULTS[$check_name]="FAILED"
-    CHECK_ERRORS[$check_name]="Invalid or undocumented CMake flags detected"
+    CHECK_ERRORS[$check_name]="Invalid or undocumented CMake flags detected in: ${validation_errors[*]}"
     FAILED_CHECKS=$((FAILED_CHECKS + 1))
     return 1
   else
-    echo -e "${GREEN}[✓]${NC} CMake flag validation passed"
+    echo -e "${GREEN}[✓]${NC} CMake flag validation passed for all scripts"
     CHECK_RESULTS[$check_name]="PASSED"
     PASSED_CHECKS=$((PASSED_CHECKS + 1))
     return 0
