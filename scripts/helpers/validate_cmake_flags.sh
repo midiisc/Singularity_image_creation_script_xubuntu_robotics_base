@@ -23,6 +23,24 @@ readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
+# Detect if running in GitHub Actions
+GITHUB_ACTIONS=${GITHUB_ACTIONS:-false}
+if [ -n "${GITHUB_ACTIONS:-}" ] && [ "${GITHUB_ACTIONS}" != "false" ]; then
+  GITHUB_ACTIONS=true
+fi
+
+# Function to output GitHub Actions annotation
+github_annotation() {
+  local level="$1"  # error, warning, notice
+  local file="$2"
+  local line="$3"
+  local message="$4"
+  
+  if [ "$GITHUB_ACTIONS" = true ]; then
+    echo "::$level file=$file,line=$line::$message"
+  fi
+}
+
 # Script configuration
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
@@ -261,11 +279,13 @@ validate_flags() {
         case "$doc_result" in
           NO_DOCS)
             log_error "Flag: ${flag} - Documentation missing for ${current_library}"
+            github_annotation "error" "$script_file" "$line_num" "CMake flag '${flag}' - Documentation missing for ${current_library}"
             ((UNDOCUMENTED_LIBRARIES++)) || true
             ((INVALID_FLAGS++)) || true
             ;;
           NOT_FOUND)
             log_error "Flag: ${flag} - NOT documented in ${current_library} flags"
+            github_annotation "error" "$script_file" "$line_num" "CMake flag '${flag}' - NOT documented in ${current_library} flags documentation"
             ((INVALID_FLAGS++)) || true
             ;;
           *)

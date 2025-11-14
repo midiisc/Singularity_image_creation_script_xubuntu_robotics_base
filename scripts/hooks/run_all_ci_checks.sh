@@ -36,6 +36,37 @@ TOTAL_CHECKS=0
 PASSED_CHECKS=0
 FAILED_CHECKS=0
 
+# Detect if running in GitHub Actions
+GITHUB_ACTIONS=${GITHUB_ACTIONS:-false}
+if [ -n "${GITHUB_ACTIONS:-}" ] && [ "${GITHUB_ACTIONS}" != "false" ]; then
+  GITHUB_ACTIONS=true
+fi
+
+# Function to output GitHub Actions annotation
+github_annotation() {
+  local level="$1"  # error, warning, notice
+  local file="$2"
+  local line="$3"
+  local message="$4"
+  
+  if [ "$GITHUB_ACTIONS" = true ]; then
+    echo "::$level file=$file,line=$line::$message"
+  else
+    # For local runs, output in colored format
+    case "$level" in
+      error)
+        echo -e "${RED}::error file=$file,line=$line::$message${NC}"
+        ;;
+      warning)
+        echo -e "${YELLOW}::warning file=$file,line=$line::$message${NC}"
+        ;;
+      *)
+        echo "::$level file=$file,line=$line::$message"
+        ;;
+    esac
+  fi
+}
+
 echo ""
 echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${CYAN}║     COMPREHENSIVE CI VALIDATION - ALL CHECKS                   ║${NC}"
@@ -112,6 +143,9 @@ check_pipe_patterns() {
       line_num_detail=$(echo "$error_detail" | cut -d: -f2)
       local line_content_detail
       line_content_detail=$(echo "$error_detail" | cut -d: -f3-)
+      
+      # Output detailed error with GitHub Actions annotation format
+      github_annotation "error" "$file_name" "$line_num_detail" "Unsafe pipe pattern: echo | grep should be replaced with here-string (grep <<< \"\${var}\")"
       echo -e "${RED}    ✗${NC} ${file_name}:${line_num_detail}: ${line_content_detail}"
     done
     CHECK_RESULTS[$check_name]="FAILED"

@@ -26,11 +26,37 @@ jobs:
 
       - name: Check for echo | grep patterns
         id: pipe_check
+        env:
+          GITHUB_ACTIONS: true
         run: |
           echo "Checking for unsafe 'echo | grep' patterns..."
-          if grep -n 'echo.*|.*grep' xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh 2>/dev/null | head -20; then
+          
+          FOUND_ERRORS=false
+          
+          # Check each file and output detailed errors with GitHub Actions annotations
+          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            
+            # Find all echo | grep patterns with file:line:content format
+            while IFS= read -r line_info; do
+              if [ -n "$line_info" ]; then
+                FOUND_ERRORS=true
+                line_num=$(echo "$line_info" | cut -d: -f1)
+                line_content=$(echo "$line_info" | cut -d: -f2-)
+                
+                # Output GitHub Actions error annotation with file:line details
+                echo "::error file=$file,line=$line_num::Unsafe pipe pattern found: echo | grep should be replaced with here-string (grep <<< \"\${var}\")"
+                echo "   $file:$line_num: $line_content"
+              fi
+            done < <(grep -n 'echo.*|.*grep' "$file" 2>/dev/null || true)
+          done
+          
+          if [ "$FOUND_ERRORS" = true ]; then
             echo "❌ Found unsafe pipe patterns"
-            echo "::warning::Found echo | grep patterns that should use here-strings (<<<)"
+            echo ""
+            echo "**Fix:** Replace 'echo \"\${VAR}\" | grep' with 'grep <<< \"\${VAR}\"'"
             exit 1
           else
             echo "✅ No unsafe pipe patterns found"
@@ -47,12 +73,17 @@ jobs:
         run: chmod +x scripts/helpers/validate_cmake_flags.sh
 
       - name: Run CMake flag validator
+        env:
+          GITHUB_ACTIONS: true
         run: |
           echo "Validating CMake flags..."
-          if ./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --report-only; then
+          if ./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --strict; then
             echo "✅ CMake flags validation passed"
           else
             echo "❌ CMake flags validation failed"
+            echo ""
+            echo "**Fix:** Review errors above. Each error shows file:line:flag details."
+            echo "Check docs/flags/ for library flag documentation."
             exit 1
           fi
 
@@ -90,17 +121,55 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify TBB checks exist
+        env:
+          GITHUB_ACTIONS: true
         run: |
           echo "Checking for TBB verification blocks..."
           
-          # Check for TBB verification in Ceres, g2o, GTSAM sections
-          if grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh && \
-             grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_post_ULTRA_CLEANED.sh && \
-             grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
-            echo "✅ TBB verification blocks found for all HPC libraries"
-          else
-            echo "❌ Missing TBB verification blocks"
+          MISSING_VERIFICATIONS=()
+          
+          # Check for TBB verification in Ceres
+          if ! grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+            MISSING_VERIFICATIONS+=("Ceres")
+            # Find where Ceres is configured to suggest where to add verification
+            CERES_LINE=$(grep -n "CERES\|Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
+            if [ "$CERES_LINE" != "unknown" ]; then
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$CERES_LINE::Missing TBB verification block for Ceres. Add verification after Ceres installation."
+            else
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for Ceres"
+            fi
+          fi
+          
+          # Check for TBB verification in g2o
+          if ! grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+            MISSING_VERIFICATIONS+=("g2o")
+            G2O_LINE=$(grep -n "g2o\|G2O" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
+            if [ "$G2O_LINE" != "unknown" ]; then
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$G2O_LINE::Missing TBB verification block for g2o. Add verification after g2o installation."
+            else
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for g2o"
+            fi
+          fi
+          
+          # Check for TBB verification in GTSAM
+          if ! grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+            MISSING_VERIFICATIONS+=("GTSAM")
+            GTSAM_LINE=$(grep -n "GTSAM\|gtsam" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
+            if [ "$GTSAM_LINE" != "unknown" ]; then
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$GTSAM_LINE::Missing TBB verification block for GTSAM. Add verification after GTSAM installation."
+            else
+              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for GTSAM"
+            fi
+          fi
+          
+          if [ ${#MISSING_VERIFICATIONS[@]} -gt 0 ]; then
+            echo "❌ Missing TBB verification blocks for: ${MISSING_VERIFICATIONS[*]}"
+            echo ""
+            echo "**Fix:** Add TBB verification blocks after each library installation."
+            echo "Example: Verifying TBB configuration for <Library>"
             exit 1
+          else
+            echo "✅ TBB verification blocks found for all HPC libraries"
           fi
 
   check-heredoc-syntax:
@@ -111,15 +180,36 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Validate heredoc delimiters
+        env:
+          GITHUB_ACTIONS: true
         run: |
           echo "Checking heredoc syntax..."
           
-          # Check for unquoted EOF delimiters (should be <<'EOF' for literals)
-          UNQUOTED_EOF=$(grep -n "<<EOF" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" | wc -l || true)
+          FOUND_WARNINGS=false
           
-          if [ "$UNQUOTED_EOF" -gt 0 ]; then
-            echo "::warning::Found $UNQUOTED_EOF potentially unquoted EOF delimiters"
-            echo "Consider using <<'EOF' for literal heredocs to prevent variable expansion"
+          # Check each file for unquoted EOF delimiters
+          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            
+            # Find unquoted EOF delimiters with file:line:content format
+            while IFS= read -r line_info; do
+              if [ -n "$line_info" ]; then
+                FOUND_WARNINGS=true
+                line_num=$(echo "$line_info" | cut -d: -f1)
+                line_content=$(echo "$line_info" | cut -d: -f2-)
+                
+                # Output GitHub Actions warning annotation with file:line details
+                echo "::warning file=$file,line=$line_num::Potentially unquoted EOF delimiter found. Consider using <<'EOF' for literal heredocs to prevent variable expansion"
+                echo "   $file:$line_num: $line_content"
+              fi
+            done < <(grep -n "<<EOF" "$file" 2>/dev/null | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" || true)
+          done
+          
+          if [ "$FOUND_WARNINGS" = true ]; then
+            echo ""
+            echo "**Fix:** Replace '<<EOF' with '<<'EOF'' for literal heredocs"
           else
             echo "✅ Heredoc syntax appears correct"
           fi
@@ -132,21 +222,57 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Check for Bash 4+ features
+        env:
+          GITHUB_ACTIONS: true
         run: |
           echo "Checking for Bash 4+ specific features..."
           
-          # Check for uppercase/lowercase conversion
-          if grep -nE '\$\{[^}]+\^\^' *.sh 2>/dev/null; then
-            echo "❌ Found uppercase conversion (\${var^^}) - not compatible with Bash 3"
-            exit 1
-          fi
+          FOUND_ERRORS=false
           
-          if grep -nE '\$\{[^}]+,,' *.sh 2>/dev/null; then
-            echo "❌ Found lowercase conversion (\${var,,}) - not compatible with Bash 3"
-            exit 1
-          fi
+          # Check for uppercase conversion (\${var^^})
+          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            
+            while IFS= read -r line_info; do
+              if [ -n "$line_info" ]; then
+                FOUND_ERRORS=true
+                line_num=$(echo "$line_info" | cut -d: -f1)
+                line_content=$(echo "$line_info" | cut -d: -f2-)
+                
+                echo "::error file=$file,line=$line_num::Found uppercase conversion (\${var^^}) - not compatible with Bash 3. Use alternative method or add Bash version check"
+                echo "   $file:$line_num: $line_content"
+              fi
+            done < <(grep -nE '\$\{[^}]+\^\^' "$file" 2>/dev/null || true)
+          done
           
-          echo "✅ No Bash 4+ specific features detected"
+          # Check for lowercase conversion (\${var,,})
+          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+            if [ ! -f "$file" ]; then
+              continue
+            fi
+            
+            while IFS= read -r line_info; do
+              if [ -n "$line_info" ]; then
+                FOUND_ERRORS=true
+                line_num=$(echo "$line_info" | cut -d: -f1)
+                line_content=$(echo "$line_info" | cut -d: -f2-)
+                
+                echo "::error file=$file,line=$line_num::Found lowercase conversion (\${var,,}) - not compatible with Bash 3. Use alternative method or add Bash version check"
+                echo "   $file:$line_num: $line_content"
+              fi
+            done < <(grep -nE '\$\{[^}]+,,' "$file" 2>/dev/null || true)
+          done
+          
+          if [ "$FOUND_ERRORS" = true ]; then
+            echo ""
+            echo "❌ Found Bash 4+ specific features"
+            echo "**Fix:** Use Bash 3 compatible alternatives or add version checks"
+            exit 1
+          else
+            echo "✅ No Bash 4+ specific features detected"
+          fi
 
   shellcheck:
     name: ShellCheck Linting
