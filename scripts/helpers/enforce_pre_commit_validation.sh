@@ -29,7 +29,12 @@ readonly NC='\033[0m'
 
 # Get repository root
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || pwd)
+# SC2015: Use explicit if-then-else instead of A && B || C
+if [ -d "${SCRIPT_DIR}/../.." ]; then
+  WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
+else
+  WORKSPACE_ROOT=$(pwd)
+fi
 
 # Validators
 PRE_COMMIT_HOOK="${WORKSPACE_ROOT}/.git/hooks/pre-commit"
@@ -282,6 +287,8 @@ if [ "$VALIDATION_PASSED" = true ] && command -v shellcheck >/dev/null 2>&1; the
           
           # Run ShellCheck and capture output (only check for errors, not warnings)
           # SC1090 warnings are acceptable for intentional dynamic sources
+          # Note: shellcheck_output is not local (we're in a loop, not a function)
+          shellcheck_output=""
           if shellcheck_output=$(shellcheck --severity=error -f gcc "$file_path" 2>&1); then
             echo -e "${GREEN}  ✓${NC} No errors found"
           else
@@ -347,8 +354,13 @@ if [ "$VALIDATION_PASSED" = true ] && command -v shellcheck >/dev/null 2>&1; the
       fi
     done
     
-    # Clean up output files
+    # Clean up output files and backup files after successful validation
     rm -f "${WORKSPACE_ROOT}/.git/.shellcheck-output-"*.txt 2>/dev/null || true
+    
+    # Clean up any backup files created by auto-fix scripts
+    if [ "$SHELLCHECK_PASSED" = true ]; then
+      find "${WORKSPACE_ROOT}" -maxdepth 3 -name "*.backup.*" -type f ! -path "${WORKSPACE_ROOT}/.git/*" -delete 2>/dev/null || true
+    fi
     
     if [ "$SHELLCHECK_PASSED" != true ]; then
       echo -e "${RED}[✗]${NC} ShellCheck validation FAILED after $MAX_RETRIES attempts"

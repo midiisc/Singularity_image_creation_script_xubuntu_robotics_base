@@ -15,6 +15,9 @@ build_logs/
 *~
 .DS_Store
 
+# Backup files (created by auto-fix scripts)
+*.backup.*
+
 # Python
 __pycache__/
 *.pyc

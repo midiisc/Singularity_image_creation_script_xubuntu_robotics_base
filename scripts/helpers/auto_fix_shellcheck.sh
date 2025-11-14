@@ -314,7 +314,12 @@ if [ $FIXES_APPLIED -gt 0 ]; then
   echo -e "${GREEN}[SUCCESS]${NC} ShellCheck issues auto-fixed"
   echo ""
   if [ "$DRY_RUN" != "--dry-run" ]; then
-    echo -e "${BLUE}[NOTE]${NC} Backup saved: ${BACKUP_FILE##*/}"
+    # Clean up backup file after successful fixes
+    # Backup is only needed during the fix process, not after validation passes
+    if [ -f "$BACKUP_FILE" ]; then
+      rm -f "$BACKUP_FILE"
+      echo -e "${BLUE}[CLEANUP]${NC} Backup file removed after successful fixes"
+    fi
     echo -e "${BLUE}[NOTE]${NC} Please review changes before committing"
     echo ""
   fi

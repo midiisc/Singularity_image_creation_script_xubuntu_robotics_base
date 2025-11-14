@@ -481,7 +481,8 @@ analyze_build_log() {
         
         for issue_line in "${all_issue_lines[@]}"; do
             # Skip if we already extracted this area (within context window)
-            if [ $issue_line -le $last_extracted_line ]; then
+            # SC2086: Quote arithmetic variables for safety
+            if [ "$issue_line" -le "$last_extracted_line" ]; then
                 continue
             fi
             
@@ -492,7 +493,8 @@ analyze_build_log() {
             local is_deprecation=false
             
             for err_line in "${error_line_nums[@]}"; do
-                if [ $err_line -eq $issue_line ]; then
+                # SC2086: Quote arithmetic variables for safety
+                if [ "$err_line" -eq "$issue_line" ]; then
                     is_error=true
                     break
                 fi
@@ -500,7 +502,8 @@ analyze_build_log() {
             
             if [ "$is_error" != true ]; then
                 for warn_line in "${warning_line_nums[@]}"; do
-                    if [ $warn_line -eq $issue_line ]; then
+                    # SC2086: Quote arithmetic variables for safety
+                    if [ "$warn_line" -eq "$issue_line" ]; then
                         is_warning=true
                         break
                     fi
@@ -509,7 +512,8 @@ analyze_build_log() {
             
             if [ "$is_error" != true ] && [ "$is_warning" != true ]; then
                 for debug_line in "${debug_flag_line_nums[@]}"; do
-                    if [ $debug_line -eq $issue_line ]; then
+                    # SC2086: Quote arithmetic variables for safety
+                    if [ "$debug_line" -eq "$issue_line" ]; then
                         is_debug=true
                         break
                     fi
@@ -518,7 +522,8 @@ analyze_build_log() {
             
             if [ "$is_error" != true ] && [ "$is_warning" != true ] && [ "$is_debug" != true ]; then
                 for dep_line in "${deprecation_line_nums[@]}"; do
-                    if [ $dep_line -eq $issue_line ]; then
+                    # SC2086: Quote arithmetic variables for safety
+                    if [ "$dep_line" -eq "$issue_line" ]; then
                         is_deprecation=true
                         break
                     fi

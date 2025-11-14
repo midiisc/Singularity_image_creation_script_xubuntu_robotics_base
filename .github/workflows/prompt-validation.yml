@@ -2,7 +2,7 @@ name: Prompt Validation Checks
 
 on:
   pull_request:
-    branches: [ main, beta ]
+    branches: [main, beta]
     paths:
       - '**.sh'
       - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
@@ -10,7 +10,7 @@ on:
       - 'prompts/**'
       - 'scripts/**'
   push:
-    branches: [ main, beta ]
+    branches: [main, beta]
     paths:
       - '**.sh'
       - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
@@ -137,8 +137,16 @@ jobs:
           if ! grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
             MISSING_VERIFICATIONS+=("Ceres")
             # Find where Ceres is configured to suggest where to add verification
-            CERES_LINE=$(grep -n "CERES\|Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
-            if [ "$CERES_LINE" != "unknown" ]; then
+            # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
+            CERES_LINE="unknown"
+            ceres_match=""
+            # Combine patterns to avoid pipe chain: search for lines with both CERES/Ceres AND cmake/build/install
+            ceres_match=$(grep -nE "(CERES|Ceres).*(cmake|build|install)|(cmake|build|install).*(CERES|Ceres)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            if [ -n "${ceres_match}" ]; then
+              CERES_LINE=""
+              CERES_LINE=$(cut -d: -f1 <<< "${ceres_match}" || echo "unknown")
+            fi
+            if [ -n "${CERES_LINE}" ] && [ "${CERES_LINE}" != "unknown" ]; then
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$CERES_LINE::Missing TBB verification block for Ceres. Add verification after Ceres installation."
             else
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for Ceres"
@@ -148,8 +156,16 @@ jobs:
           # Check for TBB verification in g2o
           if ! grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
             MISSING_VERIFICATIONS+=("g2o")
-            G2O_LINE=$(grep -n "g2o\|G2O" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
-            if [ "$G2O_LINE" != "unknown" ]; then
+            # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
+            G2O_LINE="unknown"
+            g2o_match=""
+            # Combine patterns to avoid pipe chain: search for lines with both g2o/G2O AND cmake/build/install
+            g2o_match=$(grep -nE "(g2o|G2O).*(cmake|build|install)|(cmake|build|install).*(g2o|G2O)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            if [ -n "${g2o_match}" ]; then
+              G2O_LINE=""
+              G2O_LINE=$(cut -d: -f1 <<< "${g2o_match}" || echo "unknown")
+            fi
+            if [ -n "${G2O_LINE}" ] && [ "${G2O_LINE}" != "unknown" ]; then
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$G2O_LINE::Missing TBB verification block for g2o. Add verification after g2o installation."
             else
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for g2o"
@@ -159,8 +175,16 @@ jobs:
           # Check for TBB verification in GTSAM
           if ! grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
             MISSING_VERIFICATIONS+=("GTSAM")
-            GTSAM_LINE=$(grep -n "GTSAM\|gtsam" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | grep -i "cmake\|build\|install" | head -1 | cut -d: -f1 || echo "unknown")
-            if [ "$GTSAM_LINE" != "unknown" ]; then
+            # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
+            GTSAM_LINE="unknown"
+            gtsam_match=""
+            # Combine patterns to avoid pipe chain: search for lines with both GTSAM/gtsam AND cmake/build/install
+            gtsam_match=$(grep -nE "(GTSAM|gtsam).*(cmake|build|install)|(cmake|build|install).*(GTSAM|gtsam)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            if [ -n "${gtsam_match}" ]; then
+              GTSAM_LINE=""
+              GTSAM_LINE=$(cut -d: -f1 <<< "${gtsam_match}" || echo "unknown")
+            fi
+            if [ -n "${GTSAM_LINE}" ] && [ "${GTSAM_LINE}" != "unknown" ]; then
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$GTSAM_LINE::Missing TBB verification block for GTSAM. Add verification after GTSAM installation."
             else
               echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for GTSAM"
@@ -199,20 +223,20 @@ jobs:
             fi
             
             # Find unquoted EOF delimiters with file:line:content format
-            # Use here-string instead of echo | cut (D3: PIPE PATTERN SAFETY)
-            while IFS= read -r line_info; do
-              if [ -n "$line_info" ]; then
+            # D3: PIPE PATTERN SAFETY - Use single grep with negative lookahead pattern instead of pipe chain
+            while IFS= read -r line_info || [ -n "${line_info}" ]; do
+              if [ -n "${line_info}" ]; then
                 FOUND_WARNINGS=true
                 line_num=""
-                line_num=$(cut -d: -f1 <<< "$line_info" || echo "")
+                line_num=$(cut -d: -f1 <<< "${line_info}" || echo "")
                 line_content=""
-                line_content=$(cut -d: -f2- <<< "$line_info" || echo "")
+                line_content=$(cut -d: -f2- <<< "${line_info}" || echo "")
                 
                 # Output GitHub Actions warning annotation with file:line details
                 echo "::warning file=$file,line=$line_num::Potentially unquoted EOF delimiter found. Consider using <<'EOF' for literal heredocs to prevent variable expansion"
                 echo "   $file:$line_num: $line_content"
               fi
-            done < <(grep -n "<<EOF" "$file" 2>/dev/null | grep -v "<<'EOF'" | grep -v "<<\"EOF\"" || true)
+            done < <(grep -nE '<<EOF' "$file" 2>/dev/null | grep -vE "(<<'EOF'|<<\"EOF\")" || true)
           done
           
           if [ "$FOUND_WARNINGS" = true ]; then

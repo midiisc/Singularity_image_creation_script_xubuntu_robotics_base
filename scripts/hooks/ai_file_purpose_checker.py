@@ -103,12 +103,70 @@ def analyze_file_purpose(file_path: Path) -> Dict[str, any]:
     if not file_path.exists():
         return result
     
+    # Skip backup files - they are temporary and should not be committed
+    if '.backup.' in file_path.name:
+        result["is_non_functional"] = True
+        result["reason"] = "Backup file - temporary file created during auto-fix operations"
+        result["suggested_action"] = "Remove backup file - it should not be committed"
+        return result
+    
     # Skip core files - they are always functional (check before any analysis)
+    # This list must match the core files list in pre-commit hook
     path_str = str(file_path)
-    if '.cursor/' in path_str or 'scripts/hooks/' in path_str or 'scripts/helpers/' in path_str:
-        # Core files are always functional and have proper documentation
+    file_name = file_path.name
+    
+    # Primary core files (root level)
+    primary_core_files = [
+        'build_xubuntu_robotics_base.sh',
+        'config.sh',
+        'create_writable_overlay.sh',
+        'run_on_best_node.sh',
+        'setup_conda_environments.sh',
+        'xubuntu_robotics_base_post_ULTRA_CLEANED.sh',
+        'analyze-library.sh',
+        'README.md'
+    ]
+    
+    if file_name in primary_core_files:
         result["has_docstring"] = True
         return result
+    
+    # Secondary core files (specific paths)
+    secondary_core_files = [
+        'scripts/hooks/ai_precommit_review.py',
+        'scripts/hooks/pre-commit',
+        'scripts/hooks/pre-commit-cmake-validator',
+        'scripts/hooks/ai_file_purpose_checker.py',
+        'scripts/hooks/extract_and_enhance_patterns.py',
+        'scripts/hooks/run_all_ci_checks.sh',
+        'scripts/hooks/validate_control_structure_markers.sh',
+        'scripts/hooks/validate_documentation.sh',
+        '.cursor/pre-commit-audit.sh',
+        '.cursor/auto-trigger-cursor-ai.sh',
+        'scripts/helpers/enforce_pre_commit_validation.sh'
+    ]
+    
+    # Check if file path matches any secondary core file
+    for core_file in secondary_core_files:
+        if path_str.endswith(core_file) or core_file in path_str:
+            result["has_docstring"] = True
+            return result
+    
+    # Core directories (all files in these directories are core)
+    core_directories = [
+        'scripts/hooks/',
+        'scripts/helpers/',
+        'container-scripts/',
+        '.cursor/',
+        'prompts/',
+        'docs/',
+        'spec_kit/'
+    ]
+    
+    for core_dir in core_directories:
+        if core_dir in path_str:
+            result["has_docstring"] = True
+            return result
     
     try:
         content = file_path.read_text(encoding='utf-8', errors='ignore')

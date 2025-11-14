@@ -1,0 +1,29 @@
+---
+# YAML Lint Configuration
+# Purpose: Configure yamllint for this repository
+# Usage: yamllint <file> (uses this config automatically)
+
+extends: default
+
+rules:
+  # GitHub Actions workflows use string values for env vars
+  truthy:
+    allowed-values: ['true', 'false', 'on', 'off']
+    check-keys: false
+  # Allow longer lines for shell scripts and comments
+  line-length:
+    max: 120
+    level: warning
+  # Document start is optional for workflow files (GitHub Actions doesn't require it)
+  document-start:
+    present: false
+    level: warning
+  # Trailing spaces are sometimes needed in shell scripts
+  trailing-spaces:
+    level: warning
+  # Allow brackets with spaces for readability
+  brackets:
+    max-spaces-inside: 1
+    min-spaces-inside-empty: 0
+    max-spaces-inside-empty: 0
+

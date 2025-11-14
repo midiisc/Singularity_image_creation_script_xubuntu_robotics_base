@@ -3,7 +3,7 @@
 **MANDATORY FOR ALL REVIEWS**: 
 - ALL other review prompts (Advanced CoT, Enhanced Code Review, etc.) MUST reference and strictly follow this manual
 - This manual MUST be enhanced FIRST when new patterns are discovered from AI corrections, chats, or CI checks
-- All checklist items A1 through O4 MUST be checked sequentially - do not skip any items
+- All checklist items A1 through O5 MUST be checked sequentially - do not skip any items
 - Pattern learning updates MUST be added to this manual FIRST before being referenced elsewhere
 
 ---
@@ -539,6 +539,63 @@ O. Testing, Validation & Graceful Degradation
   - **ERROR HANDLING**: On failure, provide actionable debug output (file listing, cache contents, suggestions)
   - **RELIABILITY IMPROVEMENT**: Single-phase checks are ~70% reliable, multi-phase with retry are ~95% reliable
   - **PREVENTS**: False negatives from stale ldconfig cache, race conditions, transient filesystem issues
+- O5. **SHELLCHECK VALIDATION & AUTO-CORRECTION**: All Bash scripts MUST be validated with ShellCheck and all errors/warnings MUST be corrected:
+  - **MANDATORY**: Run ShellCheck on all `.sh` files before completing the audit: `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
+  - **MANDATORY**: Fix ALL ShellCheck errors (exit code 1) - these indicate real issues that must be resolved
+  - **MANDATORY**: Fix ALL ShellCheck warnings (exit code 0 with warnings) - warnings indicate potential issues or style violations
+  - **AUTO-FIX CAPABILITY**: Use project's auto-fix script if available: `scripts/helpers/auto_fix_shellcheck.sh script.sh` to automatically fix common ShellCheck issues
+  - **SHELLCHECK SEVERITY LEVELS**:
+    - **ERROR (SC1xxx)**: Syntax errors, fatal issues - MUST be fixed immediately
+    - **WARNING (SC2xxx)**: Style issues, portability concerns - MUST be fixed
+    - **INFO (SC3xxx)**: Suggestions, best practices - SHOULD be addressed
+    - **STYLE (SC4xxx)**: Code style recommendations - SHOULD be addressed
+  - **COMMON SHELLCHECK ISSUES TO FIX**:
+    - **SC2086**: Double quote to prevent globbing and word splitting → Fix: Quote variables: `"${VAR}"` instead of `${VAR}`
+    - **SC2155**: Declare and assign separately to avoid masking return values → Fix: `local var; var=$(command)` instead of `local var=$(command)`
+    - **SC1090**: Can't follow non-constant source → Fix: Use `# shellcheck source=path/to/file` directive or disable with `# shellcheck disable=SC1090`
+    - **SC2001**: See if you can use `${variable//search/replace}` instead → Fix: Use parameter expansion when possible
+    - **SC2046**: Quote this to prevent word splitting → Fix: Quote command substitution: `"$(command)"`
+    - **SC2068**: Double quote array expansions → Fix: Quote array: `"${array[@]}"` instead of `${array[@]}`
+    - **SC2181**: Check exit code directly with `if`, don't use `$?` → Fix: `if ! command; then` instead of `command; if [ $? -ne 0 ]; then`
+    - **SC2034**: Variable appears unused → Fix: Remove unused variable or mark with `# shellcheck disable=SC2034` if intentionally unused
+    - **SC2120**: Function name references arguments, but none are ever passed → Fix: Remove unused parameters or use `_` prefix
+    - **SC2119**: Use `"$@"` if function's $1 should mean script's $1 → Fix: Use `"$@"` for forwarding arguments
+  - **SHELLCHECK DIRECTIVES**: When ShellCheck warnings are false positives or intentional, use inline directives:
+    - `# shellcheck disable=SC2086` - Disable specific warning for next line
+    - `# shellcheck disable=SC2086,SC2155` - Disable multiple warnings
+    - `# shellcheck source=path/to/file` - Tell ShellCheck where to find sourced file
+    - `# shellcheck shell=bash` - Specify shell type if shebang is missing
+  - **AUTO-FIX WORKFLOW**:
+    1. Run ShellCheck: `shellcheck script.sh` or `shellcheck -x script.sh` (for sourced scripts)
+    2. Capture all errors and warnings
+    3. Attempt auto-fix using project's helper: `scripts/helpers/auto_fix_shellcheck.sh script.sh`
+    4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
+    5. Manually fix any remaining issues that auto-fix couldn't handle
+    6. Document fixes in corrections summary with ShellCheck error codes (e.g., "SC2086: Fixed unquoted variable")
+  - **VALIDATION REQUIREMENT**: Script MUST pass ShellCheck with zero errors and zero warnings before audit is complete
+  - **INTEGRATION**: ShellCheck validation runs automatically in pre-commit hooks and CI/CD pipelines
+  - **DETECTION COMMAND**: `shellcheck --format=gcc script.sh` for machine-readable output, `shellcheck script.sh` for human-readable
+  - **EXAMPLE - WRONG** (ShellCheck errors):
+    ```bash
+    # SC2086: Double quote to prevent globbing
+    if [ -f $FILE ]; then
+      echo $VAR
+    fi
+    
+    # SC2155: Declare and assign separately
+    local result=$(command)
+    ```
+  - **EXAMPLE - CORRECT** (ShellCheck compliant):
+    ```bash
+    # SC2086: Fixed - quoted variables
+    if [ -f "${FILE}" ]; then
+      echo "${VAR}"
+    fi
+    
+    # SC2155: Fixed - separate declaration and assignment
+    local result
+    result=$(command)
+    ```
 
 P. Build Flag Analysis & CMake Configuration
 - P1. **COMPREHENSIVE FLAG EXTRACTION**: When analyzing CMake build flags, ensure complete coverage:
@@ -582,11 +639,11 @@ Step 3 – Corrections Summary
 6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`, `grep -nE` for variable declarations per C6) so the audit trail shows how issues were validated.
 
 Step 4 – Finalization
-1. Confirm explicitly that every checklist item from A1 through P5 has been evaluated and passes after corrections.
+1. Confirm explicitly that every checklist item from A1 through O5 (including ShellCheck validation) has been evaluated and passes after corrections.
 2. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
 3. State: "Block fully audited and corrected."
 4. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
-5. List the helper tools or scripts invoked (ShellCheck, custom linters, `grep`, etc.) so future reviewers can replay the validation.
+5. List the helper tools or scripts invoked (ShellCheck with exit code and error count, custom linters, `grep`, etc.) so future reviewers can replay the validation. **MANDATORY**: Report ShellCheck status: `shellcheck script.sh` exit code, total errors/warnings found, auto-fixed count, remaining issues (if any).
 
 **IDE INTEGRATION PROTOCOL** (MANDATORY FOR AI AGENTS IN IDE ENVIRONMENTS)
 **Output Format**: JSON with issue_id, severity, confidence, line, original_code, corrected_code, explanation, fix_category, auto_fixable, references, pattern_id.
@@ -597,7 +654,7 @@ Step 4 – Finalization
 
 **Execution Modes**: BATCH (CI/CD, full audit, 5-10 min) | INTERACTIVE (real-time, critical only, 10-30 sec) | FOCUSED (specific category, 1-2 min). Selection: file > 500 lines → BATCH, real-time → INTERACTIVE, user request → FOCUSED.
 
-**CI/CD Markers**: Output `[BASH_AUDIT_PASSED]` with checklist status, issues found/fixed, confidence, patterns checked, ShellCheck status, auto-fixed count, execution time, mode.
+**CI/CD Markers**: Output `[BASH_AUDIT_PASSED]` with checklist status, issues found/fixed, confidence, patterns checked, ShellCheck status (exit code, errors/warnings count, auto-fixed count), auto-fixed count, execution time, mode.
 
 **Knowledge Base**: BEFORE: Load Pattern-Learning-Repository-PART1.md/PART2.md, check git history (last 50 commits). DURING: Reference pattern IDs, update confidence from frequency. AFTER: New pattern? → Ask user to learn. <70% confidence? → Improve detection. False positive? → Reduce confidence.
 

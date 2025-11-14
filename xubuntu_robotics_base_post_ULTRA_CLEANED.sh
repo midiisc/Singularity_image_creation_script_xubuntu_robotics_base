@@ -7727,6 +7727,149 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     fi
   fi
   
+  # CRITICAL: Verify TBB version header exists (required by GTSAM's FindTBB.cmake)
+  # GTSAM's FindTBB.cmake checks for version header to determine TBB version
+  # On Ubuntu 24.04, /usr/include/tbb/version.h is a wrapper that includes ../oneapi/tbb/version.h
+  # We need to verify both the wrapper and the actual header exist
+  # Phase 1: Initialize version header tracking variables
+  TBB_VERSION_HEADER_FOUND=false
+  TBB_VERSION_HEADER_PATH=""
+  ONEAPI_TBB_VERSION_HEADER="/usr/include/oneapi/tbb/version.h"
+  
+  # Phase 2: Verify TBB include directory exists before checking for version header
+  if [ -d "${TBB_INCLUDE_PATH}" ]; then
+    # Phase 2a: Check for common version header file names in the main tbb directory
+    if [ -f "${TBB_INCLUDE_PATH}/version.h" ]; then
+      TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/version.h"
+      TBB_VERSION_HEADER_FOUND=true
+      echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+      
+      # Phase 2b: On Ubuntu 24.04, tbb/version.h is a wrapper that includes ../oneapi/tbb/version.h
+      # Verify the actual oneapi version header exists (required for the wrapper to work)
+      if [ -f "${ONEAPI_TBB_VERSION_HEADER}" ]; then
+        echo "[INFO] TBB oneapi version header found at ${ONEAPI_TBB_VERSION_HEADER} (required by wrapper)"
+      else
+        # Use safe color variables with defaults (C1, C5: Unbound variable protection)
+        YELLOW="${YELLOW:-}"
+        NC="${NC:-}"
+        if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+          echo -e "${YELLOW}[WARNING] TBB oneapi version header not found at ${ONEAPI_TBB_VERSION_HEADER}${NC}"
+          echo -e "${YELLOW}The wrapper at ${TBB_VERSION_HEADER_PATH} may not work correctly.${NC}"
+        else
+          echo "[WARNING] TBB oneapi version header not found at ${ONEAPI_TBB_VERSION_HEADER}"
+          echo "The wrapper at ${TBB_VERSION_HEADER_PATH} may not work correctly."
+        fi
+        # Don't fail here - let CMake try, but warn
+      fi
+    elif [ -f "${TBB_INCLUDE_PATH}/tbb_version.h" ]; then
+      TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/tbb_version.h"
+      TBB_VERSION_HEADER_FOUND=true
+      echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+    elif [ -f "${TBB_INCLUDE_PATH}/version.h.in" ]; then
+      TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/version.h.in"
+      TBB_VERSION_HEADER_FOUND=true
+      echo "[INFO] TBB version header template found at ${TBB_VERSION_HEADER_PATH}"
+    else
+      # Phase 2c: Search for version header in subdirectories
+      # F2: Command substitution validation - validate find result format
+      tbb_version_header_found=""
+      tbb_version_header_found=$(find "${TBB_INCLUDE_PATH}" \( -name "version.h" -o -name "tbb_version.h" \) -type f 2>/dev/null | head -1 || echo "")
+      # Validate result is non-empty and is a valid file path (F2: Command substitution format validation)
+      if [ -n "${tbb_version_header_found}" ] && [ -f "${tbb_version_header_found}" ]; then
+        TBB_VERSION_HEADER_PATH="${tbb_version_header_found}"
+        TBB_VERSION_HEADER_FOUND=true
+        echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+      fi
+    fi
+    
+    # Phase 3: If version header not found, report error with diagnostic information
+    if [ "${TBB_VERSION_HEADER_FOUND}" != true ]; then
+      # Use safe color variables with defaults (C1, C5: Unbound variable protection)
+      RED="${RED:-}"
+      YELLOW="${YELLOW:-}"
+      NC="${NC:-}"
+      if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+        echo -e "${RED}ERROR: TBB version header not found in ${TBB_INCLUDE_PATH}${NC}"
+      else
+        echo "ERROR: TBB version header not found in ${TBB_INCLUDE_PATH}"
+      fi
+      if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+        echo -e "${YELLOW}GTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version.${NC}"
+        echo -e "${YELLOW}Diagnostic information:${NC}"
+      else
+        echo "GTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version."
+        echo "Diagnostic information:"
+      fi
+      echo "  TBB include directory: ${TBB_INCLUDE_PATH}"
+      if [ -d "${TBB_INCLUDE_PATH}" ]; then
+        echo "  Directory exists: YES"
+        echo "  Contents of ${TBB_INCLUDE_PATH}:"
+        # SC2012: Use find instead of ls for better handling of non-alphanumeric filenames
+        # Use parentheses to group -type f and -type d conditions correctly
+        find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 | while IFS= read -r item || [ -n "${item}" ]; do
+          if [ -n "${item}" ]; then
+            echo "    ${item}"
+          fi
+        done || echo "    (cannot list contents)"
+        echo ""
+        echo "  Searching for version headers:"
+        find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 | while IFS= read -r version_file; do
+          if [ -n "${version_file}" ]; then
+            echo "    ${version_file}"
+          fi
+        done || echo "    (no version files found)"
+      else
+        echo "  Directory exists: NO"
+      fi
+      # ENDIF: TBB_INCLUDE_PATH directory check
+      echo ""
+      echo "  TBB library path: ${TBB_LIB_PATH}"
+      echo "  TBB library exists: $([ -f "${TBB_LIB_PATH}" ] && echo "YES" || echo "NO")"
+      echo ""
+      echo "  Checking for oneapi TBB headers:"
+      if [ -d "/usr/include/oneapi/tbb" ]; then
+        echo "    /usr/include/oneapi/tbb exists: YES"
+        if [ -f "/usr/include/oneapi/tbb/version.h" ]; then
+          echo "    /usr/include/oneapi/tbb/version.h exists: YES"
+        else
+          echo "    /usr/include/oneapi/tbb/version.h exists: NO"
+        fi
+        # ENDIF: oneapi/tbb/version.h check
+      else
+        echo "    /usr/include/oneapi/tbb exists: NO"
+      fi
+      # ENDIF: oneapi/tbb directory check
+      echo ""
+      if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+        echo -e "${YELLOW}Possible solutions:${NC}"
+      else
+        echo "Possible solutions:"
+      fi
+      echo "  1. Ensure libtbb-dev is properly installed: apt-get install --reinstall libtbb-dev"
+      echo "  2. Verify TBB installation: dpkg -L libtbb-dev (then grep for version.h in output)"
+      echo "  3. Check if TBB headers are in a different location"
+      exit 1
+    fi
+    # ENDIF: TBB_VERSION_HEADER_FOUND check
+  else
+    # Use safe color variables with defaults (C1, C5: Unbound variable protection)
+    RED="${RED:-}"
+    YELLOW="${YELLOW:-}"
+    NC="${NC:-}"
+    if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+      echo -e "${RED}ERROR: TBB include directory not found at ${TBB_INCLUDE_PATH}${NC}"
+    else
+      echo "ERROR: TBB include directory not found at ${TBB_INCLUDE_PATH}"
+    fi
+    if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+      echo -e "${YELLOW}Ensure libtbb-dev is installed: apt-get install libtbb-dev${NC}"
+    else
+      echo "Ensure libtbb-dev is installed: apt-get install libtbb-dev"
+    fi
+    exit 1
+  fi
+  # ENDIF: TBB_INCLUDE_PATH directory check
+  
   # Build TBB configuration arguments
   if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_DIR=${TBB_CMAKE_DIR}")
@@ -7738,15 +7881,44 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   
   # CRITICAL: Explicitly set TBB_LIBRARIES and TBB_INCLUDE_DIR to ensure FindTBB.cmake
   # can locate TBB even if TBB_DIR is ignored (this matches OpenCV's working configuration)
+  # IMPORTANT: GTSAM's FindTBB.cmake expects TBB_INCLUDE_DIRS to be the BASE include directory
+  # (e.g., /usr/include), not the tbb subdirectory (e.g., /usr/include/tbb), because it
+  # constructs paths like ${TBB_INCLUDE_DIRS}/tbb/tbb.h and ${TBB_INCLUDE_DIRS}/oneapi/tbb/version.h
+  # Phase 1: Set TBB_LIBRARIES if library exists
   if [ -f "${TBB_LIB_PATH}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_LIBRARIES=${TBB_LIB_PATH}")
     echo "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
   fi
+  # ENDIF: TBB_LIB_PATH check
+  
+  # Phase 2: Set TBB_INCLUDE_DIRS to base directory (required by GTSAM's FindTBB.cmake)
   if [ -d "${TBB_INCLUDE_PATH}" ]; then
+    # Extract base include directory (e.g., /usr/include/tbb -> /usr/include)
+    # F2: Command substitution validation - dirname always returns a path
+    TBB_BASE_INCLUDE_DIR=""
+    TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}")
+    # Validate dirname result is non-empty and is a valid directory path
+    if [ -z "${TBB_BASE_INCLUDE_DIR}" ] || [ ! -d "${TBB_BASE_INCLUDE_DIR}" ]; then
+      echo "[WARNING] Failed to extract base include directory from ${TBB_INCLUDE_PATH}, using fallback"
+      TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
+    fi
+    
+    # Phase 2a: Verify the base directory contains both tbb and oneapi/tbb subdirectories
+    if [ -d "${TBB_BASE_INCLUDE_DIR}/tbb" ] && [ -d "${TBB_BASE_INCLUDE_DIR}/oneapi/tbb" ]; then
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_BASE_INCLUDE_DIR}")
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR}")
+      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory for GTSAM's FindTBB.cmake)"
+      echo "[INFO]   This allows FindTBB.cmake to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
+      echo "[INFO]   and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
+    else
+      # Phase 2b: Fallback: use the tbb subdirectory if base directory structure is unexpected
     CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
     CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
-    echo "[INFO] Explicitly setting TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}"
+      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - using tbb subdirectory)"
   fi
+    # ENDIF: TBB_BASE_INCLUDE_DIR subdirectory verification
+  fi
+  # ENDIF: TBB_INCLUDE_PATH directory check
   
   # Exclude MKL TBB paths from CMake search to prevent conflicts
   # This ensures system TBB is used, not MKL's bundled TBB
@@ -15418,16 +15590,37 @@ chmod +x /usr/local/bin/turbovnc_tune.sh
 
 echo "✓ TurboVNC performance optimizations configured"
 
-#--- Sub-block 28.27: Install yq YAML processor ---
-# Purpose: Install yq for YAML file manipulation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+#--- Sub-block 28.27: Install yq YAML processor and yamllint ---
+# Purpose: Install yq for YAML file manipulation and yamllint for YAML validation
+# Dependencies: Block 6 (APT configuration), cached binary from build script, pip3
+# Outputs: yq binary in /usr/local/bin/yq, yamllint via pip3
 if [ -s "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
   if ! install -o 0 -g 0 -m 0755 "${CONTAINER_BIN_CACHE}/yq_linux_amd64" /usr/local/bin/yq; then
     echo "[warn] Failed to install yq from cached binary" >&2
+  else
+    echo "✓ yq installed to /usr/local/bin/yq"
   fi
 else
   echo "[warn] Cached yq binary missing or empty; skipping yq installation" >&2
+fi
+
+# Install yamllint for YAML file validation (used for GitHub Actions workflow validation)
+# yamllint is a Python package, install via pip3
+if command -v pip3 >/dev/null 2>&1; then
+  echo "Installing yamllint for YAML validation..."
+  if pip3 install --no-cache-dir --break-system-packages yamllint >/dev/null 2>&1; then
+    echo "✓ yamllint installed successfully"
+    # Verify installation
+    if command -v yamllint >/dev/null 2>&1; then
+      yamllint --version || echo "[warn] yamllint installed but version check failed"
+    else
+      echo "[warn] yamllint installation may have failed (command not found)"
+    fi
+  else
+    echo "[warn] Failed to install yamllint via pip3 (non-critical, continuing)"
+  fi
+else
+  echo "[warn] pip3 not available; skipping yamllint installation"
 fi
 
 #--- Sub-block 28.28: Create default VNC password (non-interactive) ---

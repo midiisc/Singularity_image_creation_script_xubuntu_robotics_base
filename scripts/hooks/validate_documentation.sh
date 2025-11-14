@@ -214,7 +214,8 @@ check_inline_comments() {
     
     # Check for loops without comments
     local loops
-    loops=$(grep -nE "for |while |until " "$file" 2>/dev/null | wc -l || echo "0")
+    # SC2126: Use grep -c instead of grep | wc -l
+    loops=$(grep -cE "for |while |until " "$file" 2>/dev/null || echo "0")
     local loop_comments=0
     
     while IFS= read -r loop_line; do

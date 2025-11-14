@@ -48,7 +48,7 @@ readonly NC='\033[0m'
 
 # Auto-fix configuration
 MAX_FIX_ATTEMPTS=3
-FIX_ATTEMPT=0
+# FIX_ATTEMPT removed - using loop_iteration instead
 
 echo ""
 echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
@@ -73,6 +73,15 @@ check_non_functional_files() {
   
   for file in $STAGED_FILES; do
     local file_path="${WORKSPACE_ROOT}/${file}"
+    
+    # Skip backup files - they are temporary and should not be committed
+    if [[ "$file" =~ \.backup\.[0-9]+$ ]] || [[ "$(basename "$file")" =~ \.backup\. ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping backup file: ${file}"
+      echo -e "${YELLOW}[ACTION]${NC} Backup files should not be committed - they are temporary files created during auto-fix operations"
+      non_functional_files+=("$file")
+      continue
+    # ENDIF: skip backup files
+    fi
     
     # Skip ALL core files (primary and secondary) - they are essential to the repository
     # PRIMARY CORE FILES
@@ -123,9 +132,6 @@ check_non_functional_files() {
     # Quick filename pattern check (fast)
     local basename
     basename=$(basename "$file")
-    # Use tr directly instead of echo | tr (D3: PIPE PATTERN SAFETY)
-    local filename_lower
-    filename_lower=$(tr '[:upper:]' '[:lower:]' <<< "$basename")
     
     # Check for forbidden patterns in filename
     # Use here-strings instead of echo | grep (D3: PIPE PATTERN SAFETY)
@@ -146,7 +152,8 @@ check_non_functional_files() {
           :
         else
           # Check failed - file is non-functional or missing docstring
-          local checker_output=$(python3 "$AI_CHECKER" "$file_path" 2>&1)
+          local checker_output
+          checker_output=$(python3 "$AI_CHECKER" "$file_path" 2>&1)
           if echo "$checker_output" | grep -q "NON-FUNCTIONAL FILES DETECTED"; then
             non_functional_files+=("$file")
           elif echo "$checker_output" | grep -q "FILES MISSING DOCSTRINGS"; then
@@ -277,7 +284,8 @@ echo ""
 
 run_validation_and_fix_loop() {
   local script_path="$1"
-  local script_name=$(basename "$script_path")
+  local script_name
+  script_name=$(basename "$script_path")
   
   echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
   echo -e "${CYAN}│  PROCESSING: ${script_name}${NC}"
@@ -410,7 +418,7 @@ run_validation_and_fix_loop() {
 ################################################################################
 
 VALIDATION_FAILED=false
-TOTAL_FIXES_APPLIED=0
+# TOTAL_FIXES_APPLIED removed - not used in current implementation
 
 for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
   script_path="${WORKSPACE_ROOT}/${script}"
