@@ -7306,12 +7306,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   echo -e "\n${YELLOW}[PHASE 3 | QGLViewer] Installing dependencies for G2O visualization...${NC}"
   
   # Critical: Qt5 and QGLViewer packages required for g2o_viewer
+  # Note: qt5-default removed in Ubuntu 24.04, replaced by qtbase5-dev/qtbase5-dev-tools
+  # Note: libqglviewer-dev/libqglviewer2 renamed to libqglviewer-dev-qt5/libqglviewer2-qt5t64 in Ubuntu 24.04
   QGLVIEWER_DEP_PACKAGES=(
     "qt5-qmake"
-    "qt5-default"
+    "qtbase5-dev"
+    "qtbase5-dev-tools"
     "libqt5opengl5-dev"
-    "libqglviewer-dev"
-    "libqglviewer2"
+    "libqglviewer-dev-qt5"
+    "libqglviewer2-qt5t64"
     "libglu1-mesa-dev"
   )
   
@@ -7512,7 +7515,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     echo -e "${YELLOW}[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:${NC}"
     find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /usr/local"
     find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /tmp/g2o"
-    echo -e "${YELLOW}  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev, qt5-qmake)${NC}"
+    echo -e "${YELLOW}  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev-qt5, qt5-qmake)${NC}"
     echo -e "${YELLOW}  If QGLViewer is not available, G2O will build without viewer tools${NC}"
   else
     echo -e "${GREEN}✓ g2o_viewer executable found: ${g2o_viewer_path}${NC}"
@@ -7623,6 +7626,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   export MKLDIR="${MKLROOT}"
   export MKL_LIBRARIES="${MKL_BLAS_LIBRARIES}"
   export TBBROOT="${TBBROOT:-/usr}"
+  
+  # CRITICAL: Set TBB_DIR to point to CMake config directory for modern TBB installations
+  # GTSAM's FindTBB.cmake will use TBB_DIR if set, otherwise falls back to TBB_ROOT_DIR
+  # Modern Ubuntu TBB packages provide CMake config files at /usr/lib/x86_64-linux-gnu/cmake/TBB
+  TBB_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  if [ ! -d "${TBB_CMAKE_DIR}" ]; then
+    # Fallback: try to find TBB CMake config in standard locations
+    TBB_CMAKE_DIR=$(find /usr -type d -path "*/cmake/TBB" 2>/dev/null | head -1 || echo "")
+  fi
 
   #--- Sub-block 17.16: Configure GTSAM with CMake ---
   # Critical: Enable TBB, Python bindings, system libraries
@@ -7630,8 +7642,18 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # - TBB: Intel's threading library for parallel algorithms (installed via libtbb-dev)
   # - MKL: Linear algebra implementation (BLAS/LAPACK) provided by Intel oneAPI
   # - They coexist but are linked separately (MKL via FindMKL, TBB via FindTBB)
-  # - TBB_ROOT_DIR points to the system TBB package (not MKL's optional TBB build)
+  # - TBB_DIR points to CMake config directory (preferred for modern TBB installations)
+  # - TBB_ROOT_DIR points to the system TBB package base directory (fallback)
   # - MKL_ROOT_DIR/MKL_LIBRARIES align with GTSAM's bundled FindMKL.cmake logic
+  CMAKE_TBB_ARGS=()
+  if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
+    CMAKE_TBB_ARGS+=("-D" "TBB_DIR=${TBB_CMAKE_DIR}")
+    echo "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
+  else
+    CMAKE_TBB_ARGS+=("-D" "TBB_ROOT_DIR=${TBBROOT}")
+    echo "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
+  fi
+  
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -7639,7 +7661,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_POLICY_DEFAULT_CMP0069=NEW \
     -D BUILD_SHARED_LIBS=ON \
     -D GTSAM_WITH_TBB=ON \
-    -D TBB_ROOT_DIR="${TBBROOT}" \
+    "${CMAKE_TBB_ARGS[@]}" \
     -D GTSAM_WITH_EIGEN_MKL=ON \
     -D GTSAM_WITH_EIGEN_MKL_OPENMP=ON \
     -D GTSAM_USE_SYSTEM_EIGEN=ON \
@@ -7735,6 +7757,10 @@ EOF
         fi
       else
         echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found${NC}"
+        echo "  This may indicate TBB_DIR or TBB_ROOT_DIR was not set correctly"
+        echo "  Check that TBB is installed: dpkg -l | grep libtbb"
+        echo "  Verify TBB_DIR points to CMake config: ls -la /usr/lib/x86_64-linux-gnu/cmake/TBB"
+        echo "  If TBB_DIR is not set, GTSAM's FindTBB.cmake may not find system TBB"
       fi
     else
       echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB is disabled (TBB support not enabled)${NC}"
@@ -9185,9 +9211,8 @@ COLMAP_DEP_PACKAGES=(
     "qtbase5-dev"
     "qtbase5-dev-tools"
     "qt5-qmake"
-    "qt5-default"
-    "libqglviewer-dev"
-    "libqglviewer2"
+    "libqglviewer-dev-qt5"
+    "libqglviewer2-qt5t64"
     "libcgal-dev"
     "libcgal-qt5-dev"
     "libfreeimage-dev"

@@ -15,6 +15,8 @@ on:
       - '**.sh'
       - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
       - 'build_xubuntu_robotics_base.sh'
+      - 'prompts/**'
+      - 'scripts/**'
 
 jobs:
   check-pipe-patterns:
@@ -319,12 +321,30 @@ jobs:
             git fetch origin beta:beta || git fetch origin main:main || true
           fi
 
+      - name: Verify API Key Configuration
+        run: |
+          if [ -z "${{ secrets.ANTHROPIC_API_KEY }}" ]; then
+            echo "::error::ANTHROPIC_API_KEY secret is not set in repository settings"
+            echo "To fix: Repository Settings → Secrets and variables → Actions → New repository secret"
+            echo "Name: ANTHROPIC_API_KEY"
+            echo "Value: Your Anthropic API key (starts with sk-ant-api03-...)"
+            exit 1
+          else
+            echo "✅ ANTHROPIC_API_KEY secret is configured"
+            # Verify key format (should start with sk-ant-)
+            KEY_PREFIX=$(echo "${{ secrets.ANTHROPIC_API_KEY }}" | cut -c1-7 || echo "")
+            if [ "$KEY_PREFIX" != "sk-ant-" ]; then
+              echo "::warning::API key format may be incorrect (expected to start with 'sk-ant-')"
+            fi
+          fi
+
       - name: Run AI Code Review
         env:
           GITHUB_ACTIONS: "true"
           GITHUB_BASE_REF: ${{ github.base_ref }}
           GITHUB_DEFAULT_BRANCH: "beta"
           AI_REVIEW_PROVIDER: "anthropic"
+          AI_REVIEW_API_URL: "https://api.anthropic.com/v1/messages"
           AI_REVIEW_MODEL: "claude-sonnet-4"
           AI_REVIEW_TOKEN: ${{ secrets.ANTHROPIC_API_KEY }}
           AI_REVIEW_TIMEOUT: "180"
@@ -335,7 +355,10 @@ jobs:
           echo "GitHub Actions: ${{ github.event_name }}"
           echo "Branch: ${{ github.ref }}"
           echo "Base ref: ${{ github.base_ref }}"
-          echo "Note: If this fails with API key error, ensure ANTHROPIC_API_KEY secret is set in repository settings"
+          echo "Provider: $AI_REVIEW_PROVIDER"
+          echo "Model: $AI_REVIEW_MODEL"
+          echo "API URL: $AI_REVIEW_API_URL"
+          echo ""
           python3 scripts/hooks/ai_precommit_review.py || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 1 ]; then
@@ -344,6 +367,7 @@ jobs:
               exit 0  # Don't fail the workflow, just warn
             else
               echo "::error::AI review failed with exit code $EXIT_CODE"
+              echo "Check the logs above for detailed error messages."
               exit $EXIT_CODE
             fi
           }

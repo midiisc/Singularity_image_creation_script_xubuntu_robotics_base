@@ -432,8 +432,22 @@ GTSAM uses standard CMake `find_package()` for dependencies:
 - **Note:** If `GTSAM_USE_SYSTEM_EIGEN=OFF`, uses bundled Eigen.
 
 ### TBB (if `GTSAM_WITH_TBB=ON`)
-- Uses `find_package(TBB)`
+- Uses `find_package(TBB 4.4 COMPONENTS tbb tbbmalloc)`
 - Custom find module in `cmake/FindTBB.cmake`
+- **CRITICAL TBB Configuration Variables:**
+  - `TBB_DIR` (STRING): Path to TBB CMake config directory (preferred for modern TBB installations)
+    - Example: `-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB`
+    - Modern Ubuntu TBB packages provide CMake config files at this location
+    - If set, GTSAM's FindTBB.cmake will use this directly
+  - `TBB_ROOT_DIR` (STRING): Base directory of TBB installation (fallback if TBB_DIR not set)
+    - Example: `-DTBB_ROOT_DIR=/usr`
+    - Used by FindTBB.cmake to search for TBB headers and libraries
+  - `TBB_INCLUDE_DIR` (STRING): Directory containing TBB headers (optional override)
+  - `TBB_LIBRARY` (STRING): Directory containing TBB library files (optional override)
+- **Environment Variables (also supported):**
+  - `TBBROOT`: Base directory of TBB installation
+  - `TBB_INSTALL_DIR`: Alternative installation directory
+- **Note:** GTSAM requires TBB 4.4 or newer. Modern Ubuntu packages (libtbb-dev) provide TBB with CMake config files. Use `TBB_DIR` for best compatibility.
 
 ### METIS (if `GTSAM_SUPPORT_NESTED_DISSECTION=ON`)
 - Uses `find_package(METIS)`
@@ -461,10 +475,11 @@ cmake .. \
   -DCMAKE_BUILD_TYPE=Release \
   -DBUILD_SHARED_LIBS=ON \
   -DGTSAM_USE_SYSTEM_EIGEN=ON \
-  -DGTSAM_WITH_TBB=ON
+  -DGTSAM_WITH_TBB=ON \
+  -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB
 ```
 
-### Full Configuration with Python
+### Full Configuration with Python and TBB
 ```cmake
 cmake .. \
   -GNinja \
@@ -474,6 +489,7 @@ cmake .. \
   -DGTSAM_USE_SYSTEM_EIGEN=ON \
   -DGTSAM_USE_SYSTEM_METIS=ON \
   -DGTSAM_WITH_TBB=ON \
+  -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
   -DGTSAM_BUILD_PYTHON=ON \
   -DGTSAM_PYTHON_VERSION=${SYSTEM_PYTHON_VER} \
   -DGTSAM_BUILD_UNSTABLE=ON \
@@ -482,6 +498,8 @@ cmake .. \
   -DGTSAM_BUILD_TESTS=OFF \
   -DEigen3_DIR=/usr/local/share/eigen3/cmake
 ```
+
+**Note:** For modern TBB installations (Ubuntu packages), use `TBB_DIR` pointing to the CMake config directory. If `TBB_DIR` is not available, fall back to `TBB_ROOT_DIR=/usr`.
 
 ### Static Library Build
 ```cmake
