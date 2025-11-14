@@ -310,11 +310,16 @@ SKIP_DEPENDENCIES=false            # optional: set true to skip dependency extra
 
 Instructions:
 1. Clean up any temporary helper scripts from prior runs (e.g., `rm -f ./analyze-library.tmp.sh ./complete-analysis.tmp.sh`). Ensure `analyze-library.sh` exists and matches the exact contents from the "Executable Bash Script" section of Library-Analysis-Tool.md; recreate it if needed.
-2. Select the analysis version in the following priority order:  
-   a. `TARGET_REF` (explicit request in this prompt)  
-   b. Version pinned in `config.sh` (or other project code/configuration files)  
-   c. Latest compatible stable release/tag when neither is set  
-   When running the script, ensure it uses the chosen version by applying `--ref` if needed or allowing the script to resolve the config/default logic automatically.
+2. **MANDATORY VERSION RESOLUTION** (STRICTLY ENFORCED):
+   a. `TARGET_REF` (explicit user override - only if user explicitly requests)
+   b. **Version pinned in `config.sh` (MANDATORY if available)** - This ensures correct supported flags for the pinned version are documented, not just the latest version
+   c. **Latest stable release tag (ONLY if version not pinned)** - Excludes RC/beta/alpha/snapshot tags
+   d. **NEVER use latest git snapshot** - Only stable releases
+   
+   **CRITICAL**: The script will FAIL if config.sh specifies a version that doesn't exist in the repository.
+   This is intentional to ensure version accuracy. Verify config.sh version matches available tags.
+   
+   When running the script, the script automatically enforces this priority. Do NOT override with --ref unless user explicitly requests it.
 3. Run the script with:
       ./analyze-library.sh --library "${TARGET_LIBRARY}" \
           --output "${TARGET_OUTPUT_DIR}/${TARGET_LIBRARY}" \
@@ -327,8 +332,11 @@ Instructions:
 6. Delete any temporary helper scripts you generated solely for this run (e.g., `rm -f ./analyze-library.tmp.sh ./complete-analysis.tmp.sh`) before finishing.
 
 Important:
+- **MANDATORY**: Always use version pinned in config.sh if available (ensures correct flags documented for that version)
+- **STRICTLY ENFORCED**: Only fall back to latest stable release if version NOT pinned in config.sh
+- **NEVER**: Use latest git snapshot - only stable releases
 - Handle errors robustly. Re-run the script with diagnostic logging if initial analysis fails.
-- Prefer versions pinned in config.sh; fall back to latest stable tag when missing.
+- If config.sh version is specified but tag doesn't exist, script will fail with clear error message
 - Do not request additional user input unless absolutely necessary.
 ```
 
@@ -486,6 +494,9 @@ echo "ℹ️  Files saved in: ${TEMP_DIR}"
 ┌──────────────────────────────────────────┐
 │ BASH SCRIPT (analyze-library.sh)        │
 │ - Downloads repo (git clone)             │
+│   * Uses version from config.sh (MANDATORY)│
+│   * Falls back to latest stable release   │
+│   * NEVER uses git snapshot               │
 │ - Finds CMakeLists.txt files             │
 │ - Extracts flags from C++, CMake         │
 │ - Detects versions                       │

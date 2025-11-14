@@ -60,9 +60,17 @@ This is a **complete, executable solution** that:
 ################################################################################
 # CONFIG-AWARE LIBRARY ANALYSIS TOOL
 # Purpose:
-#   * Clone the latest compatible stable release for a library using config.sh
+#   * Clone the version pinned in config.sh (MANDATORY if available)
+#   * Fall back to latest stable release ONLY if version not pinned in config.sh
+#   * NEVER use latest git snapshot - only stable releases
 #   * Recursively analyze the repository for flags, options, and dependencies
 #   * Emit Markdown + JSON documentation consumable by downstream AI tooling
+#
+# VERSION RESOLUTION PRIORITY (STRICTLY ENFORCED):
+#   1. User-specified --ref (explicit override)
+#   2. Version pinned in config.sh (MANDATORY - ensures correct flags documented)
+#   3. Latest stable release tag (ONLY if not pinned in config.sh)
+#   4. Default branch (LAST RESORT - should be rare, warns about git snapshot)
 #
 # Usage examples:
 #   ./analyze-library.sh --library ceres
@@ -139,9 +147,16 @@ Positional arguments:
   OUTPUT_DIR             Fallback positional output directory if --output not set
 
 Behavior:
-  * When --library is set, config.sh is sourced to resolve the stable release.
-  * If config.sh does not specify a version, the latest non-RC tag is used.
+  * When --library is set, config.sh is sourced to resolve the pinned version (MANDATORY).
+  * Version from config.sh is ALWAYS used if available (ensures correct flags documented).
+  * If config.sh does not specify a version, the latest stable release tag is used (NOT git snapshot).
   * When neither --library nor REPO_URL_OR_PATH is provided, usage is displayed.
+  
+Version Resolution (STRICTLY ENFORCED):
+  1. User --ref override (if provided)
+  2. config.sh pinned version (MANDATORY if available - ensures version-specific flag accuracy)
+  3. Latest stable release tag (ONLY if not pinned - excludes RC/beta/alpha)
+  4. Default branch (LAST RESORT - warns about using git snapshot)
 EOF
 }
 
@@ -320,14 +335,21 @@ resolve_library_source() {
         fi
         REPO_SPEC="${REPO_SPEC:-${LIBRARY_REPOS[$LIBRARY_ID]}}"
 
+        # MANDATORY: Check for version pinning in config.sh
+        # This ensures correct supported flags for the pinned version are documented
         local version_var="${LIBRARY_VERSION_VARS[$LIBRARY_ID]:-}"
         if [[ -n "$version_var" && -n "${!version_var:-}" ]]; then
             LIBRARY_VERSION="${!version_var}"
-            log_info "Config pin for ${LIBRARY_ID}: ${LIBRARY_VERSION} (via ${version_var})"
+            log_success "✅ Found config.sh version pin for ${LIBRARY_ID}: ${LIBRARY_VERSION} (via ${version_var})"
+            log_info "Will use this version to ensure correct flag documentation"
         elif [[ -n "$version_var" ]]; then
-            log_warning "Config variable ${version_var} is unset — will auto-detect latest stable release"
+            log_warning "⚠️  Config variable ${version_var} exists but is unset in config.sh"
+            log_warning "Will fall back to latest stable release (not recommended for reproducible analysis)"
+            log_warning "Consider adding version pinning to config.sh for ${LIBRARY_ID}"
         else
-            log_warning "No config mapping defined for ${LIBRARY_ID} version — will auto-detect latest stable release"
+            log_warning "⚠️  No config mapping defined for ${LIBRARY_ID} version in script"
+            log_warning "Will fall back to latest stable release (not recommended for reproducible analysis)"
+            log_warning "Consider adding ${LIBRARY_ID} to LIBRARY_VERSION_VARS mapping and config.sh"
         fi
     fi
 
@@ -338,44 +360,68 @@ resolve_library_source() {
 }
 
 determine_checkout_ref() {
+    # Priority 1: User-specified ref (explicit override)
     if [[ -n "$CHECKOUT_REF" ]]; then
         RESOLVED_REF="$CHECKOUT_REF"
         log_info "Using user-specified ref: $RESOLVED_REF"
         return
     fi
 
+    # Priority 2: MANDATORY - Use version pinned in config.sh (if available)
+    # This ensures correct supported flags for the pinned version are documented
     if [[ -n "$LIBRARY_ID" && -n "$LIBRARY_VERSION" ]]; then
         local prefix="${LIBRARY_VERSION_PREFIX[$LIBRARY_ID]:-}"
         local candidate
         candidate=$(normalize_version_tag "$LIBRARY_VERSION" "$prefix")
         if [[ -n "$candidate" ]] && is_git_url "$REPO_SPEC" && tag_exists "$REPO_SPEC" "$candidate"; then
             RESOLVED_REF="$candidate"
-            log_info "Resolved ${LIBRARY_ID} to config tag: ${RESOLVED_REF}"
+            log_success "✅ Using config.sh pinned version: ${RESOLVED_REF} (via ${LIBRARY_VERSION_VARS[$LIBRARY_ID]})"
+            log_info "This ensures correct supported flags for version ${LIBRARY_VERSION} are documented"
             return
         else
-            log_warning "Configured tag ${candidate:-<empty>} not found in remote — trying auto-detection"
+            log_error "❌ CRITICAL: Configured version ${candidate:-<empty>} from config.sh not found in remote repository"
+            log_error "Repository: $REPO_SPEC"
+            log_error "Expected tag: $candidate"
+            log_error "This may indicate:"
+            log_error "  1. Version tag format mismatch (check LIBRARY_VERSION_PREFIX mapping)"
+            log_error "  2. Repository structure changed"
+            log_error "  3. Version not yet released"
+            log_error ""
+            log_error "Please verify the version in config.sh matches available repository tags"
+            exit 1
         fi
     fi
 
+    # Priority 3: Fallback to latest stable release (ONLY if version not pinned in config.sh)
+    # NEVER use latest git snapshot - only stable releases
     if is_git_url "$REPO_SPEC"; then
         local latest
         latest=$(fetch_latest_stable_tag "$REPO_SPEC")
         if [[ -n "$latest" ]]; then
             RESOLVED_REF="$latest"
-            log_info "Auto-detected latest stable tag: ${RESOLVED_REF}"
+            log_warning "⚠️  No version pinned in config.sh for ${LIBRARY_ID:-library}"
+            log_info "Falling back to latest stable release tag: ${RESOLVED_REF}"
+            log_warning "NOTE: This may not match the version used in the build script"
+            log_warning "Consider adding version pinning to config.sh for reproducible analysis"
             return
         fi
+        # Last resort: Only if no stable tags exist, use default branch (should be rare)
         local default_branch
         default_branch=$(fetch_default_branch "$REPO_SPEC")
         if [[ -n "$default_branch" ]]; then
             RESOLVED_REF="$default_branch"
-            log_warning "Falling back to default branch ${RESOLVED_REF}"
+            log_error "❌ WARNING: No stable release tags found, using default branch ${RESOLVED_REF}"
+            log_error "This is a git snapshot and may not represent a stable release"
+            log_error "Documentation generated may not match any specific release version"
             return
         fi
     fi
 
     RESOLVED_REF=""
-    log_warning "No explicit ref detected — cloning default HEAD"
+    log_error "❌ Unable to determine checkout reference"
+    log_error "Repository: $REPO_SPEC"
+    log_error "Library ID: ${LIBRARY_ID:-N/A}"
+    exit 1
 }
 
 clone_repository() {
