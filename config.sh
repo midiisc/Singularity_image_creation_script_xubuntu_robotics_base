@@ -429,7 +429,7 @@ analyze_build_log() {
         
         # Update context based on line content
         for context_name in "${!context_patterns[@]}"; do
-            if echo "$line" | grep -qiE "${context_patterns[$context_name]}"; then
+            if grep -qiE "${context_patterns[$context_name]}" <<< "$line"; then
                 current_context="$context_name"
                 context_stack+=("$context_name")
                 break
@@ -437,23 +437,23 @@ analyze_build_log() {
         done
         
         # Match error patterns (case-insensitive) - most specific first
-        if echo "$line" | grep -qiE \
-            '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)'; then
+        if grep -qiE \
+            '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)' <<< "$line"; then
             error_line_nums+=($line_num)
             total_errors=$((total_errors + 1))
         # Match warning patterns (case-insensitive, but not errors)
-        elif echo "$line" | grep -qiE \
-            '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)'; then
+        elif grep -qiE \
+            '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)' <<< "$line"; then
             warning_line_nums+=($line_num)
             total_warnings=$((total_warnings + 1))
         # Match debug flags and diagnostic output (non-fatal but informative)
-        elif echo "$line" | grep -qiE \
-            '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)'; then
+        elif grep -qiE \
+            '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)' <<< "$line"; then
             debug_flag_line_nums+=($line_num)
             total_debug_flags=$((total_debug_flags + 1))
         # Match deprecation warnings (specific pattern for future compatibility issues)
-        elif echo "$line" | grep -qiE \
-            '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)'; then
+        elif grep -qiE \
+            '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)' <<< "$line"; then
             deprecation_line_nums+=($line_num)
             total_deprecations=$((total_deprecations + 1))
         fi
@@ -524,7 +524,7 @@ analyze_build_log() {
                     if [ $i -le ${#all_lines[@]} ]; then
                         local idx=$((i - 1))
                         if [ $idx -ge 0 ]; then
-                            if echo "${all_lines[$idx]}" | grep -qiE "${context_patterns[$context_name]}"; then
+                            if grep -qiE "${context_patterns[$context_name]}" <<< "${all_lines[$idx]}"; then
                                 context_for_issue="$context_name"
                                 break 2
                             fi
