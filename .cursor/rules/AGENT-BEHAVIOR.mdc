@@ -206,9 +206,39 @@ globs:
 - ✅ **Document edge cases and assumptions**: Help future maintainers and AI agents
 - ✅ **Reference external documentation**: Link to relevant docs when applicable
 
-### WHEN IN DOUBT:
+### CODE QUALITY & BEST PRACTICES
+
+### MANDATORY CODE QUALITY REFERENCE:
+**ALL agents MUST reference `prompts/Code_check_prompt_manual.txt` when writing or modifying code:**
+
+- **Shell Scripts (`.sh` files)**: Follow ALL checklist items A1-P5 from `Code_check_prompt_manual.txt`
+- **Python Scripts (`.py` files)**: Apply equivalent best practices (error handling, documentation, security)
+- **Other Code Files**: Apply language-appropriate best practices from the manual
+
+### Key Requirements from Code_check_prompt_manual.txt:
+1. **Structure & Syntax (A1-A6)**: Proper shebang, POSIX/Bash compatibility, version checks
+2. **Error Handling (H1-H4)**: Exit status checks, silent failure prevention, proper logging
+3. **Security (K1-K3)**: Injection protection, safe path handling, file descriptor management
+4. **Documentation (L4-L5)**: Function docs (>10 lines), multi-phase logic markers, control structure markers
+5. **CMake Flags (M7-M14)**: Flag validation, documentation requirements, dependency detection
+6. **Validation (O1-O4)**: Multi-phase verification, retry logic, graceful degradation
+
+### Integration:
+- **During Code Writing**: Consider relevant checklist items from the manual
+- **During Code Review**: Use the manual as the authoritative source for validation
+- **Pattern Learning**: Update `prompts/Pattern-Learning-Repository-PART*.md` when new patterns are discovered
+
+### Quick Reference:
+- Full manual: `prompts/Code_check_prompt_manual.txt`
+- Pattern repository: `prompts/Pattern-Learning-Repository-PART1.md` and `PART2.md`
+- CMake flag validator: `scripts/helpers/validate_cmake_flags.sh`
+
+---
+
+## WHEN IN DOUBT:
 - Ask user before creating or modifying non-core files
 - Prefer modifying existing core files over creating new ones
+- Reference `prompts/Code_check_prompt_manual.txt` for code quality requirements
 
 ---
 

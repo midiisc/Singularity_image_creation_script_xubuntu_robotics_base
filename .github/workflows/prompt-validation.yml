@@ -293,6 +293,10 @@ jobs:
   ai-code-review:
     name: AI Code Review (Claude)
     runs-on: ubuntu-latest
+    # CRITICAL: This job requires ANTHROPIC_API_KEY secret to be set in GitHub repository settings
+    # To set: Repository Settings → Secrets and variables → Actions → New repository secret
+    # Name: ANTHROPIC_API_KEY
+    # Value: Your Anthropic API key (starts with sk-ant-api03-...)
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     steps:
       - name: Checkout code
@@ -328,6 +332,10 @@ jobs:
           AI_REVIEW_MAX_TOKENS: "8192"
         run: |
           echo "Running AI code review with Claude..."
+          echo "GitHub Actions: ${{ github.event_name }}"
+          echo "Branch: ${{ github.ref }}"
+          echo "Base ref: ${{ github.base_ref }}"
+          echo "Note: If this fails with API key error, ensure ANTHROPIC_API_KEY secret is set in repository settings"
           python3 scripts/hooks/ai_precommit_review.py || {
             EXIT_CODE=$?
             if [ $EXIT_CODE -eq 1 ]; then

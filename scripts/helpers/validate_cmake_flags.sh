@@ -58,6 +58,12 @@ VALID_FLAGS=0
 INVALID_FLAGS=0
 UNDOCUMENTED_LIBRARIES=0
 
+# Track failed flags for summary
+declare -a FAILED_FLAGS=()
+declare -a FAILED_FLAG_LIBRARIES=()
+declare -a FAILED_FLAG_LINES=()
+declare -a FAILED_FLAG_REASONS=()
+
 ################################################################################
 # HELPER FUNCTIONS
 ################################################################################
@@ -251,7 +257,9 @@ find_flag_documentation() {
   #   - ### FLAG_NAME
   #   - -DFLAG_NAME=
   #   - option(FLAG_NAME
-  if grep -qiP "(^###\s+\`?${flag_name}\`?|^###\s+${flag_name}|\-D${flag_name}=|option\(${flag_name})" "$latest_doc" 2>/dev/null; then
+  #   - - `FLAG_NAME`: (list format)
+  #   - - FLAG_NAME: (list format)
+  if grep -qiP "(^###\s+\`?${flag_name}\`?|^###\s+${flag_name}|\-D${flag_name}=|option\(${flag_name}|^[[:space:]]*-\s+\`?${flag_name}\`?:)" "$latest_doc" 2>/dev/null; then
     echo "$latest_doc"
     return 0
   else
@@ -305,7 +313,17 @@ validate_flags() {
     
     # List of generic CMake flags that are allowed without library-specific documentation
     # These are standard CMake variables or commonly used generic flags
-    local generic_flags="NO_LIBM CMAKE_BUILD_TYPE CMAKE_INSTALL_PREFIX CMAKE_PREFIX_PATH CMAKE_MODULE_PATH CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_Fortran_COMPILER CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS"
+    # Standard CMake variables (used across all libraries):
+    #   - Build system: CMAKE_BUILD_TYPE, CMAKE_INSTALL_PREFIX, CMAKE_PREFIX_PATH, CMAKE_MODULE_PATH
+    #   - Compilers: CMAKE_C_COMPILER, CMAKE_CXX_COMPILER, CMAKE_Fortran_COMPILER, CMAKE_CUDA_COMPILER
+    #   - Compiler flags: CMAKE_C_FLAGS, CMAKE_CXX_FLAGS, CMAKE_CUDA_FLAGS
+    #   - Linker flags: CMAKE_EXE_LINKER_FLAGS, CMAKE_SHARED_LINKER_FLAGS, CMAKE_STATIC_LINKER_FLAGS, CMAKE_MODULE_LINKER_FLAGS
+    #   - RPATH: CMAKE_INSTALL_RPATH, CMAKE_INSTALL_RPATH_USE_LINK_PATH
+    #   - Code generation: CMAKE_POSITION_INDEPENDENT_CODE, CMAKE_INTERPROCEDURAL_OPTIMIZATION
+    #   - C++ standard: CMAKE_CXX_STANDARD, CMAKE_CXX_STANDARD_REQUIRED
+    #   - CUDA: CMAKE_CUDA_ARCHITECTURES, CMAKE_CUDA_COMPILER_WORKS, CMAKE_CUDA_RUNTIME_LIBRARY
+    #   - Generator: CMAKE_GENERATOR (handled via -G flag, not -D)
+    local generic_flags="NO_LIBM CMAKE_BUILD_TYPE CMAKE_INSTALL_PREFIX CMAKE_PREFIX_PATH CMAKE_MODULE_PATH CMAKE_C_COMPILER CMAKE_CXX_COMPILER CMAKE_Fortran_COMPILER CMAKE_CUDA_COMPILER CMAKE_C_FLAGS CMAKE_CXX_FLAGS CMAKE_CUDA_FLAGS CMAKE_EXE_LINKER_FLAGS CMAKE_SHARED_LINKER_FLAGS CMAKE_STATIC_LINKER_FLAGS CMAKE_MODULE_LINKER_FLAGS CMAKE_INSTALL_RPATH CMAKE_INSTALL_RPATH_USE_LINK_PATH CMAKE_POSITION_INDEPENDENT_CODE CMAKE_INTERPROCEDURAL_OPTIMIZATION CMAKE_CXX_STANDARD CMAKE_CXX_STANDARD_REQUIRED CMAKE_CUDA_ARCHITECTURES CMAKE_CUDA_COMPILER_WORKS CMAKE_CUDA_RUNTIME_LIBRARY BLAS_LIBRARIES LAPACK_LIBRARIES"
     
     # Validate each flag
     while IFS= read -r flag; do
@@ -335,12 +353,20 @@ validate_flags() {
           NO_DOCS)
             log_error "Flag: ${flag} - Documentation missing for ${current_library}"
             github_annotation "error" "$script_file" "$line_num" "CMake flag '${flag}' - Documentation missing for ${current_library}"
+            FAILED_FLAGS+=("${flag}")
+            FAILED_FLAG_LIBRARIES+=("${current_library}")
+            FAILED_FLAG_LINES+=("${line_num}")
+            FAILED_FLAG_REASONS+=("Documentation missing")
             ((UNDOCUMENTED_LIBRARIES++)) || true
             ((INVALID_FLAGS++)) || true
             ;;
           NOT_FOUND)
             log_error "Flag: ${flag} - NOT documented in ${current_library} flags"
             github_annotation "error" "$script_file" "$line_num" "CMake flag '${flag}' - NOT documented in ${current_library} flags documentation"
+            FAILED_FLAGS+=("${flag}")
+            FAILED_FLAG_LIBRARIES+=("${current_library}")
+            FAILED_FLAG_LINES+=("${line_num}")
+            FAILED_FLAG_REASONS+=("NOT documented")
             ((INVALID_FLAGS++)) || true
             ;;
           *)
@@ -350,6 +376,10 @@ validate_flags() {
         esac
       else
         log_warning "Flag: ${flag} - Cannot validate (unknown library context)"
+        FAILED_FLAGS+=("${flag}")
+        FAILED_FLAG_LIBRARIES+=("UNKNOWN")
+        FAILED_FLAG_LINES+=("${line_num}")
+        FAILED_FLAG_REASONS+=("Unknown library context")
         ((INVALID_FLAGS++)) || true
       fi
     done <<< "$flags"
@@ -404,6 +434,20 @@ generate_report() {
     
     if [ "$INVALID_FLAGS" -gt 0 ]; then
       echo -e "${YELLOW}ACTIONS REQUIRED:${NC}"
+      echo ""
+      echo -e "${RED}FAILED FLAGS SUMMARY:${NC}"
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      local i=0
+      while [ $i -lt ${#FAILED_FLAGS[@]} ]; do
+        echo -e "${RED}✗${NC} Flag: ${FAILED_FLAGS[$i]}"
+        echo "   Library: ${FAILED_FLAG_LIBRARIES[$i]}"
+        echo "   Line: ${FAILED_FLAG_LINES[$i]}"
+        echo "   Reason: ${FAILED_FLAG_REASONS[$i]}"
+        echo ""
+        i=$((i + 1))
+      done
+      echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+      echo ""
       echo "  1. Review invalid flags listed above"
       echo "  2. Check docs/flags/*.md for correct flag names"
       echo "  3. Update build script with documented flags"

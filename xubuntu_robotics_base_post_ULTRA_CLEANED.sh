@@ -3711,7 +3711,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   
   # CRITICAL: Configure APT cache options to ensure packages are cached in /container_cache/apt/archives
   # This ensures packages are preserved even if build fails later
-  APT_CACHE_OPTS="-o Dir::Cache::Archives=${CONTAINER_APT_CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
+  # Also configure APT to prefer local packages (check cache first before downloading)
+  APT_CACHE_OPTS="-o Dir::Cache::Archives=${CONTAINER_APT_CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false -o Acquire::http::AllowRedirect=false -o Acquire::Check-Valid-Until=false"
   
   # Verify APT cache directory exists and is accessible
   mkdir -p "${CONTAINER_APT_CACHE}" || {
@@ -3894,9 +3895,24 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   echo "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
   CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
   if [ "${CACHED_NVIDIA_PKGS}" -gt 0 ]; then
-      echo "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - will reuse if available"
+      echo "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - APT will reuse if versions match"
+      echo "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
+      # List cached packages for debugging
+      echo "  → Cached packages:"
+      find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | head -5 | while IFS= read -r pkg; do
+          echo "    - $(basename "${pkg}")"
+      done
+      [ "${CACHED_NVIDIA_PKGS}" -gt 5 ] && echo "    ... and $((CACHED_NVIDIA_PKGS - 5)) more"
   else
       echo "  ℹ No cached NVIDIA packages found - will download fresh"
+  fi
+  
+  # CRITICAL: Ensure APT configuration file exists and is correct
+  # This ensures APT uses the cache directory for all operations
+  if [ ! -f /etc/apt/apt.conf.d/90-cache.conf ]; then
+      echo "[WARN] APT cache configuration missing - creating it now..."
+      echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
+      echo 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
   fi
 
   # Try to install specific version if available, otherwise fall back to latest
@@ -3937,7 +3953,33 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
 
   if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
       echo "✓ NVIDIA cuDNN installed successfully."
+      
+      # CRITICAL: Immediately sync cache to ensure packages are persisted to disk
+      # This ensures cache is available even if build fails later
+      echo "[INFO] Syncing NVIDIA package cache to disk immediately..."
       sync || true
+      
+      # Verify packages are in cache and sync any from /var/cache/apt/archives if needed
+      if [ -d "/var/cache/apt/archives" ]; then
+          VAR_CACHE_NVIDIA=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+          if [ "${VAR_CACHE_NVIDIA}" -gt 0 ]; then
+              echo "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
+              NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+              if [ -n "${NVIDIA_FILES:-}" ]; then
+                  echo "${NVIDIA_FILES}" | while IFS= read -r deb_file; do
+                      if [ -f "${deb_file:-}" ]; then
+                          deb_name=$(basename "${deb_file}")
+                          if [ ! -f "${CONTAINER_APT_CACHE}/${deb_name}" ]; then
+                              cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
+                          fi
+                      fi
+                  done
+                  # Force sync again after copying
+                  sync || true
+              fi
+          fi
+      fi
+      
       monitor_cache "After CUDA/cuDNN installation"
       CUDA_INSTALL_PERFORMED=true
   else
