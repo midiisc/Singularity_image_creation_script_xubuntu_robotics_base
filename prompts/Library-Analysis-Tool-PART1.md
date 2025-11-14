@@ -5,6 +5,35 @@
 - `Library-Analysis-Tool-PART2.md` - Part 2 (How to Use, Agent-Facing Prompt Flow)
 - `Library-Analysis-Tool-PART3.md` - Part 3 (Complete Workflow, Integration)
 
+---
+
+## 🚨 MANDATORY SEQUENTIAL EXECUTION INSTRUCTIONS
+
+**CRITICAL: This is a multi-part prompt designed to maintain 500-line full context limits.**
+
+**EXECUTION PROTOCOL:**
+1. **START HERE**: Begin with PART 1 (this file)
+2. **COMPLETE ALL TASKS** in PART 1 fully before proceeding
+3. **ONLY AFTER** PART 1 is 100% complete, proceed to PART 2
+4. **COMPLETE ALL TASKS** in PART 2 fully before proceeding
+5. **ONLY AFTER** PART 2 is 100% complete, proceed to PART 3
+6. **DO NOT** jump ahead or skip parts - each part builds on the previous
+
+**WHY SEQUENTIAL?**
+- Maintains 500-line context window per part
+- Ensures complete understanding before moving forward
+- Prevents context overflow and incomplete reviews
+- Each part is self-contained but builds on previous work
+
+**VERIFICATION CHECKLIST:**
+- [ ] All PART 1 tasks completed
+- [ ] All PART 1 outputs generated
+- [ ] Ready to proceed to PART 2
+
+**ONLY PROCEED TO PART 2 WHEN ALL PART 1 TASKS ARE COMPLETE.**
+
+---
+
 This is a **complete, executable solution** that:
 1. **Downloads repository** (git clone)
 2. **Analyzes files** (CMake, C++, bash scripts)

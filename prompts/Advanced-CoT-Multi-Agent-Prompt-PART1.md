@@ -7,6 +7,33 @@
 
 ---
 
+## 🚨 MANDATORY SEQUENTIAL EXECUTION INSTRUCTIONS
+
+**CRITICAL: This is a multi-part prompt designed to maintain 500-line full context limits.**
+
+**EXECUTION PROTOCOL:**
+1. **START HERE**: Begin with PART 1 (this file)
+2. **COMPLETE ALL TASKS** in PART 1 fully before proceeding
+3. **ONLY AFTER** PART 1 is 100% complete, proceed to PART 2
+4. **COMPLETE ALL TASKS** in PART 2 fully before proceeding
+5. **ONLY AFTER** PART 2 is 100% complete, proceed to PART 3
+6. **DO NOT** jump ahead or skip parts - each part builds on the previous
+
+**WHY SEQUENTIAL?**
+- Maintains 500-line context window per part
+- Ensures complete understanding before moving forward
+- Prevents context overflow and incomplete reviews
+- Each part is self-contained but builds on previous work
+
+**VERIFICATION CHECKLIST:**
+- [ ] All PART 1 tasks completed
+- [ ] All PART 1 outputs generated
+- [ ] Ready to proceed to PART 2
+
+**ONLY PROCEED TO PART 2 WHEN ALL PART 1 TASKS ARE COMPLETE.**
+
+---
+
 ## EXECUTIVE SUMMARY
 
 This advanced prompt uses **modern prompt engineering techniques**:
@@ -272,7 +299,50 @@ PHASE F – LOGIC & FLOW CONTROL
     - CRITICAL: Command substitutions `$(command)` mask exit codes - always validate results
     - REQUIRED: After `result=$(command || echo "")`, check both non-empty AND valid format
     - ANTI-PATTERN: `if [ -n "$(command || echo "")" ]; then` - empty string passes even on failure
-    - See Code_check_prompt_manual.txt F2 for detailed patterns
+    - **COMMAND SUBSTITUTION FORMAT VALIDATION** (Pattern P-20251113-011):
+      - **CRITICAL**: When using `result=$(command || echo "")`, ALWAYS validate result format before parsing
+      - **REQUIRED STEPS**:
+        1. Check result is non-empty: `[ -n "${result}" ]`
+        2. Validate result format matches expected pattern: `grep -qE 'expected_pattern' <<< "${result}"` or `[[ "${result}" =~ pattern ]]`
+        3. For result files: Check file is non-empty: `[ -s "${RESULT_FILE}" ]` AND validate format: `grep -qE 'expected_pattern' "${RESULT_FILE}"`
+      - **EXAMPLE - WRONG** (no format validation):
+        ```bash
+        result=$(parse_data || echo "")
+        if [ -n "${result}" ]; then
+          use_result "${result}"  # May use invalid format!
+        fi
+        ```
+      - **EXAMPLE - CORRECT** (with format validation):
+        ```bash
+        result=$(parse_data || echo "")
+        if [ -n "${result}" ] && grep -qE '^expected_pattern' <<< "${result}"; then
+          use_result "${result}"  # Format validated
+        else
+          echo "[ERROR] Invalid or empty result format"
+          return 1
+        fi
+        ```
+      - **EXAMPLE - CORRECT** (for result files):
+        ```bash
+        # Run operations that write to result file
+        xargs -P 6 -I{} command {} > "${RESULT_FILE}" || true
+        
+        # Validate result file BEFORE parsing
+        if [ ! -s "${RESULT_FILE}" ]; then
+          echo "[ERROR] Result file empty - all operations failed"
+          return 1
+        fi
+        
+        # Validate result format
+        if ! grep -qE '^expected_pattern' "${RESULT_FILE}"; then
+          echo "[ERROR] Invalid result format in ${RESULT_FILE}"
+          return 1
+        fi
+        
+        # Now safe to parse
+        result=$(parse_results "${RESULT_FILE}")
+        ```
+    - See Code_check_prompt_manual.txt F2 for complete detailed patterns and additional examples
   F3. Safe subshell/command group usage; manage background jobs with `wait`.
 
 PHASE G – FUNCTIONS & MODULARIZATION

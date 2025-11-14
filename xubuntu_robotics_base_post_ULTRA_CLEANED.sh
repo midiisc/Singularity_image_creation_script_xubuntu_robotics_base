@@ -201,7 +201,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             # - Build system errors (CMake, Ninja, Make)
             # - Library-specific build errors (COLMAP, Open3D, OpenCV)
             # - System/user generated errors
-            if echo "${line}" | grep -qiE \
+            if grep -qiE <<< "${line}" \
                 '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
                 # Write matching line to error log with timestamp
                 echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
@@ -833,7 +833,7 @@ probe_and_set_mirrors() {
       head -20)  # Limit to top 20 mirrors for performance
     
     if [ -n "${DYNAMIC_MIRRORS:-}" ]; then
-      MIRROR_COUNT=$(printf '%s\n' "${DYNAMIC_MIRRORS}" | grep -c . || echo 0)
+      MIRROR_COUNT=$(grep -c . <<< "${DYNAMIC_MIRRORS}" || echo 0)
     else
       MIRROR_COUNT=0
     fi
@@ -881,16 +881,25 @@ probe_and_set_mirrors() {
 
   # Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
   local mirror_total
-  mirror_total=$(printf '%s' "${CANDIDATE_MIRRORS:-}" | grep -c . || echo "0")
+  mirror_total=$(grep -c . <<< "${CANDIDATE_MIRRORS:-}" || echo "0")
   echo "Testing ${mirror_total} mirrors in parallel (max 6 concurrent)..."
   # Use printf to safely handle empty strings and ensure proper line separation
   if [ -n "${CANDIDATE_MIRRORS:-}" ]; then
-    printf '%s' "${CANDIDATE_MIRRORS}" | grep -v '^[[:space:]]*$' | xargs -P 6 -I{} bash -c 'test_mirror "$1" "$2" "$3"' _ "{}" "${CODENAME}" "${PROBE_RESULTS}" || true
+    grep -v '^[[:space:]]*$' <<< "${CANDIDATE_MIRRORS}" | xargs -P 6 -I{} bash -c 'test_mirror "$1" "$2" "$3"' _ "{}" "${CODENAME}" "${PROBE_RESULTS}" || true
   fi
 
   # Display mirror probe results
   echo "--- Mirror Probe Results (speed score, url): ---"
   if [ -s "${PROBE_RESULTS:-}" ]; then
+    # Validate result format BEFORE parsing (Pattern P-20251113-011: Silent Failure Prevention)
+    # Ensure file contains expected format: time url (e.g., "1.23 http://mirror.example.com/ubuntu")
+    if ! grep -qE '^[0-9.]+ https?://' "${PROBE_RESULTS}"; then
+      echo "[warn] ⚠ Invalid result format in probe results (expected: time url)"
+      echo "[info] Falling back to archive.ubuntu.com"
+      FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
+      export FASTEST_MIRROR
+      return 0
+    fi
     LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || echo "[warn] Failed to sort results"
   else
     echo "[warn] No probe results written - all mirrors may have failed"
@@ -2459,7 +2468,7 @@ fi
 if command -v pgrep >/dev/null 2>&1; then
     echo "✓ pgrep available (from procps)"
 else
-    echo "⚠ WARNING: pgrep still not available - will use ps aux | grep fallbacks"
+    echo "⚠ WARNING: pgrep still not available - will use ps aux with grep fallbacks"
 fi
 debug_glibc "After installing core APT & System utilities"
 
@@ -2740,7 +2749,7 @@ if is_install_command "$@"; then
         echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
         touch "${URI_FILE}"
     # Try to extract URIs from the output
-    elif echo "${APT_OUTPUT}" | grep -E "'(https?://[^']*)'" | \
+    elif grep -E "'(https?://[^']*)'" <<< "${APT_OUTPUT}" | \
         sed -E "s/^'([^']+)'.*$/\1/" | \
         sed "s/ //g" | \
         grep -E "^https?://.*\.deb$" | sort -u > "${URI_FILE}" 2>/dev/null && [ -s "${URI_FILE}" ]; then
@@ -3596,13 +3605,13 @@ else
 fi
 
 if [ "${DEFAULT_BLAS_PROVIDER}" = "MKL" ]; then
-    if echo "${CURRENT_BLAS}" | grep -qi "mkl"; then
+    if grep -qi "mkl" <<< "${CURRENT_BLAS}"; then
         echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
     else
         echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred MKL${NC}"
     fi
 elif [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
-    if echo "${CURRENT_BLAS}" | grep -qi "openblas"; then
+    if grep -qi "openblas" <<< "${CURRENT_BLAS}"; then
         echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
     else
         echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred OpenBLAS${NC}"
@@ -4085,7 +4094,7 @@ echo "==> Continuing with rest of build process..."
 echo "Testing unified APT cache functionality..."
 if /usr/local/bin/apt-get --download-only install -y curl 2>/dev/null; then
   # Use find to safely check for curl packages instead of glob in test
-  if find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "curl*.deb" -type f | grep -q .; then
+  if find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "curl*.deb" -type f 2>/dev/null | grep -q .; then
         echo "✓ Unified APT cache test successful - curl package cached"
         find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "curl*.deb" -type f -delete 2>/dev/null || true
     else
@@ -6253,7 +6262,7 @@ install_packages_resilient() {
     # Check if package is already installed (optimize: call dpkg -s only once)
     local pkg_status
     pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-    if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
+    if grep -q "ok installed" <<< "${pkg_status}"; then
       echo -e "  ✓ ${pkg}: Already installed"
       continue
     fi
@@ -6277,7 +6286,7 @@ install_packages_resilient() {
       # Installation failed - check if it's actually installed now (race condition or dependency resolution)
       # Re-check dpkg status (may have been installed as dependency)
       pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-      if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
+      if grep -q "ok installed" <<< "${pkg_status}"; then
         echo -e "  ✓ ${pkg}: Installed (via dependency)"
       else
         echo -e "  ✗ ${pkg}: Installation failed"
@@ -6358,7 +6367,7 @@ install_and_verify_group() {
     # Check package status (optimize: single dpkg call)
     local pkg_status
     pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-    if printf '%s' "${pkg_status}" | grep -q "ok installed"; then
+    if grep -q "ok installed" <<< "${pkg_status}"; then
       echo -e "  - ${pkg}: ${GREEN}OK${NC}"
     else
       echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
@@ -6850,7 +6859,12 @@ timeout 5 ldconfig -p 2>/dev/null | grep glog || echo "  ⚠ No glog libraries f
 echo ""
 
 echo "2. Checking all glog headers:"
-find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep glog || echo "  ⚠ No glog headers found"
+glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep glog || echo "")
+if [ -n "${glog_headers}" ]; then
+  echo "${glog_headers}"
+else
+  echo "  ⚠ No glog headers found"
+fi
 echo ""
 
 echo "3. Checking dpkg for installed glog packages:"
@@ -8494,7 +8508,8 @@ grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 # Outputs: Environment variables, configuration
 BUILD_JOBS=$(calculate_build_jobs)
 echo "Building OpenCV with $BUILD_JOBS parallel jobs..."
-echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
+echo "  System: $(nproc) cores, ${mem_info} RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
@@ -9021,9 +9036,12 @@ chmod +x /etc/profile.d/compiled-libs.sh
 echo "Verifying compiled libraries..."
 echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'Not in pkg-config')"
 echo "  OpenCV: $(pkg-config --modversion opencv4 2>/dev/null || echo 'Not in pkg-config')"
-echo "  Ceres: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libceres || echo 0) libraries"
-echo "  G2O: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libg2o || echo 0) libraries"
-echo "  GTSAM: $(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || echo 0) libraries"
+ceres_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libceres || echo 0)
+echo "  Ceres: ${ceres_count} libraries"
+g2o_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libg2o || echo 0)
+echo "  G2O: ${g2o_count} libraries"
+gtsam_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || echo 0)
+echo "  GTSAM: ${gtsam_count} libraries"
 
 echo "✓ pip configured to protect compiled libraries"
 
@@ -9352,7 +9370,8 @@ if [ ${PIPESTATUS[0]} -ne 0 ]; then
     echo ""
     echo "📊 Diagnostic checks:"
     echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
-    echo "  Ceres: $(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')"
+    ceres_lib=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')
+    echo "  Ceres: ${ceres_lib}"
     echo "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
     echo ""
     echo "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
@@ -9392,7 +9411,8 @@ BUILD_JOBS=$(calculate_build_jobs)
 # Ensure BUILD_JOBS is set to a valid numeric value
 BUILD_JOBS=${BUILD_JOBS:-1}
 echo "Using ${BUILD_JOBS} parallel jobs for COLMAP build..."
-echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
+echo "  System: $(nproc) cores, ${mem_info} RAM"
 echo ""
 
 # Build with Ninja (better error messages than make)
@@ -9518,7 +9538,8 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         echo "  Ninja version: $(ninja --version 2>/dev/null || echo 'unknown')"
         echo "  GCC version: $(gcc --version 2>/dev/null | head -1 || echo 'unknown')"
         echo "  ccache status: $(command -v ccache >/dev/null 2>&1 && echo 'available' || echo 'not available')"
-        echo "  Available memory: $(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo 'unknown')"
+        avail_mem=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo 'unknown')
+        echo "  Available memory: ${avail_mem}"
         echo "  Build jobs: ${BUILD_JOBS}"
         
         echo ""
@@ -9528,7 +9549,7 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         echo "1. Check full log: /tmp/colmap_build.log"
         echo "2. Check CMake log: ${COLMAP_CMAKE_LOG}"
         echo "3. Verify glog: pkg-config --modversion libglog"
-        echo "4. Verify Ceres: ldconfig -p | grep libceres"
+        echo "4. Verify Ceres: Run 'ldconfig -p' and grep for libceres"
         echo "5. Check PRE-FLIGHT output (earlier in build log)"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo ""
@@ -10629,7 +10650,7 @@ if [ "${OPENBLAS_VERIFIED}" = true ]; then
         echo -e "  ${GREEN}✓ OpenBLAS registered with alternatives${NC}"
         CURRENT_BLAS_ALT=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
         if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
-            if echo "${CURRENT_BLAS_ALT}" | grep -qi "openblas"; then
+            if grep -qi "openblas" <<< "${CURRENT_BLAS_ALT}"; then
                 echo -e "  ${GREEN}✓ Default BLAS provider matches DEFAULT_BLAS_PROVIDER (${CURRENT_BLAS_ALT})${NC}"
             else
                 echo -e "  ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=OPENBLAS but current provider is ${CURRENT_BLAS_ALT}${NC}"
@@ -12815,7 +12836,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 BUILD_JOBS=$(calculate_build_jobs)
 echo "Using $BUILD_JOBS parallel jobs for Open3D build..."
 echo "  Official guide recommends: make -j$(nproc) (we use equivalent: ninja -j${BUILD_JOBS})"
-echo "  System: $(nproc) cores, $(free -h | grep Mem | awk '{print $2}') RAM"
+mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
+echo "  System: $(nproc) cores, ${mem_info} RAM"
 echo ""
 
 # Build with fallback to single-threaded on failure
@@ -12902,7 +12924,7 @@ echo "Upgrading pip, setuptools, and wheel (required for Open3D Python package).
 # Handle Debian-installed packages that can't be uninstalled (RECORD file issue)
 # Use --ignore-installed to skip uninstalling Debian packages, or --break-system-packages for externally-managed environments
 pip_output=$(python3 -m pip install --upgrade pip setuptools wheel --no-cache-dir --quiet 2>&1) || true
-if echo "${pip_output}" | grep -qE "externally-managed-environment|RECORD file not found|Cannot uninstall"; then
+if grep -qE "externally-managed-environment|RECORD file not found|Cannot uninstall" <<< "${pip_output}"; then
     echo "  Detected Debian-installed packages or externally-managed environment"
     echo "  Using --ignore-installed and --break-system-packages flags..."
     python3 -m pip install --upgrade --no-cache-dir --ignore-installed --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
@@ -13008,7 +13030,7 @@ verify_open3d_installation() {
         return 0
     else
         # Import failed - provide diagnostic information
-        if echo "${import_error}" | grep -q "No module named 'open3d'"; then
+        if grep -q "No module named 'open3d'" <<< "${import_error}"; then
             # Module not found - check if it's installed but not in path
             if python3 -m pip show open3d >/dev/null 2>&1; then
                 OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
@@ -13017,7 +13039,7 @@ verify_open3d_installation() {
                     echo "  [Diagnostic] This may be a Python path issue"
                 fi
             fi
-        elif echo "${import_error}" | grep -qE "libOpen3D|libopen3d|undefined symbol"; then
+        elif grep -qE "libOpen3D|libopen3d|undefined symbol" <<< "${import_error}"; then
             # Library loading issue
             echo "  [Diagnostic] Open3D import failed due to library loading issue"
             echo "  [Diagnostic] Error: ${import_error}"
@@ -14282,7 +14304,7 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   if command -v pgrep >/dev/null 2>&1; then
     vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1)
     if [ -n "${vnc_cmd}" ]; then
-      vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
+      vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1)
     fi
   else
     vnc_display=$(ps aux 2>/dev/null | grep -oE 'Xvnc.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
@@ -14293,7 +14315,7 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
     if command -v pgrep >/dev/null 2>&1; then
       vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1)
       if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
+        vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1)
       fi
     else
       vnc_display=$(ps aux 2>/dev/null | grep -oE 'vncserver.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
@@ -14533,7 +14555,7 @@ collect_samples() {
 
   run_output="$(${TIMEOUT_BIN} "${duration}" "$@" 2>&1 || true)"
 
-  printf '%s\n' "${run_output}" | grep -Ei "frames|fps" | tail -3 || true
+  grep -Ei "frames|fps" <<< "${run_output}" | tail -3 || true
 }
 
 echo "GPU Information:"
@@ -14798,7 +14820,7 @@ compare_render() {
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
       output="$(timeout 5 "${app}" 2>&1 || true)"
-      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
     else
       echo "   ${app} available but timing skipped (requires 'timeout')"
     fi
@@ -14816,7 +14838,7 @@ compare_render() {
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
       output="$(timeout 5 vglrun "${app}" 2>&1 || true)"
-      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
     else
       echo "   ${app} with VirtualGL available but timing skipped (requires 'timeout')"
     fi
@@ -16419,7 +16441,7 @@ detect_vgl_display() {
     if command -v pgrep >/dev/null 2>&1; then
       vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1 || true)
       if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
+        vnc_display=$(grep -E -o ':[0-9]+' <<< "${vnc_cmd}" | head -1 || true)
       fi
     else
       # D3: Use here-string instead of pipe pattern
@@ -16433,7 +16455,7 @@ detect_vgl_display() {
       if command -v pgrep >/dev/null 2>&1; then
         vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || true)
         if [ -n "${vnc_cmd}" ]; then
-          vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
+          vnc_display=$(grep -E -o ':[0-9]+' <<< "${vnc_cmd}" | head -1 || true)
         fi
       else
         # D3: Use here-string instead of pipe pattern
@@ -16527,7 +16549,7 @@ test_virtualgl() {
         echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
         
         # Test OpenGL rendering
-        if printf '%s\n' "${glxinfo_output}" | grep -q "OpenGL renderer"; then
+        if grep -q "OpenGL renderer" <<< "${glxinfo_output}"; then
           echo "  ✓ OpenGL rendering available"
           return 0
         else
@@ -18363,7 +18385,12 @@ else
     echo "  Searching for libxxhash.pc file..."
     find /usr -name "libxxhash.pc" 2>/dev/null | head -3 || echo "    (libxxhash.pc not found)"
     echo "  Attempting to locate libxxhash library..."
-    find /usr -name "*xxhash*" -type f 2>/dev/null | grep -E "\.(so|a|pc)$" | head -5 || echo "    (No xxhash files found)"
+    xxhash_files=$(find /usr -name "*xxhash*" -type f 2>/dev/null | grep -E "\.(so|a|pc)$" | head -5 || echo "")
+    if [ -n "${xxhash_files}" ]; then
+      echo "${xxhash_files}"
+    else
+      echo "    (No xxhash files found)"
+    fi
 fi
 
 # Install Xpra from PyPI (uses version from config.sh)
@@ -21513,7 +21540,7 @@ run_cpu_benchmark() {
   sb_output=$(sysbench cpu --threads="${cores}" --time=10 run 2>&1 || true)
 
   local events=""
-  events=$(printf '%s\n' "${sb_output}" | grep 'events per second' || true)
+  events=$(grep 'events per second' <<< "${sb_output}" || true)
 
   if [ -n "${events}" ]; then
     printf '  %s\n\n' "${events}"
@@ -21551,7 +21578,7 @@ run_disk_benchmark() {
 
   if [ "${dd_status}" -eq 0 ]; then
     local copied_line=""
-    copied_line=$(printf '%s\n' "${dd_output}" | grep 'copied' || true)
+    copied_line=$(grep 'copied' <<< "${dd_output}" || true)
     if [ -n "${copied_line}" ]; then
       printf '  %s\n\n' "${copied_line}"
     else
@@ -21578,7 +21605,7 @@ run_network_check() {
   ping_output=$(ping -c 4 8.8.8.8 2>&1 || true)
 
   local summary=""
-  summary=$(printf '%s\n' "${ping_output}" | grep -E 'rtt|round-trip' || true)
+  summary=$(grep -E 'rtt|round-trip' <<< "${ping_output}" || true)
 
   if [ -n "${summary}" ]; then
     printf '  %s\n\n' "${summary}"

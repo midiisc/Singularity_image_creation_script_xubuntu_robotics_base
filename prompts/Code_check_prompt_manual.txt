@@ -175,6 +175,49 @@ F. Logic & Flow Control
   - **REQUIRED**: For critical operations, capture exit code separately: `command; exit_code=$?` then validate
   - **ANTI-PATTERN**: `if [ -n "$(command || echo "")" ]; then` - empty string passes this check even on failure
   - **CORRECT PATTERN**: `result=$(command); if [ $? -eq 0 ] && [ -n "${result}" ] && validate_result "${result}"; then`
+  - **COMMAND SUBSTITUTION FORMAT VALIDATION** (Pattern P-20251113-011):
+    - **CRITICAL**: When using `result=$(command || echo "")`, ALWAYS validate result format before parsing
+    - **REQUIRED STEPS**:
+      1. Check result is non-empty: `[ -n "${result}" ]`
+      2. Validate result format matches expected pattern: `grep -qE 'expected_pattern' <<< "${result}"` or `[[ "${result}" =~ pattern ]]`
+      3. For result files: Check file is non-empty: `[ -s "${RESULT_FILE}" ]` AND validate format: `grep -qE 'expected_pattern' "${RESULT_FILE}"`
+    - **EXAMPLE - WRONG** (no format validation):
+      ```bash
+      result=$(parse_data || echo "")
+      if [ -n "${result}" ]; then
+        use_result "${result}"  # May use invalid format!
+      fi
+      ```
+    - **EXAMPLE - CORRECT** (with format validation):
+      ```bash
+      result=$(parse_data || echo "")
+      if [ -n "${result}" ] && grep -qE '^expected_pattern' <<< "${result}"; then
+        use_result "${result}"  # Format validated
+      else
+        echo "[ERROR] Invalid or empty result format"
+        return 1
+      fi
+      ```
+    - **EXAMPLE - CORRECT** (for result files):
+      ```bash
+      # Run operations that write to result file
+      xargs -P 6 -I{} command {} > "${RESULT_FILE}" || true
+      
+      # Validate result file BEFORE parsing
+      if [ ! -s "${RESULT_FILE}" ]; then
+        echo "[ERROR] Result file empty - all operations failed"
+        return 1
+      fi
+      
+      # Validate result format
+      if ! grep -qE '^expected_pattern' "${RESULT_FILE}"; then
+        echo "[ERROR] Invalid result format in ${RESULT_FILE}"
+        return 1
+      fi
+      
+      # Now safe to parse
+      result=$(parse_results "${RESULT_FILE}")
+      ```
 - F3. Safe handling of subshells, command groups, and background jobs (`wait`, exit check).
 
 G. Functions & Modularization

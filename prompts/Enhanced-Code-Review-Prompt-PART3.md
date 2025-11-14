@@ -7,6 +7,39 @@
 
 ---
 
+## 🚨 MANDATORY SEQUENTIAL EXECUTION INSTRUCTIONS
+
+**CRITICAL: This is a multi-part prompt designed to maintain 500-line full context limits.**
+
+**PREREQUISITE CHECK:**
+- [ ] **PART 1 COMPLETED**: All tasks in PART 1 must be 100% complete
+- [ ] **PART 2 COMPLETED**: All tasks in PART 2 must be 100% complete
+- [ ] **PART 1 & 2 OUTPUTS REVIEWED**: All outputs from previous parts have been generated and reviewed
+- [ ] **CONTEXT CARRIED FORWARD**: Key findings from PART 1 and PART 2 are available for reference
+
+**EXECUTION PROTOCOL:**
+1. **VERIFY PART 1 & 2 COMPLETION**: Ensure all previous parts are finished
+2. **START PART 3**: Begin with this file (PART 3 - FINAL PART)
+3. **COMPLETE ALL TASKS** in PART 3 fully
+4. **FINAL SYNTHESIS**: Combine all findings from PART 1, PART 2, and PART 3
+
+**WHY SEQUENTIAL?**
+- Maintains 500-line context window per part
+- Ensures complete understanding before moving forward
+- Prevents context overflow and incomplete reviews
+- Each part is self-contained but builds on previous work
+
+**VERIFICATION CHECKLIST:**
+- [ ] All PART 1 tasks completed (prerequisite)
+- [ ] All PART 2 tasks completed (prerequisite)
+- [ ] All PART 3 tasks completed
+- [ ] All PART 3 outputs generated
+- [ ] Final synthesis complete
+
+**THIS IS THE FINAL PART - COMPLETE ALL TASKS HERE.**
+
+---
+
   # ===== Python =====
   - repo: https://github.com/psf/black
     rev: 24.1.1

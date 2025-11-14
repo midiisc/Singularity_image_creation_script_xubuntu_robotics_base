@@ -4,6 +4,33 @@
 **This is PART 1 of 2. See also:**
 - `Pattern-Learning-Repository-PART2.md` - Part 2 (Patterns P-011 through P-012, Workflow, Integration, Metrics)
 
+---
+
+## 🚨 MANDATORY SEQUENTIAL EXECUTION INSTRUCTIONS
+
+**CRITICAL: This is a multi-part prompt designed to maintain 500-line full context limits.**
+
+**EXECUTION PROTOCOL:**
+1. **START HERE**: Begin with PART 1 (this file)
+2. **COMPLETE ALL TASKS** in PART 1 fully before proceeding
+3. **ONLY AFTER** PART 1 is 100% complete, proceed to PART 2
+4. **DO NOT** jump ahead or skip parts - each part builds on the previous
+
+**WHY SEQUENTIAL?**
+- Maintains 500-line context window per part
+- Ensures complete understanding before moving forward
+- Prevents context overflow and incomplete reviews
+- Each part is self-contained but builds on previous work
+
+**VERIFICATION CHECKLIST:**
+- [ ] All PART 1 tasks completed
+- [ ] All PART 1 outputs generated
+- [ ] Ready to proceed to PART 2
+
+**ONLY PROCEED TO PART 2 WHEN ALL PART 1 TASKS ARE COMPLETE.**
+
+---
+
 **Purpose**: This file stores patterns learned from real errors encountered during development. Each pattern is automatically checked during code review to prevent recurrence.
 
 **Generation**: Patterns are extracted automatically by the AI agent when solving preventable errors during commits.

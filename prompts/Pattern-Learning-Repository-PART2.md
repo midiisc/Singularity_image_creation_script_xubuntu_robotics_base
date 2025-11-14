@@ -4,6 +4,39 @@
 **This is PART 2 of 2. See also:**
 - `Pattern-Learning-Repository-PART1.md` - Part 1 (Header, Patterns P-001 through P-010)
 
+---
+
+## 🚨 MANDATORY SEQUENTIAL EXECUTION INSTRUCTIONS
+
+**CRITICAL: This is a multi-part prompt designed to maintain 500-line full context limits.**
+
+**PREREQUISITE CHECK:**
+- [ ] **PART 1 COMPLETED**: All tasks in PART 1 must be 100% complete before starting PART 2
+- [ ] **PART 1 OUTPUTS REVIEWED**: All outputs from PART 1 have been generated and reviewed
+- [ ] **CONTEXT CARRIED FORWARD**: Key findings from PART 1 are available for reference
+
+**EXECUTION PROTOCOL:**
+1. **VERIFY PART 1 COMPLETION**: Ensure all PART 1 tasks are finished
+2. **START PART 2**: Begin with this file (PART 2 - FINAL PART)
+3. **COMPLETE ALL TASKS** in PART 2 fully
+4. **FINAL SYNTHESIS**: Combine all findings from PART 1 and PART 2
+
+**WHY SEQUENTIAL?**
+- Maintains 500-line context window per part
+- Ensures complete understanding before moving forward
+- Prevents context overflow and incomplete reviews
+- Each part is self-contained but builds on previous work
+
+**VERIFICATION CHECKLIST:**
+- [ ] All PART 1 tasks completed (prerequisite)
+- [ ] All PART 2 tasks completed
+- [ ] All PART 2 outputs generated
+- [ ] Final synthesis complete
+
+**THIS IS THE FINAL PART - COMPLETE ALL TASKS HERE.**
+
+---
+
 **Purpose**: This file contains remaining patterns, workflow documentation, integration points, and metrics.
 
 ---
