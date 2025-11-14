@@ -3899,8 +3899,20 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       echo "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
       # List cached packages for debugging
       echo "  → Cached packages:"
-      find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | head -5 | while IFS= read -r pkg; do
-          echo "    - $(basename "${pkg}")"
+      # Phase 1: Collect package paths into array (avoids pipe subshell, limits to 5)
+      cached_pkg_array=()
+      pkg_count=0
+      while IFS= read -r -d '' pkg && [ "${pkg_count}" -lt 5 ]; do
+          if [ -n "${pkg:-}" ] && [ -f "${pkg}" ]; then
+              cached_pkg_array+=("${pkg}")
+              pkg_count=$((pkg_count + 1))
+          fi
+      done < <(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" -print0 2>/dev/null)
+      # Phase 2: Display collected packages
+      for pkg in "${cached_pkg_array[@]}"; do
+          if [ -n "${pkg:-}" ] && [ -f "${pkg}" ]; then
+              echo "    - $(basename "${pkg}")"
+          fi
       done
       [ "${CACHED_NVIDIA_PKGS}" -gt 5 ] && echo "    ... and $((CACHED_NVIDIA_PKGS - 5)) more"
   else
@@ -3957,25 +3969,50 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       # CRITICAL: Immediately sync cache to ensure packages are persisted to disk
       # This ensures cache is available even if build fails later
       echo "[INFO] Syncing NVIDIA package cache to disk immediately..."
-      sync || true
+      if ! sync; then
+          echo "[WARN] ⚠ Cache sync failed - packages may not be persisted (non-critical)"
+      fi
       
       # Verify packages are in cache and sync any from /var/cache/apt/archives if needed
       if [ -d "/var/cache/apt/archives" ]; then
           VAR_CACHE_NVIDIA=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
           if [ "${VAR_CACHE_NVIDIA}" -gt 0 ]; then
               echo "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
-              NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
-              if [ -n "${NVIDIA_FILES:-}" ]; then
-                  echo "${NVIDIA_FILES}" | while IFS= read -r deb_file; do
+              # Phase 1: Collect package paths into array (avoids pipe subshell, preserves error handling)
+              nvidia_files_array=()
+              while IFS= read -r -d '' deb_file; do
+                  if [ -n "${deb_file:-}" ] && [ -f "${deb_file}" ]; then
+                      nvidia_files_array+=("${deb_file}")
+                  fi
+              done < <(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" -print0 2>/dev/null)
+              
+              # Phase 2: Copy packages with explicit error tracking
+              if [ ${#nvidia_files_array[@]} -gt 0 ]; then
+                  copy_success=0
+                  copy_failed=0
+                  for deb_file in "${nvidia_files_array[@]}"; do
                       if [ -f "${deb_file:-}" ]; then
                           deb_name=$(basename "${deb_file}")
                           if [ ! -f "${CONTAINER_APT_CACHE}/${deb_name}" ]; then
-                              cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" || echo "  [warn] Failed to copy: ${deb_file}"
+                              if cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" 2>/dev/null; then
+                                  copy_success=$((copy_success + 1))
+                              else
+                                  copy_failed=$((copy_failed + 1))
+                                  echo "[WARN] ⚠ Failed to copy: ${deb_file}" >&2
+                              fi
                           fi
                       fi
                   done
+                  if [ "${copy_success}" -gt 0 ]; then
+                      echo "[INFO] Copied ${copy_success} package(s) to cache"
+                  fi
+                  if [ "${copy_failed}" -gt 0 ]; then
+                      echo "[WARN] ⚠ Failed to copy ${copy_failed} package(s) (non-critical)"
+                  fi
                   # Force sync again after copying
-                  sync || true
+                  if ! sync; then
+                      echo "[WARN] ⚠ Final cache sync failed (non-critical)"
+                  fi
               fi
           fi
       fi
@@ -7633,7 +7670,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   TBB_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/TBB"
   if [ ! -d "${TBB_CMAKE_DIR}" ]; then
     # Fallback: try to find TBB CMake config in standard locations
-    TBB_CMAKE_DIR=$(find /usr -type d -path "*/cmake/TBB" 2>/dev/null | head -1 || echo "")
+    # Phase 1: Find TBB CMake directory
+    tbb_found_dir=""
+    tbb_found_dir=$(find /usr -type d -path "*/cmake/TBB" 2>/dev/null | head -1 || echo "")
+    # Phase 2: Validate result before using
+    if [ -n "${tbb_found_dir:-}" ] && [ -d "${tbb_found_dir}" ]; then
+      TBB_CMAKE_DIR="${tbb_found_dir}"
+    else
+      TBB_CMAKE_DIR=""
+    fi
   fi
 
   #--- Sub-block 17.16: Configure GTSAM with CMake ---
@@ -7758,7 +7803,7 @@ EOF
       else
         echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found${NC}"
         echo "  This may indicate TBB_DIR or TBB_ROOT_DIR was not set correctly"
-        echo "  Check that TBB is installed: dpkg -l | grep libtbb"
+        echo "  Check that TBB is installed (use: dpkg -l and search for libtbb)"
         echo "  Verify TBB_DIR points to CMake config: ls -la /usr/lib/x86_64-linux-gnu/cmake/TBB"
         echo "  If TBB_DIR is not set, GTSAM's FindTBB.cmake may not find system TBB"
       fi
@@ -8430,6 +8475,8 @@ OPENCV_CMAKE_ARGS=(
   "-DBLA_VENDOR=${MKL_BLA_VENDOR}"
   "-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
   "-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
+  "-DLAPACK_INCLUDE_DIRS=${MKLROOT}/include"
+  "-DLAPACK_INCLUDE_DIR=${MKLROOT}/include"
   "-DMKL_ROOT=${MKLROOT}"
   "-DMKL_THREADING_LAYER=${MKL_THREADING_LAYER}"
   "-DJlCxx_DIR=${JULIA_HOME}/CxxWrap/deps/build/JlCxx/"
@@ -8464,7 +8511,10 @@ OPENCV_CMAKE_ARGS=(
   "-DPYTHON3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython${SYSTEM_PYTHON_VER}.so"
   "-DPYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include"
   "-DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  "-DTBB_ROOT_DIR=/usr"
   "-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"
+  "-DTBB_INCLUDE_DIR=/usr/include/tbb"
+  "-DTBB_INCLUDE_DIRS=/usr/include/tbb"
   "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
   "-DCMAKE_C_STANDARD=17"
   "-DCMAKE_CXX_STANDARD=17"
@@ -8485,7 +8535,7 @@ OPENCV_CMAKE_ARGS=(
   "-DJulia_INCLUDE_DIRS=${JULIA_HOME}/include/julia"
   "-DJulia_LIBRARIES=${JULIA_HOME}/lib/libjulia.so"
   "-DJlCxx_DIR=/opt/libcxxwrap-julia/lib/cmake/JlCxx"
-  "-DCMAKE_PREFIX_PATH=/opt/libcxxwrap-julia:${CMAKE_PREFIX_PATH:-}"
+  "-DCMAKE_PREFIX_PATH=/opt/libcxxwrap-julia:/usr:${MKLROOT}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}"
 )
 # Surface MKL CMake package location if available (helps CMake find_package workflows)
 if [ -n "${MKL_CMAKE_DIR}" ]; then

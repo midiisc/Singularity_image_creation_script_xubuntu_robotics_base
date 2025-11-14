@@ -124,6 +124,7 @@ check_non_functional_files() {
        echo "$file" | grep -qE "\.(md|txt)$"; then
       non_functional_files+=("$file")
       continue
+    fi
     # ENDIF: forbidden filename pattern check
     
     # AI-based content analysis (for code files)

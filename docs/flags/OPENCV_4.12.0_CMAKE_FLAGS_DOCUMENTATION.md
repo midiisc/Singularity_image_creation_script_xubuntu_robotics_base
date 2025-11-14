@@ -156,6 +156,12 @@
   ```cmake
   -DWITH_TBB=ON
   ```
+- **Note:** When `WITH_TBB=ON`, OpenCV uses `find_package(TBB)` to locate TBB. For proper detection, also set:
+  - `TBB_DIR`: Path to TBB CMake config directory (e.g., `/usr/lib/x86_64-linux-gnu/cmake/TBB`)
+  - `TBB_ROOT_DIR`: Root directory of TBB installation (e.g., `/usr`)
+  - `TBB_INCLUDE_DIR` or `TBB_INCLUDE_DIRS`: Path to TBB headers (e.g., `/usr/include/tbb`)
+  - `TBB_LIBRARIES`: Path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
+- **Critical:** If TBB is not detected, ensure `CMAKE_PREFIX_PATH` includes the TBB installation directory.
 
 ### `WITH_EIGEN`
 - **Type:** `OPTION` (ON/OFF)
@@ -187,10 +193,27 @@
 ### `WITH_LAPACK`
 - **Type:** `OPTION` (ON/OFF)
 - **Default:** `OFF`
-- **Description:** Enable LAPACK support.
+- **Description:** Enable LAPACK support for linear algebra operations (SVD, QR decomposition, Cholesky, etc.).
 - **Usage:**
   ```cmake
   -DWITH_LAPACK=ON
+  ```
+- **Note:** When `WITH_LAPACK=ON`, OpenCV uses `find_package(LAPACK)` to locate LAPACK. For proper detection, also set:
+  - `LAPACK_LIBRARIES`: Path to LAPACK library files (semicolon-separated for multiple libraries)
+  - `LAPACK_INCLUDE_DIR` or `LAPACK_INCLUDE_DIRS`: Path to LAPACK headers (e.g., `${MKLROOT}/include` for Intel MKL)
+  - `BLA_VENDOR`: BLAS/LAPACK vendor (e.g., `Intel10_64lp` for Intel MKL)
+  - `BLAS_LIBRARIES`: BLAS library files (often same as LAPACK when using MKL)
+- **Critical:** If LAPACK is not detected, ensure:
+  1. `CMAKE_PREFIX_PATH` includes the LAPACK installation directory (e.g., `${MKLROOT}` for Intel MKL)
+  2. Both `LAPACK_LIBRARIES` and `LAPACK_INCLUDE_DIR` are explicitly set
+  3. `BLA_VENDOR` matches your BLAS/LAPACK provider
+- **Example with Intel MKL:**
+  ```cmake
+  -DWITH_LAPACK=ON
+  -DBLA_VENDOR=Intel10_64lp
+  -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"
+  -DLAPACK_INCLUDE_DIR="${MKLROOT}/include"
+  -DCMAKE_PREFIX_PATH="${MKLROOT}"
   ```
 
 ### `WITH_OPENGL`
@@ -527,6 +550,29 @@ OpenCV respects standard CMake variables:
 - `CMAKE_INSTALL_RPATH`: RPATH entries for installed libraries
 - `CMAKE_INSTALL_RPATH_USE_LINK_PATH`: Use linker path as RPATH
 
+### Dependency Detection
+- `CMAKE_PREFIX_PATH`: Semicolon-separated list of paths where CMake searches for dependencies (critical for LAPACK and TBB detection)
+- `CMAKE_INCLUDE_PATH`: Semicolon-separated list of paths for header file search
+- `CMAKE_LIBRARY_PATH`: Semicolon-separated list of paths for library file search
+
+### LAPACK Detection Variables
+- `LAPACK_LIBRARIES`: Semicolon-separated list of LAPACK library files (required when `WITH_LAPACK=ON`)
+- `LAPACK_INCLUDE_DIR` or `LAPACK_INCLUDE_DIRS`: Path to LAPACK header directory (required for proper detection)
+- `BLA_VENDOR`: BLAS/LAPACK vendor identifier (e.g., `Intel10_64lp`, `OpenBLAS`, `Generic`)
+- `BLAS_LIBRARIES`: BLAS library files (often same as LAPACK when using MKL)
+
+### TBB Detection Variables
+- `TBB_DIR`: Path to TBB CMake config directory (e.g., `/usr/lib/x86_64-linux-gnu/cmake/TBB`)
+- `TBB_ROOT_DIR`: Root directory of TBB installation (e.g., `/usr`)
+- `TBB_INCLUDE_DIR` or `TBB_INCLUDE_DIRS`: Path to TBB header directory (e.g., `/usr/include/tbb`)
+- `TBB_LIBRARIES`: Path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
+
+**Critical Notes:**
+- OpenCV uses `find_package(LAPACK)` and `find_package(TBB)` internally
+- If detection fails, explicitly set all relevant variables (`*_LIBRARIES`, `*_INCLUDE_DIR`, `*_DIR`, etc.)
+- Ensure `CMAKE_PREFIX_PATH` includes installation directories for both LAPACK and TBB
+- For Intel MKL, set `CMAKE_PREFIX_PATH` to include `${MKLROOT}`
+
 ---
 
 ## Module-Specific BUILD_opencv_* Options
@@ -577,16 +623,24 @@ cmake .. \
   -DOPENCV_DNN_CUDA_VERSION=12.6 \
   -DWITH_OPENBLAS=ON \
   -DWITH_TBB=ON \
+  -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
+  -DTBB_ROOT_DIR=/usr \
+  -DTBB_INCLUDE_DIR=/usr/include/tbb \
+  -DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
   -DWITH_EIGEN=ON \
   -DWITH_FFMPEG=ON \
   -DWITH_GSTREAMER=ON \
   -DWITH_LAPACK=ON \
+  -DBLA_VENDOR=Intel10_64lp \
+  -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
+  -DLAPACK_INCLUDE_DIR="${MKLROOT}/include" \
   -DWITH_OPENGL=ON \
   -DWITH_OPENMP=ON \
   -DENABLE_FAST_MATH=ON \
   -DCUDA_FAST_MATH=ON \
   -DCPU_BASELINE=AVX2 \
   -DCPU_DISPATCH="AVX2,FP16,AVX512_SKX" \
+  -DCMAKE_PREFIX_PATH="/usr:${MKLROOT}" \
   -DBUILD_opencv_python3=ON \
   -DPYTHON3_EXECUTABLE=/usr/bin/python3 \
   -DBUILD_TESTS=OFF \
