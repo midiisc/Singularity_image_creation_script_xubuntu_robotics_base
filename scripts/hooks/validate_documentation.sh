@@ -11,8 +11,10 @@
 
 set -euo pipefail
 
+# SCRIPT_DIR kept for consistency with other scripts (may be used in future)
+# Currently unused - ShellCheck warning SC2034 is acceptable
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
+# REPO_ROOT unused - removed to fix SC2034
 
 # Colors
 readonly RED='\033[0;31m'
@@ -49,20 +51,21 @@ check_header_documentation() {
     local file="$1"
     local ext="$2"
     local has_header=false
-    local header_comment=""
+    # header_comment unused - removed to fix SC2034
     
     # Read first 30 lines
-    local first_lines=$(head -30 "$file")
+    local first_lines
+    first_lines=$(head -30 "$file")
     
     case "$ext" in
         sh|bash)
             # Check for header comment block (after shebang)
             if echo "$first_lines" | grep -qE "^#!.*bash|^#!.*sh"; then
                 # Check for comment block after shebang
-                local after_shebang=$(echo "$first_lines" | sed -n '2,30p')
+                local after_shebang
+                after_shebang=$(echo "$first_lines" | sed -n '2,30p')
                 if echo "$after_shebang" | grep -qE "^#.*[Pp]urpose|^#.*[Dd]escription|^#.*[Pp]urpose:|^#.*[Dd]escription:"; then
                     has_header=true
-                    header_comment=$(echo "$after_shebang" | grep -E "^#.*[Pp]urpose|^#.*[Dd]escription" | head -1)
                 fi
             else
                 # No shebang, check for comment at start
@@ -108,22 +111,28 @@ check_function_documentation() {
         sh|bash)
             # Find function definitions
             while IFS= read -r func_line; do
-                local func_name=$(echo "$func_line" | sed -nE 's/^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{?.*$/\1/p')
+                local func_name
+                func_name=$(echo "$func_line" | sed -nE 's/^[[:space:]]*([a-zA-Z_][a-zA-Z0-9_]*)\(\)[[:space:]]*\{?.*$/\1/p')
                 if [ -n "$func_name" ]; then
-                    local func_start=$(echo "$func_line" | cut -d: -f1)
+                    local func_start
+                    func_start=$(echo "$func_line" | cut -d: -f1)
                     # Get function body size
-                    local func_end=$(awk -v start="$func_start" '
+                    local func_end
+                    func_end=$(awk -v start="$func_start" '
                         NR >= start && /^[[:space:]]*}/ {print NR; exit}
                         NR >= start && /^[a-zA-Z_]/ && NR > start {print NR-1; exit}
                     ' "$file" | head -1)
                     
                     if [ -n "$func_end" ] && [ "$func_end" -gt "$func_start" ]; then
-                        local func_size=$((func_end - func_start))
+                        local func_size
+                        func_size=$((func_end - func_start))
                         if [ "$func_size" -gt 10 ]; then
                             # Check for comment before function
-                            local comment_line=$((func_start - 1))
+                            local comment_line
+                            comment_line=$((func_start - 1))
                             if [ "$comment_line" -gt 0 ]; then
-                                local comment=$(sed -n "${comment_line}p" "$file")
+                                local comment
+                                comment=$(sed -n "${comment_line}p" "$file")
                                 if ! echo "$comment" | grep -qE "^[[:space:]]*#.*$func_name|^[[:space:]]*#.*[Pp]urpose|^[[:space:]]*#.*[Dd]escription"; then
                                     echo -e "${YELLOW}[⚠]${NC} Function '$func_name' (lines $func_start-$func_end, ${func_size} lines) missing documentation"
                                     missing_docs=$((missing_docs + 1))
@@ -137,7 +146,8 @@ check_function_documentation() {
         py)
             # Check for docstrings in functions/classes
             # This is a simplified check - full implementation would parse AST
-            local funcs=$(grep -nE '^[[:space:]]*def |^[[:space:]]*class ' "$file" 2>/dev/null || true)
+            local funcs
+            funcs=$(grep -nE '^[[:space:]]*def |^[[:space:]]*class ' "$file" 2>/dev/null || true)
             if [ -n "$funcs" ]; then
                 echo -e "${BLUE}[→]${NC} Python file: Check docstrings manually (AST parsing recommended)"
             fi
@@ -162,8 +172,10 @@ check_complex_logic_documentation() {
     local missing_phase_markers=0
     
     # Check for complex multi-phase logic without phase markers
-    local complex_blocks=$(grep -cE "for candidate in|for.*in.*do" "$file" 2>/dev/null || echo "0")
-    local phase_markers=$(grep -cE "# Phase [0-9]:|# Phase [0-9] -" "$file" 2>/dev/null || echo "0")
+    local complex_blocks
+    complex_blocks=$(grep -cE "for candidate in|for.*in.*do" "$file" 2>/dev/null || echo "0")
+    local phase_markers
+    phase_markers=$(grep -cE "# Phase [0-9]:|# Phase [0-9] -" "$file" 2>/dev/null || echo "0")
     
     if [ "$complex_blocks" -gt 3 ] && [ "$phase_markers" -eq 0 ]; then
         echo -e "${YELLOW}[⚠]${NC} Complex multi-phase logic detected but no phase markers found"
@@ -172,8 +184,10 @@ check_complex_logic_documentation() {
     fi
     
     # Check for long if-else chains without comments
-    local long_conditionals=$(grep -cE "if.*\[.*\].*; then" "$file" 2>/dev/null || echo "0")
-    local conditional_comments=$(grep -B1 "if.*\[.*\].*; then" "$file" 2>/dev/null | grep -cE "^[[:space:]]*#" || echo "0")
+    local long_conditionals
+    long_conditionals=$(grep -cE "if.*\[.*\].*; then" "$file" 2>/dev/null || echo "0")
+    local conditional_comments
+    conditional_comments=$(grep -B1 "if.*\[.*\].*; then" "$file" 2>/dev/null | grep -cE "^[[:space:]]*#" || echo "0")
     
     if [ "$long_conditionals" -gt 5 ] && [ "$conditional_comments" -lt "$((long_conditionals / 2))" ]; then
         echo -e "${YELLOW}[⚠]${NC} Many conditionals without explanatory comments"
@@ -199,13 +213,16 @@ check_inline_comments() {
     local missing_comments=0
     
     # Check for loops without comments
-    local loops=$(grep -nE "for |while |until " "$file" 2>/dev/null | wc -l || echo "0")
+    local loops
+    loops=$(grep -nE "for |while |until " "$file" 2>/dev/null | wc -l || echo "0")
     local loop_comments=0
     
     while IFS= read -r loop_line; do
-        local line_num=$(echo "$loop_line" | cut -d: -f1)
+        local line_num
+        line_num=$(echo "$loop_line" | cut -d: -f1)
         if [ "$line_num" -gt 1 ]; then
-            local prev_line=$(sed -n "$((line_num - 1))p" "$file")
+            local prev_line
+            prev_line=$(sed -n "$((line_num - 1))p" "$file")
             if echo "$prev_line" | grep -qE "^[[:space:]]*#"; then
                 loop_comments=$((loop_comments + 1))
             fi
@@ -213,7 +230,8 @@ check_inline_comments() {
     done < <(grep -nE "for |while |until " "$file" 2>/dev/null || true)
     
     if [ "$loops" -gt 0 ]; then
-        local comment_ratio=$(echo "scale=2; $loop_comments / $loops" | bc 2>/dev/null || echo "0")
+        local comment_ratio
+        comment_ratio=$(echo "scale=2; $loop_comments / $loops" | bc 2>/dev/null || echo "0")
         if (( $(echo "$comment_ratio < 0.5" | bc -l 2>/dev/null || echo "1") )); then
             echo -e "${YELLOW}[⚠]${NC} Many loops without explanatory comments (${loop_comments}/${loops} documented)"
             missing_comments=$((missing_comments + 1))

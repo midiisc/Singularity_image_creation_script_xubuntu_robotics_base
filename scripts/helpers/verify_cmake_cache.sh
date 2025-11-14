@@ -27,7 +27,7 @@ readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
 # Script configuration
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# SCRIPT_DIR unused - removed to fix SC2034
 CACHE_FILE=""
 LIBRARY_NAME=""
 

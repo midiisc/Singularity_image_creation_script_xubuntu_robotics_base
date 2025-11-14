@@ -258,6 +258,7 @@ export WHEELS_CACHE="${CACHE_DIR}/wheels"
 # Generate descriptive image name with version numbers
 # Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base
 # Capitalize ROS distribution name (first letter uppercase, rest lowercase)
+# ROS_DISTRO_CAPITALIZED kept for potential future use (may be exported or used by other scripts)
 if [ -n "${ROS_DISTRO:-}" ]; then
     ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
 else
@@ -428,6 +429,7 @@ analyze_build_log() {
         all_lines+=("$line")
         
         # Update context based on line content
+        # current_context kept for potential future use in context reporting
         for context_name in "${!context_patterns[@]}"; do
             if grep -qiE "${context_patterns[$context_name]}" <<< "$line"; then
                 current_context="$context_name"
@@ -439,22 +441,26 @@ analyze_build_log() {
         # Match error patterns (case-insensitive) - most specific first
         if grep -qiE \
             '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)' <<< "$line"; then
-            error_line_nums+=($line_num)
+            # SC2206: Quote to prevent word splitting
+            error_line_nums+=("$line_num")
             total_errors=$((total_errors + 1))
         # Match warning patterns (case-insensitive, but not errors)
         elif grep -qiE \
             '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)' <<< "$line"; then
-            warning_line_nums+=($line_num)
+            # SC2206: Quote to prevent word splitting
+            warning_line_nums+=("$line_num")
             total_warnings=$((total_warnings + 1))
         # Match debug flags and diagnostic output (non-fatal but informative)
         elif grep -qiE \
             '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)' <<< "$line"; then
-            debug_flag_line_nums+=($line_num)
+            # SC2206: Quote to prevent word splitting
+            debug_flag_line_nums+=("$line_num")
             total_debug_flags=$((total_debug_flags + 1))
         # Match deprecation warnings (specific pattern for future compatibility issues)
         elif grep -qiE \
             '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)' <<< "$line"; then
-            deprecation_line_nums+=($line_num)
+            # SC2206: Quote to prevent word splitting
+            deprecation_line_nums+=("$line_num")
             total_deprecations=$((total_deprecations + 1))
         fi
     done < "$log_file"
@@ -465,9 +471,12 @@ analyze_build_log() {
         echo ""
         
         # Combine and sort line numbers
-        local all_issue_lines=($(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" | sort -n | uniq))
+        # SC2207: Use mapfile instead of command substitution for array assignment
+        local all_issue_lines
+        mapfile -t all_issue_lines < <(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" | sort -n | uniq)
         
         local last_extracted_line=0
+        # current_context_line kept for potential future use in context tracking
         local current_context_line=0
         
         for issue_line in "${all_issue_lines[@]}"; do
@@ -518,11 +527,13 @@ analyze_build_log() {
             
             # Find the most recent context before this line
             local context_for_issue="General Build"
-            local i=$((issue_line - 1))
+            local i
+            i=$((issue_line - 1))
             while [ $i -gt 0 ] && [ $i -gt $((issue_line - 50)) ]; do
                 for context_name in "${!context_patterns[@]}"; do
                     if [ $i -le ${#all_lines[@]} ]; then
-                        local idx=$((i - 1))
+                        local idx
+                        idx=$((i - 1))
                         if [ $idx -ge 0 ]; then
                             if grep -qiE "${context_patterns[$context_name]}" <<< "${all_lines[$idx]}"; then
                                 context_for_issue="$context_name"
@@ -535,11 +546,13 @@ analyze_build_log() {
             done
             
             # Calculate context range
-            local start_line=$((issue_line - context_lines))
+            local start_line
+            start_line=$((issue_line - context_lines))
             if [ $start_line -lt 1 ]; then
                 start_line=1
             fi
-            local end_line=$((issue_line + context_lines))
+            local end_line
+            end_line=$((issue_line + context_lines))
             if [ $end_line -gt ${#all_lines[@]} ]; then
                 end_line=${#all_lines[@]}
             fi
@@ -564,7 +577,8 @@ analyze_build_log() {
                 # Extract context block (0-indexed array, so subtract 1)
                 local i
                 for i in $(seq $start_line $end_line); do
-                    local idx=$((i - 1))
+                    local idx
+                    idx=$((i - 1))
                     if [ $idx -ge 0 ] && [ $idx -lt ${#all_lines[@]} ]; then
                         local marker=""
                         if [ $i -eq $issue_line ]; then

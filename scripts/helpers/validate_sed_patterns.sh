@@ -97,7 +97,8 @@ if [ -n "$CMD_SUBS_WITH_SED" ]; then
       echo ""
       echo -e "${YELLOW}AFFECTED LINES:${NC}"
       echo "$CRITICAL_MISSING" | head -10 | sed 's/^/  /'
-      if [ $(echo "$CRITICAL_MISSING" | wc -l) -gt 10 ]; then
+      # Quote command substitution to prevent word splitting (SC2046)
+      if [ "$(echo "$CRITICAL_MISSING" | wc -l)" -gt 10 ]; then
         echo "  ... ($(echo "$CRITICAL_MISSING" | wc -l) total instances)"
       fi
       echo ""

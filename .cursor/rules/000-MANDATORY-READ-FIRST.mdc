@@ -49,6 +49,10 @@ globs:
 - [ ] **I understand automation is the default** (all operations execute automatically)
 - [ ] **I understand I MUST verify branch and files before any git operation**
 - [ ] **I understand I MUST report all git operations** (informational only, not asking permission)
+- [ ] **CRITICAL: I understand I MUST run pre-commit validation BEFORE ANY commit** (see `GIT-WORKFLOW.mdc` section 2)
+  - **MANDATORY**: Run `scripts/helpers/enforce_pre_commit_validation.sh` before `git commit`
+  - **BLOCKS COMMIT**: If validation fails (exit code 1), commit is BLOCKED
+  - **NO BYPASS**: Do NOT use `--no-verify` unless user explicitly requests it
 
 ### Workflow Principles
 - [ ] **I understand plans must be presented INLINE, not as files**

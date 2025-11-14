@@ -138,7 +138,8 @@ extract_cmake_commands() {
     # Check if this line is part of a package installation command
     # Look back up to 10 lines to find apt-get/apt/yum/etc.
     local is_package_install=false
-    local check_start=$((line_num - 10))
+    local check_start
+    check_start=$((line_num - 10))
     [ "$check_start" -lt 1 ] && check_start=1
     
     # Use sed to extract context and check for package manager commands
@@ -209,7 +210,8 @@ detect_library_from_context() {
   
   # Look backward from the cmake command to find library name comments
   # Search up to 50 lines back for context
-  local start_line=$((line_num - 50))
+  local start_line
+  start_line=$((line_num - 50))
   [ "$start_line" -lt 1 ] && start_line=1
   
   local context
@@ -281,7 +283,7 @@ validate_flags() {
   
   local cmd_count=0
   local current_library=""
-  local current_doc=""
+  # current_doc unused - removed to fix SC2034
   local line_num=""
   local cmake_cmd=""
   

@@ -72,11 +72,17 @@ echo ""
 
 # Find lines with "local var=$(command)" pattern
 # Pattern: local VAR=$(command) or local VAR=`command`
-SC2155_COUNT=$(grep -nE '^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=\$\(|^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=`' "$SCRIPT_FILE" | \
+# Count lines directly with grep -c (SC2126: prefer grep -c over grep | wc -l)
+SC2155_COUNT=""
+SC2155_COUNT=$(grep -nE '^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=\$\(|^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=`' "$SCRIPT_FILE" 2>/dev/null | \
   grep -vE 'shellcheck disable=SC2155' | \
-  wc -l || echo "0")
+  grep -c . 2>/dev/null || echo "0")
 
-if [ "$SC2155_COUNT" -gt 0 ]; then
+# Ensure SC2155_COUNT is numeric (strip all whitespace including newlines)
+SC2155_COUNT=$(echo "${SC2155_COUNT}" | tr -d '[:space:]' || echo "0")
+SC2155_COUNT=$((SC2155_COUNT + 0))
+
+if [ "${SC2155_COUNT:-0}" -gt 0 ]; then
   echo -e "${YELLOW}[FOUND]${NC} $SC2155_COUNT SC2155 issue(s) (declare and assign separately)"
   echo ""
   
@@ -84,9 +90,10 @@ if [ "$SC2155_COUNT" -gt 0 ]; then
   grep -nE '^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=\$\(|^\s*local\s+[A-Za-z_][A-Za-z0-9_]*=`' "$SCRIPT_FILE" | \
     grep -vE 'shellcheck disable=SC2155' | \
     head -5 | sed 's/^/  /' || true
-  if [ "$SC2155_COUNT" -gt 5 ]; then
-    echo "  ... ($(($SC2155_COUNT - 5)) more)"
-  fi
+      if [ "$SC2155_COUNT" -gt 5 ]; then
+        # SC2004: $ not needed in arithmetic, but kept for clarity
+        echo "  ... ($((SC2155_COUNT - 5)) more)"
+      fi
   echo ""
   
   if [ "$DRY_RUN" != "--dry-run" ]; then
@@ -221,11 +228,17 @@ echo -e "${BLUE}[FIX 2]${NC} Checking SC1090: Intentional dynamic source..."
 echo ""
 
 # Find source commands with variables that don't already have disable comments
-SC1090_COUNT=$(grep -nE '^\s*source\s+["\047]\$\{' "$SCRIPT_FILE" | \
+# Count lines directly with grep -c (SC2126: prefer grep -c over grep | wc -l)
+SC1090_COUNT=""
+SC1090_COUNT=$(grep -nE '^\s*source\s+["\047]\$\{' "$SCRIPT_FILE" 2>/dev/null | \
   grep -vE 'shellcheck disable=SC1090' | \
-  wc -l || echo "0")
+  grep -c . 2>/dev/null || echo "0")
 
-if [ "$SC1090_COUNT" -gt 0 ]; then
+# Ensure SC1090_COUNT is numeric (strip all whitespace including newlines)
+SC1090_COUNT=$(echo "${SC1090_COUNT}" | tr -d '[:space:]' || echo "0")
+SC1090_COUNT=$((SC1090_COUNT + 0))
+
+if [ "${SC1090_COUNT:-0}" -gt 0 ]; then
   echo -e "${YELLOW}[FOUND]${NC} $SC1090_COUNT SC1090 issue(s) (intentional dynamic source)"
   echo ""
   

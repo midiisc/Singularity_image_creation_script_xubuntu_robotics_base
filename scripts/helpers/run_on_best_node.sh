@@ -40,7 +40,7 @@ IMAGE_ABS=$(readlink -f "$IMAGE")
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-BLUE='\033[0;34m'
+# BLUE unused - removed to fix SC2034
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 NC='\033[0m'
@@ -49,13 +49,12 @@ NC='\033[0m'
 # AUTO-DETECT OVERLAY
 #===============================================================================
 
-OVERLAY_FILE=""
+# OVERLAY_FILE unused - only OVERLAY_ABS is used (fixes SC2034)
 OVERLAY_ABS=""
 
 shopt -s nullglob
 for pattern in "ml_conda_overlay.img" "*overlay*.img" "overlay.img" "*conda*.img"; do
   if [ -f "$pattern" ]; then
-    OVERLAY_FILE="$pattern"
     OVERLAY_ABS=$(readlink -f "$pattern")
     break
   fi
@@ -114,7 +113,8 @@ find_best_nodes() {
   echo "" >&2
   
   # Query with GPU allocation info
-  local sinfo_data=$(sinfo -p $PARTITION -h -o "%N|%T|%C|%O|%m|%e|%G")
+  local sinfo_data
+  sinfo_data=$(sinfo -p $PARTITION -h -o "%N|%T|%C|%O|%m|%e|%G")
   
   if [ -z "$sinfo_data" ]; then
     echo -e "${RED}ERROR: No nodes found${NC}" >&2
@@ -122,7 +122,8 @@ find_best_nodes() {
   fi
   
   # Get partition-wide pending jobs once (more efficient)
-  local partition_pending=$(get_pending_jobs "$PARTITION")
+  local partition_pending
+  partition_pending=$(get_pending_jobs "$PARTITION")
   
   echo "GPU Nodes (Normalized Scoring 0-100, higher = better):" >&2
   echo "" >&2
@@ -142,35 +143,43 @@ find_best_nodes() {
     [[ "$state" =~ DOWN|DRAIN ]] && continue
     
     # Extract GPU count (format: gpu:4)
-    local gpu_count=$(echo "$gpus" | grep -oP 'gpu:\K\d+' || echo "0")
+    local gpu_count
+    gpu_count=$(echo "$gpus" | grep -oP 'gpu:\K\d+' || echo "0")
     [ "$gpu_count" -lt "$REQUIRED_GPUS" ] && continue
     
     # Get GPU allocation from scontrol (more accurate)
     local alloc_gpus=0
-    local gpu_alloc_info=$(scontrol show node $node 2>/dev/null | grep "AllocTRES" | grep -oP 'gres/gpu=\K\d+' || echo "0")
+    local gpu_alloc_info
+    gpu_alloc_info=$(scontrol show node $node 2>/dev/null | grep "AllocTRES" | grep -oP 'gres/gpu=\K\d+' || echo "0")
     alloc_gpus=${gpu_alloc_info:-0}
-    local free_gpus=$((gpu_count - alloc_gpus))
+    local free_gpus
+    free_gpus=$((gpu_count - alloc_gpus))
     
     # Skip if no GPUs available
     [ "$free_gpus" -lt "$REQUIRED_GPUS" ] && continue
     
     # Parse CPU info
-    local alloc_cpus=$(echo "$cpus" | cut -d'/' -f1)
-    local idle_cpus=$(echo "$cpus" | cut -d'/' -f2)
-    local total_cpus=$(echo "$cpus" | cut -d'/' -f4)
+    # alloc_cpus unused - removed to fix SC2034
+    local idle_cpus
+    idle_cpus=$(echo "$cpus" | cut -d'/' -f2)
+    local total_cpus
+    total_cpus=$(echo "$cpus" | cut -d'/' -f4)
     
     # Skip if insufficient CPUs
     [ "$idle_cpus" -lt "$REQUIRED_CPUS" ] && continue
     
     # Parse load (float value)
-    local cpu_load=$(echo "$load" | awk '{printf "%.2f", $1}')
+    local cpu_load
+    cpu_load=$(echo "$load" | awk '{printf "%.2f", $1}')
     
     # Parse memory (in MB from sinfo)
     local total_mem=$mem
     local free_mem_mb=$free_mem
-    local free_mem_gb=$(echo "$free_mem_mb" | awk '{print int($1/1024)}')
+    local free_mem_gb
+    free_mem_gb=$(echo "$free_mem_mb" | awk '{print int($1/1024)}')
     
-    local user_jobs=$(get_user_jobs_on_node "$node")
+    local user_jobs
+    user_jobs=$(get_user_jobs_on_node "$node")
     
     #==========================================================================
     # NORMALIZED SCORING (0-100 scale, 100 = BEST)
@@ -202,7 +211,8 @@ find_best_nodes() {
     # 3. CPU LOAD SCORE (0-100) - Lower load = better
     local cpu_load_score=100
     if [ "$total_cpus" -gt 0 ]; then
-      local load_ratio=$(echo "$cpu_load $total_cpus" | awk '{printf "%.0f", ($1/$2)*100}')
+      local load_ratio
+      load_ratio=$(echo "$cpu_load $total_cpus" | awk '{printf "%.0f", ($1/$2)*100}')
       cpu_load_score=$((100 - load_ratio))
       [ "$cpu_load_score" -lt 0 ] && cpu_load_score=0
     fi
@@ -237,7 +247,8 @@ find_best_nodes() {
     # WEIGHTED FINAL SCORE (0-100)
     #==========================================================================
     # Weights optimized for immediate allocation + performance
-    local final_score=$(awk -v s=$state_score -v c=$cpu_avail_score \
+    local final_score
+    final_score=$(awk -v s=$state_score -v c=$cpu_avail_score \
                             -v l=$cpu_load_score -v m=$mem_score \
                             -v g=$gpu_score -v q=$queue_score -v u=$user_score \
                             'BEGIN {printf "%.0f", s*0.25 + c*0.20 + l*0.15 + m*0.10 + g*0.20 + q*0.05 + u*0.05}')
@@ -300,10 +311,12 @@ find_best_nodes() {
   fi
   
   # Show top candidates
-  local top_n=$((idx < return_count ? idx : return_count))
+  local top_n
+  top_n=$((idx < return_count ? idx : return_count))
   echo "Top $top_n Candidates (sorted by score - higher = better):" >&2
   for ((i=0; i<top_n; i++)); do
-    local score=$((node_scores[i] / 1000))
+    local score
+    score=$((node_scores[i] / 1000))
     local rating
     if [ "$score" -ge 90 ]; then
       rating="★★★★★ EXCELLENT"
@@ -384,7 +397,8 @@ try_launch_on_node() {
 check_existing_jobs() {
   # Check if user has any running or pending jobs
   # Focus on interactive/interactive-like jobs (pty sessions) since HPC typically allows only one interactive session
-  local existing_jobs=$(squeue -u "$USER" -h -o "%i|%j|%T|%N|%M|%l|%R" 2>/dev/null)
+  local existing_jobs
+  existing_jobs=$(squeue -u "$USER" -h -o "%i|%j|%T|%N|%M|%l|%R" 2>/dev/null)
   
   if [ -z "$existing_jobs" ]; then
     return 0  # No existing jobs
@@ -409,9 +423,12 @@ check_existing_jobs() {
   fi
   
   # Count jobs by state
-  local running_jobs=$(echo "$interactive_jobs" | grep -c "RUNNING" || echo "0")
-  local pending_jobs=$(echo "$interactive_jobs" | grep -c "PENDING" || echo "0")
-  local total_jobs=$((running_jobs + pending_jobs))
+  local running_jobs
+  running_jobs=$(echo "$interactive_jobs" | grep -c "RUNNING" || echo "0")
+  local pending_jobs
+  pending_jobs=$(echo "$interactive_jobs" | grep -c "PENDING" || echo "0")
+  local total_jobs
+  total_jobs=$((running_jobs + pending_jobs))
   
   if [ "$total_jobs" -eq 0 ]; then
     return 0  # No active jobs
@@ -439,10 +456,13 @@ check_existing_jobs() {
   echo "" >&2
   
   # Find running jobs with node information for login instructions
-  local running_job_info=$(echo "$interactive_jobs" | grep "RUNNING" | head -1)
+  local running_job_info
+  running_job_info=$(echo "$interactive_jobs" | grep "RUNNING" | head -1)
   if [ -n "$running_job_info" ]; then
-    local running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
-    local running_nodes=$(echo "$running_job_info" | cut -d'|' -f4)
+    local running_job_id
+    running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
+    local running_nodes
+    running_nodes=$(echo "$running_job_info" | cut -d'|' -f4)
     
     echo -e "${CYAN}To log in to your existing running job:${NC}" >&2
     echo "  Job ID: $running_job_id" >&2
@@ -458,7 +478,8 @@ check_existing_jobs() {
       # Step 2: 's/\[.*\]//'   - Remove bracket ranges: "node[001-002]" → "node"
       # Step 3: 's/-.*//'      - Remove dash ranges: "node001-002" → "node001"
       # Result: "node001" from any format
-      local first_node=$(echo "$running_nodes" | sed 's/,.*//' | sed 's/\[.*\]//' | sed 's/-.*//')
+      local first_node
+      first_node=$(echo "$running_nodes" | sed 's/,.*//' | sed 's/\[.*\]//' | sed 's/-.*//')
       if [ -n "$first_node" ]; then
         echo "    ssh $first_node" >&2
         echo "    # Then find your singularity container:" >&2
@@ -509,7 +530,8 @@ check_existing_jobs() {
       echo -e "${CYAN}Keeping existing jobs. Exiting.${NC}" >&2
       echo "" >&2
       if [ -n "$running_job_info" ]; then
-        local running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
+        local running_job_id
+        running_job_id=$(echo "$running_job_info" | cut -d'|' -f1)
         echo "To attach to your running job, use:" >&2
         echo "  sattach $running_job_id" >&2
         echo "" >&2

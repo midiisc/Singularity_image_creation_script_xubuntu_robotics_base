@@ -456,11 +456,13 @@ calculate_build_jobs() {
     fi
     
     # Calculate jobs based on CPU (use half cores to prevent overload)
-    local jobs_by_cpu=$((cpu_cores / 2))
+    local jobs_by_cpu
+    jobs_by_cpu=$((cpu_cores / 2))
     
     # Calculate jobs based on memory (assume 3GB per C++ compilation job for safety)
     # This accounts for template-heavy code like COLMAP, Ceres, OpenCV
-    local jobs_by_mem=$((mem_gb / 3))
+    local jobs_by_mem
+    jobs_by_mem=$((mem_gb / 3))
     
     # Use the minimum of the two (most conservative)
     local jobs=$jobs_by_cpu
@@ -707,6 +709,7 @@ LDCONF
 # Dependencies: ensure_compiled_lib_priority
 # Outputs: Updated dynamic linker cache
 # Note: Function accepts optional arguments passed to ldconfig (e.g., -v for verbose)
+# shellcheck disable=SC2120  # Function intentionally uses $@ for optional ldconfig arguments
 run_ldconfig_refresh() {
   ensure_compiled_lib_priority
   ldconfig "$@"
@@ -17513,8 +17516,10 @@ create_tunnel_scripts() {
     local vnc_port="${3}"
     local web_port="${4}"
     # Calculate TurboVNC web port more robustly
-    local vnc_display_num=$((vnc_port - 5900))
-    local turbovnc_web_port=$((5800 + vnc_display_num))
+    local vnc_display_num
+    vnc_display_num=$((vnc_port - 5900))
+    local turbovnc_web_port
+    turbovnc_web_port=$((5800 + vnc_display_num))
     local user_name="${5}"
     local node_ip="${6}"
     # Get login_port from outer scope (defined in main script)
@@ -17596,8 +17601,10 @@ show_connection_info() {
     local vnc_port="${1}"
     local web_port="${2}"
     # Calculate TurboVNC web port more robustly
-    local vnc_display_num=$((vnc_port - 5900))
-    local turbovnc_web_port=$((5800 + vnc_display_num))
+    local vnc_display_num
+    vnc_display_num=$((vnc_port - 5900))
+    local turbovnc_web_port
+    turbovnc_web_port=$((5800 + vnc_display_num))
     local user_name="${3}"
     local compute_node="${4}"
     local node_ip="${5}"

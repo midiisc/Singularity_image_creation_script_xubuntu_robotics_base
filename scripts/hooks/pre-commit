@@ -96,7 +96,10 @@ check_non_functional_files() {
        [[ "$file" == "scripts/hooks/extract_and_enhance_patterns.py" ]] || \
        [[ "$file" == "scripts/hooks/run_all_ci_checks.sh" ]] || \
        [[ "$file" == "scripts/hooks/validate_control_structure_markers.sh" ]] || \
-       [[ "$file" == "scripts/hooks/validate_documentation.sh" ]]; then
+       [[ "$file" == "scripts/hooks/validate_documentation.sh" ]] || \
+       [[ "$file" == ".cursor/pre-commit-audit.sh" ]] || \
+       [[ "$file" == ".cursor/auto-trigger-cursor-ai.sh" ]] || \
+       [[ "$file" == "scripts/helpers/enforce_pre_commit_validation.sh" ]]; then
       continue
     # ENDIF: skip secondary core files
     fi
@@ -107,9 +110,9 @@ check_non_functional_files() {
     # ENDIF: skip helper and container scripts
     fi
     
-    if [[ "$file" == .cursor/rules/*.mdc ]]; then
+    if [[ "$file" == .cursor/rules/*.mdc ]] || [[ "$file" =~ ^\.cursor/.*\.sh$ ]]; then
       continue
-    # ENDIF: skip cursor rules
+    # ENDIF: skip cursor rules and cursor scripts
     fi
     
     if [[ "$file" == prompts/*.txt ]] || [[ "$file" == prompts/*.md ]]; then

@@ -240,39 +240,45 @@ NEXT STEPS:
 
 ## INTEGRATION WITH GIT WORKFLOW
 
-**This validation runs BEFORE the git commit command:**
+**MANDATORY ENFORCEMENT**: This validation MUST run BEFORE the git commit command:
 
 ```bash
 # User requests: "commit this"
-# AI agent workflow:
+# AI agent workflow (MANDATORY - NO EXCEPTIONS):
 
 1. Check if committing from IDE (local environment)
-   → If yes, run local pre-commit validation
+   → If yes, run MANDATORY pre-commit validation enforcement
    → If no (cloud agent), skip (hook will run on server)
 
-2. Run pre-commit hook locally
-   → Auto-fix issues
-   → Re-stage fixes
-   → Re-run until passes
+2. **MANDATORY**: Run enforcement script (BLOCKS commit if validation fails):
+   ```bash
+   "${WORKSPACE_ROOT}/scripts/helpers/enforce_pre_commit_validation.sh"
+   ```
+   → This script automatically:
+     - Runs pre-commit hook locally
+     - Runs comprehensive CI checks
+     - Runs ShellCheck auto-fix
+     - Auto-fixes all issues iteratively (up to 5 retries)
+     - Re-stages fixed files automatically
+     - **EXITS WITH CODE 1 IF VALIDATION FAILS** (commit BLOCKED)
+     - **EXITS WITH CODE 0 IF VALIDATION PASSES** (commit can proceed)
 
-3. Run CI checks locally
-   → Auto-fix issues
-   → Re-stage fixes
-   → Re-run until passes
-
-4. Run ShellCheck (if available)
-   → Report issues
-   → Auto-fix if possible
-
-5. If all checks pass:
+3. **ONLY IF enforcement script exits with code 0**:
    → Execute: git commit -m "..."
    → Git hook will run (should pass since we pre-validated)
 
-6. If checks fail after 3 retries:
-   → Block commit
-   → Report errors
-   → Wait for user to fix or approve
+4. **IF enforcement script exits with code 1**:
+   → **STOP IMMEDIATELY** - commit is BLOCKED
+   → Report validation errors to user
+   → Wait for user to fix issues or explicitly approve bypass
+   → **DO NOT PROCEED WITH COMMIT**
 ```
+
+**ENFORCEMENT SCRIPT**: `scripts/helpers/enforce_pre_commit_validation.sh`
+- This script is the **single point of enforcement** for pre-commit validation
+- It MUST be called before ANY commit attempt
+- It automatically handles all validation, auto-fixing, and re-staging
+- It BLOCKS commits by exiting with code 1 if validation fails
 
 ---
 

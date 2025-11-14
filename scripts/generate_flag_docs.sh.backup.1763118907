@@ -191,10 +191,8 @@ generate_documentation() {
   
   # Create output file
   mkdir -p "${DOCS_FLAGS_DIR}"
-  local lib_upper
-  lib_upper=$(echo "${LIBRARY_NAME}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
-  local version_clean
-  version_clean=$(echo "${VERSION}" | tr -d 'v')
+  local lib_upper=$(echo "${LIBRARY_NAME}" | tr '[:lower:]' '[:upper:]' | tr '-' '_')
+  local version_clean=$(echo "${VERSION}" | tr -d 'v')
   local output_file="${DOCS_FLAGS_DIR}/${lib_upper}_${version_clean}_CMAKE_FLAGS_DOCUMENTATION.md"
   
   echo "Generating documentation: ${output_file}"

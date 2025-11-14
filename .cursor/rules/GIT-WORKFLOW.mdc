@@ -102,14 +102,25 @@ git status
    - All work happens on the branch backing the active PR
    - Never commit directly to `beta` or `main`
 
-2. **Run local pre-commit validation (IDE commits only)**:
-   - **MANDATORY**: Before committing from IDE, run local validation (see `LOCAL-PRE-COMMIT-VALIDATION.mdc`)
-   - Run pre-commit hook: `./scripts/hooks/pre-commit` or `.git/hooks/pre-commit`
-   - Run CI checks: `./scripts/hooks/run_all_ci_checks.sh`
-   - Auto-fix all issues and re-run until all checks pass
-   - **ONLY THEN**: Proceed with commit
+2. **MANDATORY PRE-COMMIT VALIDATION (ENFORCED - NO EXCEPTIONS)**:
+   - **CRITICAL**: Before ANY commit attempt, you MUST run the enforcement script:
+     ```bash
+     "${WORKSPACE_ROOT}/scripts/helpers/enforce_pre_commit_validation.sh"
+     ```
+   - **This script BLOCKS commits if validation fails** (exits with code 1)
+   - **The script automatically**:
+     1. Runs pre-commit hook locally
+     2. Runs comprehensive CI checks (`run_all_ci_checks.sh`)
+     3. Runs ShellCheck auto-fix
+     4. Auto-fixes all issues iteratively (up to 5 retries)
+     5. Re-stages fixed files automatically
+     6. **BLOCKS commit if validation fails after max retries**
+   - **ONLY if enforcement script exits with code 0**: Proceed with commit
+   - **If enforcement script exits with code 1**: **STOP** - commit is BLOCKED
+   - **NO BYPASS**: Do NOT use `git commit --no-verify` unless user explicitly requests it
+   - **See**: `LOCAL-PRE-COMMIT-VALIDATION.mdc` for detailed validation requirements
 
-3. **Stage and commit automatically**:
+3. **Stage and commit automatically** (ONLY after validation passes):
    ```bash
    git add -A
    git commit -m "fix: <description>"

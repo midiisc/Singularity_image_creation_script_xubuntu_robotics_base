@@ -248,8 +248,10 @@ variable_expansion_check() {
     # Check for unquoted variables that could cause word splitting
     # Pattern: $VAR or ${VAR} not in quotes (excluding comments and echo)
     while IFS= read -r line; do
-        local line_num=$(echo "${line}" | cut -d: -f1)
-        local line_content=$(echo "${line}" | cut -d: -f2-)
+        local line_num
+        line_num=$(echo "${line}" | cut -d: -f1)
+        local line_content
+        line_content=$(echo "${line}" | cut -d: -f2-)
         
         # Skip comments and echo statements (they're often intentionally unquoted)
         if echo "${line_content}" | grep -qE '^\s*#|echo\s+'; then
@@ -408,9 +410,11 @@ logical_error_check() {
     # Check for unreachable code after return/exit
     # This is a basic check - ShellCheck does this better
     if grep -nE 'return\s+[0-9]|exit\s+[0-9]' "${file}" | while IFS= read -r line; do
-        local line_num=$(echo "${line}" | cut -d: -f1)
+        local line_num
+        line_num=$(echo "${line}" | cut -d: -f1)
         # Check if next non-comment line exists (basic check)
-        local next_line=$((line_num + 1))
+        local next_line
+        next_line=$((line_num + 1))
         if sed -n "${next_line}p" "${file}" | grep -qvE '^\s*#|^\s*$'; then
             echo "  → Line ${line_num}: Code after return/exit may be unreachable" >> "${AUDIT_REPORT}"
         fi
@@ -1161,7 +1165,8 @@ EOF
     
     # Also create a Cursor command file
     mkdir -p "${PROJECT_ROOT}/.cursor/commands" 2>/dev/null || true
-    local command_file="${PROJECT_ROOT}/.cursor/commands/audit-$(basename "${file}").json"
+    local command_file
+    command_file="${PROJECT_ROOT}/.cursor/commands/audit-$(basename "${file}").json"
     cat > "${command_file}" <<EOF
 {
   "command": "cursor.chat.audit",

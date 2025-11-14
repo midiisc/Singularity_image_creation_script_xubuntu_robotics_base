@@ -73,6 +73,7 @@ fi
 # Critical: Source config.sh to load all version numbers, URLs, and cache paths
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 
 echo "✓ Configuration loaded from ${CONFIG_FILE}"
@@ -527,7 +528,8 @@ OUR_HOME_DIR="${HOME}/singularity_builds"    # Fallback builds in home
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_with_timestamp() {
-    local message="[$(date +'%H:%M:%S')] ${1:-}"
+    local message
+    message="[$(date +'%H:%M:%S')] ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
         printf '%b\n' "${BLUE}${message}${NC}" | tee -a "${LOG_FILE}"
     else
@@ -539,7 +541,8 @@ log_with_timestamp() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_error() {
-    local message="[$(date +'%H:%M:%S')] ERROR: ${1:-}"
+    local message
+    message="[$(date +'%H:%M:%S')] ERROR: ${1:-}"
     if [ -f "${ERROR_LOG:-}" ] && [ -f "${LOG_FILE:-}" ]; then
         printf '%b\n' "${RED}${message}${NC}" | tee -a "${ERROR_LOG}" | tee -a "${LOG_FILE}"
     else
@@ -551,7 +554,8 @@ log_error() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_warning() {
-    local message="[$(date +'%H:%M:%S')] WARNING: ${1:-}"
+    local message
+    message="[$(date +'%H:%M:%S')] WARNING: ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
         printf '%b\n' "${YELLOW}${message}${NC}" | tee -a "${LOG_FILE}"
     else
@@ -591,7 +595,8 @@ filter_errors_and_warnings() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log_success() {
-    local message="[$(date +'%H:%M:%S')] SUCCESS: ${1:-}"
+    local message
+    message="[$(date +'%H:%M:%S')] SUCCESS: ${1:-}"
     if [ -f "${LOG_FILE:-}" ]; then
         printf '%b\n' "${GREEN}${message}${NC}" | tee -a "${LOG_FILE}"
     else
@@ -639,7 +644,8 @@ elapsed_time() {
     local start="${1:-0}"
     local end
     end=$(date +%s)
-    local elapsed=$((end - start))
+    local elapsed
+    elapsed=$((end - start))
     # Format as HH:MM:SS
     printf "%02d:%02d:%02d" $((elapsed/3600)) $(((elapsed%3600)/60)) $((elapsed%60))
 }
@@ -1248,7 +1254,9 @@ log "✓ Comprehensive cleanup verified successful"
 if ! type analyze_build_log >/dev/null 2>&1; then
     log_error "analyze_build_log function not found. config.sh may not have been loaded properly."
     # Try to source config.sh again as fallback
+    # shellcheck disable=SC1090
     if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+        # shellcheck disable=SC1090
         source "${SCRIPT_DIR}/config.sh"
         log_warning "Re-loaded config.sh as fallback"
     else
@@ -1283,8 +1291,11 @@ cleanup_on_exit() {
     
     # Analyze build log for errors/warnings with context before cleanup
     # Ensure analyze_build_log function is available (re-source config.sh if needed)
+    # shellcheck disable=SC1090
     if ! type analyze_build_log >/dev/null 2>&1; then
+        # shellcheck disable=SC1090
         if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+            # shellcheck disable=SC1090
             source "${SCRIPT_DIR}/config.sh"
         elif [ -f /etc/config.sh ]; then
             source /etc/config.sh

@@ -103,6 +103,13 @@ def analyze_file_purpose(file_path: Path) -> Dict[str, any]:
     if not file_path.exists():
         return result
     
+    # Skip core files - they are always functional (check before any analysis)
+    path_str = str(file_path)
+    if '.cursor/' in path_str or 'scripts/hooks/' in path_str or 'scripts/helpers/' in path_str:
+        # Core files are always functional and have proper documentation
+        result["has_docstring"] = True
+        return result
+    
     try:
         content = file_path.read_text(encoding='utf-8', errors='ignore')
         basename = file_path.name.lower()

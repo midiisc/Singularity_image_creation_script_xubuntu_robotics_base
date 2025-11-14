@@ -113,8 +113,7 @@ check_pipe_patterns() {
         if grep -qE 'echo\s+"\$\{([^}]+)\}"\s+\|\s+grep' <<< "$line_content"; then
           local var_name
           var_name=$(sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p' <<< "$line_content")
-          local grep_pattern
-          grep_pattern=$(sed -nE 's/.*grep\s+(-[a-z]*\s+)?["'\'']?([^"'\'']+)["'\'']?.*/\2/p' <<< "$line_content")
+          # grep_pattern unused - removed to fix SC2034
           
           # Create fixed version (use here-string instead of pipe - D3)
           local fixed_line
@@ -379,8 +378,10 @@ check_bash_compatibility() {
     while IFS= read -r line_info; do
       if [ -n "$line_info" ]; then
         found_incompatible=true
-        local line_num=$(echo "$line_info" | cut -d: -f1)
-        local line_content=$(echo "$line_info" | cut -d: -f2-)
+        local line_num
+        line_num=$(echo "$line_info" | cut -d: -f1)
+        local line_content
+        line_content=$(echo "$line_info" | cut -d: -f2-)
         
         echo -e "${YELLOW}  →${NC} Found Bash 4+ feature at line $line_num"
         
@@ -537,7 +538,10 @@ main() {
         for check in "${!CHECK_ERRORS[@]}"; do
           [ "$first" = false ] && echo ","
           first=false
-          local error_msg=$(echo "${CHECK_ERRORS[$check]}" | sed 's/"/\\"/g')
+          # SC2155: Declare and assign separately (already fixed by auto-fix script)
+          local error_msg
+          error_msg=""
+          error_msg=$(echo "${CHECK_ERRORS[$check]}" | sed 's/"/\\"/g' || echo "")
           echo -n "    \"$check\": \"$error_msg\""
         done
         echo ""
