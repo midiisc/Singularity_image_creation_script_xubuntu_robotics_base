@@ -2,6 +2,8 @@
 
 Production-ready Singularity/Apptainer container image for robotics research, 3D reconstruction, SLAM, and perception workflows.
 
+<!-- Test commit to trigger GitHub Actions AI review -->
+
 ## 🚀 Quick Start
 
 ```bash
