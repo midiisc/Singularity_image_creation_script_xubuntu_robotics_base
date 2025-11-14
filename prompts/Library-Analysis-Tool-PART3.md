@@ -338,6 +338,9 @@ and follow the same automated process. The user does **not** have to create or r
 
 When the agent transitions to the advanced documentation prompt, it pastes the generated content and requests the final structured report. The agent workflow ensures `flags_documentation.md` is always available for that hand-off.
 
+**Two Documentation Paths Available:**
+
+#### Path 1: Standard Documentation (Existing)
 ```
 [In Claude/Cursor Composer, use the Advanced-Library-Documentation-Prompt from [260]]
 
@@ -352,6 +355,28 @@ Then paste the contents of \`flags_documentation.md\` (or the combined artefact)
 Now, using the agent framework in the prompt above, generate comprehensive documentation 
 with all flags categorized, dependencies mapped, versions detected, and examples provided."
 ```
+
+#### Path 2: Comprehensive 5-Phase Analysis (Enhanced - RECOMMENDED)
+```
+[In Claude/Cursor Composer, use Comprehensive-Flag-Analysis-Prompt.md]
+
+Paste the full prompt from prompts/Comprehensive-Flag-Analysis-Prompt.md
+
+Then paste the preprocessing data:
+
+"Here is the preprocessing data from analyze-library.sh:
+
+[PASTE preprocessing_data.json OR flags_documentation.md]
+
+Now, following the 5-phase protocol (Discovery → Preprocessing → Deep Analysis → 
+Multi-Pass Validation → Documentation Generation), generate comprehensive flag 
+documentation with >=95% completeness target. Use the Mixture of Reasoning Experts 
+architecture (Configuration Expert, Dependency Expert, Version Expert, Documentation Expert)."
+```
+
+**When to Use Each Path:**
+- **Path 1**: Standard analysis, quick turnaround, basic flag extraction
+- **Path 2**: Comprehensive analysis, research-grade documentation, version-aware tracking, historical evolution analysis (RECOMMENDED for production use)
 
 ---
 
@@ -470,17 +495,6 @@ echo "ℹ️  Files saved in: ${TEMP_DIR}"
 - Used manually in Claude/Cursor
 - Requires you to explain data
 
-**This Bash Script + Prompt Integration:**
-- ✅ **Automatically downloads repo** (git clone)
-- ✅ **Actually analyzes files** (CMake, C++, headers)
-- ✅ **Extracts real flags and versions**
-- ✅ **Outputs structured data**
-- ✅ **Feeds to AI prompt automatically**
-- ✅ **Generates comprehensive documentation**
+**This Bash Script + Prompt Integration**: Automatically downloads repo, analyzes files (CMake, C++, headers), extracts flags/versions, outputs structured data, feeds to AI prompt, generates comprehensive documentation.
 
-**Usage (for the user):**
-1. Copy the Agent Prompt Template.
-2. Set `TARGET_LIBRARY`, optionally tweak other variables.
-3. Send the prompt in Cursor/Claude – the agent generates scripts, runs analysis, and returns the final documentation automatically.
-
-This is a **complete, working solution** that automates the entire process!
+**Usage**: Copy Agent Prompt Template, set `TARGET_LIBRARY`, send to Cursor/Claude – agent generates scripts, runs analysis, returns documentation automatically. **Complete working solution** that automates the entire process!

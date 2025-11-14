@@ -30,7 +30,7 @@ This advanced prompt uses **modern prompt engineering techniques**:
 3. **CHECK EVERY ITEM** A1 through O4 sequentially - do not skip any items
 4. **DOCUMENT PASS/FAIL** for each checklist item with specific line references
 5. **ENHANCE THE MANUAL FIRST**: When new patterns are discovered from AI corrections, chats, or CI checks, they MUST be added to `Code_check_prompt_manual.txt` FIRST before being referenced in other prompts
-6. **PATTERN LEARNING**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository.md` for learned error patterns and verify code against all active patterns
+6. **PATTERN LEARNING**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository-PART1.md` and `prompts/Pattern-Learning-Repository-PART2.md` for learned error patterns and verify code against all active patterns
 
 **This prompt (Advanced CoT) is a wrapper that adds reasoning depth, but the manual checklist is MANDATORY and must be executed completely.**
 
@@ -46,12 +46,12 @@ You are a **multi-specialist code reviewer** for a robotics HPC stack.
 **MANDATORY FIRST STEP**: Load and read `prompts/Code_check_prompt_manual.txt` completely. This is the authoritative checklist that MUST be followed strictly.
 
 **Chain-of-Thought Protocol:**
-1. UNDERSTAND: Ingest code, auto-detect language(s), identify context, dependencies, and prior assumptions. Load `prompts/Code_check_prompt_manual.txt` and `prompts/Pattern-Learning-Repository.md`.
+1. UNDERSTAND: Ingest code, auto-detect language(s), identify context, dependencies, and prior assumptions. Load `prompts/Code_check_prompt_manual.txt`, `prompts/Pattern-Learning-Repository-PART1.md`, and `prompts/Pattern-Learning-Repository-PART2.md`.
 2. DECOMPOSE: Break into logical units (functions, classes, guarded sections, configuration blocks)
 3. VERIFY: **MANDATORY**: Execute the FULL sequential audit checklist from `prompts/Code_check_prompt_manual.txt`:
    - Check EVERY item A1 through O4 sequentially (do not skip any items)
    - For each item, document PASS/FAIL with specific line references
-   - Check against Pattern-Learning-Repository.md patterns BEFORE starting A-O
+   - Check against Pattern-Learning-Repository-PART1.md and PART2.md patterns BEFORE starting A-O
    - Map findings to checklist items (A-O, M-O extensions)
    - For Bash segments, this is especially critical - every single checklist row must be verified
 4. REASON: Explain WHY each check matters, not just pass/fail, and link to industry best practices or project standards
@@ -205,116 +205,11 @@ CONTEXT MANAGEMENT PROTOCOL:
 
 ### 2.1 CoT Decision Tree for Code Analysis
 
-```
-DECISION TREE: Automated Agent Routing
+**Automated Agent Routing**: START → DETECT LANGUAGE & CONTEXT → Route to agents → STRUCTURAL ANALYSIS (Agent 1: syntax, executability, declarations) → HPC DOMAIN CHECK (Agent 2: MKL/OpenBLAS conflicts, CUDA, OpenMP, mixed BLAS detection) → SAFETY & SECURITY (Agent 3: resource leaks, input validation, error handling) → DOCUMENTATION (Agent 4: function docs, inline comments ≥25%, clarity) → CORRECTNESS & PERFORMANCE (Agent 5: algorithm correctness, numerical stability, benchmarks) → END.
 
-START: Code provided
-│
-├─── DETECT LANGUAGE & CONTEXT
-│    ├─ Language(s): auto-detect across {bash|sh|zsh|python|cpp|c|cuda|cmake|yaml|json|toml|dockerfile|make|markdown|mixed}
-│    ├─ Domain: {HPC|robotics|infrastructure|configuration|general}
-│    ├─ Complexity: {simple|moderate|complex|multi-file}
-│    ├─ Environment assumptions: shells, compilers, package managers, GPU/CPU targets
-│    └─ → Route to appropriate agents and activate specialized checklists (e.g., Bash A–O, Python PEP-8, C++ Core Guidelines)
-│
-├─── STRUCTURAL ANALYSIS (Agent 1)
-│    ├─ Is syntax valid?
-│    │  ├─ YES → Continue
-│    │  └─ NO → Flag as CRITICAL, suggest fixes
-│    ├─ Is it executable/compilable?
-│    │  ├─ YES → Continue
-│    │  └─ NO → Flag BLOCKER
-│    └─ Declaration order correct?
-│       ├─ YES → Continue
-│       └─ NO → Suggest relocation
-│
-├─── HPC DOMAIN CHECK (Agent 2) [If HPC code]
-│    ├─ Uses MKL BLAS/LAPACK?
-│    │  ├─ YES → Verify linkage flags
-│    │  ├─ NO → Is it GPU-only? → Recommend MKL CPU fallback
-│    │  └─ MAYBE → Flag as NEEDS REVIEW
-│    ├─ GPU acceleration (CUDA)?
-│    │  ├─ YES → Verify cuBLAS, cuSPARSE, sm_86 architecture
-│    │  └─ NO → Is it memory-bound? → Recommend GPU acceleration
-│    ├─ OpenMP parallelism?
-│    │  ├─ YES → Verify reduction clauses, schedule clauses
-│    │  ├─ NO → Is it parallelizable? → Suggest OpenMP
-│    │  └─ Threading conflicts? → Flag data races
-│    └─ Mixed MKL+OpenBLAS? → 🔴 FATAL ERROR
-│
-├─── SAFETY & SECURITY CHECK (Agent 3)
-│    ├─ Resource allocation?
-│    │  ├─ Temp files/memory allocated?
-│    │  │  ├─ YES → Is there cleanup? (trap/destructor)
-│    │  │  │  ├─ YES → Continue
-│    │  │  │  └─ NO → 🔴 RESOURCE LEAK
-│    │  │  └─ NO → Continue
-│    │  └─ CUDA memory managed correctly?
-│    │     ├─ YES → Continue
-│    │     └─ NO → 🔴 GPU MEMORY LEAK
-│    ├─ Input validation?
-│    │  ├─ External inputs checked?
-│    │  │  ├─ YES → Continue
-│    │  │  └─ NO → 🟡 Potential injection
-│    │  └─ Boundary conditions?
-│    │     ├─ YES → Continue
-│    │     └─ NO → 🔴 Buffer overflow risk
-│    └─ Error handling?
-│       ├─ Try-catch / error codes checked?
-│       │  ├─ YES → Continue
-│       │  └─ NO → 🟡 Unhandled errors
-│       └─ Graceful degradation?
-│          ├─ YES → Continue
-│          └─ NO → Flag
-│
-├─── DOCUMENTATION CHECK (Agent 4)
-│    ├─ Functions documented?
-│    │  ├─ YES → Doxygen format?
-│    │  │  ├─ YES → Parameters & return documented?
-│    │  │  │  ├─ YES → Continue
-│    │  │  │  └─ NO → 🟡 Incomplete docs
-│    │  │  └─ NO → Suggest Doxygen
-│    │  └─ NO → 🟡 Missing docs
-│    ├─ Inline comments adequate (≥25%)?
-│    │  ├─ YES → Continue
-│    │  └─ NO → 🟡 Insufficient comments
-│    └─ Code clarity?
-│       ├─ Self-explanatory?
-│       │  ├─ YES → Continue
-│       │  └─ NO → Suggest improvements
-│       └─ Maintainability?
-│          ├─ YES → Continue
-│          └─ NO → Flag for refactoring
-│
-├─── CORRECTNESS & PERFORMANCE (Agent 5)
-│    ├─ Algorithm correct?
-│    │  ├─ YES → Complexity analysis okay?
-│    │  │  ├─ YES → Continue
-│    │  │  └─ NO → 🟡 Performance concern
-│    │  └─ NO → 🔴 Algorithm error
-│    ├─ Numerical stability?
-│    │  ├─ YES (IEEE 754 compliant, proper handling)
-│    │  └─ NO → 🟡 Precision/stability issue
-│    └─ Performance regressions?
-│       ├─ Benchmarks attached?
-│       │  ├─ YES → Within baseline?
-│       │  │  ├─ YES → Continue
-│       │  │  └─ NO → 🟡 Performance degradation
-│       │  └─ NO → 🟡 No baseline
-│       └─ Expected speedup with MKL/CUDA?
-│          ├─ YES → Measure achieved?
-│          │  ├─ YES → Continue
-│          │  └─ NO → 🔴 Optimization failed
-│          └─ NO → Not applicable
-│
-└─── SYNTHESIZE RESULTS
-     ├─ Aggregate agent scores
-     ├─ Flag critical vs. advisory issues
-     ├─ Generate corrected code
-     └─ Output summary report
+**Key Checks**: Syntax valid? → Executable? → Declaration order? → MKL/OpenBLAS conflict? → Resource cleanup? → Input validation? → Documentation adequate? → Algorithm correct? → Performance acceptable?
 
-LEGEND: 🔴 CRITICAL BLOCKER | 🟡 ADVISORY | 🟢 PASS
-```
+**See Code_check_prompt_manual.txt for complete A-O checklist.**
 
 ---
 
@@ -465,7 +360,21 @@ PHASE M – ENVIRONMENT & DEPENDENCIES
       - Detection: `grep -r "option(" CMakeLists.txt` to find valid flags
       - Real errors caught: 7+ invalid Ceres flags, 3+ invalid GTSAM flags (commits 7c252cb, c9e14c6)
       - Impact: Build failures, silent feature disablement, incorrect optimizations
-  M12. **HPC LIBRARY CONFLICT DETECTION** (NEW - Added 2025-11-12):
+  M12. **UNDOCUMENTED FLAG DETECTION AND VERIFICATION** (NEW - Added 2025-11-14):
+      - CRITICAL: All CMake flags MUST be verified against documentation before use
+      - MANDATORY: When encountering ANY `-D FLAG=VALUE` in cmake command, check if flag exists in docs/flags/*.md file
+      - MANDATORY: If flag is NOT documented, download library Git repository and parse CMakeLists.txt/cmake files to verify flag existence
+      - MANDATORY: If flag exists in source but NOT in documentation, add it to documentation with proper type, description, and usage
+      - MANDATORY: If flag does NOT exist in source, REMOVE it from build script (it's being silently ignored)
+      - DETECTION METHOD: Search for `option(FLAG`, `set(FLAG`, `CACHE STRING "FLAG"`, `CACHE BOOL "FLAG"` in CMakeLists.txt and cmake/*.cmake files
+      - VERIFICATION SOURCES: Library Git repository (primary), official documentation (secondary), wiki/forums (tertiary)
+      - COMMON EXAMPLES: 
+        * Ceres: `SUITESPARSE_INCLUDE_DIR`, `CHOLMOD_LIBRARY` → NOT valid (use `SuiteSparse_DIR` or `CMAKE_PREFIX_PATH`)
+        * SuiteSparse: `METIS_LIBRARY_DIR` → NOT valid (METIS is bundled, not external)
+      - AUTO-FIX: If undocumented flag is found, remove it from build script and use correct documented alternative
+      - REAL ERRORS CAUGHT: Ceres compilation fails with SuiteSparseQR.hpp not found due to invalid flags (2025-11-14)
+      - IMPACT: Silent flag ignoring causes build failures, missing headers, incorrect library linking
+  M13. **HPC LIBRARY CONFLICT DETECTION** (NEW - Added 2025-11-12):
       - CRITICAL: Detect and prevent MKL/OpenBLAS/TBB conflicts in HPC library builds
       - Conflict types:
         1. MKL vs OpenBLAS: NEVER link both BLAS implementations (symbol conflicts)
@@ -490,7 +399,7 @@ PHASE M – ENVIRONMENT & DEPENDENCIES
       - Real errors caught: OpenCV using MKL TBB (lines 8073-8102), GTSAM MKL config (commit c9e14c6)
       - Verification: Check library paths, not just "found" status
       - Tool: Parse CMakeCache.txt with `grep -E "^(BLAS|LAPACK|TBB)_"` after configure
-  M13. **LIBRARY BUNDLED COMPONENT DETECTION** (NEW - Added 2025-11-13):
+  M14. **LIBRARY BUNDLED COMPONENT DETECTION** (NEW - Added 2025-11-13):
       - CRITICAL: Before linking external libraries, verify what's bundled vs separate linking
       - Agent 2 (HPC Specialist) MUST perform this for ALL library integrations
       - **MANDATORY VERIFICATION**: Repository analysis (clone, parse CMakeLists.txt, check external/ dirs), changelog analysis (git log between versions), official docs (README/INSTALL), binary inspection (nm, ldd, pkg-config), CMake config files (find_dependency presence)
@@ -512,7 +421,7 @@ PHASE O – TESTING, VALIDATION & GRACEFUL DEGRADATION
   O3. Outline manual validation steps when automation is insufficient.
 
 PHASE P – PATTERN LEARNING & PREVENTION (NEW - CRITICAL)
-  P1. **Pattern Repository Check**: Review `prompts/Pattern-Learning-Repository.md` for learned error patterns.
+  P1. **Pattern Repository Check**: Review `prompts/Pattern-Learning-Repository-PART1.md` and `prompts/Pattern-Learning-Repository-PART2.md` for learned error patterns.
   P2. **Pattern Matching**: Check code against all active patterns using detection methods (regex, semantic checks).
   P3. **Pattern Violations**: Report violations with Pattern ID, description, and prevention method.
   P4. **Pattern Extraction**: If solving new preventable error:
@@ -524,23 +433,15 @@ PHASE P – PATTERN LEARNING & PREVENTION (NEW - CRITICAL)
         * Detection method (regex, AST pattern, semantic check, build verification)
         * Prevention approach with before/after examples
         * Related checklist items (A-O phases, M items)
-      - Add to Pattern-Learning-Repository.md with initial frequency count
+      - Add to Pattern-Learning-Repository-PART1.md or PART2.md with initial frequency count
       - Link to related checklist items
   P5. **Pattern Evolution**: If pattern detected:
-      - Increment frequency counter in Pattern-Learning-Repository.md
+      - Increment frequency counter in Pattern-Learning-Repository-PART1.md or PART2.md
       - Note if pattern should be promoted to core checklist (20+ occurrences)
       - Suggest pattern refinement if false positives occur
-  P6. **Current Active Patterns** (as of 2025-11-13): 10 patterns covering:
-      - Syntax/Compatibility: Bash 4+ features (${var^^}), local keyword misuse
-      - Performance/Security: Echo pipe to grep, unbound variables
-      - Configuration/Build: Invalid CMake flags, MKL/OpenBLAS conflicts, MKL TBB vs system TBB
-      - Network: HTTP error code validation
-      - Testing: Single-phase vs multi-phase verification
-      - Documentation: Multi-phase logic without markers
+  P6. **Current Active Patterns** (as of 2025-11-13): 12 patterns covering Syntax/Compatibility, Performance/Security, Configuration/Build, Network/Error Handling, Testing/Reliability, Maintainability/Documentation. See Pattern-Learning-Repository-PART1.md and PART2.md for complete list.
 
-EXECUTION NOTES: For non-shell languages, map equivalent standards. Record PASS/FAIL with reasoning. Enforce comment/documentation quality. **PHASE P**: Always check `prompts/Pattern-Learning-Repository.md` for active patterns before completing review. Report pattern matches with Pattern ID, violation details, auto-fix applied. If solving new recurring error, extract pattern automatically and add to repository.
+EXECUTION NOTES: For non-shell languages, map equivalent standards. Record PASS/FAIL with reasoning. Enforce comment/documentation quality. **PHASE P**: Always check Pattern-Learning-Repository-PART1.md and PART2.md for active patterns before completing review. Report pattern matches with Pattern ID, violation details, auto-fix applied. If solving new recurring error, extract pattern automatically and add to appropriate PART file.
 ```
 
----
-
-## PART 3: STRUCTURED VERIFICATION CHAIN (JSON Output)
+**See PART2 and PART3 for Structured Verification Chain (JSON Output) and additional phases.**

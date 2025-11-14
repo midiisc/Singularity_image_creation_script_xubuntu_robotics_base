@@ -125,12 +125,27 @@ All default to `ON` unless the corresponding directory is missing:
 
 - `MONGOOSE_COVERAGE`: when `ON`, recompiles the graph partitioner with `-fprofile-arcs -ftest-coverage` and switches builds to debug to support coverage runs.
 
-### SuiteSparse METIS / GKlib debug flags
+### SuiteSparse METIS / GKlib Configuration
+
+**METIS is bundled in SuiteSparse 7.12.1**: SuiteSparse includes METIS as an internal dependency in `CHOLMOD/SuiteSparse_metis/`. When `CHOLMOD_PARTITION=ON`, SuiteSparse includes the bundled METIS headers directly (no external METIS library lookup).
+
+**Important Notes:**
+- METIS is compiled as part of CHOLMOD, not as a separate library (in SuiteSparse 5.x+).
+- There is NO external METIS library dependency when using SuiteSparse's bundled METIS.
+- The `CHOLMOD_PARTITION` option controls whether METIS functionality is enabled in CHOLMOD.
+- METIS headers are automatically included in CHOLMOD's include path when `CHOLMOD_PARTITION=ON`.
+
+**Invalid/Non-existent Flags (DO NOT USE):**
+- `METIS_LIBRARY_DIR` - NOT a valid SuiteSparse CMake flag (METIS is bundled, not external)
+- `METIS_LIBRARY` - NOT a valid SuiteSparse CMake flag (METIS is bundled, not external)
+- `METIS_INCLUDE_DIR` - NOT a valid SuiteSparse CMake flag (METIS headers are bundled in CHOLMOD source tree)
+
+**GKlib Debug Flags** (for bundled METIS):
 
 The METIS compatibility layer (`CHOLMOD/SuiteSparse_metis/GKlib`) exposes extra switches—default `OFF`:
 - `GDB`, `DEBUG`, `GPROF`: enable debugger symbols or gprof instrumentation.
 - `ASSERT`, `ASSERT2`: retain increasingly strict runtime checks (`NDEBUG/NDEBUG2` otherwise).
-- `OPENMP`: turn on GKlib’s internal OpenMP usage (distinct from SuiteSparse’s main OpenMP flag).
+- `OPENMP`: turn on GKlib's internal OpenMP usage (distinct from SuiteSparse's main OpenMP flag).
 - `PCRE`, `GKREGEX`, `GKRAND`: link optional regex/random helpers when available.
 
 ### LAGraph GraphBLAS discovery helpers

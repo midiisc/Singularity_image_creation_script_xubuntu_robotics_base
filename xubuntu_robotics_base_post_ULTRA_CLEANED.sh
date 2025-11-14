@@ -5144,25 +5144,11 @@ pushd "${cmake_build_dir}" >/dev/null
 CMAKE_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES:-86}"
 BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
 
-# Detect METIS library path for CHOLMOD_PARTITION support
-METIS_LIB_PATH=""
-if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists metis; then
-    METIS_LIB_PATH=$(pkg-config --libs-only-L metis 2>/dev/null | sed 's/-L//' | tr -d ' ')
-fi
-if [ -z "${METIS_LIB_PATH}" ]; then
-    # Try to find libmetis.so in common locations
-    for libdir in /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib; do
-        if [ -f "${libdir}/libmetis.so" ] || [ -n "$(find "${libdir}" -maxdepth 1 -name "libmetis.so*" 2>/dev/null | head -1)" ]; then
-            METIS_LIB_PATH="${libdir}"
-            break
-        fi
-    done
-fi
-if [ -n "${METIS_LIB_PATH}" ]; then
-    echo "  → METIS library detected at: ${METIS_LIB_PATH}"
-else
-    echo "  ⚠ METIS library path not found, SuiteSparse will attempt auto-detection"
-fi
+# NOTE: METIS is bundled in SuiteSparse 7.12.1 (in CHOLMOD/SuiteSparse_metis/)
+# When CHOLMOD_PARTITION=ON, SuiteSparse includes bundled METIS headers directly
+# There is NO external METIS library dependency
+# Reference: docs/flags/SUITESPARSE_BUILD_OPTIONS.md
+echo "  → METIS is bundled in SuiteSparse (CHOLMOD_PARTITION=${CHOLMOD_PARTITION:-ON})"
 
 # Note: SPEX Python bindings remain enabled (default). Python headers and tooling are available from earlier phases
 # (Block 24 installs python3-dev/pybind11-dev), so no additional SuiteSparse overrides are necessary here.
@@ -5242,8 +5228,11 @@ if ! cmake ../src \
     -DLAPACK_LIBRARIES="${BLAS_LIBS}" \
     -DBLA_SIZEOF_INTEGER=4 \
     -DCMAKE_PREFIX_PATH="${CUDA_HOME};${MKLROOT}${CMAKE_PREFIX_PATH:+;${CMAKE_PREFIX_PATH}}" \
-    $(if [ -n "${METIS_LIB_PATH}" ]; then echo "-DMETIS_LIBRARY_DIR=${METIS_LIB_PATH}"; fi) \
     ${SUITESPARSE_CMAKE_FLAGS}; then
+    # NOTE: METIS_LIBRARY_DIR is NOT a valid SuiteSparse CMake flag
+    # METIS is bundled in SuiteSparse 7.12.1 (in CHOLMOD/SuiteSparse_metis/)
+    # When CHOLMOD_PARTITION=ON, SuiteSparse includes bundled METIS headers directly
+    # Reference: docs/flags/SUITESPARSE_BUILD_OPTIONS.md
     echo "  ✗ CMake configuration failed"
     # Restore LDFLAGS before exiting (in case other parts of script need it)
     if [ "${LDFLAGS_WAS_SET}" = "true" ]; then
@@ -5560,6 +5549,45 @@ SUITESPARSE_CMAKE_BASE="${SUITESPARSE_LIB_DIR}/cmake"
 SUITESPARSE_CMAKE_DIR="${SUITESPARSE_CMAKE_BASE}/SuiteSparse"
 mkdir -p "${SUITESPARSE_CMAKE_DIR}"
 
+# CRITICAL: Verify SuiteSparseQR.hpp exists in include directory
+# Ceres's FindSuiteSparse.cmake searches for SuiteSparseQR.hpp in SuiteSparse_SPQR_INCLUDE_DIR
+# If the header doesn't exist, Ceres will fail to find SPQR component
+# Phase 1: Check default include directory
+if [ ! -f "${SUITESPARSE_INCLUDE_DIR:-}/SuiteSparseQR.hpp" ]; then
+    echo "  ⚠ WARNING: SuiteSparseQR.hpp not found in ${SUITESPARSE_INCLUDE_DIR:-<unset>}"
+    echo "  → Searching for SuiteSparseQR.hpp in SuiteSparse installation..."
+    # Phase 2: Validate SUITESPARSE_INSTALL_PREFIX exists before searching
+    if [ ! -d "${SUITESPARSE_INSTALL_PREFIX:-}" ]; then
+        echo "  ✗ ERROR: SUITESPARSE_INSTALL_PREFIX not set or invalid: ${SUITESPARSE_INSTALL_PREFIX:-<unset>}"
+        exit 1
+    fi
+    # Phase 3: Search with explicit error handling (F2, H4: validate command substitution)
+    SUITESPARSEQR_HEADER=""
+    if command -v find >/dev/null 2>&1; then
+        SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 || echo "")
+    fi
+    # Phase 4: Validate search result (F2: command substitution validation)
+    if [ -n "${SUITESPARSEQR_HEADER}" ] && [ -f "${SUITESPARSEQR_HEADER}" ]; then
+        echo "  → Found SuiteSparseQR.hpp at: ${SUITESPARSEQR_HEADER}"
+        # Validate dirname result (F2: command substitution validation)
+        SUITESPARSE_INCLUDE_DIR_NEW=$(dirname "${SUITESPARSEQR_HEADER}" || echo "")
+        if [ -n "${SUITESPARSE_INCLUDE_DIR_NEW}" ] && [ -d "${SUITESPARSE_INCLUDE_DIR_NEW}" ]; then
+            SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR_NEW}"
+            echo "  → Using SuiteSparse include directory: ${SUITESPARSE_INCLUDE_DIR}"
+        else
+            echo "  ✗ ERROR: Invalid directory from SuiteSparseQR.hpp path: ${SUITESPARSEQR_HEADER}"
+            exit 1
+        fi
+    else
+        echo "  ✗ ERROR: SuiteSparseQR.hpp not found in SuiteSparse installation"
+        echo "  → This will cause Ceres compilation to fail"
+        echo "  → Check SuiteSparse installation: ${SUITESPARSE_INSTALL_PREFIX}"
+        exit 1
+    fi
+else
+    echo "  ✓ SuiteSparseQR.hpp found in ${SUITESPARSE_INCLUDE_DIR}"
+fi
+
 SUITESPARSE_VERSION_STR="${SUITESPARSE_VERSION#v}"
 if [ -z "${SUITESPARSE_VERSION_STR}" ]; then
     SUITESPARSE_VERSION_STR="${SUITESPARSE_VERSION}"
@@ -5662,6 +5690,8 @@ EOF
         lib_key="${suitesparse_component_libnames[${component}]}"
         lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
         if [ -n "${lib_path}" ]; then
+            # CRITICAL: Set both INCLUDE_DIR and LIBRARY for Ceres's bundled FindSuiteSparse.cmake
+            # Ceres searches for SuiteSparseQR.hpp in SuiteSparse_SPQR_INCLUDE_DIR
             cat <<EOF
 if(NOT TARGET SuiteSparse::${component})
   add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
@@ -5670,6 +5700,7 @@ if(NOT TARGET SuiteSparse::${component})
     INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
 endif()
 set(SuiteSparse_${component}_LIBRARY "${lib_path}")
+set(SuiteSparse_${component}_INCLUDE_DIR "${SUITESPARSE_INCLUDE_DIR}")
 set(SuiteSparse_${component}_FOUND TRUE)
 EOF
         else
@@ -5683,6 +5714,7 @@ EOF
         lib_key="${suitesparse_optional_component_libnames[${component}]}"
         lib_path="${suitesparse_lib_paths[${lib_key}]:-}"
         if [ -n "${lib_path}" ]; then
+            # CRITICAL: Set both INCLUDE_DIR and LIBRARY for Ceres's bundled FindSuiteSparse.cmake
             cat <<EOF
 if(NOT TARGET SuiteSparse::${component})
   add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
@@ -5691,19 +5723,31 @@ if(NOT TARGET SuiteSparse::${component})
     INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
 endif()
 set(SuiteSparse_${component}_LIBRARY "${lib_path}")
+set(SuiteSparse_${component}_INCLUDE_DIR "${SUITESPARSE_INCLUDE_DIR}")
 set(SuiteSparse_${component}_FOUND TRUE)
 EOF
         fi
     done
 
     cat <<EOF
+# CRITICAL: Ensure all targets have proper include directories
+# Ceres's FindSuiteSparse.cmake searches for SuiteSparseQR.hpp in SuiteSparse_SPQR_INCLUDE_DIR
+# When using native CMake package config, INTERFACE_INCLUDE_DIRECTORIES must be set correctly
 if(TARGET SuiteSparse::CHOLMOD)
   set_property(TARGET SuiteSparse::CHOLMOD APPEND PROPERTY
     INTERFACE_LINK_LIBRARIES SuiteSparse::AMD SuiteSparse::CAMD SuiteSparse::COLAMD SuiteSparse::CCOLAMD SuiteSparse::Config)
+  # Ensure CHOLMOD has include directories (for Ceres's bundled finder fallback)
+  set_property(TARGET SuiteSparse::CHOLMOD PROPERTY
+    INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
 endif()
 if(TARGET SuiteSparse::SPQR)
   set_property(TARGET SuiteSparse::SPQR APPEND PROPERTY
     INTERFACE_LINK_LIBRARIES SuiteSparse::CHOLMOD SuiteSparse::Config)
+  # CRITICAL: SPQR must have include directories so Ceres can find SuiteSparseQR.hpp
+  set_property(TARGET SuiteSparse::SPQR PROPERTY
+    INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
+  # Also set for Ceres's bundled finder fallback (searches SuiteSparse_SPQR_INCLUDE_DIR)
+  set(SuiteSparse_SPQR_INCLUDE_DIR "${SUITESPARSE_INCLUDE_DIR}" CACHE PATH "SuiteSparse SPQR include directory")
 endif()
 if(TARGET SuiteSparse::Config)
   set_property(TARGET SuiteSparse::Config APPEND PROPERTY
@@ -5713,6 +5757,9 @@ foreach(_component IN ITEMS AMD CAMD COLAMD CCOLAMD UMFPACK GraphBLAS LAGraph KL
   if(TARGET SuiteSparse::\${_component})
     set_property(TARGET SuiteSparse::\${_component} APPEND PROPERTY
       INTERFACE_LINK_LIBRARIES SuiteSparse::Config)
+    # Ensure all components have include directories
+    set_property(TARGET SuiteSparse::\${_component} PROPERTY
+      INTERFACE_INCLUDE_DIRECTORIES "${SUITESPARSE_INCLUDE_DIR}")
   endif()
 endforeach()
 EOF
@@ -6965,6 +7012,46 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 #   CMAKE_POSITION_INDEPENDENT_CODE=ON: Build PIC for shared library compatibility
 #   PROVIDE_UNINSTALL_TARGET=ON: Adds uninstall target for package management
 #
+# CRITICAL: Ceres SuiteSparse Configuration
+# - Ceres uses find_package(SuiteSparse) which requires SuiteSparse_DIR or CMAKE_PREFIX_PATH
+# - Invalid flags (SUITESPARSE_INCLUDE_DIR, CHOLMOD_LIBRARY, etc.) are IGNORED by Ceres
+# - Reference: docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md
+# - SuiteSparse_DIR points to directory containing SuiteSparseConfig.cmake
+# - CMAKE_PREFIX_PATH helps CMake locate SuiteSparseConfig.cmake if SuiteSparse_DIR is not set
+# CRITICAL: Verify SuiteSparse_DIR is set and SuiteSparseConfig.cmake exists
+# Ceres's FindSuiteSparse.cmake uses SuiteSparse_DIR to find SuiteSparseConfig.cmake
+# If SuiteSparse_DIR is not set or config file doesn't exist, Ceres falls back to bundled finder
+# Phase 1: Check if SuiteSparse_DIR is set and valid (C5: unbound variable protection)
+CERES_SUITESPARSE_FLAGS=""
+if [ -n "${SuiteSparse_DIR:-}" ] && [ -d "${SuiteSparse_DIR}" ] && [ -f "${SuiteSparse_DIR}/SuiteSparseConfig.cmake" ]; then
+    echo "  → Using SuiteSparse_DIR: ${SuiteSparse_DIR}"
+    echo "  → SuiteSparseConfig.cmake found: ${SuiteSparse_DIR}/SuiteSparseConfig.cmake"
+    CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=${SuiteSparse_DIR}"
+else
+    echo "  ⚠ SuiteSparse_DIR not set or SuiteSparseConfig.cmake not found"
+    echo "  → SuiteSparse_DIR: ${SuiteSparse_DIR:-unset}"
+    if [ -n "${SuiteSparse_DIR:-}" ]; then
+        echo "  → SuiteSparseConfig.cmake: ${SuiteSparse_DIR}/SuiteSparseConfig.cmake (not found)"
+    fi
+    # Phase 2: Validate SUITESPARSE_INSTALL_PREFIX before using (C5: unbound variable protection)
+    if [ -z "${SUITESPARSE_INSTALL_PREFIX:-}" ]; then
+        echo "  ✗ ERROR: SUITESPARSE_INSTALL_PREFIX not set"
+        exit 1
+    fi
+    echo "  → Using CMAKE_PREFIX_PATH: ${SUITESPARSE_INSTALL_PREFIX}"
+    # Phase 3: Build CMAKE_PREFIX_PATH with proper fallback (C5: unbound variable protection)
+    if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}"
+    else
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}"
+    fi
+fi
+# Phase 4: Validate CERES_SUITESPARSE_FLAGS is set before use (C5: unbound variable protection, H1: error check)
+if [ -z "${CERES_SUITESPARSE_FLAGS:-}" ]; then
+    echo "  ✗ ERROR: Failed to configure SuiteSparse flags for Ceres"
+    exit 1
+fi
+
 cmake .. \
   -G Ninja \
   -D CMAKE_BUILD_TYPE=Release \
@@ -6997,15 +7084,7 @@ cmake .. \
   -D CMAKE_CXX_STANDARD=17 \
   -D CMAKE_CXX_STANDARD_REQUIRED=ON \
   -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-  -D SuiteSparse_DIR="${SuiteSparse_DIR}" \
-  -D SuiteSparse_ROOT="${SuiteSparse_ROOT}" \
-  -D SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
-  -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
-  -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
-  -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES}" \
-  $(if [ -n "${CHOLMOD_METIS_LIBRARY_PATH}" ]; then echo "-D CHOLMOD_METIS_LIBRARY=${CHOLMOD_METIS_LIBRARY_PATH}"; fi) \
-  -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
-  -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
+  ${CERES_SUITESPARSE_FLAGS}
 
 #--- Sub-block 17.6: Build and install Ceres ---
 # Critical: Compile with ninja using memory-aware job calculation
@@ -7245,15 +7324,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D BLA_VENDOR=Intel10_64lp \
     -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
     -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D SuiteSparse_DIR="${SuiteSparse_DIR}" \
-    -D SuiteSparse_ROOT="${SuiteSparse_ROOT}" \
-    -D SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
-    -D SUITESPARSE_LIBRARY_DIR="${SUITESPARSE_LIBRARY_DIR}" \
-    -D CHOLMOD_LIBRARY="${CHOLMOD_LIBRARY_PATH}" \
-    -D CHOLMOD_LIBRARIES="${CHOLMOD_LIBRARIES}" \
-    -D CHOLMOD_METIS_LIBRARY="${CHOLMOD_METIS_LIBRARY_PATH}" \
-    -D CHOLMOD_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR}" \
-    -D CHOLMOD_INCLUDE_DIRS="${SUITESPARSE_INCLUDE_DIR}"
+    -D SuiteSparse_DIR="${SuiteSparse_DIR}"
 
   #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores

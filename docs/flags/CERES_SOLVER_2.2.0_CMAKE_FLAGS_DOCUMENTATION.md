@@ -416,13 +416,27 @@ Ceres uses standard CMake `find_package()` for dependencies. These variables can
 - `LAPACK_LIBRARIES`: Direct specification of LAPACK libraries (optional)
 
 ### SuiteSparse (if `SUITESPARSE=ON`)
-- `SuiteSparse_DIR`: Directory containing `SuiteSparseConfig.cmake`
-- `SuiteSparse_NO_CMAKE`: Force use of the bundled `FindSuiteSparse.cmake` instead of an installed package config.
+- `SuiteSparse_DIR`: Directory containing `SuiteSparseConfig.cmake` (e.g., `/usr/local/lib/cmake/SuiteSparse`)
+- `SuiteSparse_NO_CMAKE`: Force use of the bundled `FindSuiteSparse.cmake` instead of an installed package config (set to `ON` when packaging or cross-compiling).
 - `SuiteSparse_FIND_COMPONENTS`: Override component list (`AMD;CAMD;CCOLAMD;CHOLMOD;COLAMD;SPQR;Config` plus implicit dependencies).
-- `SuiteSparse_<component>_INCLUDE_DIR` / `SuiteSparse_<component>_LIBRARY`: Cache entries emitted per component; set manually when packaging or cross-compiling.
+- `SuiteSparse_<component>_INCLUDE_DIR` / `SuiteSparse_<component>_LIBRARY`: Cache entries emitted per component by the bundled finder; set manually when packaging or cross-compiling (e.g., `SuiteSparse_SPQR_INCLUDE_DIR`, `SuiteSparse_CHOLMOD_LIBRARY`).
+- `CMAKE_PREFIX_PATH`: Standard CMake variable for dependency hints; add SuiteSparse installation prefix to help CMake locate SuiteSparseConfig.cmake.
 - **Required Version:** 4.5.6+
 - **Required Components:** CHOLMOD, SPQR
 - **Optional Components:** Partition (METIS)
+- **Important Notes:**
+  - Ceres first attempts to use the native SuiteSparse CMake package config (if `SuiteSparse_DIR` is set and `SuiteSparse_NO_CMAKE` is not set).
+  - If native config is found, it uses imported targets (e.g., `SuiteSparse::SPQR`, `SuiteSparse::CHOLMOD`) with proper include directories and library paths.
+  - If native config is NOT found, Ceres falls back to the bundled `FindSuiteSparse.cmake` which uses `find_path`/`find_library` to search for components.
+  - The bundled finder respects standard CMake search paths: `CMAKE_PREFIX_PATH`, `CMAKE_LIBRARY_PATH`, `CMAKE_INCLUDE_PATH`.
+- **Invalid/Non-existent Flags (DO NOT USE):**
+  - `SUITESPARSE_INCLUDE_DIR` - NOT a valid Ceres flag (use `CMAKE_PREFIX_PATH` or `SuiteSparse_<component>_INCLUDE_DIR`)
+  - `SUITESPARSE_LIBRARY_DIR` - NOT a valid Ceres flag (use `CMAKE_PREFIX_PATH` or `SuiteSparse_<component>_LIBRARY`)
+  - `CHOLMOD_LIBRARY` - NOT a valid Ceres flag (use `SuiteSparse_CHOLMOD_LIBRARY` for bundled finder)
+  - `CHOLMOD_LIBRARIES` - NOT a valid Ceres flag (use `SuiteSparse_CHOLMOD_LIBRARY` for bundled finder)
+  - `CHOLMOD_INCLUDE_DIR` - NOT a valid Ceres flag (use `SuiteSparse_CHOLMOD_INCLUDE_DIR` for bundled finder)
+  - `CHOLMOD_INCLUDE_DIRS` - NOT a valid Ceres flag (use `SuiteSparse_CHOLMOD_INCLUDE_DIR` for bundled finder)
+  - `SuiteSparse_ROOT` - NOT a valid Ceres flag (use `SuiteSparse_DIR` or `CMAKE_PREFIX_PATH`)
 
 ### METIS (if `EIGENMETIS=ON`)
 - `METIS_DIR`: Directory containing `METISConfig.cmake`

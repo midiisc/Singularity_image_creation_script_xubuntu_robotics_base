@@ -271,6 +271,67 @@ check_openmp_integration() {
 
 ---
 
+### C4. CMake Flag Validation (NEW - Added 2025-11-14)
+
+**CRITICAL**: All CMake flags MUST be verified against documentation before use.
+
+```bash
+# CHECKLIST: For CMake configuration
+# ✅ All flags are documented in docs/flags/LIBRARY_VERSION_CMAKE_FLAGS_DOCUMENTATION.md
+# ✅ Flag names match exactly (case-sensitive)
+# ✅ Flag types match documented types (OPTION for ON/OFF, STRING for paths)
+# ✅ No undocumented flags (flags not in docs are silently ignored)
+# ✅ No library-prefixed flags unless documented (e.g., Ceres_ENABLE_CUDA → use USE_CUDA)
+# ✅ Standard CMake variables used correctly (BLA_VENDOR, CMAKE_PREFIX_PATH)
+# ✅ Dependency find variables verified (SuiteSparse_DIR, METIS_DIR, etc.)
+
+# VERIFICATION COMMAND:
+check_cmake_flags() {
+    local build_script="$1"
+    local library="$2"
+    local doc_file="docs/flags/${library}_CMAKE_FLAGS_DOCUMENTATION.md"
+    
+    if [ ! -f "$doc_file" ]; then
+        echo "⚠️  Flag documentation not found: $doc_file"
+        echo "   → Download library Git repo and parse CMakeLists.txt to create documentation"
+        return 1
+    fi
+    
+    # Extract all -D FLAG=VALUE patterns
+    local flags=$(grep -oE '\-D[[:space:]]+[A-Z_]+[A-Z0-9_]*[[:space:]]*=' "$build_script" | sed 's/-D[[:space:]]*//' | sed 's/[[:space:]]*=.*//' | sort -u)
+    
+    for flag in $flags; do
+        # Skip standard CMake variables
+        if [[ "$flag" =~ ^CMAKE_|^BUILD_|^INSTALL_ ]]; then
+            continue
+        fi
+        
+        # Check if flag is documented
+        if ! grep -qE "^### \`${flag}\`|^### ${flag}|^- \`${flag}\`" "$doc_file"; then
+            echo "❌ ERROR: Undocumented flag found: $flag"
+            echo "   → Flag is being silently ignored by CMake"
+            echo "   → Action: Download library Git repo and verify flag existence"
+            echo "   → If flag exists: Add to documentation"
+            echo "   → If flag does NOT exist: Remove from build script"
+            return 1
+        fi
+    done
+    
+    echo "✅ All CMake flags verified against documentation"
+    return 0
+}
+
+# COMMON ERRORS:
+# ❌ Ceres: SUITESPARSE_INCLUDE_DIR, CHOLMOD_LIBRARY → NOT valid (use SuiteSparse_DIR)
+# ❌ SuiteSparse: METIS_LIBRARY_DIR → NOT valid (METIS is bundled)
+# ✅ Ceres: SuiteSparse_DIR → Valid (documented)
+# ✅ Ceres: CMAKE_PREFIX_PATH → Valid (standard CMake variable)
+```
+
+**Reference**: See `Code_check_prompt_manual.txt` M12 for detailed undocumented flag detection requirements.
+
+---
+
 ### D. Additional Security & Performance Checks (EXPANDED)
 
 #### D1. Memory & Resource Leaks

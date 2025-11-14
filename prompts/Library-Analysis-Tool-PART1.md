@@ -8,9 +8,18 @@
 This is a **complete, executable solution** that:
 1. **Downloads repository** (git clone)
 2. **Analyzes files** (CMake, C++, bash scripts)
-3. **Extracts all flags and versions** (bash script)
-4. **Feeds to AI prompt** (Claude/Cursor)
+3. **Extracts all flags and versions** (bash script) - **Phase 1-2 of 5-phase system**
+4. **Feeds to AI prompt** (Claude/Cursor) - **Phase 3-5 of 5-phase system**
 5. **Generates comprehensive documentation**
+
+**Enhanced with Comprehensive Build Flags Analysis System:**
+- **5-Phase Architecture**: Discovery → Preprocessing → Deep Analysis → Multi-Pass Validation → Documentation Generation
+- **Mixture of Reasoning Experts**: 4 specialized agents (Configuration, Dependency, Version, Documentation)
+- **Version-Aware Tracking**: Historical evolution analysis (e.g., METIS in SuiteSparse)
+- **Target Completeness**: >=95% flag coverage with multi-source validation
+
+**See also:**
+- `Comprehensive-Flag-Analysis-Prompt.md` - Complete 5-phase analysis protocol
 
 ---
 
