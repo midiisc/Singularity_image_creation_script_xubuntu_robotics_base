@@ -111,13 +111,14 @@ class ReviewFailure(Exception):
     """Raised when the review process fails and the commit must be blocked."""
 
 
-def run_git(args: Iterable[str]) -> subprocess.CompletedProcess[str]:
+def run_git(args: Iterable[str], check: bool = False) -> subprocess.CompletedProcess[str]:
+    """Run git command with optional check parameter."""
     return subprocess.run(
         ["git", *args],
         cwd=REPO_ROOT,
         text=True,
         capture_output=True,
-        check=False,
+        check=check,
     )
 
 
