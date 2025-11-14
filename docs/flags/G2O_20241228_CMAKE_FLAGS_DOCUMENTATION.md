@@ -413,6 +413,12 @@ g2o uses standard CMake `find_package()` for dependencies. These variables can h
 ### CHOLMOD (if `G2O_USE_CHOLMOD=ON`)
 - Uses `find_package(CHOLMOD)`
 - Requires SuiteSparse with CHOLMOD component
+- **IMPORTANT:** g2o does NOT use BLAS/LAPACK flags directly (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES are IGNORED)
+- g2o inherits BLAS/LAPACK configuration from SuiteSparse::CHOLMOD imported target
+- CHOLMOD solver uses `BLAS_DEFINITIONS` and `LAPACK_DEFINITIONS` from the SuiteSparse::CHOLMOD target
+- If SuiteSparse was compiled with CUDA support, g2o needs CUDA include paths for compilation (add `-I${CUDA_INCLUDE_DIR}` to CMAKE_CXX_FLAGS)
+- **Transitive MKL Linkage:** g2o → SuiteSparse::CHOLMOD → MKL (MKL configuration comes from SuiteSparse build)
+- **SuiteSparse_DIR:** Directory containing `SuiteSparseConfig.cmake` (set this to point to SuiteSparse installation)
 
 ### CSparse (if `G2O_USE_CSPARSE=ON`)
 - Uses `find_package(CSparse)`
@@ -476,6 +482,9 @@ cmake .. \
   -DBUILD_WITH_MARCH_NATIVE=OFF \
   -DG2O_FAST_MATH=OFF \
   -DBUILD_UNITTESTS=OFF \
+  -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops -I/usr/local/cuda-12.6/include" \
+  -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops -I/usr/local/cuda-12.6/include" \
+  -DSuiteSparse_DIR=/usr/local/lib/cmake/SuiteSparse \
   -DEigen3_DIR=/usr/local/share/eigen3/cmake
 ```
 
@@ -530,19 +539,37 @@ cmake .. \
 
 9. **Subdirectory Usage:** When used as subdirectory, `G2O_BUILD_APPS` and `G2O_BUILD_EXAMPLES` default to OFF.
 
+10. **BLAS/LAPACK Configuration (CRITICAL):**
+    - g2o does **NOT** use `BLA_VENDOR`, `BLAS_LIBRARIES`, or `LAPACK_LIBRARIES` flags directly
+    - These flags are **IGNORED** by g2o's CMake configuration
+    - g2o inherits BLAS/LAPACK configuration from SuiteSparse::CHOLMOD imported target
+    - CHOLMOD solver uses `BLAS_DEFINITIONS` and `LAPACK_DEFINITIONS` from the SuiteSparse::CHOLMOD target
+    - To use MKL: Build SuiteSparse with MKL (set `BLA_VENDOR=Intel10_64lp` when building SuiteSparse)
+    - Result: g2o → SuiteSparse::CHOLMOD → MKL (transitive linkage)
+
+11. **CUDA Header Support (Required when SuiteSparse has CUDA):**
+    - If SuiteSparse/CHOLMOD was compiled with CUDA support, CHOLMOD headers include `cublas_v2.h`
+    - g2o's `cholmod_wrapper.cpp` needs access to CUDA headers during compilation
+    - Solution: Add CUDA include directory to compiler flags: `-I${CUDA_INCLUDE_DIR}` in `CMAKE_CXX_FLAGS` and `CMAKE_C_FLAGS`
+    - Example: `-D CMAKE_CXX_FLAGS="... -I/usr/local/cuda-12.6/include"`
+    - Note: This does NOT enable CUDA in g2o, it only provides headers for CHOLMOD's CUDA-enabled interface
+
 ---
 
 ## Invalid/Non-existent Flags
 
-The following flags are **NOT** supported by g2o:
+The following flags are **NOT** supported by g2o (these flags are IGNORED if passed):
 
+- `BLA_VENDOR` - **IGNORED** - g2o does not use FindBLAS/FindLAPACK directly. BLAS/LAPACK configuration comes from SuiteSparse::CHOLMOD target
+- `BLAS_LIBRARIES` - **IGNORED** - g2o does not link BLAS directly. Uses BLAS through SuiteSparse::CHOLMOD imported target
+- `LAPACK_LIBRARIES` - **IGNORED** - g2o does not link LAPACK directly. Uses LAPACK through SuiteSparse::CHOLMOD imported target
 - `USE_SYSTEM_EIGEN` - Not used (Eigen is always found via `find_package`)
 - `BUILD_CHOLMOD` - g2o does not build CHOLMOD
 - `BUILD_CSPARSE` - g2o does not build CSparse
-- `WITH_CUDA` - g2o does not support CUDA
+- `WITH_CUDA` - g2o does not support CUDA (but needs CUDA headers if SuiteSparse was built with CUDA)
 - `WITH_OPENCV` - g2o does not use OpenCV
 - `G2O_BUILD_CUDA` - Not supported
-- `CMAKE_CUDA_ARCHITECTURES` - Not relevant (no CUDA support)
+- `CMAKE_CUDA_ARCHITECTURES` - Not relevant (g2o does not compile CUDA code, but may need CUDA include paths for CHOLMOD headers)
 
 ---
 

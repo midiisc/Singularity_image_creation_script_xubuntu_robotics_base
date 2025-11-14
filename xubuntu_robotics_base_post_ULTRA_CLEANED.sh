@@ -7284,28 +7284,37 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.11: Configure g2o with CMake ---
   # Critical: CMake configuration - will auto-detect Ceres if available
-  # MKL Integration Strategy (Phase 4.8 - docs/planning/MKL_MIGRATION_PLAN.md):
-  #   - g2o uses standard CMake FindBLAS/FindLAPACK modules
-  #   - MKL linkage via BLA_VENDOR=Intel10_64lp and BLAS_LIBRARIES
-  #   - MKLROOT environment variable (already set) guides FindBLAS to MKL
-  #   - g2o automatically inherits MKL through MKL-enabled SuiteSparse/CHOLMOD
-  #   - CHOLMOD solver uses BLAS_DEFINITIONS and LAPACK_DEFINITIONS
+  # 
+  # MKL Integration Strategy (IMPORTANT - g2o does NOT use BLAS/LAPACK flags directly):
+  #   - g2o does NOT use BLA_VENDOR, BLAS_LIBRARIES, or LAPACK_LIBRARIES flags (these are IGNORED)
+  #   - g2o inherits BLAS/LAPACK configuration from SuiteSparse/CHOLMOD via imported targets
+  #   - CHOLMOD solver uses BLAS_DEFINITIONS and LAPACK_DEFINITIONS from SuiteSparse::CHOLMOD target
+  #   - SuiteSparse::CHOLMOD was compiled with MKL (BLA_VENDOR=Intel10_64lp in Block 9)
+  #   - Result: g2o → CHOLMOD (imported target) → MKL (transitive linkage through SuiteSparse)
   #
-  # Reference: docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md
-  #   - Documented flags: BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES (standard CMake)
-  #   - Undocumented flags: MKL_ROOT, MKL_INCLUDE_DIR, MKL_LIBRARY_DIR (not recognized, removed)
+  # CUDA Header Support (Required for CHOLMOD with CUDA):
+  #   - SuiteSparse/CHOLMOD was compiled with CUDA support (CUDA enabled in Block 9)
+  #   - CHOLMOD headers include cublas_v2.h when CUDA is enabled
+  #   - g2o cholmod_wrapper.cpp needs CUDA include paths to compile successfully
+  #   - Solution: Add CUDA include directory to CMAKE_CXX_FLAGS via -I flag
   #
-  # CHOLMOD Integration:
-  #   - G2O_USE_CHOLMOD=ON links against MKL-enabled libcholmod.so
-  #   - CHOLMOD was compiled with -DBLA_VENDOR=Intel10_64lp in Block 9
-  #   - Result: g2o → CHOLMOD → MKL (transitive MKL linkage)
+  # Reference: docs/flags/G2O_20241228_CMAKE_FLAGS_DOCUMENTATION.md (updated with correct flags)
   #
   # Feature Configuration (all explicitly set for clarity):
-  #   - Linear Algebra: CHOLMOD (MKL-enabled) + CSparse with LGPL libs
+  #   - Linear Algebra: CHOLMOD (MKL+CUDA-enabled) + CSparse with LGPL libs
   #   - Type System: Full SLAM2D/3D support including SBA, ICP, Sim3
   #   - Optimization: OpenMP enabled, SSE auto-detection
   #   - Logging: spdlog support (libspdlog-dev installed in Block 22)
   #   - Visualization: OpenGL support for g2o_viewer
+  #
+  # Get CUDA include directory (required for CHOLMOD CUDA headers)
+  if [ -z "${CUDA_INCLUDE_DIR:-}" ] && [ -n "${CUDA_HOME:-}" ]; then
+    CUDA_INCLUDE_DIR="${CUDA_HOME}/include"
+  fi
+  if [ -z "${CUDA_INCLUDE_DIR:-}" ]; then
+    CUDA_INCLUDE_DIR="/usr/local/cuda-${CUDA_VERSION:-12.6}/include"
+  fi
+  
   cmake .. \
     -G Ninja \
     -D CMAKE_BUILD_TYPE=Release \
@@ -7330,14 +7339,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D BUILD_UNITTESTS=OFF \
     -D DO_SSE_AUTODETECT=ON \
     -D CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
-    -D CMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
-    -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops" \
+    -D CMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops -I${CUDA_INCLUDE_DIR}" \
+    -D CMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -fopenmp -funroll-loops -I${CUDA_INCLUDE_DIR}" \
     -D CMAKE_SHARED_LINKER_FLAGS="-flto -fopenmp" \
     -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
     -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
-    -D BLA_VENDOR=Intel10_64lp \
-    -D BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
-    -D LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}" \
     -D SuiteSparse_DIR="${SuiteSparse_DIR}"
 
   #--- Sub-block 17.12: Build and install g2o ---
