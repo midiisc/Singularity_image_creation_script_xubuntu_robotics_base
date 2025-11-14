@@ -3,7 +3,7 @@
 **Version:** 3.12.6  
 **Source Repository:** https://github.com/colmap/colmap  
 **Commit:** `4d5b60e19ad268072adaf1267d21fa38a9a828ca`  
-**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
+**Last Audited:** November 14, 2025 (Deep Analysis - MKL, CUDA, Threading)  
 **Documentation Generated:** From source code analysis  
 **CMake Minimum Version:** 3.12
 
@@ -11,6 +11,8 @@
 > - Library-Analysis-Tool inspected 26 `CMakeLists.txt`, 268 headers, and 16 shell scripts in the 3.12.6 release.  
 > - No new configurable options were identified; established switches such as `CUDA_ENABLED`, `CUDA_ARCHS`, `GUI_ENABLED`, `GRPC_ENABLED`, and `COLMAP_BUILD_TESTS` remain the controlling flags.  
 > - Dependency scan reiterates the optional integrations with CUDA, Qt, gRPC, and OpenMP, with no additional mandatory packages.
+> - **MKL Integration:** COLMAP uses standard CMake BLAS/LAPACK detection via `BLA_VENDOR`, `BLAS_LIBRARIES`, and `LAPACK_LIBRARIES`. No explicit MKL detection module (unlike OpenCV). Must use `mkl_gnu_thread` for GCC toolchain compatibility.
+> - **Threading Model:** COLMAP relies on `OPENMP_ENABLED=ON` for parallelism. MKL threading is controlled via `BLA_VENDOR` (use `Intel10_64lp` for threaded, not `Intel10_64lp_seq` for sequential).
 
 ---
 
@@ -397,6 +399,49 @@ COLMAP uses standard CMake `find_package()` for dependencies. These variables ca
 - `METIS_INCLUDE_DIR_HINTS`: Custom include directory hint (CACHE variable)
 - `METIS_LIBRARY_DIR_HINTS`: Custom library directory hint (CACHE variable)
 
+### BLAS/LAPACK (MKL Integration - CRITICAL FOR HPC PERFORMANCE)
+- **CRITICAL:** COLMAP uses standard CMake BLAS/LAPACK detection via `find_package(BLAS)` and `find_package(LAPACK)`
+- **No explicit MKL detection module:** COLMAP does NOT have a custom MKL detection module like OpenCV
+- **MKL Integration via BLA_VENDOR:** COLMAP relies on CMake's standard `BLA_VENDOR` variable for MKL detection
+- **Recommended CMake Variables:**
+  - `BLA_VENDOR`: BLAS/LAPACK vendor identifier (CRITICAL)
+    - For MKL: `Intel10_64lp` (LP64 interface with threading, REQUIRED for parallel performance)
+    - Alternative: `Intel10_64lp_seq` (sequential, NO THREADING - NOT RECOMMENDED)
+  - `BLAS_LIBRARIES`: Semicolon-separated list of MKL BLAS library files
+    - Example: `"${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"`
+    - **CRITICAL:** Must use `mkl_gnu_thread` (not `mkl_intel_thread`) for GCC toolchain compatibility
+  - `LAPACK_LIBRARIES`: Semicolon-separated list of MKL LAPACK library files
+    - Example: Same as `BLAS_LIBRARIES` when using MKL
+    - **CRITICAL:** Must match `BLAS_LIBRARIES` for consistency
+  - `CMAKE_PREFIX_PATH`: Semicolon-separated list of paths where CMake searches for dependencies
+    - Example: `"${MKLROOT};/usr/local"` (include MKL root directory)
+- **MKL Threading Model (CRITICAL):**
+  - **Recommended:** Use `mkl_gnu_thread` (GNU OpenMP) for GCC toolchain compatibility
+  - **Why GNU OpenMP?**
+    - Compatible with GCC toolchain (uses `libgomp`, not Intel OpenMP)
+    - Avoids conflicts between Intel OpenMP (`libiomp5`) and GNU OpenMP (`libgomp`)
+    - Better performance on Linux systems with GCC
+    - Matches threading model used by other HPC libraries (GTSAM, Ceres, OpenCV)
+  - **Environment Variable:** Set `MKL_THREADING_LAYER=GNU` at runtime (if needed)
+  - **MKL Library Components Required:**
+    1. `libmkl_intel_lp64.so` - LP64 interface (32-bit integers, 64-bit pointers)
+    2. `libmkl_core.so` - Core MKL functionality
+    3. `libmkl_gnu_thread.so` - GNU OpenMP threading layer (CRITICAL)
+- **Complete MKL Configuration Example:**
+  ```cmake
+  -DBLA_VENDOR=Intel10_64lp
+  -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"
+  -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"
+  -DCMAKE_PREFIX_PATH="${MKLROOT}"
+  ```
+- **Verification:**
+  - After CMake configure, check `CMakeCache.txt`:
+    - `BLAS_FOUND:BOOL=ON`
+    - `LAPACK_FOUND:BOOL=ON`
+    - `BLAS_LIBRARIES` should point to MKL libraries (not OpenBLAS)
+    - `LAPACK_LIBRARIES` should match `BLAS_LIBRARIES`
+- **Performance Note:** Using MKL with threading (`mkl_gnu_thread`) is CRITICAL for HPC performance. Sequential MKL (`Intel10_64lp_seq`) significantly reduces performance in multi-threaded workloads.
+
 ### OpenGL (if `OPENGL_ENABLED=ON`)
 - Uses standard CMake `find_package(OpenGL)`
 
@@ -408,7 +453,7 @@ COLMAP uses standard CMake `find_package()` for dependencies. These variables ca
 
 ## Usage Examples
 
-### Minimal Configuration (Headless Build)
+### Minimal Configuration (Headless Build with MKL)
 ```cmake
 cmake .. \
   -GNinja \
@@ -421,6 +466,10 @@ cmake .. \
   -DIPO_ENABLED=ON \
   -DGUI_ENABLED=OFF \
   -DTESTS_ENABLED=OFF \
+  -DBLA_VENDOR=Intel10_64lp \
+  -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
+  -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
+  -DCMAKE_PREFIX_PATH="${MKLROOT}" \
   -DCeres_DIR=/usr/local/lib/cmake/Ceres \
   -DEigen3_DIR=/usr/local/share/eigen3/cmake \
   -Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog \
@@ -428,7 +477,7 @@ cmake .. \
   -DOpenCV_DIR=/usr/local/lib/cmake/opencv4
 ```
 
-### Full Configuration with GUI
+### Full Configuration with GUI and MKL (HPC Optimized)
 ```cmake
 cmake .. \
   -GNinja \
@@ -445,6 +494,10 @@ cmake .. \
   -DLSD_ENABLED=ON \
   -DTESTS_ENABLED=OFF \
   -DCCACHE_ENABLED=ON \
+  -DBLA_VENDOR=Intel10_64lp \
+  -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
+  -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
+  -DCMAKE_PREFIX_PATH="${MKLROOT}" \
   -DCeres_DIR=/usr/local/lib/cmake/Ceres \
   -DEigen3_DIR=/usr/local/share/eigen3/cmake \
   -Dglog_DIR=/usr/lib/x86_64-linux-gnu/cmake/glog \
@@ -484,11 +537,18 @@ cmake .. \
 
 7. **CGAL:** Required for some advanced reconstruction features. Can be disabled if not needed (`CGAL_ENABLED=OFF`).
 
-8. **LTO/IPO:** `IPO_ENABLED=ON` improves performance but significantly increases compile time. Consider disabling for development builds.
+8. **MKL Integration (CRITICAL FOR HPC):** COLMAP uses standard CMake BLAS/LAPACK detection. For optimal HPC performance:
+   - Set `BLA_VENDOR=Intel10_64lp` (threaded MKL, not sequential)
+   - Explicitly provide `BLAS_LIBRARIES` and `LAPACK_LIBRARIES` with MKL libraries
+   - Use `mkl_gnu_thread` (not `mkl_intel_thread`) for GCC toolchain compatibility
+   - Include `${MKLROOT}` in `CMAKE_PREFIX_PATH`
+   - **CRITICAL:** Sequential MKL (`Intel10_64lp_seq`) significantly reduces performance - avoid for HPC builds
 
-9. **FetchContent vs find_package:** Use `FETCH_POSELIB=OFF` and `FETCH_FAISS=OFF` if you have system installations of these libraries.
+9. **LTO/IPO:** `IPO_ENABLED=ON` improves performance but significantly increases compile time. Consider disabling for development builds.
 
-10. **Sanitizers:** Use sanitizers (`ASAN_ENABLED`, `TSAN_ENABLED`, `UBSAN_ENABLED`) for debugging. They significantly slow down execution.
+10. **FetchContent vs find_package:** Use `FETCH_POSELIB=OFF` and `FETCH_FAISS=OFF` if you have system installations of these libraries.
+
+11. **Sanitizers:** Use sanitizers (`ASAN_ENABLED`, `TSAN_ENABLED`, `UBSAN_ENABLED`) for debugging. They significantly slow down execution.
 
 ---
 

@@ -2,7 +2,7 @@
 
 **Source:** Open3D v0.19.0 (GitHub: isl-org/Open3D)  
 **Commit:** `1e7b17438687a0b0c1e5a7187321ac7044afe275`  
-**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
+**Last Audited:** November 14, 2025 (Deep Analysis - MKL, CUDA, Threading, HPC Performance)  
 **CMake Minimum Version:** 3.24
 
 This document provides an exhaustive list of all supported CMake configuration flags, variables, and options in Open3D 0.19.0.
@@ -11,6 +11,9 @@ This document provides an exhaustive list of all supported CMake configuration f
 > - Library-Analysis-Tool traversed 75 `CMakeLists.txt`, 511 headers, and 13 helper scripts for tag `v0.19.0`.  
 > - No new configurable flags were introduced since the previous revision; key toggles (`BUILD_SHARED_LIBS`, `BUILD_EXAMPLES`, `BUILD_GUI`, `BUILD_ISPC_MODULE`, `BUILD_TENSORFLOW_OPS`, `BUILD_PYTHON_MODULE`, etc.) retain their documented defaults.  
 > - Dependency scan confirms the optional integrations with CUDA, ROCm, SYCL/oneAPI, Vulkan, ISPC, TensorFlow/PyTorch ML ops, and RealSense/Azure sensor backends exactly as summarised below.
+> - **Deep Analysis - MKL, CUDA, Threading, HPC Performance:** Open3D uses standard CMake BLAS/LAPACK detection via `find_package(BLAS)` and `find_package(LAPACK)` when `USE_SYSTEM_BLAS=ON`. MKL integration requires `BLA_VENDOR=Intel10_64lp` (threaded, not sequential) and explicit `BLAS_LIBRARIES`/`LAPACK_LIBRARIES` with `mkl_gnu_thread` for GCC compatibility. CUDA optimization includes `ENABLE_CACHED_CUDA_MANAGER=ON`, `BUILD_WITH_CUDA_STATIC=ON`, and `CMAKE_CUDA_ARCHITECTURES` for target GPU architectures. Threading uses `WITH_OPENMP=ON` for parallel operations. HPC performance optimization requires `CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON` (Link Time Optimization) and `CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb` to prevent conflicts with MKL TBB.
+> - **MKL Integration (CRITICAL FOR HPC):** When `USE_BLAS=ON` and `USE_SYSTEM_BLAS=ON`, Open3D uses `find_package(BLAS)` which respects `BLA_VENDOR=Intel10_64lp` and `BLAS_LIBRARIES`/`LAPACK_LIBRARIES`. Include `${MKLROOT}` in `CMAKE_PREFIX_PATH` for reliable MKL detection. Use threaded MKL (`mkl_gnu_thread`) with GCC toolchain for optimal parallel performance. Avoid sequential MKL (`mkl_sequential` or `Intel10_64lp_seq`) as it disables threading.
+> - **CUDA Optimization:** Enable `ENABLE_CACHED_CUDA_MANAGER=ON` for improved CUDA memory management (Linux/macOS only, causes errors on Windows). Use `BUILD_WITH_CUDA_STATIC=ON` for static CUDA libraries. Set `CMAKE_CUDA_ARCHITECTURES` to target specific GPU architectures (e.g., "86;89;90" for Ampere, Ada Lovelace, Hopper).
 
 ---
 
@@ -757,15 +760,46 @@ cmake .. \
     -DBUILD_PYTHON_MODULE=ON
 ```
 
-### CUDA-Enabled Configuration
+### CUDA-Enabled Configuration (with OpenBLAS)
 ```bash
 cmake .. \
     -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_CUDA_MODULE=ON \
     -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
     -DBUILD_PYTHON_MODULE=ON \
+    -DUSE_BLAS=ON \
     -DUSE_SYSTEM_BLAS=ON \
     -DBLA_VENDOR=OpenBLAS
+```
+
+### Full Configuration with GUI and MKL (HPC Optimized)
+```bash
+cmake .. \
+    -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DBUILD_SHARED_LIBS=OFF \
+    -DBUILD_CUDA_MODULE=ON \
+    -DBUILD_GUI=ON \
+    -DBUILD_PYTHON_MODULE=ON \
+    -DCMAKE_CUDA_ARCHITECTURES="86;89;90" \
+    -DENABLE_CACHED_CUDA_MANAGER=ON \
+    -DBUILD_WITH_CUDA_STATIC=ON \
+    -DWITH_OPENMP=ON \
+    -DWITH_IPP=ON \
+    -DUSE_BLAS=ON \
+    -DUSE_SYSTEM_BLAS=ON \
+    -DBLA_VENDOR=Intel10_64lp \
+    -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl" \
+    -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl" \
+    -DCMAKE_PREFIX_PATH="/usr/local;/usr;${MKLROOT}" \
+    -DCMAKE_IGNORE_PATH="/opt/intel/oneapi/tbb" \
+    -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON \
+    -DCMAKE_CXX_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
+    -DCMAKE_C_FLAGS="-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops" \
+    -DCMAKE_CUDA_FLAGS="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations" \
+    -DEigen3_DIR=/usr/local/share/eigen3/cmake \
+    -DOpenCV_DIR=/usr/local/lib/cmake/opencv4
 ```
 
 ### System Libraries Configuration
@@ -804,6 +838,26 @@ cmake .. \
 5. **ISPC Version:** Requires ISPC >= 1.16 (ISPC 1.15 and older not supported)
 
 6. **Auto-Detection:** Many dependencies are auto-detected via `find_package()`. Explicit paths can be provided via standard CMake variables.
+
+7. **MKL Integration (CRITICAL FOR HPC):** Open3D uses standard CMake BLAS/LAPACK detection via `find_package(BLAS)` and `find_package(LAPACK)` when `USE_SYSTEM_BLAS=ON`. To use Intel MKL:
+   - Set `USE_BLAS=ON` and `USE_SYSTEM_BLAS=ON`
+   - Set `BLA_VENDOR=Intel10_64lp` (threaded, not sequential)
+   - Provide explicit `BLAS_LIBRARIES` and `LAPACK_LIBRARIES` with MKL components (e.g., `libmkl_intel_lp64.so`, `libmkl_core.so`, `libmkl_gnu_thread.so`)
+   - Include `${MKLROOT}` in `CMAKE_PREFIX_PATH` for reliable MKL detection
+   - Use `CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb` to prevent conflicts with MKL's optional TBB build (use system TBB instead)
+   - **CRITICAL:** Use threaded MKL (`mkl_gnu_thread` with GCC) for parallel performance. Avoid sequential MKL (`mkl_sequential` or `Intel10_64lp_seq`) as it disables threading.
+
+8. **CUDA Optimization:** For maximum HPC performance with CUDA:
+   - Enable `ENABLE_CACHED_CUDA_MANAGER=ON` for improved CUDA memory management (Linux/macOS only, causes errors on Windows)
+   - Use `BUILD_WITH_CUDA_STATIC=ON` for static CUDA libraries
+   - Set `CMAKE_CUDA_ARCHITECTURES` to target specific GPU architectures (e.g., "86;89;90" for Ampere, Ada Lovelace, Hopper)
+   - Include CUDA compiler flags: `--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda`
+
+9. **HPC Performance Optimization:**
+   - Enable `CMAKE_INTERPROCEDURAL_OPTIMIZATION=ON` (Link Time Optimization) for maximum performance
+   - Use `WITH_OPENMP=ON` for parallel operations (required for threaded MKL)
+   - Enable CPU architecture optimizations: `-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops`
+   - Use Ninja generator for faster builds: `-G Ninja`
 
 ---
 

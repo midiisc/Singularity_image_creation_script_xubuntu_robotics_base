@@ -4,7 +4,7 @@
 **Source Repository:** https://github.com/opencv/opencv  
 **Contrib Repository:** https://github.com/opencv/opencv_contrib  
 **Commit:** `49486f61fb25722cbcf586b7f4320921d46fb38e`  
-**Last Audited:** November 9, 2025 (Library-Analysis-Tool)  
+**Last Audited:** November 14, 2025 (Deep Analysis - TBB, LAPACK, MKL, Threading)  
 **Documentation Generated:** From source code analysis  
 **CMake Minimum Version:** 3.5
 
@@ -12,6 +12,8 @@
 > - Library-Analysis-Tool scanned 118 `CMakeLists.txt`, 1,735 headers, and 16 helper scripts in the 4.12.0 tag.  
 > - No new top-level `option()` entries were introduced; feature gates such as `OPENCV_ENABLE_NONFREE`, `WITH_CUDA`, `WITH_OPENCL`, `BUILD_opencv_*`, and `OPENCV_DNN_OPENVINO` retain their documented defaults.  
 > - Dependency scan continues to report the same optional integrations (Intel TBB, CUDA, cuDNN, OpenVINO, FFmpeg, GStreamer, Vulkan, etc.) with no additional mandatory packages.
+> - **TBB Verification:** System TBB 2021.11.0 (TBB_INTERFACE_VERSION >= 12000) verified on Ubuntu 24.04. OpenCV automatically sets `__TBB_NO_IMPLICIT_LINKAGE=1` for oneTBB 2021+. CMake config files located at `/usr/lib/x86_64-linux-gnu/cmake/TBB`.
+> - **LAPACK/MKL Verification:** OpenCV prioritizes MKL over OpenBLAS via `cmake/OpenCVFindMKL.cmake`. Requires `mkl_cblas.h` and `mkl_lapack.h` headers. Uses `mkl_gnu_thread` for GCC toolchain compatibility.
 
 ---
 
@@ -142,26 +144,71 @@
 ### `WITH_OPENBLAS`
 - **Type:** `OPTION` (ON/OFF)
 - **Default:** `OFF`
-- **Description:** Use OpenBLAS for BLAS operations.
+- **Description:** Use OpenBLAS for BLAS operations (NOT RECOMMENDED - use MKL instead).
 - **Usage:**
   ```cmake
   -DWITH_OPENBLAS=ON
   ```
+- **CRITICAL NOTE:** OpenCV should use Intel MKL (not OpenBLAS) for optimal performance and compatibility with other HPC libraries (GTSAM, Ceres, etc.). Use `WITH_MKL=ON` instead of `WITH_OPENBLAS=ON`.
 
 ### `WITH_TBB`
 - **Type:** `OPTION` (ON/OFF)
 - **Default:** `OFF`
-- **Description:** Use Intel Threading Building Blocks for parallelization.
+- **Description:** Use Intel Threading Building Blocks (TBB) for parallelization. TBB provides task-based parallelism for OpenCV operations.
 - **Usage:**
   ```cmake
   -DWITH_TBB=ON
   ```
-- **Note:** When `WITH_TBB=ON`, OpenCV uses `find_package(TBB)` to locate TBB. For proper detection, also set:
+- **TBB Detection Process (from `cmake/OpenCVDetectTBB.cmake`):**
+  1. **CMake Package Search:** OpenCV first tries `find_package(TBB QUIET COMPONENTS tbb)` searching in:
+     - `$ENV{TBBROOT}/cmake`
+     - `$ENV{TBBROOT}/lib/cmake/tbb`
+  2. **Environment Variable Search:** If CMake package not found, searches via:
+     - `TBBROOT` environment variable
+     - `CPATH` for headers (`tbb/tbb.h`)
+     - `LIBRARY_PATH` for libraries (`libtbb.so`)
+  3. **Version Detection:** Reads TBB version from:
+     - `oneapi/tbb/version.h` (oneTBB 2021+, preferred)
+     - `tbb/tbb_stddef.h` (legacy TBB, fallback)
+  4. **Version Requirements:** Requires `TBB_INTERFACE_VERSION >= 6000` (TBB 4.0+)
+  5. **oneTBB 2021+ Handling:** For `TBB_INTERFACE_VERSION >= 12000`, automatically sets `__TBB_NO_IMPLICIT_LINKAGE=1` to avoid defaultlib issues
+
+- **Recommended CMake Variables (for reliable detection):**
   - `TBB_DIR`: Path to TBB CMake config directory (e.g., `/usr/lib/x86_64-linux-gnu/cmake/TBB`)
+    - **CRITICAL:** Modern Ubuntu TBB packages (libtbb-dev) provide CMake config files at this location
+    - OpenCV's `find_package(TBB)` will use this if available
   - `TBB_ROOT_DIR`: Root directory of TBB installation (e.g., `/usr`)
-  - `TBB_INCLUDE_DIR` or `TBB_INCLUDE_DIRS`: Path to TBB headers (e.g., `/usr/include/tbb`)
-  - `TBB_LIBRARIES`: Path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
-- **Critical:** If TBB is not detected, ensure `CMAKE_PREFIX_PATH` includes the TBB installation directory.
+    - Used as fallback if `TBB_DIR` is not found
+  - `TBB_INCLUDE_DIR` or `TBB_INCLUDE_DIRS`: Path to TBB header directory (e.g., `/usr/include/tbb`)
+    - **Required Headers:** Must contain `tbb/tbb.h` (or `oneapi/tbb/version.h` for oneTBB)
+  - `TBB_LIBRARIES`: Full path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
+    - **Explicit override:** Ensures correct library is linked even if `TBB_DIR` is ignored
+
+- **System TBB vs MKL TBB:**
+  - **CRITICAL:** OpenCV must use **system TBB** (from `libtbb-dev`), NOT MKL's optional TBB build
+  - System TBB: `/usr/lib/x86_64-linux-gnu/libtbb.so` (correct)
+  - MKL TBB: `/opt/intel/oneapi/tbb/lib/libtbb.so` (incorrect, causes conflicts)
+  - Use `CMAKE_IGNORE_PATH` to exclude MKL TBB: `-DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb`
+
+- **TBB Header Structure (Ubuntu 24.04 - Verified):**
+  - Legacy headers: `/usr/include/tbb/tbb.h` (wrapper that includes `../oneapi/tbb.h`)
+  - oneTBB headers: `/usr/include/oneapi/tbb/version.h`, `/usr/include/oneapi/tbb.h`
+  - **Verified Version:** TBB 2021.11.0 (TBB_VERSION_MAJOR=2021, TBB_VERSION_MINOR=11, TBB_VERSION_PATCH=0)
+  - **TBB_INTERFACE_VERSION:** >= 12000 (oneTBB 2021+), automatically triggers `__TBB_NO_IMPLICIT_LINKAGE=1`
+  - **CMake Config Location:** `/usr/lib/x86_64-linux-gnu/cmake/TBB` (TBBConfig.cmake, TBBTargets.cmake)
+  - **Library Location:** `/usr/lib/x86_64-linux-gnu/libtbb.so.12` (system TBB, NOT MKL TBB)
+  - **pkg-config:** `pkg-config --modversion tbb` returns `2021.11.0`
+  - OpenCV detects both structures automatically
+
+- **Critical:** If TBB is not detected, ensure:
+  1. `CMAKE_PREFIX_PATH` includes the TBB installation directory (e.g., `/usr`)
+  2. All TBB variables (`TBB_DIR`, `TBB_INCLUDE_DIR`, `TBB_LIBRARIES`) are explicitly set:
+     - `TBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB` (Ubuntu 24.04 verified path)
+     - `TBB_INCLUDE_DIR=/usr/include/tbb` or `/usr/include` (if using oneapi/tbb)
+     - `TBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so` (system TBB, NOT MKL TBB)
+  3. MKL TBB paths are excluded via `CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb`
+  4. **Verify TBB version:** `pkg-config --modversion tbb` should return `2021.11.0` or later
+  5. **Verify CMake config:** Check that `/usr/lib/x86_64-linux-gnu/cmake/TBB/TBBConfig.cmake` exists
 
 ### `WITH_EIGEN`
 - **Type:** `OPTION` (ON/OFF)
@@ -192,29 +239,100 @@
 
 ### `WITH_LAPACK`
 - **Type:** `OPTION` (ON/OFF)
-- **Default:** `OFF`
-- **Description:** Enable LAPACK support for linear algebra operations (SVD, QR decomposition, Cholesky, etc.).
+- **Default:** `OFF` (unless `CV_DISABLE_OPTIMIZATION` is set)
+- **Description:** Enable LAPACK support for linear algebra operations (SVD, QR decomposition, Cholesky, eigenvalue problems, etc.).
+
+- **CRITICAL: OpenCV MUST use Intel MKL (not OpenBLAS)**
+  - OpenCV is configured to link with Intel MKL for optimal performance
+  - OpenBLAS is built as a fallback but is **NOT used by OpenCV**
+  - MKL provides better performance and compatibility with other HPC libraries (GTSAM, Ceres, etc.)
+
+- **LAPACK Detection Process (from `cmake/OpenCVFindLAPACK.cmake`):**
+  1. **MKL Detection (First Priority):** If `OPENCV_LAPACK_DISABLE_MKL` is not set:
+     - Searches for MKL via `cmake/OpenCVFindMKL.cmake`
+     - Requires headers: `mkl_cblas.h` and `mkl_lapack.h` in `${MKLROOT}/include`
+     - Validates with test compile (`cmake/checks/lapack_check.cpp`)
+     - Creates proxy header `opencv_lapack.h` that includes MKL headers
+  2. **OpenBLAS Detection (Fallback):** If MKL not found:
+     - Searches via `cmake/OpenCVFindOpenBLAS.cmake`
+     - Requires headers: `cblas.h` and `lapacke.h`
+  3. **ATLAS Detection (Linux Fallback):** If OpenBLAS not found:
+     - Searches via `cmake/OpenCVFindAtlas.cmake`
+  4. **Generic LAPACK Detection:** If none found:
+     - Uses CMake's `find_package(LAPACK)`
+     - Searches for `lapacke.h` and `cblas.h` in standard locations
+
+- **Required Headers (MKL):**
+  - **CBLAS Header:** `${MKLROOT}/include/mkl_cblas.h`
+  - **LAPACKE Header:** `${MKLROOT}/include/mkl_lapack.h`
+  - Both headers must exist and be accessible
+
+- **MKL Threading Model (CRITICAL):**
+  - **Recommended:** `MKL_THREADING_LAYER=GNU` (GNU OpenMP)
+  - **Why GNU OpenMP?**
+    - Compatible with GCC toolchain (uses `libgomp`, not Intel OpenMP)
+    - Avoids conflicts between Intel OpenMP (`libiomp5`) and GNU OpenMP (`libgomp`)
+    - Better performance on Linux systems with GCC
+    - Matches threading model used by other HPC libraries (GTSAM, Ceres)
+  - **CMake Variable:** `-DMKL_THREADING_LAYER=GNU`
+  - **OpenCV MKL Configuration:** When `MKL_WITH_OPENMP=ON` and not MSVC:
+    - OpenCV's `OpenCVFindMKL.cmake` automatically links `mkl_gnu_thread`
+    - This uses GNU OpenMP runtime (`libgomp.so.1`)
+  - **Alternative Threading Models (NOT RECOMMENDED):**
+    - `MKL_THREADING_LAYER=INTEL`: Requires Intel OpenMP (`libiomp5`), conflicts with GNU OpenMP
+    - `MKL_THREADING_LAYER=TBB`: Requires TBB threading, less common for MKL
+    - `MKL_THREADING_LAYER=SEQUENTIAL`: Single-threaded, poor performance
+
 - **Usage:**
   ```cmake
   -DWITH_LAPACK=ON
+  -DWITH_MKL=ON
+  -DMKL_WITH_OPENMP=ON
+  -DMKL_THREADING_LAYER=GNU
   ```
-- **Note:** When `WITH_LAPACK=ON`, OpenCV uses `find_package(LAPACK)` to locate LAPACK. For proper detection, also set:
-  - `LAPACK_LIBRARIES`: Path to LAPACK library files (semicolon-separated for multiple libraries)
-  - `LAPACK_INCLUDE_DIR` or `LAPACK_INCLUDE_DIRS`: Path to LAPACK headers (e.g., `${MKLROOT}/include` for Intel MKL)
-  - `BLA_VENDOR`: BLAS/LAPACK vendor (e.g., `Intel10_64lp` for Intel MKL)
-  - `BLAS_LIBRARIES`: BLAS library files (often same as LAPACK when using MKL)
-- **Critical:** If LAPACK is not detected, ensure:
-  1. `CMAKE_PREFIX_PATH` includes the LAPACK installation directory (e.g., `${MKLROOT}` for Intel MKL)
-  2. Both `LAPACK_LIBRARIES` and `LAPACK_INCLUDE_DIR` are explicitly set
-  3. `BLA_VENDOR` matches your BLAS/LAPACK provider
-- **Example with Intel MKL:**
+
+- **Required CMake Variables (MKL):**
+  - `LAPACK_LIBRARIES`: Semicolon-separated list of MKL library files
+    - Example: `"${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"`
+  - `LAPACK_INCLUDE_DIR` or `LAPACK_INCLUDE_DIRS`: Path to MKL headers
+    - Example: `"${MKLROOT}/include"`
+  - `BLA_VENDOR`: BLAS/LAPACK vendor identifier
+    - For MKL: `Intel10_64lp` (LP64 interface, 32-bit integers, 64-bit pointers)
+    - Alternative: `Intel10_64lp_seq` (sequential, no threading)
+  - `BLAS_LIBRARIES`: BLAS library files (often same as LAPACK for MKL)
+    - Example: Same as `LAPACK_LIBRARIES` when using MKL
+  - `MKL_ROOT`: Root directory of MKL installation
+    - Example: `"${MKLROOT}"` (from environment variable)
+
+- **Complete MKL Configuration Example:**
   ```cmake
   -DWITH_LAPACK=ON
+  -DWITH_MKL=ON
+  -DMKL_WITH_OPENMP=ON
+  -DMKL_THREADING_LAYER=GNU
+  -DMKL_USE_STATIC_LIBS=OFF
   -DBLA_VENDOR=Intel10_64lp
+  -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"
   -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"
   -DLAPACK_INCLUDE_DIR="${MKLROOT}/include"
+  -DLAPACK_INCLUDE_DIRS="${MKLROOT}/include"
+  -DMKL_ROOT="${MKLROOT}"
   -DCMAKE_PREFIX_PATH="${MKLROOT}"
   ```
+
+- **Critical:** If LAPACK is not detected, ensure:
+  1. `CMAKE_PREFIX_PATH` includes `${MKLROOT}`
+  2. Both `LAPACK_LIBRARIES` and `LAPACK_INCLUDE_DIR` are explicitly set
+  3. `BLA_VENDOR=Intel10_64lp` matches your MKL installation
+  4. `MKL_THREADING_LAYER=GNU` is set for GCC toolchain compatibility
+  5. MKL headers (`mkl_cblas.h`, `mkl_lapack.h`) exist in `${MKLROOT}/include`
+  6. MKL libraries exist and are accessible
+
+- **Verification:**
+  - After CMake configure, check `CMakeCache.txt`:
+    - `LAPACK_FOUND:BOOL=ON` or `HAVE_LAPACK:BOOL=1`
+    - `LAPACK_IMPL:STRING=MKL`
+    - `LAPACK_LIBRARIES` should point to MKL libraries (not OpenBLAS)
 
 ### `WITH_OPENGL`
 - **Type:** `OPTION` (ON/OFF)
@@ -563,15 +681,46 @@ OpenCV respects standard CMake variables:
 
 ### TBB Detection Variables
 - `TBB_DIR`: Path to TBB CMake config directory (e.g., `/usr/lib/x86_64-linux-gnu/cmake/TBB`)
+  - **CRITICAL:** Modern Ubuntu TBB packages provide CMake config files here
+  - OpenCV's `find_package(TBB)` will use this if available
 - `TBB_ROOT_DIR`: Root directory of TBB installation (e.g., `/usr`)
+  - Used as fallback if `TBB_DIR` is not found
 - `TBB_INCLUDE_DIR` or `TBB_INCLUDE_DIRS`: Path to TBB header directory (e.g., `/usr/include/tbb`)
-- `TBB_LIBRARIES`: Path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
+  - **Required Headers:** Must contain `tbb/tbb.h` (or `oneapi/tbb/version.h` for oneTBB 2021+)
+  - Ubuntu 24.04 provides both legacy (`/usr/include/tbb/tbb.h`) and oneTBB (`/usr/include/oneapi/tbb/version.h`) headers
+- `TBB_LIBRARIES`: Full path to TBB library file (e.g., `/usr/lib/x86_64-linux-gnu/libtbb.so`)
+  - **Explicit override:** Ensures correct library is linked even if `TBB_DIR` is ignored
+  - **CRITICAL:** Must point to system TBB, NOT MKL TBB (`/opt/intel/oneapi/tbb/lib/libtbb.so`)
+
+### LAPACK Detection Variables (MKL)
+- `LAPACK_LIBRARIES`: Semicolon-separated list of MKL library files
+  - **CRITICAL:** Must use MKL libraries, NOT OpenBLAS
+  - Example: `"${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so"`
+- `LAPACK_INCLUDE_DIR` or `LAPACK_INCLUDE_DIRS`: Path to MKL header directory
+  - **Required Headers:** Must contain `mkl_cblas.h` and `mkl_lapack.h`
+  - Example: `"${MKLROOT}/include"`
+- `BLA_VENDOR`: BLAS/LAPACK vendor identifier
+  - **For MKL:** `Intel10_64lp` (LP64 interface, recommended)
+  - **Alternative:** `Intel10_64lp_seq` (sequential, no threading, not recommended)
+- `BLAS_LIBRARIES`: BLAS library files (often same as LAPACK for MKL)
+  - Example: Same as `LAPACK_LIBRARIES` when using MKL
+- `MKL_ROOT`: Root directory of MKL installation
+  - Example: `"${MKLROOT}"` (from environment variable)
+- `MKL_THREADING_LAYER`: MKL threading layer (CRITICAL for performance)
+  - **Recommended:** `GNU` (GNU OpenMP, compatible with GCC toolchain)
+  - **Why GNU?** Uses `libgomp` (GNU OpenMP), avoids conflicts with Intel OpenMP
+  - **Alternative (NOT RECOMMENDED):** `INTEL` (requires Intel OpenMP, conflicts with GNU OpenMP)
 
 **Critical Notes:**
-- OpenCV uses `find_package(LAPACK)` and `find_package(TBB)` internally
+- **OpenCV MUST use MKL (not OpenBLAS):** OpenCV is configured to link with Intel MKL for optimal performance
+- **MKL Threading Model:** Use `MKL_THREADING_LAYER=GNU` with `MKL_WITH_OPENMP=ON` for GCC toolchain compatibility
+- **TBB vs MKL TBB:** OpenCV uses system TBB (`/usr/lib/x86_64-linux-gnu/libtbb.so`), NOT MKL's optional TBB build
+- OpenCV uses `find_package(LAPACK)` and `find_package(TBB)` internally, but explicit variables ensure reliable detection
 - If detection fails, explicitly set all relevant variables (`*_LIBRARIES`, `*_INCLUDE_DIR`, `*_DIR`, etc.)
-- Ensure `CMAKE_PREFIX_PATH` includes installation directories for both LAPACK and TBB
-- For Intel MKL, set `CMAKE_PREFIX_PATH` to include `${MKLROOT}`
+- Ensure `CMAKE_PREFIX_PATH` includes installation directories:
+  - For MKL: `${MKLROOT}`
+  - For TBB: `/usr` (system TBB)
+- Use `CMAKE_IGNORE_PATH` to exclude MKL TBB: `-DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb`
 
 ---
 
@@ -605,7 +754,7 @@ cmake .. \
   -DBUILD_EXAMPLES=OFF
 ```
 
-### Full Configuration with CUDA
+### Full Configuration with CUDA and MKL
 ```cmake
 cmake .. \
   -GNinja \
@@ -621,19 +770,27 @@ cmake .. \
   -DWITH_CUDNN=ON \
   -DOPENCV_DNN_CUDA=ON \
   -DOPENCV_DNN_CUDA_VERSION=12.6 \
-  -DWITH_OPENBLAS=ON \
   -DWITH_TBB=ON \
   -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB \
   -DTBB_ROOT_DIR=/usr \
   -DTBB_INCLUDE_DIR=/usr/include/tbb \
+  -DTBB_INCLUDE_DIRS=/usr/include/tbb \
   -DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so \
+  -DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb \
   -DWITH_EIGEN=ON \
   -DWITH_FFMPEG=ON \
   -DWITH_GSTREAMER=ON \
   -DWITH_LAPACK=ON \
+  -DWITH_MKL=ON \
+  -DMKL_WITH_OPENMP=ON \
+  -DMKL_THREADING_LAYER=GNU \
+  -DMKL_USE_STATIC_LIBS=OFF \
   -DBLA_VENDOR=Intel10_64lp \
+  -DBLAS_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
   -DLAPACK_LIBRARIES="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so" \
   -DLAPACK_INCLUDE_DIR="${MKLROOT}/include" \
+  -DLAPACK_INCLUDE_DIRS="${MKLROOT}/include" \
+  -DMKL_ROOT="${MKLROOT}" \
   -DWITH_OPENGL=ON \
   -DWITH_OPENMP=ON \
   -DENABLE_FAST_MATH=ON \
@@ -648,6 +805,18 @@ cmake .. \
   -DBUILD_PERF_TESTS=OFF \
   -DBUILD_DOCS=OFF
 ```
+
+**Key Points:**
+- **MKL (not OpenBLAS):** `WITH_MKL=ON` ensures OpenCV uses Intel MKL for LAPACK operations
+- **MKL Threading:** `MKL_THREADING_LAYER=GNU` uses GNU OpenMP (`libgomp`), compatible with GCC toolchain
+- **TBB Exclusion:** `CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb` prevents OpenCV from using MKL's optional TBB build
+- **System TBB:** TBB variables point to system TBB (`/usr/lib/x86_64-linux-gnu/libtbb.so`), not MKL TBB
+- **Explicit Library Paths (CRITICAL):** Use explicit `Ceres_DIR` and `SuiteSparse_DIR` to ensure OpenCV uses compiled libraries (e.g., from our builds) rather than system-installed versions:
+  ```cmake
+  -DCeres_DIR=/usr/local/lib/cmake/Ceres
+  -DSuiteSparse_DIR=/usr/local/lib/cmake/SuiteSparse
+  ```
+  Include `/usr/local` first in `CMAKE_PREFIX_PATH` to prioritize compiled libraries over system libraries.
 
 ### Static Library Build
 ```cmake
@@ -677,6 +846,12 @@ cmake .. \
 6. **License:** `OPENCV_ENABLE_NONFREE=ON` enables algorithms with restrictive licenses (SIFT, SURF).
 
 7. **DNN CUDA:** Requires both `WITH_CUDA=ON` and `WITH_CUDNN=ON` for GPU-accelerated deep learning.
+
+8. **Explicit Library Paths (CRITICAL FOR COMPILED LIBRARIES):** When OpenCV depends on libraries you've compiled from source (e.g., Ceres, SuiteSparse), explicitly set their CMake config directories to ensure OpenCV uses your builds instead of system-installed versions:
+   - Use `-DCeres_DIR=/usr/local/lib/cmake/Ceres` to force OpenCV to use compiled Ceres
+   - Use `-DSuiteSparse_DIR=/usr/local/lib/cmake/SuiteSparse` to force OpenCV to use compiled SuiteSparse
+   - Include `/usr/local` first in `CMAKE_PREFIX_PATH` to prioritize compiled libraries: `-DCMAKE_PREFIX_PATH=/usr/local:/usr:${MKLROOT}`
+   - This ensures compatibility and consistency across the build stack
 
 ---
 
