@@ -128,7 +128,7 @@ export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
 export NVIDIA_KEYRING_VER="1.1-1"
 export CUDA_VERSION="12.6"
 export CUDA_MAJOR="${CUDA_VERSION%%.*}"
-export CUDA_MINOR="${CUDA_VERSION#${CUDA_MAJOR}.}"
+export CUDA_MINOR="${CUDA_VERSION#"${CUDA_MAJOR}".}"
 export CUDA_PKG_SUFFIX="${CUDA_VERSION//./-}"
 export CUDA_META_PACKAGE="cuda-${CUDA_PKG_SUFFIX}"
 export CUDA_TOOLKIT_PACKAGE="cuda-toolkit-${CUDA_PKG_SUFFIX}"
@@ -259,11 +259,12 @@ export WHEELS_CACHE="${CACHE_DIR}/wheels"
 # Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base
 # Capitalize ROS distribution name (first letter uppercase, rest lowercase)
 # ROS_DISTRO_CAPITALIZED kept for potential future use (may be exported or used by other scripts)
-if [ -n "${ROS_DISTRO:-}" ]; then
-    ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-else
-    ROS_DISTRO_CAPITALIZED="Unknown"
-fi
+    if [ -n "${ROS_DISTRO:-}" ]; then
+        ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+        export ROS_DISTRO_CAPITALIZED
+    else
+        export ROS_DISTRO_CAPITALIZED="Unknown"
+    fi
 # SIF_NAME and DEF_NAME are defined in BUILD OUTPUT CONFIGURATION section below
 # They are generated dynamically in build script if not set
 
@@ -388,6 +389,8 @@ analyze_build_log() {
     local debug_flag_line_nums=()
     local deprecation_line_nums=()
     local all_lines=()
+    # current_context kept for potential future use in context reporting
+    # shellcheck disable=SC2034
     local current_context="General Build"
     local context_stack=()
     
@@ -430,6 +433,7 @@ analyze_build_log() {
         
         # Update context based on line content
         # current_context kept for potential future use in context reporting
+        # shellcheck disable=SC2034
         for context_name in "${!context_patterns[@]}"; do
             if grep -qiE "${context_patterns[$context_name]}" <<< "$line"; then
                 current_context="$context_name"
@@ -475,9 +479,10 @@ analyze_build_log() {
         local all_issue_lines
         mapfile -t all_issue_lines < <(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" | sort -n | uniq)
         
-        local last_extracted_line=0
-        # current_context_line kept for potential future use in context tracking
-        local current_context_line=0
+            local last_extracted_line=0
+            # current_context_line kept for potential future use in context tracking
+            # shellcheck disable=SC2034
+            local current_context_line=0
         
         for issue_line in "${all_issue_lines[@]}"; do
             # Skip if we already extracted this area (within context window)
@@ -581,14 +586,14 @@ analyze_build_log() {
                 
                 # Extract context block (0-indexed array, so subtract 1)
                 local i
-                for i in $(seq $start_line $end_line); do
+                for i in $(seq "$start_line" "$end_line"); do
                     local idx
                     idx=$((i - 1))
-                    if [ $idx -ge 0 ] && [ $idx -lt ${#all_lines[@]} ]; then
+                    if [ "$idx" -ge 0 ] && [ "$idx" -lt ${#all_lines[@]} ]; then
                         local marker=""
-                        if [ $i -eq $issue_line ]; then
+                        if [ "$i" -eq "$issue_line" ]; then
                             marker=" >>> "
-                        elif [ $i -lt $issue_line ]; then
+                        elif [ "$i" -lt "$issue_line" ]; then
                             marker="     "
                         else
                             marker="     "

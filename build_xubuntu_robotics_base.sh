@@ -634,7 +634,7 @@ progress() {
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 start_time() {
-    echo "$(date +%s)"  # Return Unix timestamp
+    date +%s  # Return Unix timestamp
 }
 
 #--- Sub-block 9.2: Elapsed time calculation ---
@@ -1298,11 +1298,13 @@ cleanup_on_exit() {
             # shellcheck disable=SC1090
             source "${SCRIPT_DIR}/config.sh"
         elif [ -f /etc/config.sh ]; then
+            # shellcheck disable=SC1091
             source /etc/config.sh
         fi
     fi
     # Only call if function exists
     if type analyze_build_log >/dev/null 2>&1; then
+        # shellcheck disable=SC2119
         analyze_build_log || true
     else
         echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
@@ -2060,6 +2062,8 @@ check_and_download_required_files() {
         # Extract file info
         file_info="${required_files[${file_name}]}"
         # Save and restore IFS to avoid affecting other commands
+        # param1, param2, param3 are reserved for future validation parameters
+        # shellcheck disable=SC2034
         IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
         IFS="${old_ifs}"
         
@@ -2275,6 +2279,8 @@ check_and_download_required_files() {
         local old_ifs="${IFS}"
         file_info="${required_files[${file_name}]}"
         # Save and restore IFS to avoid affecting other commands
+        # param1, param2, param3 are reserved for future validation parameters
+        # shellcheck disable=SC2034
         IFS='|' read -r validation_method file_url param1 param2 param3 optional_flag <<< "${file_info}"
         IFS="${old_ifs}"
         
@@ -3083,6 +3089,7 @@ if [ -z "${WHEELS_CACHE_COUNT:-}" ] && [ -d "${WHEELS_CACHE:-}" ]; then
     [ -z "${WHEELS_CACHE_COUNT}" ] && WHEELS_CACHE_COUNT="0"
 fi
 
+# shellcheck disable=SC2129
 cat >> "${ARCHITECTURE_FILE}" << ARCH_INFO_EOF
 - **Build Date**: ${BUILD_DATE_STR:-unknown}
 - **Build Timestamp**: ${BUILD_TIMESTAMP:-unknown}
