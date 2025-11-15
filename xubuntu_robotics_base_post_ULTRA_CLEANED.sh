@@ -427,11 +427,12 @@ debug_glibc() {
   gcc -xc++ -E -v - < /dev/null 2>&1 | grep '^ /' 2>/dev/null || echo "Cannot check (GCC not ready)"
   echo "---"
   echo "Test compile with stdlib.h:"
-  local tmp_src
-  local tmp_bin
   # Use command substitution with fallback for temporary file creation
   # Note: This occurs in non-strict mode context (pipefail disabled), so || fallback is acceptable
+  # SC2155: Declare and assign separately to avoid masking return values
+  local tmp_src
   tmp_src=$(mktemp -t glibc_testXXXX.c 2>/dev/null) || tmp_src="/tmp/glibc_test_$$.c"
+  local tmp_bin
   tmp_bin=$(mktemp -t glibc_testXXXX 2>/dev/null) || tmp_bin="/tmp/glibc_test_$$"
   {
     echo '#include <stdlib.h>'
@@ -749,7 +750,8 @@ test_mirror() {
         
       # Penalize Release-only results (multiply by 10 to prefer Packages.gz results)
       if [[ "${CURL_EXIT_CODE:-1}" -eq 0 ]] && [[ -n "${CURL_OUTPUT:-}" ]] && [[ "${CURL_OUTPUT:-}" != "0.000000" ]]; then
-        CURL_OUTPUT=$(printf "%.3f" "$(echo "${CURL_OUTPUT} 10" | awk '{print $1 * $2}' 2>/dev/null || echo "${CURL_OUTPUT}")")
+        # D3: Use here-string instead of echo | awk (unsafe pipe pattern)
+        CURL_OUTPUT=$(printf "%.3f" "$(awk '{print $1 * $2}' <<< "${CURL_OUTPUT} 10" 2>/dev/null || echo "${CURL_OUTPUT}")")
       fi
     fi
     if [[ "${previous_opts}" == *e* ]]; then
@@ -2324,12 +2326,14 @@ reapply_fastest_mirror() {
       else
         echo "[ERROR] ⚠ apt-get update failed even with default archive.ubuntu.com mirror"
         echo "[warn] This may indicate a network or system issue. Output:"
-        echo "${retry_output}" | head -10 | sed 's/^/  /'
+        # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
+        head -10 <<< "${retry_output}" | sed 's/^/  /'
         echo "[warn] Build may continue, but package operations may fail"
       fi
     else
       echo "[warn] apt-get update had issues (may continue):"
-      echo "${apt_update_output}" | head -5 | sed 's/^/  /'
+      # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
+      head -5 <<< "${apt_update_output}" | sed 's/^/  /'
     fi
   else
     echo "[info] ✓ apt-get update succeeded with selected mirror"
@@ -3359,7 +3363,8 @@ verify_deb_package() {
     if command -v dpkg-sig >/dev/null 2>&1; then
         local sig_list_output
         sig_list_output=$(dpkg-sig -list "${deb_file}" 2>/dev/null || echo "")
-        if [ -n "${sig_list_output:-}" ] && echo "${sig_list_output}" | grep -q "signature"; then
+        # D3: Use here-string instead of pipe pattern (unsafe pipe pattern fixed)
+        if [ -n "${sig_list_output:-}" ] && grep -q "signature" <<< "${sig_list_output}"; then
             echo "✓ Package has valid signature structure for ${basename_file}"
             return 0  # Loosening constraint to allow install
         else
@@ -3497,7 +3502,8 @@ EOF
         # D3: Use here-string instead of pipe pattern
         local config_content
         config_content=$(cat /etc/apt/apt.conf.d/90-cache.conf 2>/dev/null || echo "")
-        if [ -n "${config_content:-}" ] && echo "${config_content}" | grep -q "\${CONTAINER_APT_CACHE}"; then
+        # D3: Use here-string instead of pipe pattern (unsafe pipe pattern fixed)
+        if [ -n "${config_content:-}" ] && grep -q "\${CONTAINER_APT_CACHE}" <<< "${config_content}"; then
             echo "[ERROR] ⚠ APT cache configuration has unexpanded variable!"
             exit 1
         fi
@@ -4032,8 +4038,9 @@ if is_install_command "$@"; then
     elif [ "${APT_EXIT_CODE:-1}" -ne 0 ] && [ -n "${APT_OUTPUT:-}" ] && ! grep -qiE "(already the newest|0 upgraded|0 to install)" <<< "${APT_OUTPUT}"; then
         echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
         # F2: Validate command substitution result
+        # D3: Use here-string instead of echo | head (unsafe pipe pattern)
         local error_preview
-        error_preview=$(echo "${APT_OUTPUT}" | head -3 || echo "")
+        error_preview=$(head -3 <<< "${APT_OUTPUT}" || echo "")
         if [ -n "${error_preview:-}" ]; then
             echo "[apt-aria] Error output: ${error_preview}"
         fi
@@ -4222,7 +4229,8 @@ if [ -f /etc/environment ] && [ -w /etc/environment ]; then
     # D3: Use here-string instead of pipe pattern
     env_content=""
     env_content=$(cat /etc/environment 2>/dev/null || echo "")
-    if [ -z "${env_content:-}" ] || ! echo "${env_content}" | grep -q "^CONTAINER_APT_CACHE="; then
+    # D3: Use here-string instead of pipe pattern (unsafe pipe pattern fixed)
+    if [ -z "${env_content:-}" ] || ! grep -q "^CONTAINER_APT_CACHE=" <<< "${env_content}"; then
         # H1: Check exit code of echo append operation
         if ! echo "CONTAINER_APT_CACHE=${CONTAINER_APT_CACHE:-/container_cache/apt/archives}" >> /etc/environment 2>/dev/null; then
             echo "[warn] ⚠ Failed to append to /etc/environment"
@@ -4999,7 +5007,7 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         echo -e "    ${YELLOW}⚠ strings command not available - cannot verify DYNAMIC_ARCH${NC}"
     fi
 else
-    echo -e "  ${RED}✗ OpenBLAS library not found at expected location${NC}"
+    printf '%s\n' "  ${RED}✗ OpenBLAS library not found at expected location${NC}" >&2
     exit 1
 fi
 echo ""
@@ -5009,7 +5017,7 @@ echo ""
 #          DEFAULT_BLAS_PROVIDER explicitly requests OpenBLAS as the default)
 # Dependencies: Block 6.12B.6 (verified OpenBLAS installation)
 # Outputs: Updated alternatives configuration
-echo -e "${YELLOW}[6.12B.7] Registering OpenBLAS with alternatives system...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.7] Registering OpenBLAS with alternatives system...${NC}"
 
 # Find the actual OpenBLAS library file
 OPENBLAS_LIB_FILE=""
@@ -5023,22 +5031,22 @@ for lib_file in \
 done
 
 if [ -z "${OPENBLAS_LIB_FILE}" ]; then
-    echo -e "  ${RED}✗ OpenBLAS library file not found${NC}"
+    printf '%s\n' "  ${RED}✗ OpenBLAS library file not found${NC}" >&2
     exit 1
 fi
 
 # Update BLAS alternatives
 OPENBLAS_ALT_PRIORITY=100
-echo "  Registering OpenBLAS BLAS alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
+printf '%s\n' "  Registering OpenBLAS BLAS alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
 # H1: Check exit code of update-alternatives operation
 if ! update-alternatives --install /usr/lib/x86_64-linux-gnu/libblas.so.3 \
     libblas.so.3-x86_64-linux-gnu \
     "${OPENBLAS_LIB_FILE}" "${OPENBLAS_ALT_PRIORITY}" 2>/dev/null; then
-    echo -e "  ${YELLOW}⚠ Failed to set BLAS alternative (may already be set)${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ Failed to set BLAS alternative (may already be set)${NC}" >&2
 fi
 
 # Update LAPACK alternatives (OpenBLAS includes LAPACK)
-echo "  Registering OpenBLAS LAPACK alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
+printf '%s\n' "  Registering OpenBLAS LAPACK alternative (priority ${OPENBLAS_ALT_PRIORITY})..."
 LAPACK_ALT_LIB=""
 for lapack_file in \
     "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0" \
@@ -5053,33 +5061,39 @@ if [ -n "${LAPACK_ALT_LIB}" ]; then
     update-alternatives --install /usr/lib/x86_64-linux-gnu/liblapack.so.3 \
         liblapack.so.3-x86_64-linux-gnu \
         "${LAPACK_ALT_LIB}" "${OPENBLAS_ALT_PRIORITY}" || {
-        echo -e "  ${YELLOW}⚠ Failed to set LAPACK alternative (may already be set)${NC}"
+        printf '%s\n' "  ${YELLOW}⚠ Failed to set LAPACK alternative (may already be set)${NC}" >&2
     }
 fi
 
 if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
-    echo "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; selecting OpenBLAS as default provider..."
-    update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_LIB_FILE}" 2>/dev/null || true
+    printf '%s\n' "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; selecting OpenBLAS as default provider..."
+    # H4: Validate alternatives set operation - check if it succeeded
+    if ! update-alternatives --set libblas.so.3-x86_64-linux-gnu "${OPENBLAS_LIB_FILE}" 2>/dev/null; then
+        printf '%s\n' "  ${YELLOW}⚠ Failed to set BLAS default to OpenBLAS${NC}" >&2
+    fi
     if [ -n "${LAPACK_ALT_LIB}" ]; then
-        update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${LAPACK_ALT_LIB}" 2>/dev/null || true
+        if ! update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${LAPACK_ALT_LIB}" 2>/dev/null; then
+            printf '%s\n' "  ${YELLOW}⚠ Failed to set LAPACK default to OpenBLAS${NC}" >&2
+        fi
     fi
 else
-    echo "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; OpenBLAS registered as fallback alternative"
+    printf '%s\n' "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; OpenBLAS registered as fallback alternative"
 fi
 
-echo -e "  ${GREEN}✓ Alternatives system registration complete${NC}"
+printf '%s\n' "  ${GREEN}✓ Alternatives system registration complete${NC}"
 echo ""
 
 #--- Sub-block 12.8: Configure library paths ---
 # Purpose: Make OpenBLAS available system-wide via library paths
 # Dependencies: Block 6.12B.7 (alternatives updated)
 # Outputs: Updated ldconfig, environment variables, pkg-config
-echo -e "${YELLOW}[6.12B.8] Configuring library paths...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.8] Configuring library paths...${NC}"
 
 # Verify library exists before updating ldconfig
+# J1: File existence validation before use
 if [ ! -f "${OPENBLAS_LIB_FILE}" ]; then
-    echo -e "  ${RED}✗ Error: OpenBLAS library not found at ${OPENBLAS_LIB_FILE}${NC}"
-    echo "  Cannot update ldconfig without library file"
+    printf '%s\n' "  ${RED}✗ Error: OpenBLAS library not found at ${OPENBLAS_LIB_FILE}${NC}" >&2
+    printf '%s\n' "  Cannot update ldconfig without library file" >&2
     exit 1
 fi
 
@@ -5089,26 +5103,36 @@ ensure_compiled_lib_priority || {
 }
 
 # Update ldconfig
-echo "  Updating ldconfig cache..."
+printf '%s\n' "  Updating ldconfig cache..."
 echo "${OPENBLAS_INSTALL_PREFIX}/lib" > /etc/ld.so.conf.d/openblas-custom.conf
 
 # Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/openblas_build.log" 200
+# J1: File existence validation before use
+if [ -f "/tmp/openblas_build.log" ]; then
+    run_ldconfig_refresh_from_install_output "/tmp/openblas_build.log" 200
+else
+    printf '%s\n' "  ${YELLOW}⚠ Build log not found, using standard ldconfig refresh${NC}" >&2
+    run_ldconfig_refresh 2>&1 || true
+fi
 
 # Verify OpenBLAS is now in ldconfig cache
-if timeout 5 ldconfig -p 2>/dev/null | grep -q libopenblas; then
-    echo -e "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
+# D3c: Use -F flag for literal pattern matching
+if timeout 5 ldconfig -p 2>/dev/null | grep -Fq libopenblas; then
+    printf '%s\n' "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
 else
-    echo -e "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}" >&2
     # Retry ldconfig
-    run_ldconfig_refresh 2>&1 || true
+    # H4: Validate ldconfig refresh result
+    if ! run_ldconfig_refresh 2>&1; then
+        printf '%s\n' "  ${YELLOW}⚠ ldconfig refresh failed${NC}" >&2
+    fi
     # Check again
-    if ldconfig -p 2>/dev/null | grep -q libopenblas; then
-        echo -e "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
+    if ldconfig -p 2>/dev/null | grep -Fq libopenblas; then
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
     else
-        echo -e "  ${YELLOW}⚠ OpenBLAS still not in ldconfig cache (library may need to be in standard location)${NC}"
-        echo "    Library exists at: ${OPENBLAS_LIB_FILE}"
-        echo "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
+        printf '%s\n' "  ${YELLOW}⚠ OpenBLAS still not in ldconfig cache (library may need to be in standard location)${NC}" >&2
+        printf '%s\n' "    Library exists at: ${OPENBLAS_LIB_FILE}"
+        printf '%s\n' "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
     fi
 fi
 
@@ -5200,14 +5224,14 @@ export CMAKE_PREFIX_PATH=${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
 EOF
 chmod 0644 /etc/profile.d/openblas.sh
 
-echo -e "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
+printf '%s\n' "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
 echo ""
 
 #--- Sub-block 12.9: Set up APT pinning ---
 # Purpose: Prevent APT from installing system OpenBLAS packages
 # Dependencies: None (APT configuration)
 # Outputs: APT preferences file
-echo -e "${YELLOW}[6.12B.9] Setting up APT pinning to protect OpenBLAS...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.9] Setting up APT pinning to protect OpenBLAS...${NC}"
 cat > /etc/apt/preferences.d/openblas-protect <<'EOF'
 # Prevent APT from installing system OpenBLAS packages
 # Our custom-compiled OpenBLAS should be used instead
@@ -5216,69 +5240,79 @@ Pin: release *
 Pin-Priority: -1
 EOF
 
-echo -e "  ${GREEN}✓ APT pinning configured${NC}"
+printf '%s\n' "  ${GREEN}✓ APT pinning configured${NC}"
 echo ""
 
 #--- Sub-block 12.10: Final verification ---
 # Purpose: Verify OpenBLAS is properly configured and being used
 # Dependencies: Block 6.12B.8 (library paths configured)
 # Outputs: Verification status
-echo -e "${YELLOW}[6.12B.10] Final verification...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.10] Final verification...${NC}"
 
 # Check alternatives
-echo "  Checking alternatives system:"
-CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
-if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "${OPENBLAS_LIB_FILE}"; then
-    echo -e "    ${GREEN}✓ OpenBLAS registered with alternatives (priority ${OPENBLAS_ALT_PRIORITY})${NC}"
+printf '%s\n' "  Checking alternatives system:"
+# D3d, F2: Validate command substitution result
+CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -F "link currently points to" | sed 's/.*points to //' || echo "unknown")
+# D3c: Use -F flag for literal pattern matching
+if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -Fq "${OPENBLAS_LIB_FILE}"; then
+    printf '%s\n' "    ${GREEN}✓ OpenBLAS registered with alternatives (priority ${OPENBLAS_ALT_PRIORITY})${NC}"
 else
-    echo -e "    ${YELLOW}⚠ OpenBLAS not listed in BLAS alternatives${NC}"
+    printf '%s\n' "    ${YELLOW}⚠ OpenBLAS not listed in BLAS alternatives${NC}" >&2
 fi
 
 if [ "${DEFAULT_BLAS_PROVIDER}" = "MKL" ]; then
-    if grep -qi "mkl" <<< "${CURRENT_BLAS}"; then
-        echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
+    # D3c: Use -F flag for literal pattern matching (case-insensitive)
+    if grep -Fqi "mkl" <<< "${CURRENT_BLAS}"; then
+        printf '%s\n' "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
     else
-        echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred MKL${NC}"
+        printf '%s\n' "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred MKL${NC}" >&2
     fi
 elif [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
-    if grep -qi "openblas" <<< "${CURRENT_BLAS}"; then
-        echo -e "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
+    # D3c: Use -F flag for literal pattern matching (case-insensitive)
+    if grep -Fqi "openblas" <<< "${CURRENT_BLAS}"; then
+        printf '%s\n' "    ${GREEN}✓ Default BLAS provider matches preference (${CURRENT_BLAS})${NC}"
     else
-        echo -e "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred OpenBLAS${NC}"
+        printf '%s\n' "    ${YELLOW}⚠ Default BLAS provider (${CURRENT_BLAS}) differs from preferred OpenBLAS${NC}" >&2
     fi
 else
-    echo -e "    ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; current BLAS points to ${CURRENT_BLAS}${NC}"
+    printf '%s\n' "    ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; current BLAS points to ${CURRENT_BLAS}${NC}" >&2
 fi
 
 # Check ldconfig
-echo "  Checking ldconfig:"
-if timeout 5 ldconfig -p 2>/dev/null | grep -q libopenblas; then
-    echo -e "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
-    timeout 5 ldconfig -p 2>/dev/null | grep libopenblas | head -3 | sed 's/^/      /' || true
+printf '%s\n' "  Checking ldconfig:"
+# D3c: Use -F flag for literal pattern matching
+if timeout 5 ldconfig -p 2>/dev/null | grep -Fq libopenblas; then
+    printf '%s\n' "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
+    # H4: Validate grep result before using
+    ldconfig_output=$(timeout 5 ldconfig -p 2>/dev/null | grep -F libopenblas | head -3 || echo "")
+    if [ -n "${ldconfig_output}" ]; then
+        printf '%s\n' "${ldconfig_output}" | sed 's/^/      /'
+    fi
 else
-    echo -e "    ${YELLOW}⚠ OpenBLAS not in ldconfig cache (may need manual update)${NC}"
+    printf '%s\n' "    ${YELLOW}⚠ OpenBLAS not in ldconfig cache (may need manual update)${NC}" >&2
 fi
 
 # Verify library file exists and is accessible
+# J1: File existence validation
 if [ -f "${OPENBLAS_LIB_FILE}" ]; then
-    echo -e "    ${GREEN}✓ OpenBLAS library file exists: ${OPENBLAS_LIB_FILE}${NC}"
+    printf '%s\n' "    ${GREEN}✓ OpenBLAS library file exists: ${OPENBLAS_LIB_FILE}${NC}"
 else
-    echo -e "    ${RED}✗ OpenBLAS library file not found${NC}"
+    printf '%s\n' "    ${RED}✗ OpenBLAS library file not found${NC}" >&2
 fi
 
 echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✓ OpenBLAS compilation and installation complete!${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${GREEN}✓ OpenBLAS compilation and installation complete!${NC}"
+printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo "Summary:"
-echo "  - OpenBLAS ${OPENBLAS_VERSION} compiled with DYNAMIC_ARCH=1"
-echo "  - Installed to: ${OPENBLAS_INSTALL_PREFIX}"
-echo "  - Registered with alternatives (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})"
-echo "  - Current default BLAS provider: ${CURRENT_BLAS}"
-echo "  - Library paths configured (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)"
-echo "  - APT pinning configured (prevents system OpenBLAS installation)"
-echo "  - Applications can select OpenBLAS via update-alternatives if desired"
+printf '%s\n' "Summary:"
+printf '%s\n' "  - OpenBLAS ${OPENBLAS_VERSION} compiled with DYNAMIC_ARCH=1"
+printf '%s\n' "  - Installed to: ${OPENBLAS_INSTALL_PREFIX}"
+printf '%s\n' "  - Registered with alternatives (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})"
+printf '%s\n' "  - Current default BLAS provider: ${CURRENT_BLAS}"
+printf '%s\n' "  - Library paths configured (ldconfig, PKG_CONFIG_PATH, LD_LIBRARY_PATH)"
+printf '%s\n' "  - APT pinning configured (prevents system OpenBLAS installation)"
+printf '%s\n' "  - Applications can select OpenBLAS via update-alternatives if desired"
 echo ""
 
 # Clean up build directory (keep installed files)
@@ -5313,7 +5347,8 @@ rm -rf "${OPENBLAS_SOURCE_DIR}" /tmp/openblas_build.log
 echo "==> Installing NVIDIA cuDNN for CUDA 12.x..."
 
 CUDA_STACK_ALREADY_PRESENT=false
-if command -v nvcc >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q 'libcudnn.so'; then
+# D3c: Use -F flag for literal pattern matching
+if command -v nvcc >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -Fq 'libcudnn.so'; then
   NVCC_VERSION_DETECTED=$(nvcc --version 2>/dev/null | awk -F'release ' 'NF>1 {print $2}' | awk '{print $1}' | tr -d 'V,' || echo "")
   CUDNN_VERSION_DETECTED=$(
     dpkg-query -W -f='${Version}\n' libcudnn9 2>/dev/null \
@@ -5487,7 +5522,7 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
           append_cuda_package "${fallback_toolkit}"
           CUDA_VERSION_SELECTED="${CUDA_VERSION_PREFERRED:-${CUDA_MAJOR}}"
       else
-          echo "✗ No suitable CUDA toolkit package found in APT repositories for major version ${CUDA_MAJOR}"
+          printf '%s\n' "✗ No suitable CUDA toolkit package found in APT repositories for major version ${CUDA_MAJOR}" >&2
           exit 1
       fi
   fi
@@ -5501,34 +5536,37 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   ensure_cuda_companion_package "libnpp"
   ensure_cuda_companion_package "libnpp-dev"
 
-  echo "Selected CUDA packages: ${CUDA_INSTALL_PACKAGES[*]}"
-  echo "Preferred CUDA version: ${CUDA_VERSION_PREFERRED}"
-  echo "Effective CUDA version target: ${CUDA_VERSION}"
+  printf '%s\n' "Selected CUDA packages: ${CUDA_INSTALL_PACKAGES[*]}"
+  printf '%s\n' "Preferred CUDA version: ${CUDA_VERSION_PREFERRED}"
+  printf '%s\n' "Effective CUDA version target: ${CUDA_VERSION}"
 
   # Check if the specific cuDNN version is available before attempting installation
-  echo "Checking availability of cuDNN version ${CUDNN_VER}..."
+  printf '%s\n' "Checking availability of cuDNN version ${CUDNN_VER}..."
   CUDNN_VERSION_AVAILABLE=false
   # Use -F for fixed-string matching (safer for version strings with special characters)
-  if apt-cache policy libcudnn9 2>/dev/null | grep -qF "${CUDNN_VER}"; then
+  # D3c: Use -F flag for literal pattern matching
+  if apt-cache policy libcudnn9 2>/dev/null | grep -Fq "${CUDNN_VER}"; then
       CUDNN_VERSION_AVAILABLE=true
-      echo "  ✓ Version ${CUDNN_VER} is available in repository"
+      printf '%s\n' "  ✓ Version ${CUDNN_VER} is available in repository"
   else
-      echo "  ⚠ Version ${CUDNN_VER} not found in repository"
-      echo "  Checking available cuDNN versions..."
-      apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)"
+      printf '%s\n' "  ⚠ Version ${CUDNN_VER} not found in repository" >&2
+      printf '%s\n' "  Checking available cuDNN versions..."
+      # D3c: Use -E for regex pattern (version numbers)
+      version_list=$(apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)")
+      printf '%s\n' "${version_list}"
   fi
 
   CUDA_CUDNN_PACKAGE="${CUDA_CUDNN_PACKAGE:-libcudnn9-cuda-${CUDA_MAJOR}}"
   CUDA_CUDNN_DEV_PACKAGE="${CUDA_CUDNN_DEV_PACKAGE:-libcudnn9-dev-cuda-${CUDA_MAJOR}}"
 
   # Check for cached NVIDIA packages before downloading
-  echo "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
+  printf '%s\n' "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
   CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
   if [ "${CACHED_NVIDIA_PKGS}" -gt 0 ]; then
-      echo "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - APT will reuse if versions match"
-      echo "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
+      printf '%s\n' "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - APT will reuse if versions match"
+      printf '%s\n' "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
       # List cached packages for debugging
-      echo "  → Cached packages:"
+      printf '%s\n' "  → Cached packages:"
       # Phase 1: Collect package paths into array (avoids pipe subshell, limits to 5)
       cached_pkg_array=()
       pkg_count=0
@@ -5541,38 +5579,39 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       # Phase 2: Display collected packages
       for pkg in "${cached_pkg_array[@]}"; do
           if [ -n "${pkg:-}" ] && [ -f "${pkg}" ]; then
-              echo "    - $(basename "${pkg}")"
+              printf '%s\n' "    - $(basename "${pkg}")"
           fi
       done
-      [ "${CACHED_NVIDIA_PKGS}" -gt 5 ] && echo "    ... and $((CACHED_NVIDIA_PKGS - 5)) more"
+      [ "${CACHED_NVIDIA_PKGS}" -gt 5 ] && printf '%s\n' "    ... and $((CACHED_NVIDIA_PKGS - 5)) more"
   else
-      echo "  ℹ No cached NVIDIA packages found - will download fresh"
+      printf '%s\n' "  ℹ No cached NVIDIA packages found - will download fresh"
   fi
   
   # CRITICAL: Ensure APT configuration file exists and is correct
   # This ensures APT uses the cache directory for all operations
+  # J1: File existence validation before use
   if [ ! -f /etc/apt/apt.conf.d/90-cache.conf ]; then
-      echo "[WARN] APT cache configuration missing - creating it now..."
-      echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
-      echo 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
+      printf '%s\n' "[WARN] APT cache configuration missing - creating it now..." >&2
+      printf '%s\n' "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
+      printf '%s\n' 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
   fi
 
   # Try to install specific version if available, otherwise fall back to latest
   CUDNN_INSTALLED=false
   if [ "${CUDNN_VERSION_AVAILABLE:-}" = "true" ]; then
-      echo "Installing cuDNN version ${CUDNN_VER}..."
+      printf '%s\n' "Installing cuDNN version ${CUDNN_VER}..."
       if apt-get ${APT_CACHE_OPTS} install -y --no-install-recommends libcudnn9=${CUDNN_VER} libcudnn9-dev=${CUDNN_VER} "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee /tmp/cudnn_install.log; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
-              echo "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
+              printf '%s\n' "  ✓ Successfully installed cuDNN ${CUDNN_VER}"
           fi
       fi
   fi
 
   # Fallback to latest compatible version if specific version failed or wasn't available
   if [ "${CUDNN_INSTALLED:-}" = "false" ]; then
-      echo "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
-      echo "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
+      printf '%s\n' "Installing latest cuDNN version compatible with CUDA ${CUDA_MAJOR}..."
+      printf '%s\n' "  (This is the fallback when specific version ${CUDNN_VER} is not available)"
       if apt-get ${APT_CACHE_OPTS} install -y --no-install-recommends "${CUDA_CUDNN_PACKAGE}" "${CUDA_CUDNN_DEV_PACKAGE}" "${CUDA_INSTALL_PACKAGES[@]}" 2>&1 | tee -a /tmp/cudnn_install.log; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
@@ -5585,29 +5624,30 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
                   INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
               fi
               if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
-                  echo "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
+                  printf '%s\n' "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
               else
-                  echo "  ✓ Successfully installed latest cuDNN version"
+                  printf '%s\n' "  ✓ Successfully installed latest cuDNN version"
               fi
           fi
       fi
   fi
 
   if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
-      echo "✓ NVIDIA cuDNN installed successfully."
+      printf '%s\n' "✓ NVIDIA cuDNN installed successfully."
       
       # CRITICAL: Immediately sync cache to ensure packages are persisted to disk
       # This ensures cache is available even if build fails later
-      echo "[INFO] Syncing NVIDIA package cache to disk immediately..."
+      printf '%s\n' "[INFO] Syncing NVIDIA package cache to disk immediately..."
+      # H4: Validate sync operation
       if ! sync; then
-          echo "[WARN] ⚠ Cache sync failed - packages may not be persisted (non-critical)"
+          printf '%s\n' "[WARN] ⚠ Cache sync failed - packages may not be persisted (non-critical)" >&2
       fi
       
       # Verify packages are in cache and sync any from /var/cache/apt/archives if needed
       if [ -d "/var/cache/apt/archives" ]; then
           VAR_CACHE_NVIDIA=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
           if [ "${VAR_CACHE_NVIDIA}" -gt 0 ]; then
-              echo "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
+              printf '%s\n' "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
               # Phase 1: Collect package paths into array (avoids pipe subshell, preserves error handling)
               nvidia_files_array=()
               while IFS= read -r -d '' deb_file; do
@@ -5628,20 +5668,21 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
                                   copy_success=$((copy_success + 1))
                               else
                                   copy_failed=$((copy_failed + 1))
-                                  echo "[WARN] ⚠ Failed to copy: ${deb_file}" >&2
+                                  printf '%s\n' "[WARN] ⚠ Failed to copy: ${deb_file}" >&2
                               fi
                           fi
                       fi
                   done
                   if [ "${copy_success}" -gt 0 ]; then
-                      echo "[INFO] Copied ${copy_success} package(s) to cache"
+                      printf '%s\n' "[INFO] Copied ${copy_success} package(s) to cache"
                   fi
                   if [ "${copy_failed}" -gt 0 ]; then
-                      echo "[WARN] ⚠ Failed to copy ${copy_failed} package(s) (non-critical)"
+                      printf '%s\n' "[WARN] ⚠ Failed to copy ${copy_failed} package(s) (non-critical)" >&2
                   fi
                   # Force sync again after copying
+                  # H4: Validate sync operation
                   if ! sync; then
-                      echo "[WARN] ⚠ Final cache sync failed (non-critical)"
+                      printf '%s\n' "[WARN] ⚠ Final cache sync failed (non-critical)" >&2
                   fi
               fi
           fi
@@ -5650,23 +5691,24 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       monitor_cache "After CUDA/cuDNN installation"
       CUDA_INSTALL_PERFORMED=true
   else
-      echo "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details."
+      printf '%s\n' "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details." >&2
       export PHASE2_STATUS="FAIL"
       exit 1
   fi
 else
-  echo "[INFO] CUDA/cuDNN installation skipped (already satisfied)."
+  printf '%s\n' "[INFO] CUDA/cuDNN installation skipped (already satisfied)."
 fi
 # --- Configuration Step (Fixing the PATH) ---
-echo -e "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment variables for CUDA...${NC}"
+printf '%s\n' "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment variables for CUDA...${NC}"
 # After CUDA installation, detect actual installed version (or use config.sh default)
 CUDA_MAJOR="${CUDA_VERSION%%.*}"  # Extract major version from config.sh
-DETECTED_CUDA=$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p')
+# D3d, F2: Validate command substitution result
+DETECTED_CUDA=$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
 if [ -n "${DETECTED_CUDA}" ]; then
   CUDA_VERSION="${DETECTED_CUDA}"  # Use detected version if found
 fi
 # CUDA_VERSION now contains either detected version or config.sh default
-echo "Detected CUDA version: ${CUDA_VERSION}"
+printf '%s\n' "Detected CUDA version: ${CUDA_VERSION}"
 
 
 #--- Sub-block 13.2: Configure CUDA environment variables ---
@@ -5685,10 +5727,12 @@ chmod +x /etc/profile.d/cuda.sh
 # Purpose: Make CUDA available in all shell types
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
+# J1: File existence validation before use
 if [ -f /etc/profile.d/cuda.sh ]; then
   . /etc/profile.d/cuda.sh
-  if ! grep -q 'cuda.sh' /etc/bash.bashrc; then
-    echo '. /etc/profile.d/cuda.sh' >> /etc/bash.bashrc
+  # D3c: Use -F flag for literal pattern matching
+  if ! grep -Fq 'cuda.sh' /etc/bash.bashrc; then
+    printf '%s\n' '. /etc/profile.d/cuda.sh' >> /etc/bash.bashrc
   fi
 fi
 # End environment sourcing (if-else self-contained)
@@ -5697,8 +5741,13 @@ fi
 # Critical: Make CUDA available immediately for rest of build process
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-echo "==> Sourcing CUDA environment to make it available for the rest of this build..."
-source /etc/profile.d/cuda.sh
+printf '%s\n' "==> Sourcing CUDA environment to make it available for the rest of this build..."
+# J1: File existence validation before use
+if [ -f /etc/profile.d/cuda.sh ]; then
+    source /etc/profile.d/cuda.sh
+else
+    printf '%s\n' "[WARN] CUDA profile script not found: /etc/profile.d/cuda.sh" >&2
+fi
 # Note: ldconfig should be run without sudo in container context (already root)
 run_ldconfig_refresh
 
@@ -5707,19 +5756,20 @@ run_ldconfig_refresh
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 PHASE2_SUCCESS=true
-echo -e "${YELLOW}[PHASE 2 | NVIDIA] Verifying installation and environment...${NC}"
+printf '%s\n' "${YELLOW}[PHASE 2 | NVIDIA] Verifying installation and environment...${NC}"
 if ! command -v nvcc &>/dev/null; then
-  echo -e "${RED}[VERIFICATION FAILED] 'nvcc' command not found in PATH.${NC}"
+  printf '%s\n' "${RED}[VERIFICATION FAILED] 'nvcc' command not found in PATH.${NC}" >&2
   PHASE2_SUCCESS=false
 else
-  echo -e "  - nvcc command: ${GREEN}OK (Found in PATH)${NC}"
+  printf '%s\n' "  - nvcc command: ${GREEN}OK (Found in PATH)${NC}"
   nvcc --version
 fi
-if ! timeout 5 ldconfig -p 2>/dev/null | grep -q 'libcudnn.so'; then
-  echo -e "${RED}[VERIFICATION FAILED] 'libcudnn.so' not found in linker cache.${NC}"
+# D3c: Use -F flag for literal pattern matching
+if ! timeout 5 ldconfig -p 2>/dev/null | grep -Fq 'libcudnn.so'; then
+  printf '%s\n' "${RED}[VERIFICATION FAILED] 'libcudnn.so' not found in linker cache.${NC}" >&2
   PHASE2_SUCCESS=false
 else
-  echo -e "  - libcudnn.so: ${GREEN}OK (Visible to linker)${NC}"
+  printf '%s\n' "  - libcudnn.so: ${GREEN}OK (Visible to linker)${NC}"
 fi
 
 #--- Sub-block 13.6: Report CUDA installation status ---
@@ -5727,10 +5777,10 @@ fi
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
 if [ "${PHASE2_SUCCESS}" = true ]; then
-  echo -e "${GREEN}✓ [PHASE 2] NVIDIA CUDA Toolkit and cuDNN configured and verified successfully.${NC}"
+  printf '%s\n' "${GREEN}✓ [PHASE 2] NVIDIA CUDA Toolkit and cuDNN configured and verified successfully.${NC}"
   export PHASE2_STATUS="PASS"
 else
-  echo -e "${RED}✗ [PHASE 2] Errors occurred during GPU environment setup. Please review logs.${NC}"
+  printf '%s\n' "${RED}✗ [PHASE 2] Errors occurred during GPU environment setup. Please review logs.${NC}" >&2
   export PHASE2_STATUS="FAIL"
   exit 1
 fi
@@ -5925,7 +5975,7 @@ early_verify_cached_files() {
 
     # Verify Julia (early verification for complex archive)
     if [ -f "${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}" ]; then
-    echo "Verifying Julia archive..."
+        echo "Verifying Julia archive..."
         julia_file="${CONTAINER_BIN_CACHE}/${JULIA_TARBALL}"
         expected_sha256="${JULIA_SHA256}"
         julia_url="${JULIA_URL}"
@@ -5956,17 +6006,24 @@ early_verify_cached_files() {
         fi
       else
         echo "✗ Julia re-download attempt failed due to network error"
-            exit 1
+        exit 1
       fi
-        fi
+    fi
 
-        # gzip integrity check
+    # gzip integrity check
+    # Validate file exists before integrity check (J1)
+    if [ ! -f "${julia_file}" ]; then
+      echo "✗ Julia file not found: ${julia_file}"
+      exit 1
+    fi
     if gzip -t "${julia_file}" 2>/dev/null; then
       echo "✓ Julia gzip integrity verified"
-        else
+    else
       echo "✗ Julia gzip integrity check failed - archive is corrupted!"
-            echo "  Attempting to re-download..."
-      if curl -fsSL -o "${julia_file}" "${julia_url}"; then
+      echo "  Attempting to re-download..."
+      # Check HTTP status code for curl (I4)
+      http_code=$(curl -w "%{http_code}" -fsSL -o "${julia_file}" "${julia_url}" 2>&1 | tail -n1)
+      if [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
         if gzip -t "${julia_file}" 2>/dev/null; then
           echo "✓ Julia re-downloaded and gzip integrity verified"
         else
@@ -5982,14 +6039,16 @@ early_verify_cached_files() {
           echo "    ${julia_file}"
           echo "═══════════════════════════════════════════════════════════════"
           echo "✗ Julia re-download also failed - aborting build"
-                exit 1
+          exit 1
         fi
       else
-        echo "✗ Julia re-download attempt failed due to network error"
-            exit 1
+        echo "✗ Julia re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
+        exit 1
       fi
-        fi
     fi
+    # ENDIF: gzip integrity check
+    fi
+    # ENDIF: Julia verification
 
 
     echo "✓ Early verification completed - all cached files are intact"
@@ -6106,21 +6165,27 @@ echo "Attempting to add PPAs using add-apt-repository..."
 # apt-fast PPA removed - using apt-aria wrapper instead
 add-apt-repository -y ppa:mozillateam/ppa 2>/dev/null || echo "[warn] Mozilla PPA failed, will try manual method"
 add-apt-repository -y ppa:agornostal/ulauncher 2>/dev/null || echo "[warn] Ulauncher PPA failed, will try manual method"
-    CODENAME=$(lsb_release -cs)
+CODENAME=$(lsb_release -cs)
+# Validate CODENAME is non-empty (C1, C5)
+if [ -z "${CODENAME}" ]; then
+  echo "[ERROR] Failed to determine Ubuntu codename"
+  exit 1
+fi
 # If add-apt-repository failed, use manual method as fallback
-if [ ! -f /etc/apt/sources.list.d/mozillateam-ubuntu-ppa-${CODENAME}.list ]; then
+if [ ! -f "/etc/apt/sources.list.d/mozillateam-ubuntu-ppa-${CODENAME}.list" ]; then
   echo "Using manual PPA configuration as fallback for ${CODENAME}..."
 
-    # apt-fast PPA removed - using apt-aria wrapper instead
+  # apt-fast PPA removed - using apt-aria wrapper instead
 
-    # Add Mozilla PPA manually
-    echo "deb http://ppa.launchpad.net/mozillateam/ppa/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/mozillateam-ppa.list
-    echo "deb-src http://ppa.launchpad.net/mozillateam/ppa/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/mozillateam-ppa.list
+  # Add Mozilla PPA manually
+  echo "deb http://ppa.launchpad.net/mozillateam/ppa/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/mozillateam-ppa.list
+  echo "deb-src http://ppa.launchpad.net/mozillateam/ppa/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/mozillateam-ppa.list
 
-    # Add Ulauncher PPA manually
-    echo "deb http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/ulauncher-ppa.list
-    echo "deb-src http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/ulauncher-ppa.list
+  # Add Ulauncher PPA manually
+  echo "deb http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" > /etc/apt/sources.list.d/ulauncher-ppa.list
+  echo "deb-src http://ppa.launchpad.net/agornostal/ulauncher/ubuntu ${CODENAME} main" >> /etc/apt/sources.list.d/ulauncher-ppa.list
 fi
+# ENDIF: PPA fallback check
 
 # Verify fastest mirror is still in place (safeguard after PPA operations)
 echo ""
@@ -6135,22 +6200,40 @@ echo "Adding PPA GPG keys..."
 # apt-fast key removed - using apt-aria wrapper
 
 # Mozilla PPA key
-curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xAEBDF4819BE21867 | gpg --dearmor -o /etc/apt/trusted.gpg.d/mozillateam.gpg 2>/dev/null || echo "[warn] Mozilla key failed"
+# Check HTTP status code for curl (I4)
+http_code=$(curl -w "%{http_code}" -fsSL -o /tmp/mozillateam_key.asc "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xAEBDF4819BE21867" 2>&1 | tail -n1)
+if [ "${http_code}" = "200" ] && [ -f /tmp/mozillateam_key.asc ]; then
+  gpg --dearmor -o /etc/apt/trusted.gpg.d/mozillateam.gpg /tmp/mozillateam_key.asc 2>/dev/null || echo "[warn] Mozilla key GPG processing failed"
+  rm -f /tmp/mozillateam_key.asc
+else
+  echo "[warn] Mozilla key download failed (HTTP ${http_code:-unknown})"
+fi
 
 # Ulauncher PPA key
-curl -fsSL https://keyserver.ubuntu.com/pks/lookup?op=get\&search=0xFAF1020699503176 | gpg --dearmor -o /etc/apt/trusted.gpg.d/ulauncher.gpg 2>/dev/null || echo "[warn] Ulauncher key failed"
+# Check HTTP status code for curl (I4)
+http_code=$(curl -w "%{http_code}" -fsSL -o /tmp/ulauncher_key.asc "https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xFAF1020699503176" 2>&1 | tail -n1)
+if [ "${http_code}" = "200" ] && [ -f /tmp/ulauncher_key.asc ]; then
+  gpg --dearmor -o /etc/apt/trusted.gpg.d/ulauncher.gpg /tmp/ulauncher_key.asc 2>/dev/null || echo "[warn] Ulauncher key GPG processing failed"
+  rm -f /tmp/ulauncher_key.asc
+else
+  echo "[warn] Ulauncher key download failed (HTTP ${http_code:-unknown})"
+fi
 
 #--- Sub-block 13.24: Verify PPA keys ---
 # Purpose: Confirm all PPA keys are properly installed
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 echo "Verifying PPA GPG keys..."
-for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
-  if [ -f "${keyfile:-}" ]; then
-    echo "✓ PPA key verified: $(basename "${keyfile}")"
-  fi
-done
-# End PPA key verification loop (for loop self-contained)
+# Validate directory exists before globbing (J1)
+if [ -d /etc/apt/trusted.gpg.d ]; then
+  for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
+    # Handle case where glob matches no files (D3f)
+    if [ -f "${keyfile:-}" ]; then
+      echo "✓ PPA key verified: $(basename "${keyfile}")"
+    fi
+  done
+fi
+# ENDFOR: keyfile
 
 #--- Sub-block 13.25: Update package lists with PPAs ---
 # Critical: Refresh APT cache with all newly added repositories
@@ -6194,36 +6277,62 @@ fi
 # Verify GMP version meets requirement (>= 6.1.2)
 if command -v pkg-config >/dev/null 2>&1; then
     GMP_VERSION=$(pkg-config --modversion gmp 2>/dev/null || echo "0.0.0")
-    echo "  ✓ GMP version: ${GMP_VERSION}"
-    # Basic version check (compare major.minor)
-    GMP_MAJOR=$(echo "${GMP_VERSION}" | cut -d. -f1)
-    GMP_MINOR=$(echo "${GMP_VERSION}" | cut -d. -f2)
-    if [ "${GMP_MAJOR}" -lt 6 ] || ([ "${GMP_MAJOR}" -eq 6 ] && [ "${GMP_MINOR}" -lt 1 ]); then
-        echo "  ⚠ WARNING: GMP version ${GMP_VERSION} may be below required 6.1.2"
-        echo "    SPEX may fail to build. Consider upgrading GMP if build fails."
+    # Validate version format before parsing (F2, H4)
+    if [ -n "${GMP_VERSION}" ] && [ "${GMP_VERSION}" != "0.0.0" ]; then
+      echo "  ✓ GMP version: ${GMP_VERSION}"
+      # Basic version check (compare major.minor)
+      # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+      GMP_MAJOR=$(cut -d. -f1 <<< "${GMP_VERSION}")
+      GMP_MINOR=$(cut -d. -f2 <<< "${GMP_VERSION}")
+      # Validate numeric values before arithmetic comparison (K1)
+      if [ -n "${GMP_MAJOR}" ] && [ -n "${GMP_MINOR}" ] && \
+         [ "${GMP_MAJOR}" -ge 0 ] 2>/dev/null && [ "${GMP_MINOR}" -ge 0 ] 2>/dev/null; then
+        if [ "${GMP_MAJOR}" -lt 6 ] || ([ "${GMP_MAJOR}" -eq 6 ] && [ "${GMP_MINOR}" -lt 1 ]); then
+          echo "  ⚠ WARNING: GMP version ${GMP_VERSION} may be below required 6.1.2"
+          echo "    SPEX may fail to build. Consider upgrading GMP if build fails."
+        else
+          echo "  ✓ GMP version ${GMP_VERSION} meets requirement (>= 6.1.2)"
+        fi
+      else
+        echo "  ⚠ WARNING: Could not parse GMP version ${GMP_VERSION}"
+      fi
     else
-        echo "  ✓ GMP version ${GMP_VERSION} meets requirement (>= 6.1.2)"
+      echo "  ⚠ WARNING: Could not determine GMP version"
     fi
 else
     echo "  ⚠ pkg-config not available, skipping GMP version check"
 fi
+# ENDIF: pkg-config check for GMP
 
 # Verify MPFR version meets requirement (>= 4.0.2)
 if command -v pkg-config >/dev/null 2>&1; then
     MPFR_VERSION=$(pkg-config --modversion mpfr 2>/dev/null || echo "0.0.0")
-    echo "  ✓ MPFR version: ${MPFR_VERSION}"
-    # Basic version check (compare major.minor)
-    MPFR_MAJOR=$(echo "${MPFR_VERSION}" | cut -d. -f1)
-    MPFR_MINOR=$(echo "${MPFR_VERSION}" | cut -d. -f2)
-    if [ "${MPFR_MAJOR}" -lt 4 ] || ([ "${MPFR_MAJOR}" -eq 4 ] && [ "${MPFR_MINOR}" -lt 1 ]); then
-        echo "  ⚠ WARNING: MPFR version ${MPFR_VERSION} may be below required 4.0.2"
-        echo "    SPEX may fail to build. Consider upgrading MPFR if build fails."
+    # Validate version format before parsing (F2, H4)
+    if [ -n "${MPFR_VERSION}" ] && [ "${MPFR_VERSION}" != "0.0.0" ]; then
+      echo "  ✓ MPFR version: ${MPFR_VERSION}"
+      # Basic version check (compare major.minor)
+      # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+      MPFR_MAJOR=$(cut -d. -f1 <<< "${MPFR_VERSION}")
+      MPFR_MINOR=$(cut -d. -f2 <<< "${MPFR_VERSION}")
+      # Validate numeric values before arithmetic comparison (K1)
+      if [ -n "${MPFR_MAJOR}" ] && [ -n "${MPFR_MINOR}" ] && \
+         [ "${MPFR_MAJOR}" -ge 0 ] 2>/dev/null && [ "${MPFR_MINOR}" -ge 0 ] 2>/dev/null; then
+        if [ "${MPFR_MAJOR}" -lt 4 ] || ([ "${MPFR_MAJOR}" -eq 4 ] && [ "${MPFR_MINOR}" -lt 1 ]); then
+          echo "  ⚠ WARNING: MPFR version ${MPFR_VERSION} may be below required 4.0.2"
+          echo "    SPEX may fail to build. Consider upgrading MPFR if build fails."
+        else
+          echo "  ✓ MPFR version ${MPFR_VERSION} meets requirement (>= 4.0.2)"
+        fi
+      else
+        echo "  ⚠ WARNING: Could not parse MPFR version ${MPFR_VERSION}"
+      fi
     else
-        echo "  ✓ MPFR version ${MPFR_VERSION} meets requirement (>= 4.0.2)"
+      echo "  ⚠ WARNING: Could not determine MPFR version"
     fi
 else
     echo "  ⚠ pkg-config not available, skipping MPFR version check"
 fi
+# ENDIF: pkg-config check for MPFR
 
 echo "  ✓ GMP and MPFR installed successfully"
 echo ""
@@ -6277,8 +6386,9 @@ fi
 declare -a suitesparse_cuda_libs=("libcublas.so" "libcusparse.so" "libcusolver.so" "libcurand.so")
 for cuda_lib in "${suitesparse_cuda_libs[@]}"; do
     if [[ ! -f "${CUDA_LIB_DIR}/${cuda_lib}" ]]; then
-        found_path="$(find "${CUDA_LIB_DIR}" -maxdepth 1 -name "${cuda_lib}*" -print -quit)"
-        if [[ -n "${found_path}" ]]; then
+        found_path="$(find "${CUDA_LIB_DIR}" -maxdepth 1 -name "${cuda_lib}*" -print -quit 2>/dev/null || echo "")"
+        # Validate find result (F2, H4)
+        if [[ -n "${found_path}" ]] && [[ -f "${found_path}" ]]; then
             echo "  ✓ Using ${found_path}"
             declare "FOUND_${cuda_lib//./_}=${found_path}"
         else
@@ -6286,7 +6396,9 @@ for cuda_lib in "${suitesparse_cuda_libs[@]}"; do
             exit 1
         fi
     fi
+    # ENDIF: CUDA library check
 done
+# ENDFOR: cuda_lib
 
 echo "  ✓ CUDA toolkit detected at ${CUDA_HOME}"
 echo "  ✓ MKLROOT detected at ${MKLROOT}"
@@ -6410,7 +6522,8 @@ else:
     sys.exit(1)
 " "${GRAPHBLAS_CMakeLists}" 2>&1
             PATCH_RESULT=$?
-            if [ ${PATCH_RESULT} -eq 0 ]; then
+            # Validate patch result (F2, H4)
+            if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
                 # Patch succeeded, remove backup file
                 rm -f "${GRAPHBLAS_CMakeLists}.bak"
             else
@@ -6420,8 +6533,11 @@ else:
                     mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
                 fi
             fi
+            # ENDIF: patch result check
         fi
+        # ENDIF: python3 availability check
     fi
+    # ENDIF: GraphBLAS CMakeLists.txt check
     
     # CRITICAL: Patch ALL CMakeLists.txt files that create executables to ensure libm linking
     # This includes test directories, benchmark directories, and any other executables
@@ -6532,6 +6648,7 @@ else:
         echo "  ⚠ python3 not found, cannot patch all CMakeLists.txt files"
         echo "    → Will rely on CMAKE_EXE_LINKER_FLAGS_INIT for all executables"
     fi
+    # ENDIF: python3 availability check for all CMakeLists.txt patching
     
     # Also ensure libm is always linked on Unix (safer approach)
     # Check if GraphBLAS target already links to math library (case-insensitive)
@@ -6557,8 +6674,13 @@ else:
                     echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
                     # Create a backup and patch using Python (will be cleaned up after successful patch)
                     cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
-                # Use Python to safely add math library to target_link_libraries
-                python3 -c "
+                    # Use Python to safely add math library to target_link_libraries
+                    # Validate CMakeLists.txt exists before patching (J1)
+                    if [ ! -f "${GRAPHBLAS_CMakeLists}" ]; then
+                      echo "  ✗ ERROR: GraphBLAS CMakeLists.txt not found: ${GRAPHBLAS_CMakeLists}"
+                      exit 1
+                    fi
+                    python3 -c "
 import sys
 import re
 
@@ -6623,7 +6745,8 @@ else:
     sys.exit(1)
 " "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1
                     PATCH_RESULT=$?
-                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                    # Validate patch result (F2, H4)
+                    if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
                         # Patch succeeded, remove backup
                         rm -f "${GRAPHBLAS_CMakeLists}.bak"
                     else
@@ -6633,9 +6756,15 @@ else:
                             mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
                         fi
                     fi
+                    # ENDIF: patch result check
                 else
                     echo "  → No existing target_link_libraries found for GraphBLAS, adding one..."
                     # Add a new target_link_libraries line after add_library
+                    # Validate CMakeLists.txt exists before patching (J1)
+                    if [ ! -f "${GRAPHBLAS_CMakeLists}" ]; then
+                      echo "  ✗ ERROR: GraphBLAS CMakeLists.txt not found: ${GRAPHBLAS_CMakeLists}"
+                      exit 1
+                    fi
                     cp "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_CMakeLists}.bak"
                     python3 -c "
 import sys
@@ -6674,7 +6803,8 @@ else:
     sys.exit(1)
 " "${GRAPHBLAS_CMakeLists}" "${GRAPHBLAS_TARGET}" 2>&1
                     PATCH_RESULT=$?
-                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                    # Validate patch result (F2, H4)
+                    if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
                         # Patch succeeded, remove backup
                         rm -f "${GRAPHBLAS_CMakeLists}.bak"
                     else
@@ -6684,17 +6814,23 @@ else:
                             mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
                         fi
                     fi
+                    # ENDIF: patch result check
                 fi
+                # ENDIF: target_link_libraries existence check
             fi
+            # ENDIF: python3 availability check
         else
             echo "  ⚠ Could not determine GraphBLAS target name"
         fi
+        # ENDIF: GraphBLAS target name check
     else
         echo "  ✓ GraphBLAS already links to math library"
     fi
+    # ENDIF: GraphBLAS math library link check
 else
     echo "  ⚠ GraphBLAS CMakeLists.txt not found (will rely on CMake standard libraries)"
 fi
+# ENDIF: GraphBLAS CMakeLists.txt existence check
 
 # Patch LAGraph similarly to ensure math library linking
 if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
@@ -6715,8 +6851,13 @@ if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
                 if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
                     # Add m to existing target_link_libraries line (if not already there)
                     echo "  → LAGraph has target_link_libraries, ensuring math library is included..."
+                    # Validate CMakeLists.txt exists before patching (J1)
+                    if [ ! -f "${LAGRAPH_CMakeLists}" ]; then
+                      echo "  ✗ ERROR: LAGraph CMakeLists.txt not found: ${LAGRAPH_CMakeLists}"
+                      exit 1
+                    fi
                     cp "${LAGRAPH_CMakeLists}" "${LAGRAPH_CMakeLists}.bak"
-                python3 -c "
+                    python3 -c "
 import sys
 import re
 
@@ -6781,7 +6922,8 @@ else:
     sys.exit(1)
 " "${LAGRAPH_CMakeLists}" "${LAGRAPH_TARGET}" 2>&1
                     PATCH_RESULT=$?
-                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                    # Validate patch result (F2, H4)
+                    if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
                         # Patch succeeded, remove backup
                         rm -f "${LAGRAPH_CMakeLists}.bak"
                     else
@@ -6791,8 +6933,14 @@ else:
                             mv "${LAGRAPH_CMakeLists}.bak" "${LAGRAPH_CMakeLists}"
                         fi
                     fi
+                    # ENDIF: patch result check
                 else
                     echo "  → No existing target_link_libraries found for LAGraph, adding one..."
+                    # Validate CMakeLists.txt exists before patching (J1)
+                    if [ ! -f "${LAGRAPH_CMakeLists}" ]; then
+                      echo "  ✗ ERROR: LAGraph CMakeLists.txt not found: ${LAGRAPH_CMakeLists}"
+                      exit 1
+                    fi
                     cp "${LAGRAPH_CMakeLists}" "${LAGRAPH_CMakeLists}.bak"
                     python3 -c "
 import sys
@@ -6831,7 +6979,8 @@ else:
     sys.exit(1)
 " "${LAGRAPH_CMakeLists}" "${LAGRAPH_TARGET}" 2>&1
                     PATCH_RESULT=$?
-                    if [ ${PATCH_RESULT} -eq 0 ]; then
+                    # Validate patch result (F2, H4)
+                    if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
                         # Patch succeeded, remove backup
                         rm -f "${LAGRAPH_CMakeLists}.bak"
                     else
@@ -6841,23 +6990,34 @@ else:
                             mv "${LAGRAPH_CMakeLists}.bak" "${LAGRAPH_CMakeLists}"
                         fi
                     fi
+                    # ENDIF: patch result check
                 fi
+                # ENDIF: target_link_libraries existence check
             fi
+            # ENDIF: python3 availability check
         else
             echo "  ⚠ Could not determine LAGraph target name"
         fi
+        # ENDIF: LAGraph target name check
     else
         echo "  ✓ LAGraph already links to math library"
     fi
+    # ENDIF: LAGraph math library link check
 else
     echo "  ⚠ LAGraph CMakeLists.txt not found (will rely on CMake standard libraries)"
 fi
+# ENDIF: LAGraph CMakeLists.txt existence check
 
 echo -e "${YELLOW}[6.12C.3] Configuring SuiteSparse via CMake...${NC}"
 cmake_build_dir="${SUITESPARSE_SOURCE_DIR}/build"
+# Validate source directory exists before build operations (J1)
+if [ ! -d "${SUITESPARSE_SOURCE_DIR}" ]; then
+  echo "  ✗ ERROR: SuiteSparse source directory not found: ${SUITESPARSE_SOURCE_DIR}"
+  exit 1
+fi
 rm -rf "${cmake_build_dir}"
-mkdir -p "${cmake_build_dir}"
-pushd "${cmake_build_dir}" >/dev/null
+mkdir -p "${cmake_build_dir}" || { echo "  ✗ Failed to create build directory: ${cmake_build_dir}"; exit 1; }
+pushd "${cmake_build_dir}" >/dev/null || { echo "  ✗ Failed to change to build directory: ${cmake_build_dir}"; exit 1; }
 
 CMAKE_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES:-86}"
 BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/libmkl_core.so;${MKLROOT}/lib/intel64/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
@@ -6963,7 +7123,8 @@ fi
 
 # Verify NO_LIBM is not set (or is set to OFF/NO) in CMakeCache.txt
 if [ -f "CMakeCache.txt" ]; then
-    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+    # Validate command substitution result (F2, H4)
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
     if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
         echo "  ⚠ WARNING: NO_LIBM is set to '${NO_LIBM_VALUE}' in CMakeCache.txt (expected OFF/NO/FALSE/0)"
         echo "    → This may indicate check_symbol_exists detected libm incorrectly"
@@ -6975,7 +7136,8 @@ if [ -f "CMakeCache.txt" ]; then
         # Re-run CMake configure to apply the change
         cmake . -DNO_LIBM=OFF >/dev/null 2>&1 || true
         # Verify again
-        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        # Validate command substitution result (F2, H4)
+        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
         if [ "${NO_LIBM_VALUE}" = "OFF" ] || [ "${NO_LIBM_VALUE}" = "NO" ] || [ "${NO_LIBM_VALUE}" = "FALSE" ] || [ "${NO_LIBM_VALUE}" = "0" ]; then
             echo "  ✓ Successfully forced NO_LIBM=OFF"
         else
@@ -6986,8 +7148,10 @@ if [ -f "CMakeCache.txt" ]; then
     fi
     
     # Additional verification: Check that linker flags actually contain -lm
-    LINKER_FLAGS_CHECK=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2-)
-    if grep -q "\-lm" <<< "${LINKER_FLAGS_CHECK}"; then
+    # Validate command substitution result (F2, H4)
+    LINKER_FLAGS_CHECK=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2- || echo "")
+    # Validate variable before using in here-string (D3, F2)
+    if [ -n "${LINKER_FLAGS_CHECK}" ] && grep -q "\-lm" <<< "${LINKER_FLAGS_CHECK}"; then
         echo "  ✓ Verified: CMAKE_SHARED_LINKER_FLAGS contains -lm"
     else
         echo "  ⚠ WARNING: CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm"
@@ -7014,7 +7178,8 @@ unset CMAKE_REQUIRED_LIBRARIES
 echo -e "${YELLOW}[6.12C.4] Building SuiteSparse...${NC}"
 # Final pre-build verification: Ensure NO_LIBM=OFF and linker flags are correct
 if [ -f "CMakeCache.txt" ]; then
-    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+    # Validate command substitution result (F2, H4)
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
     if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
         echo "  → Pre-build fix: NO_LIBM=${NO_LIBM_VALUE}, forcing OFF..."
         sed -i 's/^NO_LIBM:.*=.*/NO_LIBM:BOOL=OFF/' CMakeCache.txt 2>/dev/null || true
@@ -7028,11 +7193,13 @@ if ! cmake --build . -j"$(nproc)"; then
     echo "  → Checking for build errors related to math library..."
     # We're still in the build directory, so check CMakeCache.txt
     if [ -f "CMakeCache.txt" ]; then
-        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+        # Validate command substitution results (F2, H4)
+        NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
         echo "    - NO_LIBM value in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
-        LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
-        EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
-        if grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
+        LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2- || echo "")
+        EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2- || echo "")
+        # Validate variable before using in here-string (D3, F2)
+        if [ -n "${LINKER_FLAGS}" ] && grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
         else
             echo "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO"
@@ -7063,13 +7230,23 @@ echo "  ✓ SuiteSparse installation completed"
 
 # Comprehensive post-build verification: Check NO_LIBM value and verify actual linking
 if [ -f "CMakeCache.txt" ]; then
-    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
-    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
-    EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2-)
+    # Validate command substitution results (F2, H4)
+    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
+    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2- || echo "")
+    EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2- || echo "")
     
     # Check both shared and executable linker flags
-    SHARED_HAS_LM=$(grep -q "\-lm" <<< "${LINKER_FLAGS}" && echo "YES" || echo "NO")
-    EXE_HAS_LM=$(grep -q "\-lm" <<< "${EXE_LINKER_FLAGS}" && echo "YES" || echo "NO")
+    # Validate variables before using in here-strings (D3, F2)
+    if [ -n "${LINKER_FLAGS}" ] && grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
+      SHARED_HAS_LM="YES"
+    else
+      SHARED_HAS_LM="NO"
+    fi
+    if [ -n "${EXE_LINKER_FLAGS}" ] && grep -q "\-lm" <<< "${EXE_LINKER_FLAGS}"; then
+      EXE_HAS_LM="YES"
+    else
+      EXE_HAS_LM="NO"
+    fi
     
     if [ -n "${NO_LIBM_VALUE}" ] && [ "${NO_LIBM_VALUE}" != "OFF" ] && [ "${NO_LIBM_VALUE}" != "NO" ] && [ "${NO_LIBM_VALUE}" != "FALSE" ] && [ "${NO_LIBM_VALUE}" != "0" ]; then
         if [ "${SHARED_HAS_LM}" = "YES" ] && [ "${EXE_HAS_LM}" = "YES" ]; then
@@ -7153,18 +7330,21 @@ verify_math_library_linkage() {
             
             if [ -n "${UNDEF_SYMBOLS}" ]; then
                 echo "    ✗ Found undefined math symbols (this will cause linker errors):"
-                echo "${UNDEF_SYMBOLS}" | sed 's/^/      /'
+                # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+                sed 's/^/      /' <<< "${UNDEF_SYMBOLS}"
                 echo "    → Diagnostic information:"
                 
                 # Check CMakeCache.txt if available (use cmake_build_dir variable for consistency)
                 local cmake_cache="${SUITESPARSE_SOURCE_DIR}/build/CMakeCache.txt"
                 if [ -f "${cmake_cache}" ]; then
-                    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2 | tr -d ' ')
+                    # Validate command substitution results (F2, H4)
+                    NO_LIBM_VALUE=$(grep -i "^NO_LIBM:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2 | tr -d ' ' || echo "")
                     echo "      - NO_LIBM in CMakeCache.txt: ${NO_LIBM_VALUE:-unset}"
                     
                     # Check if CMAKE_SHARED_LINKER_FLAGS contains -lm
-                    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2-)
-                    if grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
+                    LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2- || echo "")
+                    # Validate variable before using in here-string (D3, F2)
+                    if [ -n "${LINKER_FLAGS}" ] && grep -q "\-lm" <<< "${LINKER_FLAGS}"; then
                         echo "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES"
                         echo "      → NOTE: Even though NO_LIBM=${NO_LIBM_VALUE}, linker flags include -lm, so linking should work"
                     else
@@ -7191,14 +7371,19 @@ verify_math_library_linkage() {
 }
 
 # Verify GraphBLAS
-GRAPHBLAS_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "libgraphblas.so*" -type f 2>/dev/null | head -1)
-verify_math_library_linkage "${GRAPHBLAS_LIB}" "GraphBLAS"
+# Validate command substitution result (F2, H4)
+GRAPHBLAS_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "libgraphblas.so*" -type f 2>/dev/null | head -1 || echo "")
+if [ -n "${GRAPHBLAS_LIB}" ]; then
+  verify_math_library_linkage "${GRAPHBLAS_LIB}" "GraphBLAS"
+fi
 
 # Verify LAGraph (if it exists and was built)
-LAGRAPH_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "liblagraph.so*" -type f 2>/dev/null | head -1)
+# Validate command substitution result (F2, H4)
+LAGRAPH_LIB=$(find "${SUITESPARSE_INSTALL_PREFIX}/lib" -name "liblagraph.so*" -type f 2>/dev/null | head -1 || echo "")
 if [ -n "${LAGRAPH_LIB}" ]; then
     verify_math_library_linkage "${LAGRAPH_LIB}" "LAGraph"
 fi
+# ENDIF: LAGraph library check
 
 find_suitesparse_library() {
     local lib_basename="${1:-}"
@@ -7282,13 +7467,14 @@ if [ ! -f "${SUITESPARSE_INCLUDE_DIR:-}/SuiteSparseQR.hpp" ]; then
     # Phase 3: Search with explicit error handling (F2, H4: validate command substitution)
     SUITESPARSEQR_HEADER=""
     if command -v find >/dev/null 2>&1; then
+        # Validate command substitution result (F2, H4)
         SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 || echo "")
     fi
     # Phase 4: Validate search result (F2: command substitution validation)
     if [ -n "${SUITESPARSEQR_HEADER}" ] && [ -f "${SUITESPARSEQR_HEADER}" ]; then
         echo "  → Found SuiteSparseQR.hpp at: ${SUITESPARSEQR_HEADER}"
         # Validate dirname result (F2: command substitution validation)
-        SUITESPARSE_INCLUDE_DIR_NEW=$(dirname "${SUITESPARSEQR_HEADER}" || echo "")
+        SUITESPARSE_INCLUDE_DIR_NEW=$(dirname "${SUITESPARSEQR_HEADER}" 2>/dev/null || echo "")
         if [ -n "${SUITESPARSE_INCLUDE_DIR_NEW}" ] && [ -d "${SUITESPARSE_INCLUDE_DIR_NEW}" ]; then
             SUITESPARSE_INCLUDE_DIR="${SUITESPARSE_INCLUDE_DIR_NEW}"
             echo "  → Using SuiteSparse include directory: ${SUITESPARSE_INCLUDE_DIR}"
@@ -8617,8 +8803,9 @@ GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
 if [ "${GLOG_VERSION}" != "unknown" ]; then
     echo "  ✓ pkg-config reports glog version: ${GLOG_VERSION}"
     # Extract major.minor version
-    GLOG_MAJOR=$(echo "${GLOG_VERSION}" | cut -d. -f1)
-    GLOG_MINOR=$(echo "${GLOG_VERSION}" | cut -d. -f2)
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    GLOG_MAJOR=$(cut -d. -f1 <<< "${GLOG_VERSION}")
+    GLOG_MINOR=$(cut -d. -f2 <<< "${GLOG_VERSION}")
     
     # Validate version components are numeric before comparison
     if [ -n "${GLOG_MAJOR}" ] && [ -n "${GLOG_MINOR}" ] && \
@@ -10449,7 +10636,8 @@ elif command -v gcc &>/dev/null; then
 fi
 
 if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
-    GCC_MAJOR_FOR_OPENCV=$(echo "${GCC_VERSION_FOR_OPENCV}" | cut -d. -f1)
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    GCC_MAJOR_FOR_OPENCV=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_OPENCV}")
     echo "  Detected GCC version for OpenCV: ${GCC_VERSION_FOR_OPENCV}"
     
     # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
@@ -10719,7 +10907,8 @@ if grep -Eq "^LAPACK(_lapack)?_FOUND:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
   # Check which LAPACK implementation was detected
   lapack_impl_line=$(grep -E "^LAPACK_IMPL:STRING=" CMakeCache.txt 2>/dev/null | head -1 || true)
   if [ -n "${lapack_impl_line}" ]; then
-    lapack_impl=$(echo "${lapack_impl_line}" | cut -d= -f2 | tr -d '\n' || echo "")
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    lapack_impl=$(cut -d= -f2 <<< "${lapack_impl_line}" | tr -d '\n' || echo "")
     if [ "${lapack_impl}" = "MKL" ]; then
       echo -e "  ${GREEN}✓ LAPACK detected by CMake: MKL (using ${MKL_BLA_VENDOR})${NC}"
     elif [ "${lapack_impl}" = "OpenBLAS" ]; then
@@ -10810,7 +10999,8 @@ fi
 mkl_threading_verified=false
 MKL_THREADING_CACHE=$(grep -E "^MKL_THREADING_LAYER" CMakeCache.txt 2>/dev/null | head -1 || true)
 if [ -n "${MKL_THREADING_CACHE}" ]; then
-  MKL_THREADING_VALUE=$(echo "${MKL_THREADING_CACHE}" | cut -d= -f2 | tr -d '\n' || echo "")
+  # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+  MKL_THREADING_VALUE=$(cut -d= -f2 <<< "${MKL_THREADING_CACHE}" | tr -d '\n' || echo "")
   if [ "${MKL_THREADING_VALUE}" = "GNU" ]; then
     echo -e "  ${GREEN}✓ MKL threading layer verified: GNU OpenMP (libgomp)${NC}"
     mkl_threading_verified=true
@@ -11465,8 +11655,9 @@ if [ "${GLOG_VERSION}" != "unknown" ]; then
     echo "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo '/usr/lib/x86_64-linux-gnu')"
     
     # Verify it's glog 0.6.x (required for COLMAP 3.12.6)
-    GLOG_MAJOR=$(echo "${GLOG_VERSION}" | cut -d. -f1)
-    GLOG_MINOR=$(echo "${GLOG_VERSION}" | cut -d. -f2)
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    GLOG_MAJOR=$(cut -d. -f1 <<< "${GLOG_VERSION}")
+    GLOG_MINOR=$(cut -d. -f2 <<< "${GLOG_VERSION}")
     if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
         echo "  ✓ glog 0.6.x detected - COMPATIBLE with COLMAP 3.12.6"
     else
@@ -11652,7 +11843,8 @@ GCC_MAJOR_FOR_COLMAP=""
 if command -v gcc &>/dev/null; then
     GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
     if [ -n "${GCC_VERSION_FOR_COLMAP}" ]; then
-        GCC_MAJOR_FOR_COLMAP=$(echo "${GCC_VERSION_FOR_COLMAP}" | cut -d. -f1)
+        # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        GCC_MAJOR_FOR_COLMAP=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_COLMAP}")
         echo "  Detected GCC version for COLMAP: ${GCC_VERSION_FOR_COLMAP}"
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
@@ -12280,7 +12472,8 @@ detect_cuda_version_for_jax() {
         local cuda_lib
         cuda_lib=$(find /usr/local/cuda-*/lib64/libcudart.so* 2>/dev/null | head -1)
         if [ -n "${cuda_lib:-}" ]; then
-            cuda_full=$(echo "${cuda_lib}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
+            # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+            cuda_full=$(sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p' <<< "${cuda_lib}")
             if [ -n "${cuda_full:-}" ]; then
                 cuda_major="${cuda_full%%.*}"
                 cuda_minor="${cuda_full#*.}"
@@ -12291,7 +12484,8 @@ detect_cuda_version_for_jax() {
     
     # Method 3: Check CUDA_HOME or CUDA_PATH
     if [ -z "${cuda_full:-}" ] && [ -n "${CUDA_HOME:-}" ]; then
-        cuda_full=$(echo "${CUDA_HOME}" | sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p')
+        # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+        cuda_full=$(sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p' <<< "${CUDA_HOME}")
         if [ -z "${cuda_full:-}" ] && [ -f "${CUDA_HOME}/version.txt" ]; then
             cuda_full=$(grep -oP 'CUDA Version \K[0-9]+\.[0-9]+' "${CUDA_HOME}/version.txt" 2>/dev/null || echo "")
         fi
@@ -12535,8 +12729,9 @@ if python3 -c "import matplotlib" 2>/dev/null; then
     MATPLOTLIB_VER=$(python3 -c "import matplotlib; print(matplotlib.__version__)" 2>/dev/null || echo "")
     if [ -n "${MATPLOTLIB_VER}" ]; then
         # Check if matplotlib version is < 3.8 (required by types-seaborn)
-        MATPLOTLIB_MAJOR=$(echo "${MATPLOTLIB_VER}" | cut -d. -f1 2>/dev/null || echo "")
-        MATPLOTLIB_MINOR=$(echo "${MATPLOTLIB_VER}" | cut -d. -f2 2>/dev/null || echo "")
+        # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        MATPLOTLIB_MAJOR=$(cut -d. -f1 <<< "${MATPLOTLIB_VER}" 2>/dev/null || echo "")
+        MATPLOTLIB_MINOR=$(cut -d. -f2 <<< "${MATPLOTLIB_VER}" 2>/dev/null || echo "")
         # Fix logic: need parentheses for proper evaluation
         if [ -n "${MATPLOTLIB_MAJOR}" ] && [ -n "${MATPLOTLIB_MINOR}" ] && \
            ([ "${MATPLOTLIB_MAJOR}" -lt 3 ] || ([ "${MATPLOTLIB_MAJOR}" -eq 3 ] && [ "${MATPLOTLIB_MINOR}" -lt 8 ])); then
@@ -13062,8 +13257,9 @@ fi
 
 # Verify Python version (PyTorch 2.6.0 requires Python 3.8+)
 PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
-PYTHON_MAJOR=$(echo "${PYTHON_VERSION}" | cut -d. -f1)
-PYTHON_MINOR=$(echo "${PYTHON_VERSION}" | cut -d. -f2)
+# D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+PYTHON_MAJOR=$(cut -d. -f1 <<< "${PYTHON_VERSION}")
+PYTHON_MINOR=$(cut -d. -f2 <<< "${PYTHON_VERSION}")
 if [ "${PYTHON_MAJOR}" -lt 3 ] || { [ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_MINOR}" -lt 8 ]; }; then
     echo -e "  ${RED}✗ ERROR: PyTorch 2.6.0 requires Python 3.8 or later${NC}"
     echo "  Current Python version: ${PYTHON_VERSION}"
@@ -13084,7 +13280,8 @@ GCC_MAJOR=""
 if command -v gcc >/dev/null 2>&1; then
     GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
     if [ -n "${GCC_VERSION}" ]; then
-        GCC_MAJOR=$(echo "${GCC_VERSION}" | cut -d. -f1 || echo "")
+        # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        GCC_MAJOR=$(cut -d. -f1 <<< "${GCC_VERSION}" || echo "")
         echo "  Detected GCC version: ${GCC_VERSION}"
     fi
 fi
@@ -13151,8 +13348,9 @@ CUDA_HOME=""
 if command -v nvcc >/dev/null 2>&1; then
     CUDA_VERSION=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
     if [ -n "${CUDA_VERSION}" ]; then
-        CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
-        CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)
+        # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}")
+        CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}")
         CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")")
         echo "  Detected CUDA version: ${CUDA_VERSION}"
         echo "  CUDA_HOME: ${CUDA_HOME}"
@@ -13161,8 +13359,9 @@ elif [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
     if [ -f "${CUDA_HOME}/bin/nvcc" ]; then
         CUDA_VERSION=$("${CUDA_HOME}/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
         if [ -n "${CUDA_VERSION}" ]; then
-            CUDA_MAJOR=$(echo "${CUDA_VERSION}" | cut -d. -f1)
-            CUDA_MINOR=$(echo "${CUDA_VERSION}" | cut -d. -f2)
+            # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+            CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}")
+            CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}")
             echo "  Detected CUDA version: ${CUDA_VERSION}"
         fi
     fi
@@ -13825,8 +14024,9 @@ CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}' 2>/dev
 if [ -z "${CMAKE_VERSION}" ]; then
     echo "⚠ WARNING: Could not determine CMake version"
 else
-    CMAKE_MAJOR=$(echo "${CMAKE_VERSION}" | cut -d. -f1 2>/dev/null || echo "")
-    CMAKE_MINOR=$(echo "${CMAKE_VERSION}" | cut -d. -f2 2>/dev/null || echo "")
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    CMAKE_MAJOR=$(cut -d. -f1 <<< "${CMAKE_VERSION}" 2>/dev/null || echo "")
+    CMAKE_MINOR=$(cut -d. -f2 <<< "${CMAKE_VERSION}" 2>/dev/null || echo "")
     # Validate that we got numeric values (check if they're non-empty and numeric)
     if [ -z "${CMAKE_MAJOR}" ] || ! expr "${CMAKE_MAJOR}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
         echo "⚠ WARNING: Could not parse CMake major version from: ${CMAKE_VERSION}"
@@ -14851,7 +15051,8 @@ if [ -n "${CLANG_LIBDIR_11:-}" ] && [ -d "${CLANG_LIBDIR_11}" ]; then
 elif [ -n "${CLANG_LIBDIR_DETECTED:-}" ] && [ -d "${CLANG_LIBDIR_DETECTED}" ]; then
     CLANG_LIBDIR_TO_USE="${CLANG_LIBDIR_DETECTED}"
     LLVM_VERSION_DETECTED=""
-    LLVM_VERSION_DETECTED=$(echo "${CLANG_LIBDIR_TO_USE}" | sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' | head -1 || echo "")
+    # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+    LLVM_VERSION_DETECTED=$(sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' <<< "${CLANG_LIBDIR_TO_USE}" | head -1 || echo "")
     if [ -n "${LLVM_VERSION_DETECTED}" ]; then
         # Check if version is numeric and greater than 11 (use bash arithmetic instead of expr)
         if [[ "${LLVM_VERSION_DETECTED}" =~ ^[0-9]+$ ]] && [ "${LLVM_VERSION_DETECTED}" -gt 11 ]; then
@@ -14914,7 +15115,8 @@ GCC_MAJOR_FOR_OPEN3D=""
 if command -v gcc &>/dev/null; then
     GCC_VERSION_FOR_OPEN3D=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
     if [ -n "${GCC_VERSION_FOR_OPEN3D}" ]; then
-        GCC_MAJOR_FOR_OPEN3D=$(echo "${GCC_VERSION_FOR_OPEN3D}" | cut -d. -f1)
+        # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        GCC_MAJOR_FOR_OPEN3D=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_OPEN3D}")
         echo "  Detected GCC version for Open3D: ${GCC_VERSION_FOR_OPEN3D}"
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
@@ -19568,10 +19770,12 @@ TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM_FROM_PORT))
 # Try to detect compute node from SLURM environment
 if [ -n "${SLURM_JOB_NODELIST:-}" ]; then
     # Extract first node from SLURM_JOB_NODELIST
-    COMPUTE_NODE=$(echo "${SLURM_JOB_NODELIST}" | cut -d',' -f1 | sed 's/\[.*\]//')
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    COMPUTE_NODE=$(cut -d',' -f1 <<< "${SLURM_JOB_NODELIST}" | sed 's/\[.*\]//')
     echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
 elif [ -n "${SLURM_NODELIST:-}" ]; then
-    COMPUTE_NODE=$(echo "${SLURM_NODELIST}" | cut -d',' -f1 | sed 's/\[.*\]//')
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+    COMPUTE_NODE=$(cut -d',' -f1 <<< "${SLURM_NODELIST}" | sed 's/\[.*\]//')
     echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
 fi
 
