@@ -13,7 +13,11 @@ import json
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 PATTERN_REPO = REPO_ROOT / "prompts" / "Pattern-Learning-Repository.md"
-CODE_CHECK_PROMPT = REPO_ROOT / "prompts" / "Code_check_prompt_manual.txt"
+CODE_CHECK_PROMPT = REPO_ROOT / "prompts" / "Code_check_prompt_manual.txt"  # Master entry point
+CODE_CHECK_PROMPT_PART1 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART1.txt"
+CODE_CHECK_PROMPT_PART2 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART2.txt"
+CODE_CHECK_PROMPT_PART3 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART3.txt"
+CODE_CHECK_PROMPT_PART4 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART4.txt"
 ADVANCED_COT = REPO_ROOT / "prompts" / "Advanced-CoT-Multi-Agent-Prompt-PART1.md"
 ENHANCED_REVIEW = REPO_ROOT / "prompts" / "Enhanced-Code-Review-Prompt-PART1.md"
 LIBRARY_ANALYSIS = REPO_ROOT / "prompts" / "Library-Analysis-Tool-PART1.md"
@@ -439,26 +443,77 @@ def update_pattern_repository(patterns: List[Dict]) -> bool:
 def enhance_code_check_prompt(pattern: Dict) -> bool:
     """
     Enhance Code_check_prompt_manual.txt with pattern if not already covered.
+    Handles split parts: checks all parts sequentially, enhances the appropriate part.
     """
     if not CODE_CHECK_PROMPT.exists():
         return False
     
-    content = CODE_CHECK_PROMPT.read_text(encoding="utf-8")
+    # Load all parts sequentially to check for existing pattern and determine target part
+    part_files = [
+        (CODE_CHECK_PROMPT_PART1, "PART1"),
+        (CODE_CHECK_PROMPT_PART2, "PART2"),
+        (CODE_CHECK_PROMPT_PART3, "PART3"),
+        (CODE_CHECK_PROMPT_PART4, "PART4"),
+    ]
     
-    # Check if pattern is already covered
-    if pattern["detection"] in content or pattern["error"].lower() in content.lower():
+    # Check if pattern already exists in any part
+    for part_path, part_name in part_files:
+        if part_path.exists():
+            content = part_path.read_text(encoding="utf-8")
+            if pattern["detection"] in content or pattern["error"].lower() in content.lower():
+                return False  # Pattern already covered
+    
+    # Determine target part based on section (A-C in PART1, D-H in PART2, I-M in PART3, N-P in PART4)
+    target_part = None
+    section_map = {
+        "A": CODE_CHECK_PROMPT_PART1,  # A. Structure & Syntax
+        "B": CODE_CHECK_PROMPT_PART1,  # B. Shell Options
+        "C": CODE_CHECK_PROMPT_PART1,  # C. Variables & Defaults
+        "D": CODE_CHECK_PROMPT_PART2,  # D. Quoting & Expansion Safety (continues in PART2)
+        "E": CODE_CHECK_PROMPT_PART2,  # E. Here-docs
+        "F": CODE_CHECK_PROMPT_PART2,  # F. Logic & Flow Control
+        "G": CODE_CHECK_PROMPT_PART2,  # G. Functions
+        "H": CODE_CHECK_PROMPT_PART2,  # H. Error Handling (continues in PART3)
+        "I": CODE_CHECK_PROMPT_PART3,  # I. Timeouts
+        "J": CODE_CHECK_PROMPT_PART3,  # J. Edge Cases
+        "K": CODE_CHECK_PROMPT_PART3,  # K. Security
+        "L": CODE_CHECK_PROMPT_PART3,  # L. Performance
+        "M": CODE_CHECK_PROMPT_PART3,  # M. Environment & Dependencies
+        "N": CODE_CHECK_PROMPT_PART4,  # N. Resource Management
+        "O": CODE_CHECK_PROMPT_PART4,  # O. Testing & Validation
+        "P": CODE_CHECK_PROMPT_PART4,  # P. Build Flag Analysis
+    }
+    
+    # Determine target section based on pattern category
+    if "pipe" in pattern["category"].lower():
+        target_part = CODE_CHECK_PROMPT_PART2  # D3 section
+    elif "bash" in pattern["category"].lower() or "compatibility" in pattern["category"].lower():
+        target_part = CODE_CHECK_PROMPT_PART1  # A6 section
+    elif "security" in pattern["category"].lower() or "injection" in pattern["category"].lower():
+        target_part = CODE_CHECK_PROMPT_PART3  # K section
+    elif "cmake" in pattern["category"].lower() or "flag" in pattern["category"].lower():
+        target_part = CODE_CHECK_PROMPT_PART4  # M or P section
+    elif "error" in pattern["category"].lower() or "failure" in pattern["category"].lower():
+        target_part = CODE_CHECK_PROMPT_PART2  # H section
+    else:
+        # Default to PART1
+        target_part = CODE_CHECK_PROMPT_PART1
+    
+    if not target_part.exists():
         return False
+    
+    content = target_part.read_text(encoding="utf-8")
     
     # Add to appropriate section based on category
     if "pipe" in pattern["category"].lower() or "performance" in pattern["category"].lower():
         # Add to D3 section (Pipe Pattern Safety)
         if "D3" in content or "Pipe Pattern Safety" in content:
-            section_pattern = r'(D3\.\s*Pipe Pattern Safety.*?)(\n[A-Z]\.)'
-            addition = f"\n- D3.{len(re.findall(r'D3\.', content)) + 1}: {pattern['error']}\n  - Detection: {pattern['detection']}\n  - Fix: {pattern['prevention']}\n"
+            section_pattern = r'(D3\.\s*\*\*PIPE PATTERN SAFETY\*\*.*?)(\n[E-Z]\.|\n\n[A-Z]\.)'
+            addition = f"\n- **Pattern {pattern['id']}**: {pattern['error']}\n  - Detection: {pattern['detection']}\n  - Fix: {pattern['prevention']}\n"
             content = re.sub(section_pattern, rf'\1{addition}\2', content, flags=re.DOTALL)
         else:
             # Add new D3 section
-            content += f"\n\nD3. Pipe Pattern Safety\n- {pattern['error']}\n  - Detection: {pattern['detection']}\n  - Fix: {pattern['prevention']}\n"
+            content += f"\n\nD3. **PIPE PATTERN SAFETY**\n- **Pattern {pattern['id']}**: {pattern['error']}\n  - Detection: {pattern['detection']}\n  - Fix: {pattern['prevention']}\n"
     
     elif "bash" in pattern["category"].lower() or "compatibility" in pattern["category"].lower():
         # Add to A6 section (Bash Version Compatibility)
@@ -471,7 +526,7 @@ def enhance_code_check_prompt(pattern: Dict) -> bool:
                 flags=re.DOTALL
             )
     
-    CODE_CHECK_PROMPT.write_text(content, encoding="utf-8")
+    target_part.write_text(content, encoding="utf-8")
     return True
 
 

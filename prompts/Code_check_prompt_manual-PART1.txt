@@ -1,0 +1,516 @@
+**CODE CHECK PROMPT MANUAL - PART 1 of 4**
+
+**AUTHORITATIVE SOURCE**: This file (`Code_check_prompt_manual-PART1.txt`) is PART 1 of 4 parts that together form the **central, comprehensive, grounded prompt** for all code checking in this repository. This is the **single source of truth** for all validation criteria.
+
+**SEQUENTIAL CHECKING ENFORCED**: 
+- This is PART 1 of 4 (covers: Introduction, Steps 1-2, Sections A-B-C-D partial)
+- After completing all checklist items in this part, continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H)
+- Then PART 3: `Code_check_prompt_manual-PART3.txt` (continues H, covers I-J-K-L-M-O partial)  
+- Finally PART 4: `Code_check_prompt_manual-PART4.txt` (continues O, covers P, Steps 3-4, Protocols)
+- **DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts
+- Complete PART 1 before proceeding to PART 2
+
+**MANDATORY FOR ALL REVIEWS**: 
+- ALL other review prompts (Advanced CoT, Enhanced Code Review, etc.) MUST reference and strictly follow this manual
+- This manual MUST be enhanced FIRST when new patterns are discovered from AI corrections, chats, or CI checks
+- All checklist items A1 through O5 MUST be checked sequentially - do not skip any items
+- Pattern learning updates MUST be added to this manual FIRST before being referenced elsewhere
+
+---
+
+You will be given a Bash script segment for audit and correction, specified by a line range or a distinct code block that may differ from earlier reviews.
+
+When responding, follow each checklist item explicitly, indicating pass/fail (and corrections, if needed) before moving to the next item. Do not skip or merge items.
+
+Adhere to established industry best practices for Bash scripting (POSIX compliance when feasible, defensive programming, minimal privilege exposure, deterministic cleanup). Treat each checklist item as a gate intended to enforce these standards.
+
+Step 1 – Context Review
+1. Confirm the provided code block boundaries (line range or identifier).
+2. Note any visible dependencies on earlier/later script sections that may influence this block.
+3. If the supplied slice exceeds ~500 lines or mixes multiple logical units, split it before proceeding. Aim for 400–600 line chunks, respect natural boundaries (functions, classes), and include a 10–20 line overlap so context is preserved. Document the chosen splits. Track any symbols (functions, globals, exported variables) that originate in an earlier chunk but are referenced later, capturing their scope (local/global/exported) so you explicitly carry their context forward during review. As soon as a definition is confirmed and safe usage verified, mark it resolved in your tracking table so only active dependencies are carried forward, minimizing retained context and memory overhead.
+4. Identify the logical blocks that form self-contained operations (functions, guarded sections, case arms, long loops). Confirm each block is clearly delineated with surrounding whitespace, consistent indentation, and an opening comment that states its purpose and any preconditions or context carried in from earlier chunks. Add or refresh comments when the intent is unclear, and note the updates in your summary.
+
+**LLM AGENT EXECUTION PROTOCOL** (MANDATORY FOR AI AGENTS)
+Before executing checklist items A1-P5, implement structured reasoning:
+
+**Phase 1: Code Understanding** - Parse boundaries, extract symbols (scope: local/global/exported), map call graph, trace variable state, build symbol table.
+
+**Phase 2: Heuristic-Based Fast Filtering** - Run fast heuristics: Shebang? → Skip A5 if bash. Strict mode? → Enable B3 first. Parallel ops? → Enable H4. Network? → Enable I4. CMake? → Enable M7-M14. Result: Execute ONLY relevant groups (30-40% faster).
+
+**Phase 3: Pattern-Based Error Detection** (RANK 1 - check FIRST): Unquoted vars (D1, ~70%), missing error checks (H1, ~65%), unbound vars (C1, ~55%), variable duplication/overwrites (C6, ~40%), masked failures (H4, ~25%), command injection (K1, ~30%). Report with Pattern ID, line numbers, confidence (≥90% = high).
+
+**Phase 4: Parallel Execution** - Group 1 (A1-A6, D1-D4) → Group 2 (F1-F3, C1-C6) → Group 3 (M1-M14) → Group 4 (B1-B3, H1-H4, N1-N5). Report time saved vs sequential.
+
+**Phase 5: Confidence Scoring** - CRITICAL (≥95%): Pattern-based, deterministic. HIGH (85-94%): Pattern + context. MEDIUM (70-84%): Heuristic, verify manually. LOW (<70%): Suggestive only. Prioritize: CRITICAL → HIGH → MEDIUM → LOW.
+
+Step 2 – Sequential Audit Checklist
+For each row below, conduct a line-by-line, comprehensive review of the provided block, confirming full coverage before proceeding. State whether the block satisfies the requirement. If it fails, correct the code, explain the fix, and mark it as resolved.
+
+**IMPORTANT**: Before starting phases A-O, ALWAYS check `prompts/Pattern-Learning-Repository-PART1.md` and `prompts/Pattern-Learning-Repository-PART2.md` for learned error patterns. Verify code against all active patterns using their detection methods. Report any violations with Pattern ID and prevention approach.
+
+**MULTI-SHELL/VERSION DETECTION** (MANDATORY FOR AI AGENTS)
+- Extract shebang (`#!/bin/bash`, `#!/bin/sh`, `#!/bin/dash`) to determine target shell
+- Detect Bash features: `${var^^}`/`${var,,}` → Bash 4+ (check A6), `[[ ]]` → Bash 3.2+, `declare -A` → Bash 4+ (check A6), `(( ))` → Bash-only, `readarray/mapfile` → Bash 4+
+- If Bash 4+ features used but shebang is `#!/bin/sh` or unspecified → Flag INCOMPATIBLE
+- Report compatibility: Bash 3.2 (macOS), Bash 4.0+ (Linux), dash (POSIX), sh
+- Recommend documenting minimum version in comments if Bash 4+ features detected
+Flag any direct package verification patterns such as `dpkg -l | grep` or manual parsing of `apt-cache` output; replace them with the project's resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) or an equivalently robust approach, and document the remediation.
+Maintain a running symbol table covering variables, functions, and exported values encountered so far (see C6 for detailed symbol table structure and variable duplication prevention). For each usage, ensure a single declaration exists before first use (pulling the definition earlier if required), eliminate redundant redeclarations encountered in later chunks (C6 detects duplicates), assign meaningful defaults to variables at their declaration site to avoid unbound-value failures downstream, and mark entries resolved once safe usage is verified so the table stays lean. Use the symbol table to detect variable overwrites and unexpected reuse (C6). Document any adjustments you make.
+As you progress, audit comment coverage alongside code logic: every non-trivial block (multi-line conditional, loop, trap, function, or guarded section) must have a succinct comment tying it back to surrounding context. Update or add comments when intent is ambiguous, and tighten whitespace so related statements remain visually grouped.
+
+A. Structure & Syntax
+- A1. Shebang compatibility, POSIX/Bash feature alignment.
+- A2. Syntax correctness, indentation, formatting, line wrapping.
+- A3. Avoidance of deprecated or non-portable constructs unless justified.
+- A4. Declaration order: functions and variables are defined before first use (or accompanied by guards) to avoid relying on implicit forward declarations.
+- A5. **POSIX COMPLIANCE FOR MAXIMUM COMPATIBILITY**: Favor POSIX-safe command patterns; when Bash-specific constructs are required, document the justification and ensure degradations are gracefully handled:
+  - **POSIX-SAFE COMMAND PATTERNS** (PREFERRED):
+    - Use `[` instead of `[[` when possible (POSIX `[` vs Bash `[[`)
+    - Use `test` command for portability: `test -f "${FILE}"` (POSIX) vs `[[ -f "${FILE}" ]]` (Bash)
+    - Use `case` for pattern matching (POSIX) instead of Bash regex `=~` when possible
+    - Use `printf` instead of `echo -e` or `echo -n` (POSIX-compliant, no flag interpretation)
+    - Use `tr` for character translation (POSIX) instead of Bash parameter expansion `${var^^}`/`${var,,}`
+    - Use `awk` or `sed` for text processing (POSIX) instead of Bash-only features
+    - Use `command -v` instead of `which` (POSIX-compliant command lookup)
+    - Use `read -r` with IFS handling (POSIX) instead of Bash-specific `readarray`
+  - **BASH-SPECIFIC CONSTRUCTS** (REQUIRE JUSTIFICATION):
+    - `[[ ]]` (Bash conditional) → Document why `[` won't work
+    - `(( ))` (Bash arithmetic) → Document why `$(( ))` won't work
+    - `readarray`/`mapfile` (Bash 4+) → Document why `while read` loop won't work
+    - Associative arrays `declare -A` (Bash 4+) → Document why regular arrays won't work
+    - Process substitution `<()` (Bash) → Document why pipes won't work
+    - Parameter expansion `${var:offset}` (Bash) → Document why `cut`/`sed` won't work
+  - **GRACEFUL DEGRADATION**: When Bash features are used, provide POSIX fallback:
+    ```bash
+    # Bash-specific with POSIX fallback
+    if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+      readarray -t lines < "${FILE}"  # Bash 4+
+    else
+      # POSIX fallback
+      while IFS= read -r line || [ -n "${line}" ]; do
+        lines+=("${line}")
+      done < "${FILE}"
+    fi
+    ```
+  - **VALIDATION**: For each Bash-specific feature, verify:
+    1. POSIX alternative was considered
+    2. Bash feature is necessary (documented justification)
+    3. Fallback is provided for compatibility (if needed)
+    4. Shebang matches feature requirements (`#!/bin/bash` for Bash features)
+  - **DETECTION**: Find Bash-specific features: `grep -nE '\[\[|\(\(|readarray|mapfile|declare -A|<\(\)' script.sh`
+  - **CROSS-REFERENCE**: See A6 (Bash version compatibility), A1 (shebang compatibility)
+- A5a. **ROBUST COMMAND SELECTION**: Choose commands that handle various text types robustly (alphanumeric, special characters, Unicode, whitespace):
+  - **FILENAME/PATH ROBUSTNESS** (CRITICAL):
+    - **ALPHANUMERIC + SAFE CHARS**: Filenames may contain: `a-z`, `A-Z`, `0-9`, `_`, `-`, `.`, `/`, spaces, Unicode
+    - **ROBUST COMMANDS FOR FILENAMES**:
+      - `find` → Handles all filename types (spaces, special chars, Unicode): `find "${DIR}" -name "*.txt"`
+      - `test -f` / `[ -f ]` → POSIX-compliant, handles all filenames: `[ -f "${FILE}" ]`
+      - `readlink -f` / `realpath` → Canonicalizes paths, handles special chars: `realpath "${FILE}"`
+      - `basename` / `dirname` → POSIX-compliant, handles all paths: `basename "${FILE}"`
+      - `install` → Robust file copying with permissions: `install -m 0644 "${SRC}" "${DST}"`
+    - **UNSAFE COMMANDS FOR FILENAMES**:
+      - `ls` with globbing → May fail with spaces/special chars: `ls *.txt` (use `find` or arrays)
+      - `for file in *` → May fail with spaces: `for file in *` (use `find` or `nullglob`)
+      - Unquoted variables → Word splitting issues: `command $FILE` (always quote: `command "${FILE}"`)
+    - **VALIDATION PATTERNS**:
+      - **WRONG**: `for file in *.txt; do command "$file"; done` (fails if no matches, spaces break it)
+      - **CORRECT**: `find "${DIR}" -name "*.txt" -type f -exec command {} \;` (handles all cases)
+      - **CORRECT**: `files=("${DIR}"/*.txt); [ ${#files[@]} -gt 0 ] && for file in "${files[@]}"; do command "${file}"; done`
+    - **ALPHANUMERIC PATTERN VALIDATION**: When validating filenames/patterns:
+      - **SAFE CHARS**: `[a-zA-Z0-9_.-]` (alphanumeric, underscore, dash, dot)
+      - **EXTENDED SAFE**: `[a-zA-Z0-9_./-]` (includes slash for paths)
+      - **VALIDATION**: `[[ "${NAME}" =~ ^[a-zA-Z0-9_.-]+$ ]]` (alphanumeric + safe chars only)
+      - **REJECT UNSAFE**: Reject filenames with spaces, special chars, or control characters unless explicitly needed
+  - **TEXT PROCESSING ROBUSTNESS** (CRITICAL):
+    - **TEXT TYPES TO HANDLE**: Alphanumeric, special characters (`!@#$%^&*()`), Unicode, whitespace (spaces, tabs, newlines), control characters
+    - **ROBUST COMMANDS FOR TEXT**:
+      - `grep -F` → Fixed-string matching (no regex interpretation): `grep -F "${PATTERN}" file` (handles special chars literally)
+      - `sed` → Stream editor, handles all text types: `sed 's/old/new/g' file` (escape special chars in pattern)
+      - `awk` → Text processing, handles all text types: `awk '{print $1}' file` (robust field handling)
+      - `tr` → Character translation, handles all chars: `tr '[:upper:]' '[:lower:]'` (POSIX character classes)
+      - `cut` → Field extraction, handles delimited text: `cut -d: -f1 file` (robust delimiter handling)
+      - `sort` → Sorting, handles all text types: `sort file` (locale-aware, handles Unicode)
+      - `printf` → Format output, handles all text types: `printf '%s\n' "${VAR}"` (no interpretation, safe)
+    - **UNSAFE COMMANDS FOR TEXT**:
+      - `echo "${VAR}"` → May interpret flags (`-e`, `-n`) if VAR contains them (use `printf` instead)
+      - `grep "${PATTERN}"` without `-F` → Regex interpretation may match unintended patterns (use `-F` for literal)
+      - Unquoted variables → Word splitting issues: `command $VAR` (always quote: `command "${VAR}"`)
+    - **SPECIAL CHARACTER HANDLING**:
+      - **QUOTE ALL VARIABLES**: `"${VAR}"` prevents word splitting and globbing
+      - **ESCAPE IN REGEX**: When using regex (`grep -E`, `sed -E`), escape special chars: `\.`, `\*`, `\[`, `\]`
+      - **FIXED-STRING MATCHING**: Use `grep -F` when pattern should be literal (no regex interpretation)
+      - **PRINTF FOR OUTPUT**: Use `printf '%s\n' "${VAR}"` instead of `echo "${VAR}"` (no flag interpretation)
+    - **WHITESPACE HANDLING**:
+      - **QUOTE VARIABLES**: `"${VAR}"` preserves spaces/tabs/newlines
+      - **IFS HANDLING**: Set `IFS` for word splitting control: `IFS=$'\n' read -r line` (newline only)
+      - **TRIM WHITESPACE**: Use `sed 's/^[[:space:]]*//;s/[[:space:]]*$//'` (POSIX character class)
+      - **PRESERVE WHITESPACE**: Quote variables and use `read -r` (raw input, no backslash interpretation)
+    - **UNICODE HANDLING**:
+      - **LOCALE SETTING**: Set `LC_ALL=C` for ASCII-only, `LC_ALL=en_US.UTF-8` for Unicode
+      - **SORT UNICODE**: `sort` handles Unicode when locale is set correctly
+      - **CHARACTER CLASSES**: Use POSIX classes: `[[:alnum:]]`, `[[:alpha:]]`, `[[:digit:]]` (locale-aware)
+      - **VALIDATION**: Test with Unicode filenames: `touch "测试.txt"` and verify commands work
+  - **PATTERN MATCHING ROBUSTNESS**:
+    - **LITERAL STRINGS**: Use `grep -F` (fixed-string) for literal patterns: `grep -F "exact text" file`
+    - **REGEX PATTERNS**: Use `grep -E` (extended regex) only when regex is needed: `grep -E "^[0-9]+$" file`
+    - **GLOBBING**: Use `find -name` for glob patterns: `find . -name "*.txt"` (more robust than shell globbing)
+    - **CASE-INSENSITIVE**: Use `grep -i` or `tr` for case handling: `grep -i "pattern" file` or `tr '[:upper:]' '[:lower:]'`
+    - **VALIDATION**: Always quote patterns: `grep -F "${PATTERN}" file` (prevents word splitting and globbing)
+  - **DETECTION**: Find potentially unsafe patterns:
+    - Unquoted variables: `grep -nE 'command\s+\$[^{A-Z_]' script.sh`
+    - Echo with variables: `grep -nE 'echo\s+.*\$\{' script.sh` (should use `printf`)
+    - Grep without `-F`: `grep -nE 'grep\s+[^-F]' script.sh` (check if `-F` needed)
+    - Shell globbing: `grep -nE '\*\s|for.*in\s+\*' script.sh` (should use `find` or arrays)
+  - **AUTO-FIX STRATEGY**:
+    - Replace `echo "${VAR}"` with `printf '%s\n' "${VAR}"`
+    - Add `-F` flag to `grep` when pattern is literal
+    - Replace shell globbing with `find` or arrays
+    - Quote all unquoted variables
+    - Use POSIX-compliant commands when possible
+- A6. **BASH VERSION COMPATIBILITY**: Check for Bash 4+ features that may not work in older versions:
+  - FORBIDDEN: `${var^^}` (uppercase) - use `tr '[:lower:]' '[:upper:]'` instead
+  - FORBIDDEN: `${var,,}` (lowercase) - use `tr '[:upper:]' '[:lower:]'` instead
+  - FORBIDDEN: Associative arrays (`declare -A`) without version check
+  - When using Bash 4+ features, add explicit version check: `if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then ... else ... fi`
+
+B. Shell Options & Execution Controls
+- B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
+- B2. Documentation of intentional relaxations (e.g., `set +e`, `|| true`) and local scoping for risky sections.
+- B3. **STRICT MODE SILENT FAILURE PREVENTION**: In blocks with strict error settings (`set -e`, `set -euo pipefail`), enforce stricter validation:
+  - **CRITICAL**: When `set -e` or `set -euo pipefail` is active, silent failures are EXTREMELY DANGEROUS
+  - **FORBIDDEN**: Using `|| true` or `|| echo ""` in strict mode blocks without explicit validation and logging
+  - **REQUIRED**: In strict mode blocks, ALL masked failures MUST be logged: `command || { echo "[ERROR] Operation failed: command"; exit 1; }`
+  - **REQUIRED**: Command substitutions in strict mode MUST validate results: `result=$(command) || { echo "[ERROR] Command failed"; exit 1; }` then validate result
+  - **REQUIRED**: When `set -u` is active, ALL command substitutions MUST have fallback: `result=$(command || echo "")` AND validate non-empty
+  - **REQUIRED**: Parallel operations (`xargs -P`) in strict mode MUST check result files: `[ -s "${RESULT_FILE}" ] || { echo "[ERROR] All operations failed"; exit 1; }`
+  - **EDGE CASE**: In strict mode, empty result from masked failure can cause `set -u` to trigger if variable is used unguarded
+  - **EDGE CASE**: Pipeline failures in strict mode with `set -o pipefail` will exit immediately - ensure all pipeline stages handle errors
+  - **EDGE CASE**: When `set -e` is active, `|| true` masks failures but script continues - must validate downstream operations don't use invalid results
+  - **DETECTION**: Find strict mode blocks: `grep -nE 'set -e|set -eo|set -euo' script.sh`, then check for masked failures within those blocks
+  - **VALIDATION PATTERN**: For each strict mode block:
+    1. Identify block boundaries (from `set -e` to `set +e` or end of function/file)
+    2. Find all `|| true` or `|| echo ""` patterns within block
+    3. Verify each has explicit validation/logging after the masked command
+    4. Verify result variables are validated before use
+    5. Verify result files are checked for non-empty before parsing
+  - **EXAMPLE - WRONG** (silent failure in strict mode):
+    ```bash
+    set -euo pipefail  # Strict mode active
+    xargs -P 6 -I{} command {} || true  # Masks failures silently
+    result=$(parse_results || echo "")   # Returns empty on failure
+    use_result "${result}"              # Uses empty result - may trigger set -u or cause logic error
+    ```
+  - **EXAMPLE - CORRECT** (explicit validation in strict mode):
+    ```bash
+    set -euo pipefail  # Strict mode active
+    
+    # Run operations with explicit error tracking
+    local failed_count=0
+    xargs -P 6 -I{} bash -c 'command "$1" || exit 1' _ {} || failed_count=$?
+    
+    # Validate result file BEFORE parsing
+    if [ ! -s "${RESULT_FILE}" ]; then
+      echo "[ERROR] ⚠ Result file empty - all operations failed (failed_count=${failed_count})"
+      exit 1  # Exit in strict mode
+    fi
+    
+    # Validate result format
+    if ! grep -qE '^expected_pattern' "${RESULT_FILE}"; then
+      echo "[ERROR] ⚠ Invalid result format in ${RESULT_FILE}"
+      exit 1
+    fi
+    
+    # Parse with validation
+    result=$(parse_results) || {
+      echo "[ERROR] ⚠ parse_results failed"
+      exit 1
+    }
+    
+    # Validate result is non-empty and valid
+    if [ -z "${result}" ] || ! validate_result "${result}"; then
+      echo "[ERROR] ⚠ Invalid or empty result from parse_results"
+      exit 1
+    fi
+    
+    # Safe to use result
+    use_result "${result}"
+    ```
+  - **STRICT MODE EDGE CASES**:
+    - **Case 1**: `set -u` + empty result from `$(command || echo "")` → Variable is empty string (not unset), but logic may fail
+    - **Case 2**: `set -e` + `|| true` → Script continues but invalid state may cause later failures
+    - **Case 3**: `set -o pipefail` + pipeline with masked failure → Pipeline succeeds but produces invalid output
+    - **Case 4**: Strict mode block + subshell with masked failure → Subshell exits 0 but parent may use invalid result
+    - **Prevention**: Always validate results, log failures explicitly, exit on validation failure in strict mode
+  - **STRICT MODE ENFORCEMENT VALIDATION** (MANDATORY):
+    - **CRITICAL**: Verify strict mode is ACTUALLY established and enforced before relying on it
+    - **MANDATORY CHECKS**:
+      - **Verify `set -e` is active**: After `set -e`, test with failing command: `false; echo "set -e not working"` (should NOT print)
+      - **Verify `set -u` is active**: After `set -u`, test with unset variable: `echo "${UNSET_VAR}"` (should exit with error)
+      - **Verify `set -o pipefail` is active**: After `set -o pipefail`, test with failing pipeline: `false | true; echo "pipefail not working"` (should NOT print)
+      - **Verify local scope**: In functions, verify `local` variables don't leak: `local VAR=value; [ -z "${VAR}" ]` outside function (should be empty)
+      - **Verify strict mode boundaries**: Check `set +e` doesn't accidentally disable strict mode before intended
+    - **VALIDATION PATTERNS**:
+      - **WRONG**: `set -euo pipefail` (assumed active, no verification)
+      - **CORRECT**: 
+        ```bash
+        set -euo pipefail
+        # Verify strict mode is active
+        if ! (set -e; false; true); then
+          echo "[ERROR] set -e not working correctly"
+          exit 1
+        fi
+        ```
+      - **WRONG**: `set -e` in function but parent has `set +e` (strict mode not inherited)
+      - **CORRECT**: 
+        ```bash
+        function strict_function() {
+          set -euo pipefail  # Explicitly set in function
+          # ... function code ...
+        }
+        ```
+    - **DETECTION METHOD**:
+      - Find all `set -e`/`set -u`/`set -o pipefail` declarations: `grep -nE 'set -[euo]|set -o pipefail' script.sh`
+      - For each declaration, verify it's not immediately followed by `set +e`/`set +u`/`set +o pipefail`
+      - Check for subshells that may not inherit strict mode: `(command)` vs `{ command; }`
+      - Verify strict mode is set before first use of error-sensitive operations
+    - **EDGE CASES TO VALIDATE**:
+      - **Subshell inheritance**: `set -e; (false; echo "subshell")` → Subshell may not inherit `set -e` → Use `set -e; bash -c 'false; exit 1'` instead
+      - **Function scope**: Strict mode set in function doesn't affect caller → Verify each function that needs strict mode sets it explicitly
+      - **Sourced scripts**: Sourced scripts inherit strict mode → Verify sourced scripts don't accidentally disable strict mode
+      - **Background jobs**: `set -e; command &` → Background job failures don't trigger `set -e` → Use `wait` and check exit codes
+      - **Command substitutions**: `set -e; result=$(false; echo "failed")` → Command substitution doesn't trigger `set -e` → Validate result explicitly
+      - **Conditional contexts**: `set -e; if false; then ...; fi` → Conditionals don't trigger `set -e` → Check exit codes explicitly
+    - **AUTO-FIX STRATEGY**:
+      - Insert strict mode verification after each `set -e`/`set -u`/`set -o pipefail`
+      - Add explicit strict mode setting in functions that require it
+      - Replace subshells with command groups when strict mode is needed: `(command)` → `{ command; }`
+      - Add validation checks after strict mode is set to confirm it's active
+    - **COMPREHENSIVE COVERAGE**: Validate strict mode enforcement for:
+      - Script-level strict mode (set at top of script)
+      - Function-level strict mode (set in each function)
+      - Block-level strict mode (set in specific blocks)
+      - Subshell strict mode (explicitly set in subshells)
+      - Background job strict mode (check exit codes with `wait`)
+
+C. Variables & Defaults
+- C1. Detection/handling of unbound variables with `${var:-default}` or `${var:?message}` as appropriate.
+- C2. Correct use of `local`, `readonly`, `declare -r`, exported variables, and avoidance of unintended global state.
+  - **CRITICAL**: NEVER use `local` keyword outside a function - this causes error "local: can only be used in a function"
+  - Check every `local` declaration is inside a function body
+  - For global variables, use plain assignment or `declare` (without `local`)
+  - Suggested commands: `grep -n '^[[:space:]]*local ' script.sh` to find `local` declarations, verify each is inside a function
+- C3. Safe handling of arrays, indexes, and `IFS` mutations (restore defaults after use).
+- C4. Each variable is declared once, with an explicit, meaningful default or guard. Later redeclarations are removed in favor of the carried-forward definition, and usages reference the original declaration.
+- C5. **UNBOUND VARIABLE PROTECTION**: When using `set -u` or expecting unbound variables, ensure all variables have defaults:
+  - Use `${VAR:-default_value}` pattern consistently
+  - For environment variables that may not be set: `CACHE_DIR="${CONTAINER_APT_CACHE:-/var/cache/apt/archives}"`
+  - Export critical variables in profile scripts: `/etc/profile.d/*.sh` and `/etc/environment`
+  - Add fallback detection logic for missing environment variables before first use
+- C6. **VARIABLE DUPLICATION & OVERWRITE PREVENTION**: Maintain dynamic symbol table and prevent unexpected variable reuse:
+  - **MANDATORY**: Build and maintain a running symbol table tracking all variable declarations (name, scope: local/global/exported, line number, default value, purpose)
+  - **CRITICAL**: Detect duplicate variable declarations - same variable name declared multiple times in same scope
+  - **CRITICAL**: Detect variable overwrites - variable assigned new value without explicit intent (may indicate logic error)
+  - **REQUIRED**: For each variable declaration, check symbol table for existing entry:
+    - If variable exists in same scope → **ERROR**: Duplicate declaration (remove duplicate, use original)
+    - If variable exists in different scope → **WARNING**: Potential shadowing (verify intent, document if intentional)
+    - If variable overwrites existing value → **WARNING**: Verify overwrite is intentional (add comment explaining why)
+  - **SYMBOL TABLE STRUCTURE**: Track for each variable:
+    - Variable name (case-sensitive)
+    - Scope (local/global/exported/readonly)
+    - First declaration line number
+    - Default value (if any)
+    - Purpose/description (from comments or context)
+    - All usage locations (line numbers)
+    - Last assignment line number (to detect overwrites)
+  - **DETECTION METHOD**:
+    1. Extract all variable declarations: `grep -nE '^[[:space:]]*(local |declare |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' script.sh`
+    2. Extract all variable assignments: `grep -nE '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' script.sh`
+    3. Build symbol table: For each declaration, add to table; for each assignment, check if variable exists
+    4. Cross-reference: Check for duplicates in same scope, overwrites without explicit intent
+  - **RISKY BEHAVIORS TO PREVENT**:
+    - **RISK 1**: Variable reused for different purpose → May cause logic errors if old value expected
+    - **RISK 2**: Global variable overwritten in function → May affect other code expecting original value
+    - **RISK 3**: Loop variable reused outside loop → May contain unexpected value from last iteration
+    - **RISK 4**: Temporary variable reused without reset → May contain stale data from previous operation
+    - **RISK 5**: Configuration variable overwritten → May break downstream code expecting original config
+  - **VALIDATION PATTERNS**:
+    - **Pattern 1 - Duplicate Declaration**: `VAR=value1` ... `VAR=value2` (same scope) → Remove duplicate, use first declaration
+    - **Pattern 2 - Unintended Overwrite**: `CONFIG_DIR="/opt/config"` ... `CONFIG_DIR="/tmp"` (no comment) → Add comment or use different variable
+    - **Pattern 3 - Loop Variable Reuse**: `for item in list; do ...; done` ... `echo "$item"` (outside loop) → Use different variable or reset
+    - **Pattern 4 - Temporary Variable Reuse**: `TMP=$(mktemp)` ... `TMP=$(mktemp)` (same scope) → Verify old file cleaned up, or use different variable
+    - **Pattern 5 - Global Shadowing**: Global `VAR=value1` ... Function `local VAR=value2` → Document intentional shadowing
+  - **CROSS-CHUNK TRACKING**: When code is split into chunks:
+    - Maintain symbol table across chunks (carry forward from previous chunks)
+    - Track variables defined in earlier chunks but used in later chunks
+    - Mark variables as "resolved" once safe usage verified in all chunks
+    - When duplicate found across chunks, verify if it's intentional (different purpose) or error (same purpose)
+  - **AUTO-FIX STRATEGY**:
+    - **Duplicate in same scope**: Remove duplicate declaration, update all references to use original
+    - **Unintended overwrite**: Add comment explaining overwrite, or rename variable if different purpose
+    - **Loop variable reuse**: Use different variable name outside loop, or explicitly reset before use
+    - **Temporary variable reuse**: Use unique variable name for each temporary operation, or verify cleanup
+    - **Global shadowing**: Document intentional shadowing with comment, or rename local variable
+  - **EXAMPLE - WRONG** (duplicate declaration):
+    ```bash
+    # Line 100: First declaration
+    INSTALL_DIR="/opt/myapp"
+    
+    # Line 500: Duplicate declaration (ERROR - same scope)
+    INSTALL_DIR="/usr/local/myapp"  # Overwrites without clear intent
+    
+    # Line 800: Uses variable (may use wrong value)
+    install_files "${INSTALL_DIR}"  # Which value is used?
+    ```
+  - **EXAMPLE - CORRECT** (single declaration with explicit overwrite):
+    ```bash
+    # Line 100: Single declaration with default
+    INSTALL_DIR="${INSTALL_DIR:-/opt/myapp}"
+    
+    # Line 500: Explicit overwrite with comment (if intentional)
+    # Override install directory for container builds
+    INSTALL_DIR="/usr/local/myapp"
+    
+    # Line 800: Uses variable (clear which value)
+    install_files "${INSTALL_DIR}"  # Uses /usr/local/myapp
+    ```
+  - **EXAMPLE - WRONG** (temporary variable reuse):
+    ```bash
+    # First operation
+    TMP_FILE=$(mktemp)
+    process_data > "${TMP_FILE}"
+    result1=$(parse_output "${TMP_FILE}")
+    rm -f "${TMP_FILE}"
+    
+    # Second operation (reuses TMP_FILE - risky if first operation failed)
+    TMP_FILE=$(mktemp)  # Overwrites, but what if previous cleanup failed?
+    process_other > "${TMP_FILE}"
+    result2=$(parse_output "${TMP_FILE}")
+    ```
+  - **EXAMPLE - CORRECT** (unique temporary variables):
+    ```bash
+    # First operation
+    TMP_FILE1=$(mktemp)
+    trap 'rm -f "${TMP_FILE1}"' EXIT
+    process_data > "${TMP_FILE1}"
+    result1=$(parse_output "${TMP_FILE1}")
+    
+    # Second operation (uses different variable)
+    TMP_FILE2=$(mktemp)
+    trap 'rm -f "${TMP_FILE2}"' EXIT
+    process_other > "${TMP_FILE2}"
+    result2=$(parse_output "${TMP_FILE2}")
+    ```
+  - **SYMBOL TABLE EXAMPLE**:
+    ```
+    Variable: INSTALL_DIR
+      Scope: global
+      First declared: line 100
+      Default value: /opt/myapp
+      Purpose: Installation directory for application
+      Usage locations: [100, 500, 800]
+      Last assignment: line 500
+      Status: WARNING - Overwritten at line 500 (verify intent)
+    
+    Variable: TMP_FILE
+      Scope: local (function: process_data)
+      First declared: line 200
+      Default value: (mktemp output)
+      Purpose: Temporary file for data processing
+      Usage locations: [200, 201, 202]
+      Last assignment: line 200
+      Status: WARNING - Reused at line 400 (verify cleanup)
+    ```
+  - **VALIDATION COMMANDS**:
+    - Find all variable declarations: `grep -nE '^[[:space:]]*(local |declare |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' script.sh`
+    - Find duplicate names: `grep -oE '^[[:space:]]*(local |declare |readonly |export )?[A-Za-z_][A-Za-z0-9_]*=' script.sh | sed 's/.*\(local \|declare \|readonly \|export \)?//; s/=.*//' | sort | uniq -d`
+    - Find overwrites: Build symbol table, track assignments, flag variables assigned multiple times
+    - Cross-reference with usage: `grep -nE '\$\{[A-Za-z_][A-Za-z0-9_]*\}' script.sh` to find all variable usages
+
+D. Quoting & Expansion Safety
+- D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
+- D2. Verification of `read` usage (`read -r`, IFS settings) and word-splitting safeguards.
+- D3. **PIPE PATTERN SAFETY**: Avoid unsafe `echo | grep` patterns; prefer here-strings or direct grep on variables:
+  - UNSAFE: `if echo "${VARIABLE}" | grep -q "pattern"; then` (creates unnecessary subshell, potential echo flag interpretation)
+  - SAFE: `if grep -q "pattern" <<< "${VARIABLE}"; then` (here-string, no subshell, explicit quoting)
+  - SAFE: `if [[ "${VARIABLE}" =~ pattern ]]; then` (Bash regex, no external command)
+  - Detection: `grep -n 'echo.*|.*grep' script.sh` to find all occurrences
+- D3a. **COMPREHENSIVE UNSAFE PIPE PATTERNS**: Check for ALL unsafe pipe patterns beyond `echo | grep`:
+  - **UNSAFE PATTERNS**:
+    - `echo "${VAR}" | grep` → Use here-string or Bash regex (see D3)
+    - `echo "${VAR}" | sed` → Use here-string: `sed 's/old/new/' <<< "${VAR}"`
+    - `echo "${VAR}" | awk` → Use here-string: `awk '{...}' <<< "${VAR}"`
+    - `echo "${VAR}" | cut` → Use here-string: `cut -d: -f1 <<< "${VAR}"`
+    - `echo "${VAR}" | sort` → Use here-string: `sort <<< "${VAR}"`
+    - `echo "${VAR}" | head/tail` → Use here-string: `head -n1 <<< "${VAR}"`
+    - `printf "${VAR}" | command` → Use here-string: `command <<< "${VAR}"`
+    - `cat file | grep` → Use direct input: `grep pattern file` (no pipe needed)
+    - `cat file | while read` → Use direct input: `while IFS= read -r line < file` or `grep pattern file | while read`
+  - **SAFE ALTERNATIVES**:
+    - For variables: Use here-strings (`<<< "${VAR}"`) or Bash built-ins (`[[ ]]` regex)
+    - For files: Use direct input (`command file`) or process substitution (`< file`)
+    - For arrays: Use process substitution or here-string: `grep pattern <(printf '%s\n' "${array[@]}")`
+  - **DETECTION**: Find all pipe patterns: `grep -nE '[^|]\|[^|]' script.sh`, then analyze each for safe alternatives
+  - **VALIDATION**: For each pipe pattern, verify if here-string or direct input would work better
+- D3b. **ECHO UNSAFE PATTERNS**: Check for unsafe `echo` usage patterns:
+  - **UNSAFE PATTERNS**:
+    - `echo -e "${VAR}"` → Variables may contain escape sequences (`-e`, `-n`) that echo interprets as flags
+    - `echo -n "${VAR}"` → Variables starting with `-n` or containing `\c` can cause unexpected behavior
+    - `echo "${VAR}"` when VAR contains `-e`, `-n`, `--`, `\n`, `\t` → May interpret as flags/escapes
+    - `echo $VAR` (unquoted) → Word splitting and globbing issues
+    - `echo "${VAR}" | command` → Unnecessary pipe (use here-string instead)
+  - **SAFE ALTERNATIVES**:
+    - `printf '%s\n' "${VAR}"` → Always safe, no flag interpretation, explicit format
+    - `printf '%s' "${VAR}"` → Safe for output without newline
+    - `echo "${VAR}"` → Safe ONLY if VAR is guaranteed to not contain echo flags (`-e`, `-n`, `--`)
+    - For literal text: `printf '%s\n' "text"` or `echo "text"` (safe for literal strings)
+  - **VALIDATION RULES**:
+    - If VAR is user-controlled or file content → Use `printf` instead of `echo`
+    - If VAR contains paths, URLs, or unknown content → Use `printf` instead of `echo`
+    - If VAR is guaranteed safe (hardcoded, validated) → `echo "${VAR}"` is acceptable
+    - Always quote variables: `echo "${VAR}"` not `echo $VAR`
+  - **DETECTION**: Find all echo usage: `grep -nE '\becho\s' script.sh`, check for:
+    - Echo with variables: `echo.*\$\{`
+    - Echo with flags: `echo\s+-[en]`
+    - Echo in pipes: `echo.*\|`
+  - **AUTO-FIX**: Replace unsafe `echo` patterns with `printf '%s\n' "${VAR}"`
+- D3c. **GREP UNSAFE PATTERNS**: Check for unsafe `grep` usage patterns:
+  - **UNSAFE PATTERNS**:
+    - `grep "${PATTERN}" file` when PATTERN contains regex special chars (`[`, `]`, `*`, `.`, `^`, `$`) → May match unintended patterns
+    - `grep "${PATTERN}"` when PATTERN is user-controlled or file content → Command injection risk if pattern contains shell metacharacters
+    - `grep -E "${PATTERN}"` with unvalidated pattern → Regex injection risk
+    - `grep "${PATTERN}"` (unquoted pattern) → Word splitting and globbing issues
+    - `grep pattern file` without error handling → May fail silently with `set -e`
+  - **SAFE ALTERNATIVES**:
+    - For literal strings: `grep -F "${PATTERN}" file` → Fixed-string matching (no regex interpretation)
+    - For user-controlled patterns: Validate pattern before use, use `grep -F` when possible
+    - Always quote pattern: `grep -F "${PATTERN}"` not `grep -F $PATTERN`
+    - Add error fallback: `grep -F "${PATTERN}" file || echo ""` (with validation)
+    - For regex: `grep -E "${PATTERN}" file` → Only use when pattern is trusted and regex is intended
+  - **VALIDATION RULES**:
+    - If pattern is literal string → Use `grep -F` (fixed-string matching)
+    - If pattern is user-controlled → Use `grep -F` and validate pattern format first
+    - If pattern is file content → Use `grep -F` or sanitize pattern before use
+    - If pattern needs regex → Use `grep -E` but validate pattern is safe
+    - Always quote patterns: `grep -F "${PATTERN}"`
+    - Always handle errors: `grep -F "${PATTERN}" file || echo ""` (with result validation)
+  - **DETECTION**: Find all grep usage: `grep -nE '\bgrep\s' script.sh`, check for:
+    - Unquoted patterns: `grep\s+[^\"]+\s` (pattern not in quotes)
+    - Missing `-F` flag: `grep\s+[^-F]` (when pattern should be literal)
+    - Variables in patterns: `grep.*\$\{` (verify if `-F` should be used)
+  - **AUTO-FIX**: Add `-F` flag for literal string patterns, quote unquoted patterns
+- D3d. **ROBUST COMMAND SUBSTITUTION**: Check for unsafe command substitution patterns and ensure robust input/output handling:
+  - **UNSAFE PATTERNS**:
+    - `result=$(command "${VAR}")` when VAR contains shell metacharacters → Command injection risk
+    - `result=$(command ${VAR})` (unquoted variable) → Word splitting and command injection
+    - `result=$(command $@)` (unquoted `$@`) → Word splitting issues
+    - `result=$(command)` without error handling → Masked failures (see H4)
+    - `result=$(command || echo "")` without validation → Empty result may cause errors (see H4, F2)
+    - `$(eval "command ${VAR}")` → NEVER use `eval` with variables (see K1)
+    - `$(exec command)` → Replaces current shell, use only when intentional
+  - **ROBUST INPUT HANDLING** (CRITICAL):
+
+---
+
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 1 of 4. After completing all checklist items in this part (A-B-C-D partial), continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H).
+
+**DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts. Complete PART 1 before proceeding to PART 2.

@@ -2,7 +2,8 @@
 ################################################################################
 # AUTO-FIX SED PATTERNS
 # Purpose: Automatically fix malformed sed patterns and missing error fallbacks
-# Implements: prompts/Code_check_prompt_manual.txt (D4) - Auto-fix mode
+# Implements: prompts/Code_check_prompt_manual.txt (Master entry point - loads all parts sequentially)
+# Section D4 in PART2 (D. Quoting & Expansion Safety) - Auto-fix mode
 #
 # Fixes:
 #   1. Malformed bracket classes: sed 's/[[...' → sed 's/[][...'

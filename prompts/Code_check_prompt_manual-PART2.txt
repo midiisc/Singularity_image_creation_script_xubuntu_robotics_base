@@ -1,0 +1,510 @@
+**CODE CHECK PROMPT MANUAL - PART 2 of 4**
+
+**SEQUENTIAL CHECKING ENFORCED**: 
+- This is PART 2 of 4 (continues section D, covers E-F-G-H)
+- You MUST have completed PART 1 (`Code_check_prompt_manual-PART1.txt`) before starting this part
+- After completing this part, continue with PART 3: `Code_check_prompt_manual-PART3.txt`
+- **DO NOT SKIP**: All checklist items must be checked sequentially
+
+---
+
+    - **QUOTE ALL INPUTS**: Always quote variables and arguments in command substitutions:
+      - **WRONG**: `result=$(command $VAR)` → Word splitting, globbing, injection risk
+      - **CORRECT**: `result=$(command "${VAR}")` → Safe, handles spaces/special chars
+    - **VALIDATE INPUT BEFORE USE**: Check input format before passing to commands:
+      ```bash
+      # Validate filename is safe before use
+      if [[ ! "${FILENAME}" =~ ^[a-zA-Z0-9_.-]+$ ]]; then
+        echo "[ERROR] Invalid filename: ${FILENAME}"
+        exit 1
+      fi
+      result=$(command "${FILENAME}")  # Safe after validation
+      ```
+    - **HANDLE SPECIAL CHARACTERS**: Commands must handle alphanumeric, spaces, special chars, Unicode:
+      - **QUOTE VARIABLES**: `"${VAR}"` preserves all characters (spaces, special chars, Unicode)
+      - **USE ROBUST COMMANDS**: `find`, `grep -F`, `sed`, `awk` handle all text types
+      - **ESCAPE WHEN NEEDED**: For regex patterns, escape special chars: `sed 's/[[\.*^$()+?{|]/\\&/g'`
+    - **ARRAY INPUT HANDLING**: Use proper array expansion for multiple arguments:
+      - **WRONG**: `result=$(command ${array[@]})` → Word splitting issues
+      - **CORRECT**: `result=$(command "${array[@]}")` → Proper array expansion
+      - **FOR FILES**: `files=("${DIR}"/*.txt); result=$(command "${files[@]}")` → Handles spaces in filenames
+    - **POSITIONAL PARAMETERS**: Always quote `$@` and `$*`:
+      - **WRONG**: `result=$(command $@)` → Word splitting
+      - **CORRECT**: `result=$(command "$@")` → Preserves argument boundaries
+  - **ROBUST OUTPUT HANDLING** (CRITICAL):
+    - **CAPTURE STDOUT AND STDERR SEPARATELY**: Handle both output streams:
+      ```bash
+      # Capture stdout only
+      result=$(command 2>/dev/null) || {
+        echo "[ERROR] Command failed"
+        exit 1
+      }
+      
+      # Capture stderr separately
+      stderr=$(command 2>&1 >/dev/null) || {
+        echo "[ERROR] Command failed: ${stderr}"
+        exit 1
+      }
+      
+      # Capture both (stdout in result, stderr in stderr)
+      result=$(command 2>stderr_file) || {
+        stderr=$(cat stderr_file)
+        echo "[ERROR] Command failed: ${stderr}"
+        exit 1
+      }
+      ```
+    - **VALIDATE OUTPUT FORMAT**: Check output matches expected format before use:
+      ```bash
+      result=$(command) || {
+        echo "[ERROR] Command failed"
+        exit 1
+      }
+      
+      # Validate result is non-empty
+      if [ -z "${result}" ]; then
+        echo "[ERROR] Command produced empty output"
+        exit 1
+      fi
+      
+      # Validate result format (e.g., numeric, alphanumeric, path)
+      if [[ ! "${result}" =~ ^[0-9]+$ ]]; then
+        echo "[ERROR] Invalid output format: ${result}"
+        exit 1
+      fi
+      ```
+    - **HANDLE MULTILINE OUTPUT**: Command substitutions capture all lines:
+      - **PRESERVE NEWLINES**: `result=$(command)` preserves newlines in result
+      - **PROCESS LINE BY LINE**: Use `while read` loop for line-by-line processing:
+        ```bash
+        while IFS= read -r line || [ -n "${line}" ]; do
+          process_line "${line}"
+        done < <(command)
+        ```
+      - **ARRAY FROM OUTPUT**: Convert multiline output to array:
+        ```bash
+        # Bash 4+
+        readarray -t lines < <(command)
+        
+        # POSIX-compatible
+        lines=()
+        while IFS= read -r line || [ -n "${line}" ]; do
+          lines+=("${line}")
+        done < <(command)
+        ```
+    - **HANDLE EMPTY OUTPUT**: Always check for empty results:
+      ```bash
+      result=$(command || echo "")  # Fallback to empty string
+      if [ -z "${result}" ]; then
+        echo "[ERROR] Command produced no output"
+        exit 1
+      fi
+      ```
+    - **HANDLE WHITESPACE IN OUTPUT**: Preserve leading/trailing whitespace when needed:
+      ```bash
+      result=$(command)  # Preserves whitespace
+      # Trim if needed: result=$(command | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+      ```
+    - **HANDLE SPECIAL CHARACTERS IN OUTPUT**: Output may contain any characters:
+      - **QUOTE WHEN USING**: Always quote result when using: `command "${result}"`
+      - **VALIDATE FORMAT**: Check output format matches expectations
+      - **ESCAPE IF NEEDED**: Escape special chars if passing to other commands
+  - **ROBUST ERROR HANDLING** (CRITICAL):
+    - **CAPTURE EXIT CODE**: Command substitution masks exit codes, capture separately:
+      ```bash
+      # Method 1: Capture exit code separately
+      result=$(command) || exit_code=$?
+      if [ ${exit_code:-0} -ne 0 ]; then
+        echo "[ERROR] Command failed with exit code ${exit_code}"
+        exit 1
+      fi
+      
+      # Method 2: Validate result after capture
+      result=$(command || echo "")
+      if [ -z "${result}" ]; then
+        echo "[ERROR] Command failed or produced no output"
+        exit 1
+      fi
+      
+      # Method 3: Use set -e with proper error handling
+      set -e
+      result=$(command)  # Will exit on failure
+      set +e
+      ```
+    - **VALIDATE RESULT AFTER CAPTURE**: Always validate result before use (see F2, H4):
+      ```bash
+      result=$(command || echo "")
+      
+      # Multi-step validation
+      if [ -z "${result}" ]; then
+        echo "[ERROR] Result is empty"
+        exit 1
+      fi
+      
+      if ! validate_result_format "${result}"; then
+        echo "[ERROR] Invalid result format: ${result}"
+        exit 1
+      fi
+      
+      # Safe to use result
+      use_result "${result}"
+      ```
+    - **HANDLE PARTIAL FAILURES**: Some commands may partially succeed:
+      ```bash
+      # For commands that may partially fail
+      result=$(command 2>&1) || {
+        # Check if result contains useful data despite error
+        if [ -n "${result}" ] && grep -q "expected_pattern" <<< "${result}"; then
+          echo "[WARN] Command had errors but produced usable output"
+        else
+          echo "[ERROR] Command failed completely"
+          exit 1
+        fi
+      }
+      ```
+  - **ROBUST COMMAND SELECTION FOR SUBSTITUTION**:
+    - **USE POSIX-COMPLIANT COMMANDS**: Prefer POSIX commands for maximum compatibility:
+      - `command -v` (POSIX) instead of `which` (non-POSIX)
+      - `test` / `[` (POSIX) instead of `[[` (Bash)
+      - `printf` (POSIX) instead of `echo -e` (non-POSIX)
+    - **USE ROBUST TEXT PROCESSING**: Commands that handle all text types:
+      - `grep -F` for fixed-string matching (handles special chars literally)
+      - `sed` for stream editing (handles all text types)
+      - `awk` for field processing (robust delimiter handling)
+      - `tr` for character translation (POSIX character classes)
+      - `cut` for field extraction (robust delimiter handling)
+    - **AVOID FRAGILE COMMANDS**: Commands that may fail with special characters:
+      - `ls` with globbing → Use `find` instead
+      - `echo "${VAR}"` → Use `printf '%s\n' "${VAR}"` instead
+      - Unquoted variables → Always quote: `"${VAR}"`
+  - **SAFE ALTERNATIVES**:
+    - Always quote variables: `result=$(command "${VAR}")`
+    - Quote arrays properly: `result=$(command "${array[@]}")`
+    - Validate results: `result=$(command) || { echo "[ERROR] Command failed"; exit 1; }`
+    - For arrays: Use proper array expansion: `result=$(command "${array[@]}")`
+    - Avoid eval: Never use `eval` with variables (use direct command execution instead)
+    - Capture exit codes separately when needed
+    - Validate output format before use
+  - **VALIDATION RULES**:
+    - All variables in command substitutions must be quoted: `"${VAR}"`
+    - All command substitutions must have error handling or validation
+    - Result must be validated before use (see F2, H4)
+    - Never use `eval` with variables or user input
+    - Always validate input format before passing to commands
+    - Always validate output format after capturing from commands
+    - Handle empty output gracefully
+    - Preserve whitespace and special characters when needed
+  - **DETECTION**: Find all command substitutions: `grep -nE '\$\([^)]+\)' script.sh`, check for:
+    - Unquoted variables: `\$\(.*\$[^{]` (variables not in `${VAR}` format or unquoted)
+    - Missing error handling: `\$\(.*\)(?!\s*\|\|)` (no error fallback)
+    - Eval usage: `\$\(eval` (should be removed)
+    - Missing output validation: Check if result is validated before use
+  - **AUTO-FIX**: Quote unquoted variables, add error handling, remove eval usage, add input/output validation
+- D3e. **WORD SPLITTING UNSAFE PATTERNS**: Check for unsafe word splitting patterns:
+  - **UNSAFE PATTERNS**:
+    - `command $VAR` (unquoted variable) → Word splitting on spaces/tabs/newlines
+    - `command ${VAR}` (unquoted expansion) → Word splitting issues
+    - `command $@` (unquoted `$@`) → Word splitting (should use `"$@"` or `"${@}"`)
+    - `command $*` (unquoted `$*`) → Word splitting (should use `"$*"` or `"${*}"`)
+    - `for item in $VAR` (unquoted variable) → Word splitting in loop
+    - `IFS= read var` without `-r` → Backslash interpretation and word splitting
+  - **SAFE ALTERNATIVES**:
+    - Always quote variables: `command "${VAR}"`
+    - Always quote arrays: `command "${array[@]}"` (proper array expansion)
+    - Always quote positional params: `command "$@"` (preserves argument boundaries)
+    - Use `read -r`: `IFS= read -r var` (raw input, no backslash interpretation)
+    - For array iteration: `for item in "${array[@]}"; do` (proper array iteration)
+  - **VALIDATION RULES**:
+    - All variables must be quoted unless intentionally allowing word splitting
+    - All array expansions must be quoted: `"${array[@]}"` or `"${array[*]}"`
+    - All positional parameters must be quoted: `"$@"` or `"${@}"`
+    - All `read` commands should use `-r` flag: `read -r var`
+    - Exception: When word splitting is intentional (rare), document with comment
+  - **DETECTION**: Find unquoted variables: `grep -nE '\$[^{A-Z_]|^\s*\$\{|[^"]\$\{' script.sh`, check for:
+    - Unquoted simple vars: `\$[A-Z_][A-Z0-9_]*[^"]` (variable not in quotes)
+    - Unquoted expansions: `\$\{[^}]*\}[^"]` (expansion not in quotes)
+    - Unquoted arrays: `\$[a-zA-Z_][a-zA-Z0-9_]*\[@?\]` (array not in quotes)
+  - **AUTO-FIX**: Quote all unquoted variables, add `-r` to `read` commands
+- D3f. **GLOBBING UNSAFE PATTERNS**: Check for unsafe globbing (pathname expansion) patterns:
+  - **UNSAFE PATTERNS**:
+    - `command *` (unquoted glob) → Expands to all files in current directory
+    - `command *.txt` (unquoted glob) → Expands to matching files (may fail if no matches)
+    - `command ${VAR}/*` (unquoted glob in expansion) → May expand unexpectedly
+    - `rm -f ${VAR}/*` (unquoted glob) → May delete unintended files if glob expands unexpectedly
+    - `for file in *.txt` (unquoted glob) → May fail if no matches (depends on `nullglob`)
+  - **SAFE ALTERNATIVES**:
+    - For intentional globbing: `for file in *.txt; do` (acceptable if `nullglob` is set or matches expected)
+    - For safe globbing: Set `nullglob` and `failglob`: `shopt -s nullglob failglob` (fails if no matches)
+    - For literal patterns: Quote pattern: `command "*.txt"` (treats as literal string)
+    - For variables with paths: Use arrays: `files=("${VAR}"/*); command "${files[@]}"`
+    - For safety: Use `find` instead of globbing: `find "${DIR}" -name "*.txt" -exec command {} \;`
+  - **VALIDATION RULES**:
+    - If globbing is intentional → Use with `nullglob` or validate matches exist
+    - If pattern should be literal → Quote pattern: `"*.txt"`
+    - If using glob in variables → Use arrays or `find` for safer expansion
+    - Always validate glob results before destructive operations (`rm`, `mv`, etc.)
+  - **DETECTION**: Find unquoted globs: `grep -nE '[^*]\*[^*]|[^?]\?[^?]' script.sh`, check for:
+    - Unquoted `*`: `\s+\*[^"]` (glob not in quotes)
+    - Unquoted `?`: `\s+\?[^"]` (glob not in quotes)
+    - Unquoted `[`: `\[[^\]]*\][^"]` (character class not in quotes)
+  - **AUTO-FIX**: Quote globs if literal, use arrays/find if expansion needed, add validation
+- D4. **SED CHARACTER CLASS ESCAPING**: Validate sed bracket expressions for correct escaping and error handling:
+  - **CRITICAL**: Bracket expressions must escape brackets correctly: `[][]` for literal `[` or `]`
+  - **CRITICAL**: All command substitutions with sed MUST have error fallback: `|| echo ""`
+  - **COMMON ERRORS**: `sed 's/[[\/&]/\\&/g'` (malformed - should be `sed 's/[][\\\/&]/\\&/g' || echo ""`)
+  - **BRACKET CLASS SYNTAX**: Use `[][]` to match literal `[` or `]`, `\\` for backslash, `\/` for forward slash
+  - **ERROR FALLBACK**: When `set -u` is active, ALWAYS add `|| echo ""` to sed/awk/grep in command substitutions
+  - **CONSISTENCY**: All similar escaping operations must use identical patterns
+  - **DETECTION**: `grep -nE "sed 's/\[\[" script.sh` (malformed), `grep -nE '\$\(.*sed.*\)' script.sh | grep -v '|| echo'` (no fallback)
+  - **REAL ERROR**: Line 945 used `sed 's/[[\/&]/\\&/g'` without fallback → script crashed with `set -u` → Fix: `sed 's/[][\\\/&]/\\&/g' || echo ""`
+
+E. Here-docs & Here-strings
+- E1. **HEREDOC vs EXTERNAL FILE DECISION**: Evaluate whether heredoc content should be extracted to `container-scripts/` folder:
+  - **EXTRACT TO container-scripts WHEN**:
+    - Content is >20 lines of code or configuration
+    - Content is a complete script (shell, Python, etc.) or config file
+    - Content will be modified/debugged frequently (easier to edit external files)
+    - Content needs version control separately (git history, diffs)
+    - Content is reused across multiple blocks or sections
+    - Content needs syntax highlighting or IDE support during development
+    - Content is complex enough to warrant separate testing/validation
+  - **USE HEREDOC WHEN**:
+    - Content is <20 lines and simple (one-liners, small inline configs)
+    - Content is generated dynamically with variables/interpolation needed
+    - Content is temporary or highly context-dependent
+    - Content is a single-use inline script that's tightly coupled to surrounding code
+    - Content needs to be embedded directly in build flow without separate file management
+  - **container-scripts ORGANIZATION**: If extracting, follow existing structure:
+    - Shell scripts → `container-scripts/shell-scripts/block-<N>-<name>/`
+    - Config files → `container-scripts/config-files/block-<N>-<name>/`
+    - JSON configs → `container-scripts/json-configs/block-<N>-<name>/`
+    - Python scripts → `container-scripts/python-scripts/block-<N>-<name>/`
+    - Other types → `container-scripts/other/block-<N>-<name>/`
+  - **EXTRACTION PATTERN**: When extracting, replace heredoc with:
+    ```bash
+    # Before (heredoc):
+    cat > /usr/local/bin/script.sh <<'EOF'
+    # ... 50 lines of script ...
+    EOF
+    
+    # After (external file):
+    # Copy from container-scripts (handled by install.sh based on MANIFEST.json)
+    install -m 0755 "${CONTAINER_SCRIPTS}/shell-scripts/block-<N>-<name>/script.sh" /usr/local/bin/script.sh
+    ```
+  - **VALIDATION**: If content should be extracted (based on criteria above), recommend extraction with rationale
+  - **BENEFITS OF EXTERNAL FILES**: Better maintainability, easier debugging, syntax highlighting, separate version control, reusable, testable independently
+  - **BENEFITS OF HEREDOC**: Direct embedding, variable interpolation, context coupling, fewer file operations
+- E2. **QUOTED DELIMITERS** (`<<'EOF'` vs `<<EOF`): Choose correct quoting for heredoc delimiter:
+  - **USE `<<'EOF'` (QUOTED)** when:
+    - Content is literal code/config that should NOT undergo variable expansion
+    - Content contains shell special characters (`$`, `` ` ``, `\`) that must be preserved literally
+    - Content is a script or config that should execute as-written inside container
+    - Content needs to prevent variable injection attacks or unexpected expansions
+    - **SECURITY**: Prevents arbitrary variable expansion from parent script context
+  - **USE `<<EOF` (UNQUOTED)** when:
+    - Content needs variable interpolation from parent script context
+    - Content is dynamically generated with embedded variables (e.g., `PATH=${INSTALL_DIR}/bin`)
+    - Content is templated with values from script variables
+    - **CAUTION**: Only use unquoted when variables are trusted and from controlled script context
+  - **USE `<<"EOF"` (DOUBLE-QUOTED)**: Rarely needed - same behavior as unquoted, use for consistency if mixing quote styles
+  - **QUOTING VALIDATION**: For each heredoc:
+    1. Analyze content for `$`, `` ` ``, `\` characters that need literal preservation
+    2. Check if content references variables from parent script (needs unquoted)
+    3. Verify security implications (unquoted allows parent script variable injection)
+    4. Apply appropriate quoting: literal content → `<<'EOF'`, templated content → `<<EOF`
+  - **DETECTION METHOD**: 
+    - Find all heredocs: `grep -nE '<<\s*([\'"]?)(EOF|HEREDOC)\1' script.sh`
+    - For each, analyze content between delimiter lines to determine if quoting is correct
+    - Check for `$` variables in content → if variables are from parent script, unquoted OK; if variables should be literal, need quoted
+- E3. **VARIABLE LEAKAGE PREVENTION**: Ensure heredocs do not leak variables unexpectedly:
+  - **QUOTED HEREDOCS** (`<<'EOF'`): Variables in content are LITERAL - no leakage risk, but variables won't expand
+  - **UNQUOTED HEREDOCS** (`<<EOF`): Variables expand from parent script - verify all variables are intentional:
+    - **REQUIRED**: Explicitly list all variables used in heredoc content in comment above heredoc
+    - **REQUIRED**: Validate variables are set before heredoc (use `${VAR:?message}` guards)
+    - **REQUIRED**: Document if variables are intentionally from parent context
+    - **SECURITY CHECK**: Ensure no user-controlled variables or command output are expanded unquoted
+  - **EDGE CASE**: Heredoc inside function - variables expand from function scope, not global scope
+  - **EDGE CASE**: Heredoc with command substitution - `$(command)` executes in parent shell, not container shell
+  - **VALIDATION PATTERN**:
+    ```bash
+    # WRONG - unquoted heredoc without variable guard
+    cat > /etc/config <<EOF
+    PATH=$INSTALL_DIR/bin  # What if INSTALL_DIR is unset?
+    EOF
+    
+    # CORRECT - unquoted heredoc with variable guard
+    # Variables used: INSTALL_DIR (from parent script)
+    [ -n "${INSTALL_DIR}" ] || { echo "[ERROR] INSTALL_DIR not set"; exit 1; }
+    cat > /etc/config <<EOF
+    PATH=${INSTALL_DIR}/bin
+    EOF
+    
+    # CORRECT - quoted heredoc for literal content
+    cat > /usr/local/bin/script.sh <<'EOF'
+    #!/bin/bash
+    # Script content with $ symbols that should be literal
+    echo "Price: \$100"
+    EOF
+    ```
+- E4. **TEMP FILE MANAGEMENT**: Ensure heredocs don't leave temporary files:
+  - **DIRECT REDIRECTION**: `cat > file <<EOF` creates file directly (no temp file)
+  - **INDIRECT REDIRECTION**: `cat <<EOF > file` creates file directly (no temp file)
+  - **SAFE PATTERN**: Heredocs with `> file` or `>> file` create files directly, no cleanup needed
+  - **UNSAFE PATTERN**: Heredocs written to temp locations should use `mktemp` and `trap` cleanup:
+    ```bash
+    # WRONG - temp file without cleanup
+    cat > /tmp/script.sh <<'EOF'
+    # ...
+    EOF
+    
+    # CORRECT - temp file with cleanup
+    TMP_SCRIPT=$(mktemp)
+    trap 'rm -f "${TMP_SCRIPT}"' EXIT
+    cat > "${TMP_SCRIPT}" <<'EOF'
+    # ...
+    EOF
+    ```
+  - **VALIDATION**: For heredocs writing to `/tmp/`, verify cleanup or use direct target path
+- E5. **TAB-STRIPPING** (`<<-`): Use `<<-` when leading tabs should be stripped for indentation:
+  - **USE `<<-` WHEN**: Heredoc content is indented to match surrounding code style (leading tabs stripped)
+  - **REQUIREMENT**: Only leading TAB characters are stripped (spaces are NOT stripped)
+  - **REQUIREMENT**: Delimiter line must also start with TAB (e.g., `	TAB<<-EOF`)
+  - **DOCUMENTATION**: When using `<<-`, document in comment that leading tabs are stripped
+  - **EXAMPLE**:
+    ```bash
+    # Leading tabs in heredoc content will be stripped
+    if [ "${CONDITION}" = "true" ]; then
+    	cat > /etc/config <<-EOF
+    		# This line's leading tab will be stripped
+    		# This line's leading tab will be stripped
+    		# Delimiter must also start with tab
+    	EOF
+    fi
+    ```
+  - **VALIDATION**: Verify indentation is intentional and tabs are correct (not spaces mixed with tabs)
+- E6. **HEREDOC SYNTAX CORRECTNESS**: Validate heredoc syntax and structure:
+  - **REQUIRED**: Delimiter on same line as `<<` (or `<<-`): `cat > file <<EOF`
+  - **REQUIRED**: Closing delimiter must match opening delimiter exactly (case-sensitive): `<<EOF` → `EOF` (not `eof` or `Eof`)
+  - **REQUIRED**: Closing delimiter must be on line by itself (no trailing spaces or characters)
+  - **REQUIRED**: No variable expansion in delimiter name (delimiter is literal token)
+  - **VALIDATION PATTERNS**:
+    - **WRONG**: `cat > file <<EOF\n  EOF` (spaces before delimiter)
+    - **WRONG**: `cat > file <<EOF\nEof` (case mismatch)
+    - **CORRECT**: `cat > file <<EOF\nEOF` (exact match, no spaces)
+  - **DETECTION**: Check for mismatched delimiters, trailing spaces on delimiter lines, case mismatches
+- E7. **HEREDOC CONTENT VALIDATION**: Validate heredoc content for correctness:
+  - **SHELL SCRIPTS IN HEREDOC**: If heredoc creates shell script, validate script syntax:
+    - Run `bash -n` on extracted content (dry-run syntax check)
+    - Run ShellCheck on extracted content if available
+    - Validate shebang is present and correct (`#!/bin/bash`, `#!/bin/sh`)
+    - Check for common errors (unquoted variables, missing error handling)
+  - **CONFIG FILES IN HEREDOC**: Validate config file syntax matches expected format:
+    - JSON/JSON5: Validate JSON syntax
+    - INI/conf: Validate key=value format
+    - XML: Validate XML well-formedness
+  - **EXTRACTION VALIDATION**: Use project's heredoc extraction tools to validate:
+    - `scripts/extract_all_heredocs.py` - Extract and validate all heredocs
+    - `scripts/validate_heredoc_scripts.py` - Validate extracted shell scripts
+    - Ensure extracted content matches expected structure and syntax
+  - **INTEGRATION**: Heredoc validation should be part of pre-commit hooks (already implemented in CI checks)
+- E8. **HEREDOC SECURITY CONSIDERATIONS**: Ensure heredoc usage is secure:
+  - **COMMAND INJECTION**: Heredoc content should not execute arbitrary commands from untrusted sources
+  - **VARIABLE INJECTION**: Unquoted heredocs expand variables - verify variables are trusted
+  - **PATH VALIDATION**: When heredoc writes to file, validate target path:
+    - Use absolute paths (not relative paths that could be manipulated)
+    - Validate parent directory exists and is writable
+    - Use `${VAR:?message}` guards for path variables
+  - **PERMISSIONS**: Set appropriate file permissions after heredoc creates file:
+    ```bash
+    cat > /usr/local/bin/script.sh <<'EOF'
+    # ...
+    EOF
+    chmod 0755 /usr/local/bin/script.sh  # Set executable permission
+    ```
+  - **VALIDATION**: For each heredoc that creates executable file, verify permissions are set explicitly
+- E9. **HEREDOC MAINTAINABILITY**: Ensure heredocs are maintainable:
+  - **LENGTH LIMIT**: If heredoc exceeds 50 lines, consider extracting to `container-scripts/` (see E1)
+  - **COMMENTS**: Add comments above heredoc explaining purpose, variables used, target file
+  - **ORGANIZATION**: Group related heredocs together, separate with blank lines
+  - **VERSION TRACKING**: If heredoc content changes frequently, extract to external file for better git history
+  - **TESTING**: Complex heredoc content should be testable - extract to external file if testing is needed
+  - **DOCUMENTATION**: Document heredoc purpose in surrounding code comments
+
+F. Logic & Flow Control
+- F1. Correct conditional expressions (`[[` vs `[`], `(( ))`), loops, and arithmetic.
+- F2. Correct treatment of exit codes (`$?`, `||/&&`, negated commands):
+  - **CRITICAL**: Command substitutions `$(command)` mask exit codes - always validate results
+  - **REQUIRED**: After `result=$(command || echo "")`, check both non-empty AND valid format
+  - **REQUIRED**: For critical operations, capture exit code separately: `command; exit_code=$?` then validate
+  - **ANTI-PATTERN**: `if [ -n "$(command || echo "")" ]; then` - empty string passes this check even on failure
+  - **CORRECT PATTERN**: `result=$(command); if [ $? -eq 0 ] && [ -n "${result}" ] && validate_result "${result}"; then`
+  - **COMMAND SUBSTITUTION FORMAT VALIDATION** (Pattern P-20251113-011):
+    - **CRITICAL**: When using `result=$(command || echo "")`, ALWAYS validate result format before parsing
+    - **REQUIRED STEPS**:
+      1. Check result is non-empty: `[ -n "${result}" ]`
+      2. Validate result format matches expected pattern: `grep -qE 'expected_pattern' <<< "${result}"` or `[[ "${result}" =~ pattern ]]`
+      3. For result files: Check file is non-empty: `[ -s "${RESULT_FILE}" ]` AND validate format: `grep -qE 'expected_pattern' "${RESULT_FILE}"`
+    - **EXAMPLE - WRONG** (no format validation):
+      ```bash
+      result=$(parse_data || echo "")
+      if [ -n "${result}" ]; then
+        use_result "${result}"  # May use invalid format!
+      fi
+      ```
+    - **EXAMPLE - CORRECT** (with format validation):
+      ```bash
+      result=$(parse_data || echo "")
+      if [ -n "${result}" ] && grep -qE '^expected_pattern' <<< "${result}"; then
+        use_result "${result}"  # Format validated
+      else
+        echo "[ERROR] Invalid or empty result format"
+        return 1
+      fi
+      ```
+    - **EXAMPLE - CORRECT** (for result files):
+      ```bash
+      # Run operations that write to result file
+      xargs -P 6 -I{} command {} > "${RESULT_FILE}" || true
+      
+      # Validate result file BEFORE parsing
+      if [ ! -s "${RESULT_FILE}" ]; then
+        echo "[ERROR] Result file empty - all operations failed"
+        return 1
+      fi
+      
+      # Validate result format
+      if ! grep -qE '^expected_pattern' "${RESULT_FILE}"; then
+        echo "[ERROR] Invalid result format in ${RESULT_FILE}"
+        return 1
+      fi
+      
+      # Now safe to parse
+      result=$(parse_results "${RESULT_FILE}")
+      ```
+- F3. Safe handling of subshells, command groups, and background jobs (`wait`, exit check).
+
+G. Functions & Modularization
+- G1. Proper function definitions, parameter handling (`$@`, `$*`, shifts), defaulting, and return semantics.
+- G2. Ensuring functions do not leak state (globals, directory changes, shell options).
+- G3. Proper use of `trap` within functions and restoration of environment on exit.
+- G4. Functions grouped logically; helper functions declared ahead of dependents or referenced safely via sourcing order checks.
+- G5. Each function is defined exactly once before first use; if discovered later in the file, relocate the definition earlier and remove duplicates, updating references to match the retained definition.
+
+H. Error Handling & Observability
+- H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
+- H2. `trap` handlers clean up resources (temp files, mounts, jobs) and re-raise signals when appropriate.
+- H3. Logging differentiates stdout/stderr where helpful; optional scoped `set -x` toggles documented.
+- H4. **SILENT FAILURE PREVENTION**: Critical operations must not mask failures silently:
+  - **FORBIDDEN**: Using `|| true` or `|| echo ""` on critical operations without explicit validation
+  - **FORBIDDEN**: Command substitutions that mask errors: `result=$(command || echo "")` without checking if result is valid
+  - **REQUIRED**: After masking failures with `|| true`, explicitly validate results before use
+  - **REQUIRED**: For parallel operations (`xargs -P`), check exit codes and validate result files contain expected data
+  - **REQUIRED**: Validate result files are non-empty and contain valid format before parsing
+  - **CRITICAL IN STRICT MODE**: When `set -e` or `set -euo pipefail` is active, silent failures are EXTREMELY DANGEROUS - see B3 for strict mode requirements
+  - **DETECTION**: `grep -nE '\|\| (true|echo "")' script.sh` to find masked failures, verify each has validation
+  - **STRICT MODE DETECTION**: For blocks with `set -e`/`set -euo pipefail`, use stricter validation (see B3)
+  - **EXAMPLE - WRONG** (silent failure):
+    ```bash
+    xargs -P 6 -I{} command {} || true  # Masks all failures
+    result=$(parse_results || echo "")   # Returns empty on failure
+    if [ -n "${result}" ]; then         # Empty string passes this check!
+      use_result "${result}"             # Uses empty/invalid result

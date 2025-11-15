@@ -1,0 +1,104 @@
+**CODE CHECK PROMPT MANUAL - PART 4 of 4 (FINAL)**
+
+**SEQUENTIAL CHECKING ENFORCED**: 
+- This is PART 4 of 4 (continues O, covers P, Steps 3-4, Protocols)
+- You MUST have completed PART 1, PART 2, and PART 3 before starting this part
+- This is the final part - complete all checklist items here
+- **DO NOT SKIP**: All checklist items A1 through P5 must be checked sequentially across all parts
+
+---
+
+  - **AUTO-FIX WORKFLOW**:
+    1. Run ShellCheck: `shellcheck script.sh` or `shellcheck -x script.sh` (for sourced scripts)
+    2. Capture all errors and warnings
+    3. Attempt auto-fix using project's helper: `scripts/helpers/auto_fix_shellcheck.sh script.sh`
+    4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
+    5. Manually fix any remaining issues that auto-fix couldn't handle
+    6. Document fixes in corrections summary with ShellCheck error codes (e.g., "SC2086: Fixed unquoted variable")
+  - **VALIDATION REQUIREMENT**: Script MUST pass ShellCheck with zero errors and zero warnings before audit is complete
+  - **INTEGRATION**: ShellCheck validation runs automatically in pre-commit hooks and CI/CD pipelines
+  - **DETECTION COMMAND**: `shellcheck --format=gcc script.sh` for machine-readable output, `shellcheck script.sh` for human-readable
+  - **EXAMPLE - WRONG** (ShellCheck errors):
+    ```bash
+    # SC2086: Double quote to prevent globbing
+    if [ -f $FILE ]; then
+      echo $VAR
+    fi
+    
+    # SC2155: Declare and assign separately
+    local result=$(command)
+    ```
+  - **EXAMPLE - CORRECT** (ShellCheck compliant):
+    ```bash
+    # SC2086: Fixed - quoted variables
+    if [ -f "${FILE}" ]; then
+      echo "${VAR}"
+    fi
+    
+    # SC2155: Fixed - separate declaration and assignment
+    local result
+    result=$(command)
+    ```
+
+P. Build Flag Analysis & CMake Configuration
+- P1. **COMPREHENSIVE FLAG EXTRACTION**: When analyzing CMake build flags, ensure complete coverage:
+  - **MANDATORY**: Recursively find ALL CMakeLists.txt and *.cmake files (no depth limit)
+  - **MANDATORY**: Extract flags using multiple patterns: `option()`, `set()`, `add_definitions()`, `target_compile_definitions()`, `target_compile_options()`
+  - **MANDATORY**: Track flag types (BOOL, STRING, FILEPATH, PATH) and default values
+  - **MANDATORY**: Identify version-specific flags (check changelogs, git history)
+  - **REQUIRED**: Cross-reference flags with documentation (README, INSTALL, BUILD docs)
+  - **TARGET**: >=95% flag coverage with multi-source validation
+- P2. **DEPENDENCY MAPPING**: When analyzing library dependencies, distinguish bundled vs external:
+  - **MANDATORY**: Identify bundled dependencies (external/, third_party/, FetchContent_Declare, add_subdirectory)
+  - **MANDATORY**: Map external dependencies (find_package, pkg_check_modules)
+  - **MANDATORY**: Track dependency evolution across versions (e.g., METIS in SuiteSparse: separate → bundled → optional)
+  - **REQUIRED**: Document version-specific dependency behavior (when bundled, when separate, when deprecated)
+  - **REQUIRED**: Cross-validate dependency requirements with CMakeLists.txt and documentation
+- P3. **VERSION-AWARE ANALYSIS**: When analyzing build flags, track historical changes:
+  - **MANDATORY**: Parse changelogs for flag introduction/deprecation dates
+  - **MANDATORY**: Use git history to track flag evolution (git log --grep, git diff between versions)
+  - **MANDATORY**: Document version-specific behaviors (e.g., "METIS bundled since v3.0", "NPARTITION flag available since v7.0")
+  - **REQUIRED**: Validate flags exist in analyzed version (don't document flags from future versions)
+  - **REQUIRED**: Identify breaking changes and migration paths
+- P4. **MULTI-PASS VALIDATION**: When generating flag documentation, ensure consistency:
+  - **MANDATORY PASS 1**: Consistency check - verify flag names consistent across CMakeLists.txt files
+  - **MANDATORY PASS 2**: Dependency resolution - map all find_package() calls to flags, identify conflicts
+  - **MANDATORY PASS 3**: Version-aware validation - verify flags exist in analyzed version, check deprecations
+  - **MANDATORY PASS 4**: Gap identification - find flags in code but not documented, identify documented flags not in code
+  - **REQUIRED**: Report completeness metrics (target: >=95% coverage)
+- P5. **STRUCTURED OUTPUT**: When documenting build flags, provide both human and machine-readable formats:
+  - **MANDATORY**: Comprehensive markdown documentation (50-100 pages) with categorized flags
+  - **MANDATORY**: JSON database for programmatic access (flag name, type, default, dependencies, version info)
+  - **REQUIRED**: Quick reference card (2-5 pages) with most common flags and copy-paste examples
+  - **REQUIRED**: Troubleshooting guide with common errors and concrete solutions
+  - **REQUIRED**: Analysis report with completeness metrics and validation results
+
+Step 3 – Corrections Summary
+1. List each correction with the corresponding checklist ID(s) (e.g., "C1, D1: Added default guard for `$FOO` and quoted expansion"). Reference line numbers for clarity.
+2. Provide the corrected Bash code snippet for the audited block.
+3. Present this summary directly in the chat response; do not create or modify any additional files to capture it.
+4. If the block was split into multiple chunks, enumerate the chunk line ranges you reviewed (including overlaps), list the shared symbols (functions, globals, exported variables) whose context was carried across chunks, and confirm each chunk satisfied the checklist.
+5. Call out any declaration relocations, duplicate removals (C6), variable overwrite fixes (C6), or new default assignments made to satisfy the symbol tracking requirements. Include symbol table updates showing variable deduplication and overwrite prevention.
+6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`, `grep -nE` for variable declarations per C6) so the audit trail shows how issues were validated.
+
+Step 4 – Finalization
+1. Confirm explicitly that every checklist item from A1 through O5 (including ShellCheck validation) has been evaluated and passes after corrections.
+2. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
+3. State: "Block fully audited and corrected."
+4. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.
+5. List the helper tools or scripts invoked (ShellCheck with exit code and error count, custom linters, `grep`, etc.) so future reviewers can replay the validation. **MANDATORY**: Report ShellCheck status: `shellcheck script.sh` exit code, total errors/warnings found, auto-fixed count, remaining issues (if any).
+
+**IDE INTEGRATION PROTOCOL** (MANDATORY FOR AI AGENTS IN IDE ENVIRONMENTS)
+**Output Format**: JSON with issue_id, severity, confidence, line, original_code, corrected_code, explanation, fix_category, auto_fixable, references, pattern_id.
+
+**Progressive Feedback**: CRITICAL (≥95%) first → HIGH (85-94%) → MEDIUM/LOW (<85%). Batch by category (all command injection together, all unquoted vars together).
+
+**Auto-Fix Preview**: Issue description, original code (3-5 lines), corrected code (3-5 lines), explanation, request approval [YES/NO/SKIP].
+
+**Execution Modes**: BATCH (CI/CD, full audit, 5-10 min) | INTERACTIVE (real-time, critical only, 10-30 sec) | FOCUSED (specific category, 1-2 min). Selection: file > 500 lines → BATCH, real-time → INTERACTIVE, user request → FOCUSED.
+
+**CI/CD Markers**: Output `[BASH_AUDIT_PASSED]` with checklist status, issues found/fixed, confidence, patterns checked, ShellCheck status (exit code, errors/warnings count, auto-fixed count), auto-fixed count, execution time, mode.
+
+**Knowledge Base**: BEFORE: Load Pattern-Learning-Repository-PART1.md/PART2.md, check git history (last 50 commits). DURING: Reference pattern IDs, update confidence from frequency. AFTER: New pattern? → Ask user to learn. <70% confidence? → Improve detection. False positive? → Reduce confidence.
+
+**PATTERN LEARNING INTEGRATION**: Before Steps 3-4, check `prompts/Pattern-Learning-Repository-PART1.md` and `prompts/Pattern-Learning-Repository-PART2.md` for active patterns. Apply detection methods, report violations with Pattern ID, auto-fix. If solving recurring error (2+ occurrences), extract pattern (ID, description, detection, prevention) and add to PART1 or PART2. Track frequency, promote to core checklist if ≥20 occurrences. In Step 4, add Pattern Learning Summary and update tools list to include repository.

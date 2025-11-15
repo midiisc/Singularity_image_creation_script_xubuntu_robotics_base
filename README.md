@@ -360,10 +360,12 @@ This repository enforces strict AI agent behavior rules to maintain a clean, eff
 ### Code Review & Validation (NEW - 2025-11-12)
 
 **Prompt Framework**:
-- **`prompts/Advanced-CoT-Multi-Agent-Prompt.md`** - Multi-agent Chain-of-Thought code review framework
+- **`prompts/Advanced-CoT-Multi-Agent-Prompt-PART1.md`** - Multi-agent Chain-of-Thought code review framework (split into parts for optimal context)
   - Updated with 8 new error pattern checks (D3, L5, M11, M12)
   - TBB conflict detection, CMake validation, pipe safety, multi-phase docs
-- **`prompts/Code_check_prompt_manual.txt`** - Comprehensive Bash code review checklist
+- **`prompts/Code_check_prompt_manual.txt`** - Master entry point for comprehensive Bash code review checklist
+  - Split into 4 parts (PART1-PART4) for optimal context window usage (each under 500 lines)
+  - Loads all parts sequentially to ensure complete checklist coverage (A1-P5)
   - 80+ lines of new checks matching Advanced CoT updates
 
 **Automated Enforcement**:
@@ -419,9 +421,9 @@ To get the AI to create a file, use explicit phrases:
 - **`scripts/hooks/pre-commit-cmake-validator`** - Pre-commit validation hook
 
 **Prompts & Code Review:**
-- **`prompts/Advanced-CoT-Multi-Agent-Prompt.md`** - Multi-agent CoT code review framework
-- **`prompts/Code_check_prompt_manual.txt`** - Comprehensive Bash code checklist
-- **`prompts/Enhanced-Code-Review-Prompt.md`** - Enhanced code review guidelines
+- **`prompts/Advanced-CoT-Multi-Agent-Prompt-PART1.md`** - Multi-agent CoT code review framework (master entry point, loads all parts sequentially)
+- **`prompts/Code_check_prompt_manual.txt`** - Master entry point for comprehensive Bash code checklist (loads PART1-PART4 sequentially)
+- **`prompts/Enhanced-Code-Review-Prompt-PART1.md`** - Enhanced code review guidelines (master entry point, loads all parts sequentially)
 
 **AI Agent Rules:**
 - **`.cursor/rules/000-MANDATORY-READ-FIRST.mdc`** - Pre-work verification checklist

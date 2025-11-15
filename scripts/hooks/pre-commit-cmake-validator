@@ -5,7 +5,8 @@
 # Installation: 
 #   ln -s ../../scripts/hooks/pre-commit-cmake-validator .git/hooks/pre-commit
 #
-# Implements: prompts/Code_check_prompt_manual.txt (M8, M9, M10)
+# Implements: prompts/Code_check_prompt_manual.txt (Master entry point - loads all parts sequentially)
+# Section M8/M9/M10 in PART3 (M. Environment & Dependencies)
 ################################################################################
 
 set -euo pipefail

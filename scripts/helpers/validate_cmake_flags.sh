@@ -5,7 +5,8 @@
 # Usage: ./validate_cmake_flags.sh <script_file> [--strict] [--report-only]
 #
 # Implements requirements from:
-#   - prompts/Code_check_prompt_manual.txt (M8, M9, M10)
+#   - prompts/Code_check_prompt_manual.txt (Master entry point - loads all parts sequentially)
+#   - Section M8/M9/M10 in PART3 (M. Environment & Dependencies)
 #   - Prevents invalid/undocumented CMake flags from being used
 #
 # Exit codes:

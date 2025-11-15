@@ -7,7 +7,7 @@ This repository uses AI-powered code review via Claude (Anthropic) to ensure cod
 - **GitHub Actions**: AI review runs automatically on all PRs and pushes (primary method)
 - **Local pre-commit hook**: AI review is **DISABLED by default** (can be enabled with `ENABLE_AI_REVIEW=1`)
 - AI reviewer: `scripts/hooks/ai_precommit_review.py`
-- Prompt source: `prompts/Code_check_prompt_manual.txt`
+- Prompt source: `prompts/Code_check_prompt_manual.txt` (Master entry point - loads PART1-PART4 sequentially)
 
 ## AI Review in GitHub Actions (Primary Method)
 
@@ -74,7 +74,8 @@ The AI reviewer (`ai_precommit_review.py`) automatically detects the environment
 Common behavior:
 - Filters files with extensions commonly used in this repository (`.sh`, `.py`, `.cpp`, `.yaml`, etc.)
 - Generates unified diffs and splits them into chunks (default 400 diff lines)
-- Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` as the authoritative checklist
+- Builds a strict review prompt using `prompts/Code_check_prompt_manual.txt` (master entry point) as the authoritative checklist
+- Loads all parts (PART1-PART4) sequentially to ensure complete checklist coverage (A1-P5)
 - Calls Claude (Anthropic) API and expects JSON with `status`, `summary`, and structured `findings`
 - Reports findings with severity levels (critical, major, minor)
 - In GitHub Actions: Outputs findings to workflow logs
@@ -177,7 +178,7 @@ export AI_REVIEW_SECONDARY_PROVIDER="none"
 
 ## Maintenance tips
 
-- Update `prompts/Code_check_prompt_manual.txt` whenever the review policy evolves; the AI prompt pulls the file verbatim.
+- Update `prompts/Code_check_prompt_manual.txt` (or appropriate PART file) whenever the review policy evolves; the AI prompt loads all parts sequentially to ensure complete coverage.
 - When introducing new file types, add their extensions to `ALLOWED_SUFFIXES` in `scripts/hooks/ai_precommit_review.py`.
 - If the API schema diverges from Anthropic’s Claude endpoint, update `call_anthropic_api()` / `extract_review_content()` accordingly. For alternate providers, extend the abstractions in `ai_precommit_review.py`.
 - Tune `AI_REVIEW_COMPLEXITY_*` thresholds if you need Claude to trigger more or less aggressively, or if you want OpenAI usage to increase/decrease.

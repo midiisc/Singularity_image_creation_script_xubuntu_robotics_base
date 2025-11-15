@@ -2,7 +2,8 @@
 ################################################################################
 # AUTO-FIX SHELLCHECK ISSUES
 # Purpose: Automatically fix common ShellCheck warnings before commit
-# Implements: prompts/Code_check_prompt_manual.txt - Auto-fix mode
+# Implements: prompts/Code_check_prompt_manual.txt (Master entry point - loads all parts sequentially)
+# Section O5 in PART4 (O. Testing, Validation & Graceful Degradation) - Auto-fix mode
 #
 # Fixes:
 #   1. SC2155: Declare and assign separately (local var=$(cmd))

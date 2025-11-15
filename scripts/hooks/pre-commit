@@ -822,8 +822,9 @@ if [ "$VALIDATION_FAILED" = true ]; then
   echo "  git commit --no-verify"
   echo ""
   echo -e "${YELLOW}[REFERENCE]${NC}"
-  echo "  - Sed patterns: prompts/Code_check_prompt_manual.txt (D4)"
-  echo "  - CMake flags: prompts/Code_check_prompt_manual.txt (M8/M9/M10)"
+  echo "  - Sed patterns: prompts/Code_check_prompt_manual.txt (D4 in PART2)"
+  echo "  - CMake flags: prompts/Code_check_prompt_manual.txt (M8/M9/M10 in PART3)"
+  echo "  - Master entry point: prompts/Code_check_prompt_manual.txt (loads all parts sequentially)"
   echo ""
   exit 1
 else

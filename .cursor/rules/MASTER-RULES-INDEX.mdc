@@ -119,8 +119,8 @@ globs:
 - `.cursor/rules/LOCAL-PRE-COMMIT-VALIDATION.mdc` - Local pre-commit validation
 - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Quick reference and pre-work checklist
 - `.cursorrules` - Points to this index
-- `prompts/Code_check_prompt_manual.txt` - Bash validation checklist
-- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt (or PART1/PART2/PART3)
+- `prompts/Code_check_prompt_manual.txt` - Bash validation checklist (Master entry point - loads PART1-PART4 sequentially)
+- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - CoT audit prompt (Master entry point - loads PART1 → PART2A → PART2B → PART3 sequentially)
 - `prompts/Pattern-Learning-Repository.md` - Learned error patterns (auto-updated)
 
 ---

@@ -2,7 +2,8 @@
 ################################################################################
 # SED PATTERN VALIDATOR
 # Purpose: Detect malformed sed bracket expressions and missing error fallbacks
-# Implements: prompts/Code_check_prompt_manual.txt (D4)
+# Implements: prompts/Code_check_prompt_manual.txt (Master entry point - loads all parts sequentially)
+# Section D4 in PART2 (D. Quoting & Expansion Safety)
 # 
 # Detects:
 #   1. Malformed bracket classes: sed 's/[[' pattern

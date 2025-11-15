@@ -214,8 +214,8 @@ cmake .. \
 
 ## Related Documentation
 
-- **Code Review Checklist:** `prompts/Code_check_prompt_manual.txt` (M8, M9, M10, O4)
-- **Library Analysis Tool:** `prompts/Library-Analysis-Tool.md`
+- **Code Review Checklist:** `prompts/Code_check_prompt_manual.txt` (Master entry point - loads PART1-PART4 sequentially, M8/M9/M10 in PART3, O4 in PART4)
+- **Library Analysis Tool:** `prompts/Library-Analysis-Tool-PART1.md` (Master entry point - loads all parts sequentially)
 - **Flag Documentation:** `docs/flags/*.md`
 
 ## Support

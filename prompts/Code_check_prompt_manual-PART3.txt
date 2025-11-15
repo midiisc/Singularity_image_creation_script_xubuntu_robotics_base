@@ -1,0 +1,510 @@
+**CODE CHECK PROMPT MANUAL - PART 3 of 4**
+
+**SEQUENTIAL CHECKING ENFORCED**: 
+- This is PART 3 of 4 (continues H, covers I-J-K-L-M-O partial)
+- You MUST have completed PART 1 and PART 2 before starting this part
+- After completing this part, continue with PART 4: `Code_check_prompt_manual-PART4.txt`
+- **DO NOT SKIP**: All checklist items must be checked sequentially
+
+---
+
+    fi
+    ```
+  - **EXAMPLE - CORRECT** (explicit validation):
+    ```bash
+    # Run parallel operations, capture failures
+    local failed_count=0
+    xargs -P 6 -I{} bash -c 'command "$1" || exit 1' _ {} || failed_count=$?
+    
+    # Validate result file exists and contains data
+    if [ ! -s "${RESULT_FILE}" ]; then
+      echo "[ERROR] Result file empty or missing - all operations may have failed"
+      return 1
+    fi
+    
+    # Parse with validation
+    result=$(parse_results 2>/dev/null)
+    if [ -z "${result}" ] || ! validate_result "${result}"; then
+      echo "[ERROR] Invalid or empty result from parse_results"
+      return 1
+    fi
+    use_result "${result}"
+    ```
+  - **MIRROR PROBE PATTERN**: When probing mirrors/endpoints in parallel:
+    - Check result file is non-empty: `[ -s "${PROBE_RESULTS}" ]`
+    - Validate result format before parsing: `grep -qE '^[0-9.]+ [a-z]+://' "${PROBE_RESULTS}"`
+    - Log failure count if all probes fail: `if [ ! -s "${PROBE_RESULTS}" ]; then echo "[ERROR] All probes failed"; fi`
+    - Never use empty result silently: Always check `[ -n "${result}" ]` AND validate format before use
+  - **COMPREHENSIVE SILENT FAILURE PREVENTION** (MANDATORY - ALL POSSIBILITIES & EDGE CASES):
+    - **CRITICAL PRINCIPLE**: ALL failures MUST be detected, logged, and handled with appropriate fallbacks - NO silent failures allowed
+    - **MANDATORY COVERAGE**: Check ALL failure modes and edge cases:
+      - **Command failures**: Exit codes, stderr output, partial success
+      - **File operations**: Missing files, permission errors, disk full, I/O errors
+      - **Network operations**: Timeouts, connection refused, DNS failures, HTTP errors
+      - **Process operations**: Process not found, permission denied, zombie processes
+      - **Variable operations**: Unset variables, empty variables, invalid values
+      - **Pipeline operations**: Intermediate command failures, pipe breaks
+      - **Subshell operations**: Subshell failures, exit code masking
+      - **Background jobs**: Job failures, wait timeouts, signal handling
+    - **REQUIRED FAILURE DETECTION PATTERNS**:
+      - **Command exit codes**: `command; exit_code=$?; if [ $exit_code -ne 0 ]; then echo "[ERROR] Command failed with exit code $exit_code"; fi`
+      - **Stderr capture**: `stderr=$(command 2>&1 >/dev/null); if [ -n "${stderr}" ]; then echo "[ERROR] Command stderr: ${stderr}"; fi`
+      - **Combined check**: `output=$(command 2>&1); exit_code=$?; if [ $exit_code -ne 0 ] || [ -z "${output}" ]; then echo "[ERROR] Command failed or produced no output"; fi`
+      - **File operations**: `[ -f "${FILE}" ] || { echo "[ERROR] File missing: ${FILE}"; return 1; }`
+      - **Directory operations**: `[ -d "${DIR}" ] || { echo "[ERROR] Directory missing: ${DIR}"; return 1; }`
+      - **Permission checks**: `[ -r "${FILE}" ] || { echo "[ERROR] File not readable: ${FILE}"; return 1; }`
+      - **Network operations**: `http_code=$(curl -w "%{http_code}" -o /dev/null -s "${URL}"); if [ "${http_code}" != "200" ]; then echo "[ERROR] HTTP ${http_code} for ${URL}"; fi`
+    - **REQUIRED FALLBACK STRATEGIES**:
+      - **Primary → Secondary**: Try primary source, fallback to secondary on failure
+      - **Retry with backoff**: Retry failed operations with exponential backoff
+      - **Graceful degradation**: Continue with reduced functionality if non-critical operations fail
+      - **User notification**: Always inform user of failures and fallback actions taken
+      - **Error accumulation**: Track all failures and report summary at end
+    - **EDGE CASES TO HANDLE**:
+      - **Partial success**: Some operations succeed, others fail → Track success/failure counts, report partial success
+      - **Race conditions**: File/directory created/deleted between check and use → Use atomic operations or retry logic
+      - **Timeout vs failure**: Operation times out vs actually fails → Distinguish timeout from failure, handle differently
+      - **Empty vs missing**: Empty result vs missing result → Check both `[ -z "${result}" ]` and `[ ! -f "${result_file}" ]`
+      - **Permission vs existence**: File exists but not accessible → Check both existence and permissions
+      - **Network transient errors**: Temporary network failures vs permanent failures → Retry transient errors, fail fast on permanent
+      - **Subshell masking**: Subshell failures don't propagate → Check subshell exit codes explicitly
+      - **Background job failures**: Background job failures don't trigger `set -e` → Use `wait` and check exit codes
+      - **Pipeline intermediate failures**: Middle command in pipeline fails → Use `set -o pipefail` and check pipeline exit code
+      - **Command substitution masking**: `$(command)` masks exit codes → Check exit code separately or validate result
+      - **Conditional masking**: `if command; then` doesn't trigger `set -e` → Check exit codes explicitly in conditionals
+      - **Function return masking**: Function returns non-zero but caller doesn't check → Always check function return codes
+      - **Trap handler failures**: Trap handlers can fail silently → Validate trap handler operations
+      - **Cleanup failures**: Cleanup operations can fail → Log cleanup failures but don't mask original error
+    - **COMPREHENSIVE VALIDATION PATTERNS**:
+      - **WRONG** (silent failure - no detection):
+        ```bash
+        command || true  # Masks failure, no logging
+        result=$(parse_data || echo "")  # Returns empty, no validation
+        use_result "${result}"  # Uses potentially invalid result
+        ```
+      - **CORRECT** (comprehensive failure detection):
+        ```bash
+        # Run command with full error tracking
+        local exit_code=0
+        local stderr_output=""
+        stderr_output=$(command 2>&1) || exit_code=$?
+        
+        # Detect and handle ALL failure modes
+        if [ $exit_code -ne 0 ]; then
+          echo "[ERROR] Command failed with exit code $exit_code"
+          [ -n "${stderr_output}" ] && echo "[ERROR] Stderr: ${stderr_output}"
+          # Fallback strategy
+          if ! fallback_command; then
+            echo "[ERROR] Fallback also failed"
+            return 1
+          fi
+        fi
+        
+        # Validate result with multiple checks
+        result=$(parse_data 2>&1) || {
+          echo "[ERROR] parse_data failed"
+          return 1
+        }
+        
+        # Check result is non-empty AND valid format
+        if [ -z "${result}" ]; then
+          echo "[ERROR] Result is empty"
+          return 1
+        fi
+        
+        if ! validate_result_format "${result}"; then
+          echo "[ERROR] Result format invalid: ${result}"
+          return 1
+        fi
+        
+        # Safe to use result
+        use_result "${result}"
+        ```
+      - **WRONG** (silent failure - no fallback):
+        ```bash
+        curl "${URL}" || echo ""  # Fails silently, no fallback
+        ```
+      - **CORRECT** (comprehensive failure handling with fallback):
+        ```bash
+        # Try primary source with full error detection
+        http_code=$(curl -w "%{http_code}" -o "${OUTPUT_FILE}" -s --max-time 30 "${PRIMARY_URL}" 2>&1) || {
+          echo "[WARN] Primary source failed, trying fallback..."
+          # Fallback to secondary source
+          http_code=$(curl -w "%{http_code}" -o "${OUTPUT_FILE}" -s --max-time 30 "${FALLBACK_URL}" 2>&1) || {
+            echo "[ERROR] Both primary and fallback sources failed"
+            return 1
+          }
+        }
+        
+        # Validate HTTP response
+        if [ "${http_code}" != "200" ]; then
+          echo "[ERROR] HTTP ${http_code} - download failed"
+          return 1
+        fi
+        
+        # Validate output file
+        if [ ! -s "${OUTPUT_FILE}" ]; then
+          echo "[ERROR] Downloaded file is empty"
+          return 1
+        fi
+        ```
+    - **DETECTION METHOD**:
+      - Find all `|| true`/`|| echo ""` patterns: `grep -nE '\|\| (true|echo "")' script.sh`
+      - Find all command substitutions: `grep -nE '\$\([^)]+\)' script.sh`
+      - Find all background jobs: `grep -nE '&[[:space:]]*$' script.sh`
+      - Find all pipeline operations: `grep -nE '\|' script.sh`
+      - For each pattern, verify failure detection and fallback handling
+    - **AUTO-FIX STRATEGY**:
+      - Replace `|| true` with explicit error detection and logging
+      - Add result validation after all command substitutions
+      - Add exit code checks after all external commands
+      - Add fallback logic for critical operations
+      - Add user-visible error messages for all failures
+      - Add retry logic for transient failures
+    - **MANDATORY FAILURE REPORTING**:
+      - **ALL failures MUST be logged**: Use `echo "[ERROR] ..." >&2` for errors, `echo "[WARN] ..." >&2` for warnings
+      - **Include context**: Error messages must include: operation name, file/path involved, exit code (if applicable), suggested action
+      - **Failure summary**: For batch operations, report success/failure counts and list failed items
+      - **Exit codes**: Use appropriate exit codes: 0 (success), 1 (general error), 2 (misuse), 126 (not executable), 127 (not found), 128+ (signal)
+    - **COMPREHENSIVE COVERAGE CHECKLIST**:
+      - [ ] All external commands have exit code checks
+      - [ ] All file operations have existence/permission checks
+      - [ ] All network operations have HTTP status/timeout checks
+      - [ ] All command substitutions have result validation
+      - [ ] All background jobs have `wait` and exit code checks
+      - [ ] All pipeline operations have `set -o pipefail` and exit code checks
+      - [ ] All subshell operations have explicit exit code checks
+      - [ ] All function calls have return code checks
+      - [ ] All masked failures (`|| true`) have explicit validation after
+      - [ ] All critical operations have fallback strategies
+      - [ ] All failures are logged with context
+      - [ ] All edge cases (partial success, race conditions, timeouts) are handled
+
+I. Timeouts, Retries, & Robustness
+- I1. Long-running operations (e.g., `ldconfig`, package managers, service checks) wrapped with `timeout`, retries, or backoff.
+- I2. Graceful degradation/fallback behavior documented when timeouts or partial failures occur.
+- I3. Handling of transient network or IO failures, including retries and validation of results.
+- I4. **HTTP ERROR HANDLING**: All curl/wget operations must check HTTP status codes and handle errors:
+  - Capture HTTP status codes: `curl -w "%{http_code}" -o output_file URL`
+  - Check for HTTP errors: 403 (Forbidden/Blocked), 404 (Not Found), 5xx (Server Errors)
+  - Detect connection errors: timeouts, connection refused, DNS failures
+  - Implement fallback logic when primary source fails (e.g., fallback to archive.ubuntu.com for mirrors)
+  - Use temporary files to capture both stdout and stderr separately for proper error analysis
+  - Validate HTTP codes are 3-digit numbers before checking: `[[ "${http_code}" =~ ^[0-9]{3}$ ]]`
+  - Always provide user-visible error messages explaining the specific failure (403, timeout, etc.)
+
+J. Edge Cases & Resiliency
+- J1. **MANDATORY FILE/DIRECTORY EXISTENCE VALIDATION**: ALL files and directories MUST be validated for existence BEFORE first use:
+  - **CRITICAL**: Every file path used (read, write, append, execute) MUST be checked for existence before first use
+  - **CRITICAL**: Every directory path used (cd, create files in, list contents) MUST be checked for existence before first use
+  - **MANDATORY CHECKS**:
+    - **Before reading**: `[ -f "${FILE_PATH}" ] || { echo "[ERROR] File not found: ${FILE_PATH}"; exit 1; }`
+    - **Before writing**: `[ -d "$(dirname "${FILE_PATH}")" ] || mkdir -p "$(dirname "${FILE_PATH}")" || { echo "[ERROR] Cannot create directory for: ${FILE_PATH}"; exit 1; }`
+    - **Before directory operations**: `[ -d "${DIR_PATH}" ] || { echo "[ERROR] Directory not found: ${DIR_PATH}"; exit 1; }`
+    - **Before executing**: `[ -x "${SCRIPT_PATH}" ] || { echo "[ERROR] Script not executable: ${SCRIPT_PATH}"; exit 1; }`
+  - **REQUIRED VALIDATION PATTERNS**:
+    - **File read**: `[ -r "${FILE}" ] && [ -f "${FILE}" ]` (readable AND regular file)
+    - **File write**: `[ -w "$(dirname "${FILE}")" ]` (parent directory writable)
+    - **Directory access**: `[ -d "${DIR}" ] && [ -x "${DIR}" ]` (exists AND executable/traversable)
+    - **Symlink handling**: `[ -L "${LINK}" ] && [ -e "${LINK}" ]` (symlink exists AND target exists)
+  - **EDGE CASES TO HANDLE**:
+    - **Race conditions**: File/directory may be deleted between check and use → Use atomic operations or retry logic
+    - **Permissions**: File exists but not readable → Check permissions: `[ -r "${FILE}" ]`
+    - **Symlinks**: Symlink exists but target missing → Check both: `[ -L "${LINK}" ] && [ -e "${LINK}" ]`
+    - **Relative paths**: Relative paths depend on current directory → Use absolute paths or validate `PWD`
+    - **Whitespace in paths**: Paths with spaces → Always quote: `"${FILE_PATH}"`
+    - **Empty paths**: Empty variable expands to current directory → Validate non-empty: `[ -n "${PATH_VAR}" ]`
+    - **Special files**: `/dev/null`, `/dev/stdout` always exist → Special case handling
+  - **DETECTION METHOD**: 
+    - Find all file operations: `grep -nE '(cat|read|source|\.|cd|mkdir|rm|cp|mv|ln|touch|chmod|chown|>|>>)' script.sh`
+    - For each operation, verify existence check precedes it
+    - Check for unguarded operations: `grep -nE '(cat|read|source) [^[]' script.sh` (no `[ -f` check before)
+  - **VALIDATION PATTERNS**:
+    - **WRONG**: `cat "${CONFIG_FILE}"` (no existence check)
+    - **CORRECT**: `[ -f "${CONFIG_FILE}" ] && cat "${CONFIG_FILE}" || { echo "[ERROR] Config file missing: ${CONFIG_FILE}"; exit 1; }`
+    - **WRONG**: `cd "${BUILD_DIR}" && make` (no existence check)
+    - **CORRECT**: `[ -d "${BUILD_DIR}" ] && cd "${BUILD_DIR}" && make || { echo "[ERROR] Build directory missing: ${BUILD_DIR}"; exit 1; }`
+    - **WRONG**: `source "${SCRIPT}"` (no existence check)
+    - **CORRECT**: `[ -f "${SCRIPT}" ] && [ -r "${SCRIPT}" ] && source "${SCRIPT}" || { echo "[ERROR] Script not found or not readable: ${SCRIPT}"; exit 1; }`
+  - **AUTO-FIX STRATEGY**: 
+    - For each file/directory operation, insert existence check before first use
+    - Use helper function: `validate_file_exists "${FILE}"` or `validate_dir_exists "${DIR}"`
+    - Add error messages with context (what operation failed, what file/dir was expected)
+  - **COMPREHENSIVE COVERAGE**: Check ALL file/directory operations:
+    - File reads: `cat`, `read`, `source`, `.`, `grep -f`, `awk -f`, `sed -f`
+    - File writes: `>`, `>>`, `tee`, `printf >`, `echo >`
+    - Directory operations: `cd`, `mkdir`, `rmdir`, `find`, `ls`, `tree`
+    - Path operations: `dirname`, `basename`, `realpath`, `readlink`
+    - Execution: `./script`, `bash script`, `sh script`, `exec script`
+- J2. Safe temporary resource management (`mktemp`, secure paths).
+- J3. Handling of empty/whitespace-only data, concurrency hazards, and race conditions.
+  - Suggested pattern: wrap `read` loops with `while IFS= read -r line || [ -n "$line" ]; do ...; done`.
+
+K. Security Posture
+- K1. **INJECTION PREVENTION**: Protection against injection attacks (command, code, variable, path injection):
+  - **COMMAND INJECTION** (CRITICAL):
+    - **FORBIDDEN**: `eval "${VAR}"` → NEVER use `eval` with variables or user input
+    - **FORBIDDEN**: `command $VAR` (unquoted variable) → Command injection risk (see D3e)
+    - **FORBIDDEN**: `$(eval "command ${VAR}")` → NEVER use `eval` in command substitutions
+    - **FORBIDDEN**: `command "$(printf '%s' "${VAR}")"` when VAR contains command separators (`;`, `|`, `&`, `&&`, `||`)
+    - **FORBIDDEN**: `command "${VAR}"` when VAR is user-controlled and contains shell metacharacters
+    - **SAFE ALTERNATIVES**:
+      - Never use `eval` → Use direct command execution or function calls
+      - Always quote variables: `command "${VAR}"` (but validate VAR doesn't contain command separators)
+      - Sanitize user input: Validate format before use, escape special characters
+      - Use arrays for arguments: `command "${args[@]}"` (prevents injection in arrays)
+      - Use `command -v` for command validation: `command -v "${cmd}"` before executing
+    - **VALIDATION**: Find all `eval` usage: `grep -nE '\beval\s' script.sh` → Must be removed or documented as safe
+    - **DETECTION**: Find unquoted variables in commands: `grep -nE 'command\s+\$[^{]' script.sh` → Must be quoted
+    - **CROSS-REFERENCE**: See D3d (command substitution), D3e (word splitting) for related patterns
+  - **VARIABLE INJECTION** (HIGH):
+    - **FORBIDDEN**: Unquoted heredoc delimiters with user-controlled content (see E2)
+    - **FORBIDDEN**: Unquoted variables in command contexts (see D3e)
+    - **FORBIDDEN**: Variable expansion in eval/exec contexts
+    - **VALIDATION**: Ensure all variables are quoted and validated before use
+    - **CROSS-REFERENCE**: See E2 (heredoc quoting), D3e (word splitting), C1 (unbound variables)
+  - **PATH INJECTION** (MEDIUM):
+    - **FORBIDDEN**: `cd "${VAR}"` when VAR contains `..` or absolute paths (directory traversal)
+    - **FORBIDDEN**: `cat "${VAR}"` when VAR contains `/etc/passwd` or other sensitive paths
+    - **FORBIDDEN**: Unquoted path variables: `command $PATH_VAR` (pathname expansion risk)
+    - **SAFE ALTERNATIVES**:
+      - Validate paths before use: `[[ "${PATH}" =~ ^[a-zA-Z0-9_/.-]+$ ]]` (alphanumeric, slash, dash, dot, underscore only)
+      - Use `realpath` to canonicalize paths: `real_path=$(realpath "${VAR}")`
+      - Check path boundaries: Ensure path doesn't escape intended directory
+      - Use `basename`/`dirname` to extract safe path components
+    - **VALIDATION**: For all file operations, validate path doesn't contain `..` or absolute paths when relative expected
+    - **CROSS-REFERENCE**: See J1 (file existence validation), D3f (globbing)
+  - **REGEX INJECTION** (MEDIUM):
+    - **FORBIDDEN**: `grep -E "${USER_PATTERN}"` when PATTERN is user-controlled (regex injection)
+    - **FORBIDDEN**: `sed -E "s/${USER_PATTERN}/replacement/"` when PATTERN is user-controlled
+    - **SAFE ALTERNATIVES**:
+      - Use `grep -F` for fixed-string matching when pattern is user-controlled
+      - Validate and sanitize regex patterns before use
+      - Escape regex special characters if regex is required: `printf '%s\n' "${PATTERN}" | sed 's/[][.*+?^${}()|\\]/\\&/g'`
+    - **VALIDATION**: For user-controlled patterns, use `-F` flag or validate pattern format
+    - **CROSS-REFERENCE**: See D3c (grep unsafe patterns)
+  - **ARITHMETIC INJECTION** (LOW):
+    - **FORBIDDEN**: `(( VAR + USER_INPUT ))` when USER_INPUT contains shell code
+    - **FORBIDDEN**: `let "VAR = ${USER_INPUT}"` → Variable injection risk
+    - **SAFE ALTERNATIVES**:
+      - Validate input is numeric before arithmetic: `[[ "${INPUT}" =~ ^[0-9+-/*() ]+$ ]]`
+      - Use `$(( ))` for arithmetic (safer than `let`)
+      - Sanitize input: Remove all non-numeric characters except operators
+    - **VALIDATION**: For arithmetic with user input, validate input is numeric
+  - **DETECTION METHODS**:
+    - Find `eval` usage: `grep -nE '\beval\s' script.sh`
+    - Find unquoted variables: `grep -nE 'command\s+\$[^{A-Z_]' script.sh`
+    - Find user input usage: Check for `read`, `$1`, `$@`, environment variables in command contexts
+    - Find path operations: `grep -nE '(cd|cat|rm|mv|cp|ln)\s+\$\{' script.sh`
+  - **AUTO-FIX STRATEGY**:
+    - Remove all `eval` usage (replace with direct commands or functions)
+    - Quote all unquoted variables
+    - Add input validation before command execution
+    - Use `-F` flag for grep when pattern is user-controlled
+    - Validate paths before file operations
+- K1a. **EVAL/EXEC UNSAFE PATTERNS**: Specific checks for `eval` and `exec` usage:
+  - **EVAL UNSAFE PATTERNS** (CRITICAL - NEVER ALLOW):
+    - `eval "${VAR}"` → Variable content executed as shell code
+    - `eval "command ${VAR}"` → Command injection via variable
+    - `eval "$(command)"` → Command output executed as shell code
+    - `eval "$@\"` → Positional parameters executed as shell code
+    - **REQUIREMENT**: ALL `eval` usage MUST be removed or documented with security justification
+    - **SAFE ALTERNATIVES**:
+      - Direct command execution: `command "${VAR}"` (if VAR is a command name)
+      - Function calls: `function_name "${VAR}"` (if VAR is an argument)
+      - Arrays: `command "${args[@]}"` (if VAR is arguments)
+      - Case/if statements: `case "${VAR}" in pattern1) command1;; esac`
+    - **EXCEPTION**: Only allow `eval` if:
+      1. Content is completely controlled (hardcoded, no variables)
+      2. Security review explicitly approves usage
+      3. Documented with security rationale
+    - **DETECTION**: `grep -nE '\beval\s' script.sh` → All occurrences must be justified
+    - **AUTO-FIX**: Replace `eval` with direct command execution or function calls
+  - **EXEC UNSAFE PATTERNS** (HIGH - USE WITH CAUTION):
+    - `exec command "${VAR}"` when VAR contains shell metacharacters → Command injection
+    - `exec ${VAR}` (unquoted) → Word splitting and command injection
+    - `exec command` → Replaces current shell (use only when intentional)
+    - **REQUIREMENT**: `exec` usage MUST be intentional and documented
+    - **SAFE ALTERNATIVES**:
+      - Direct command execution: `command "${VAR}"` (if not replacing shell)
+      - Use `exec` only when replacing current shell is intentional
+      - Always quote variables: `exec command "${VAR}"`
+      - Validate command before exec: `command -v "${cmd}"` or `[ -x "${cmd}" ]`
+    - **VALIDATION**: For all `exec` usage, verify:
+      1. Shell replacement is intentional
+      2. Command is validated before execution
+      3. Variables are quoted
+      4. No user-controlled content in command
+    - **DETECTION**: `grep -nE '\bexec\s' script.sh` → Verify all are intentional and safe
+    - **AUTO-FIX**: Add validation, quote variables, document intent
+  - **CROSS-REFERENCE**: See K1 (injection prevention), D3d (command substitution), D3e (word splitting)
+- K2. Safe path handling, avoidance of world-writable directories, deliberate permission settings:
+  - **PATH VALIDATION**:
+    - Validate paths don't contain `..` or absolute paths when relative expected (see K1 - path injection)
+    - Use `realpath` to canonicalize paths: `real_path=$(realpath "${PATH_VAR}")`
+    - Check path boundaries: Ensure path doesn't escape intended directory
+  - **WORLD-WRITABLE DIRECTORY AVOIDANCE**:
+    - **FORBIDDEN**: Creating files in world-writable directories (`/tmp`, `/var/tmp`) without unique names
+    - **FORBIDDEN**: Using fixed paths in `/tmp`: `TMP_DIR=/tmp/script` (race condition risk)
+    - **SAFE ALTERNATIVES**:
+      - Use `mktemp` for temporary files: `TMP_FILE=$(mktemp)` or `TMP_DIR=$(mktemp -d)`
+      - Use `mktemp` with template: `TMP_FILE=$(mktemp -t script.XXXXXX)`
+      - Set secure permissions: `chmod 0600 "${TMP_FILE}"` for files, `chmod 0700 "${TMP_DIR}"` for directories
+      - Use `trap` cleanup: `trap 'rm -f "${TMP_FILE}"' EXIT`
+    - **VALIDATION**: For all `/tmp` or world-writable directory usage, verify `mktemp` is used
+    - **DETECTION**: `grep -nE '/tmp/[^$]|/var/tmp/[^$]' script.sh` → Must use `mktemp`
+  - **PERMISSION SETTINGS**:
+    - Set appropriate permissions after file creation: `chmod 0644 "${FILE}"` for config files, `chmod 0755 "${SCRIPT}"` for scripts
+    - Avoid world-writable permissions: `chmod 0666` or `chmod 0777` (security risk)
+    - Use `umask` for default permissions: `umask 022` (files: 644, dirs: 755)
+    - Validate permissions after setting: `stat -c '%a' "${FILE}"` to verify
+  - **CROSS-REFERENCE**: See K1 (path injection), J2 (temp file management), N1 (resource cleanup)
+- K3. Explicit management of file descriptors (e.g., `exec {fd}`) when opened manually:
+
+L. Performance & Maintainability
+- L1. Avoid needless subshells, command substitutions in tight loops, prefer built-ins (`printf` over `echo -e`).
+- L2. Clear comments for intentional complexity, avoidance of duplicated logic.
+- L3. Readability: consistent naming, structure, modularization, and comment density that explains non-trivial control flow. Refresh stale comments or insert concise summaries when logic evolves.
+- L4. **DOCUMENTATION COVERAGE REQUIREMENT**: 
+  - **MANDATORY**: Every function > 10 lines MUST have documentation comment before definition
+  - **MANDATORY**: Complex logic blocks (multi-phase, nested conditionals, long loops) MUST have explanatory comments
+  - **BEST PRACTICE**: Minimum 25% comment density in complex code sections
+  - **REQUIRED**: Comments explain WHY (rationale, assumptions, edge cases), not WHAT (code is self-documenting)
+  - **REQUIRED**: Update comments when code changes (stale comments are worse than no comments)
+  - **AUTO-FIX**: Pre-commit hook automatically adds missing header documentation
+  - **VALIDATION**: Documentation validator checks all code files before commit
+- L5. **MULTI-PHASE LOGIC DOCUMENTATION**: Complex detection/configuration logic with multiple phases MUST be documented:
+  - REQUIRED: Header comment explaining overall strategy and number of phases
+  - REQUIRED: Phase markers (e.g., "# Phase 1: ...") before each distinct phase
+  - REQUIRED: Final decision comment explaining how phases combine
+  - Example pattern (3-phase SDK detection): Header comment → Phase 1 marker → Phase 2 marker → Phase 3 marker → Final decision comment
+  - Rationale: Multi-phase logic is complex; without clear phase markers, maintainers cannot understand the detection strategy
+- L5a. **CONTROL STRUCTURE MARKERS (REQUIRED)**: All control structures MUST have closing markers to track pairings:
+  - **MANDATORY**: `if ... then` → `# ENDIF: <condition description>` comment before `fi`
+  - **MANDATORY**: `for ... in` → `# ENDFOR: <loop variable>` comment before `done`
+  - **MANDATORY**: `while ... do` → `# ENDWHILE: <condition description>` comment before `done`
+  - **MANDATORY**: `case ... in` → `# ENDCASE: <case variable>` comment before `esac`
+  - **PURPOSE**: Helps debug missing if-fi, for-done, while-done, case-esac pairings
+  - **AUTO-FIX**: Pre-commit hook automatically adds missing markers
+  - **VALIDATION**: Control structure marker validator checks all pairs
+- L6. When documenting updates, call out the self-contained blocks you touched (e.g., loop, trap handler, function) and confirm their comments, whitespace, and readability were brought in line with project conventions.
+
+M. Environment & Dependencies
+- M1. Validation that required external commands/binaries exist (`command -v`, `hash`) and version-sensitive behavior is documented.
+- M2. Verification of environment assumptions (shell, OS, distro, architecture, locale, `LANG`, `LC_ALL`, `PATH`, proxy settings).
+- M3. Safe handling of configuration files, credentials, and secrets (no accidental logging, enforce permissions).
+- M4. Package detection/checking uses resilient helpers (e.g., `dpkg_resolve_installed_package`, `dpkg_get_installed_version`) instead of brittle parsing of `dpkg -l` or similar command output; replace and verify during the audit.
+- M5. Confirm installation logic never removes or downgrades distro-provided packages (especially Python runtimes) inadvertently; prefer `apt-get install --no-remove --ignore-hold` or equivalent safeguards, and document rationale when relaxations are necessary.
+- M6. Ensure locally compiled or source-installed packages are guarded from subsequent package-manager overwrites by pinning (`/etc/apt/preferences.d`) or an equivalent industry-standard protection mechanism; verify pins are scoped, documented, and cleaned up when no longer required.
+- M7. **CMAKE CONFIGURATION VALIDATION**: When building software with CMake, validate critical configuration options:
+  - Check CMakeCache.txt after configuration for incorrect detection (e.g., NO_LIBM=1 when libm is available)
+  - Add pre-configuration CMake cache files to force correct settings before CMake runs
+  - Verify linker flags contain required libraries: `CMAKE_SHARED_LINKER_FLAGS`, `CMAKE_EXE_LINKER_FLAGS`
+  - Use `CMAKE_*_LINKER_FLAGS_INIT` to ensure flags apply to all targets from the start
+  - Post-build verification: check built libraries with `ldd` to confirm required libraries are linked
+- M8. **CMAKE FLAG DOCUMENTATION REQUIREMENT**: BEFORE compiling ANY library with CMake, verify comprehensive flag documentation exists:
+  - **MANDATORY**: Documentation file MUST exist at `docs/flags/LIBRARY_VERSION_CMAKE_FLAGS_DOCUMENTATION.md`
+  - **MANDATORY**: Documentation MUST include: library version, source repository, source commit hash, generation date, CMake minimum version
+  - **MANDATORY**: ALL CMake flags used in build script MUST be documented with: flag type (OPTION/STRING/PATH/CACHE), default value, description, usage example
+  - **MANDATORY**: Build script MUST include inline comment referencing the documentation file
+  - **VALIDATION**: If documentation doesn't exist, WARN user and PROMPT to create it
+  - **ERROR PREVENTION**: This check prevents using undocumented/invalid flags that are silently ignored by CMake
+- M9. **CMAKE FLAG CROSS-REFERENCE VALIDATION**: For EVERY CMake flag used (-D FLAG=VALUE), verify against documentation:
+  - **MANDATORY**: Each `-D FLAG=VALUE` in cmake command MUST be listed in corresponding docs/flags/*.md file
+  - **MANDATORY**: Flag name MUST match exactly (case-sensitive) - e.g., `USE_CUDA` NOT `Ceres_ENABLE_CUDA`
+  - **MANDATORY**: Flag type in script must match documented type (OPTION for ON/OFF, STRING for paths/values)
+  - **COMMON ERRORS TO PREVENT**: Using prefix that doesn't exist, using old/deprecated flag names, using "assumed" flags that are never actually defined
+- M10. **VERSION-SPECIFIC FLAG VALIDATION**: When upgrading library versions, verify all CMake flags are still valid:
+  - **MANDATORY**: When changing library version, regenerate flag documentation for new version
+  - **MANDATORY**: Compare old vs new flag documentation to identify deprecated/removed/renamed flags
+  - **MANDATORY**: Update build script to use new flag names and remove deprecated flags
+- M11. **CMAKE FLAG VALIDATION**: All CMake flags MUST be validated against official library documentation:
+  - REQUIRED: Before adding CMake flags, verify against library's official documentation (e.g., docs/flags/CERES_SOLVER_2.2.0_CMAKE_FLAGS_DOCUMENTATION.md)
+  - FORBIDDEN: Using undocumented or library-specific prefixed flags (e.g., `Ceres_ENABLE_CUDA` → use `USE_CUDA`)
+  - FORBIDDEN: Passing framework-specific flags to libraries that don't support them (e.g., `MKL_ROOT` to Ceres)
+  - REQUIRED: Use standard CMake variables (BLA_VENDOR, BLAS_LIBRARIES, LAPACK_LIBRARIES) for BLAS/LAPACK configuration
+  - VALIDATION: Run `scripts/helpers/validate_cmake_flags.sh` on script before commit
+- M12. **UNDOCUMENTED FLAG DETECTION AND VERIFICATION**: All CMake flags MUST be verified against documentation before use:
+  - **MANDATORY**: When encountering ANY `-D FLAG=VALUE` in cmake command, check if flag exists in docs/flags/*.md file
+  - **MANDATORY**: If flag is NOT documented, download library Git repository and parse CMakeLists.txt/cmake files to verify flag existence
+  - **MANDATORY**: If flag exists in source but NOT in documentation, add it to documentation with proper type, description, and usage
+  - **MANDATORY**: If flag does NOT exist in source, REMOVE it from build script (it's being silently ignored)
+  - **DETECTION METHOD**: Search for `option(FLAG`, `set(FLAG`, `CACHE STRING "FLAG"`, `CACHE BOOL "FLAG"` in CMakeLists.txt and cmake/*.cmake files
+  - **VERIFICATION SOURCES**: Library Git repository (primary), official documentation (secondary), wiki/forums (tertiary)
+  - **COMMON EXAMPLES**: 
+    - Ceres: `SUITESPARSE_INCLUDE_DIR`, `CHOLMOD_LIBRARY` → NOT valid (use `SuiteSparse_DIR` or `CMAKE_PREFIX_PATH`)
+    - SuiteSparse: `METIS_LIBRARY_DIR` → NOT valid (METIS is bundled, not external)
+  - **AUTO-FIX**: If undocumented flag is found, remove it from build script and use correct documented alternative
+- M13. **HPC LIBRARY CONFLICT DETECTION**: When configuring HPC libraries (MKL, OpenBLAS, TBB), detect and prevent conflicts:
+  - MKL/OpenBLAS conflict: NEVER link both MKL BLAS and OpenBLAS in same library
+  - TBB conflict: Ensure system TBB is used, NOT MKL's bundled TBB (check `TBB_LIBRARIES` points to `/usr/lib/x86_64-linux-gnu/libtbb.so`, NOT `/opt/intel/*/tbb`)
+  - BLAS vendor consistency: All libraries in dependency chain must use same BLAS (all MKL or all OpenBLAS)
+  - Verification: After CMake configure, check `CMakeCache.txt` for mixed BLAS/TBB
+  - Prevention: Always verify library paths after configuration, not just "found" status
+- M14. **LIBRARY BUNDLED COMPONENT DETECTION**: Before linking external libraries, verify what's bundled vs what needs separate linking:
+  - **CRITICAL**: Check library documentation and repository to identify bundled dependencies (e.g., SuiteSparse bundles METIS in newer versions)
+  - **MANDATORY CHECKS**: Parse CMakeLists.txt for FetchContent_Declare/add_subdirectory, check CHANGELOG/RELEASES for "bundled"/"integrated" keywords, verify official docs, inspect installed library headers/binaries (`nm -D lib*.so | grep symbol`), cross-reference with pkg-config files
+  - **VERSION AWARENESS**: Different versions may have different bundling strategies (e.g., SuiteSparse < 7.0 requires separate METIS, >= 7.1 bundles METIS)
+  - **CHANGELOG ANALYSIS**: Use `git log v7.0.0..v7.1.0 --grep="METIS\|dependency\|bundle"` and `git diff` to check version transitions
+  - **PROS/CONS**: Document decision rationale (bundled: simpler build, version compatibility vs larger binary; separate: shared libs, easier updates vs version mismatch risks)
+  - **DETECTION PATTERNS**: Check for `add_subdirectory.*metis` in CMakeLists.txt, look for external/third_party directories, verify symbols with `nm -D`
+  - **OFFICIAL SOURCE VERIFICATION**: Check library website, GitHub README, CMake config files, distribution package metadata, build system output
+  - **DOCUMENTATION REQUIREMENT**: When integrating library, document in comments: library version, bundled components, separate components, source URL, verification date, decision rationale
+  - **AUTOMATED ANALYSIS TOOL**: Use `prompts/Library-Analysis-Tool.md` to automate bundled component detection
+- M-TOOLS: When analyzing library dependencies, CMake flags, or bundled components, consider using `prompts/Library-Analysis-Tool.md` for automated comprehensive analysis before manual verification.
+  - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats (legacy: `/etc/apt/sources.list` and `*.list` files; modern: `*.sources` deb822 format for Ubuntu 24.04+). Parse both `deb http://...` lines AND `URIs: http://...` fields from .sources files. Update mirror URLs in BOTH formats when modifying apt sources.
+
+Helper Reference – Robust Package Checks
+----------------------------------------
+- Preferred presence check: `if dpkg_resolve_installed_package "pkg-name" >/dev/null; then ...`
+- Preferred version retrieval: `pkg_version=$(dpkg_get_installed_version "pkg-name" || true)`
+- Legacy pattern: `dpkg -l | grep "^ii.*libfoo-dev" | awk '{print $3}'` → Replacement: `dpkg_get_installed_version "libfoo-dev" || true`
+
+N. Resource Management & Cleanup
+- N1. Proper creation and teardown of temporary directories/files (`mktemp`, `trap` cleanup).
+- N2. Release of file descriptors, mounts, network interfaces, or background jobs on success and failure paths.
+- N3. Consideration of resource limits (disk, memory, FD ulimit) and fallback strategies if limits are reached.
+- N4. Detection of potential memory/resource leaks (e.g., orphaned background processes, uncontrolled job growth) and mitigation via supervision or explicit termination.
+- N5. Cleanup of transient variables and state to avoid junk accumulation (unset or reuse safely after use).
+  - Example commands: `pgrep -f script_name` to ensure no stray processes remain; `lsof` to verify file descriptors closed.
+
+O. Testing, Validation & Graceful Degradation
+- O1. Built-in validation checks (self-tests, sanity checks) before performing irreversible actions.
+- O2. Optional dry-run or verbose mode behavior reviewed for correctness and safety.
+- O3. Documentation of manual verification steps when automation cannot fully guarantee success.
+- O4. **MULTI-PHASE INSTALLATION VERIFICATION**: Library installation verification MUST use multiple independent checks with retry logic:
+  - **MANDATORY PHASE 1 - File Existence**: Verify library file exists before checking caches (e.g., `[ -f "/usr/local/lib/libname.so" ]`)
+  - **MANDATORY PHASE 2 - Linker Cache**: Check library appears in ldconfig cache (e.g., `ldconfig -p | grep "libname.so"`)
+  - **MANDATORY PHASE 3 - Retry Logic**: If cache check fails, refresh ldconfig and retry verification
+  - **MANDATORY PHASE 4 - Version Check**: Where applicable, verify library version matches expected (e.g., `pkg-config --modversion libname`)
+  - **MANDATORY**: Detailed debug logging at each phase showing what was checked and why it passed/failed
+  - **SINGLE-CHECK ANTI-PATTERN**: Do NOT rely solely on ldconfig cache check - files can exist but not be in cache (transient failures)
+  - **ERROR HANDLING**: On failure, provide actionable debug output (file listing, cache contents, suggestions)
+  - **RELIABILITY IMPROVEMENT**: Single-phase checks are ~70% reliable, multi-phase with retry are ~95% reliable
+  - **PREVENTS**: False negatives from stale ldconfig cache, race conditions, transient filesystem issues
+- O5. **SHELLCHECK VALIDATION & AUTO-CORRECTION**: All Bash scripts MUST be validated with ShellCheck and all errors/warnings MUST be corrected:
+  - **MANDATORY**: Run ShellCheck on all `.sh` files before completing the audit: `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
+  - **MANDATORY**: Fix ALL ShellCheck errors (exit code 1) - these indicate real issues that must be resolved
+  - **MANDATORY**: Fix ALL ShellCheck warnings (exit code 0 with warnings) - warnings indicate potential issues or style violations
+  - **AUTO-FIX CAPABILITY**: Use project's auto-fix script if available: `scripts/helpers/auto_fix_shellcheck.sh script.sh` to automatically fix common ShellCheck issues
+  - **SHELLCHECK SEVERITY LEVELS**:
+    - **ERROR (SC1xxx)**: Syntax errors, fatal issues - MUST be fixed immediately
+    - **WARNING (SC2xxx)**: Style issues, portability concerns - MUST be fixed
+    - **INFO (SC3xxx)**: Suggestions, best practices - SHOULD be addressed
+    - **STYLE (SC4xxx)**: Code style recommendations - SHOULD be addressed
+  - **COMMON SHELLCHECK ISSUES TO FIX**:
+    - **SC2086**: Double quote to prevent globbing and word splitting → Fix: Quote variables: `"${VAR}"` instead of `${VAR}`
+    - **SC2155**: Declare and assign separately to avoid masking return values → Fix: `local var; var=$(command)` instead of `local var=$(command)`
+    - **SC1090**: Can't follow non-constant source → Fix: Use `# shellcheck source=path/to/file` directive or disable with `# shellcheck disable=SC1090`
+    - **SC2001**: See if you can use `${variable//search/replace}` instead → Fix: Use parameter expansion when possible
+    - **SC2046**: Quote this to prevent word splitting → Fix: Quote command substitution: `"$(command)"`
+    - **SC2068**: Double quote array expansions → Fix: Quote array: `"${array[@]}"` instead of `${array[@]}`
+    - **SC2181**: Check exit code directly with `if`, don't use `$?` → Fix: `if ! command; then` instead of `command; if [ $? -ne 0 ]; then`
+    - **SC2034**: Variable appears unused → Fix: Remove unused variable or mark with `# shellcheck disable=SC2034` if intentionally unused
+    - **SC2120**: Function name references arguments, but none are ever passed → Fix: Remove unused parameters or use `_` prefix
+    - **SC2119**: Use `"$@"` if function's $1 should mean script's $1 → Fix: Use `"$@"` for forwarding arguments
+  - **SHELLCHECK DIRECTIVES**: When ShellCheck warnings are false positives or intentional, use inline directives:
+    - `# shellcheck disable=SC2086` - Disable specific warning for next line
+    - `# shellcheck disable=SC2086,SC2155` - Disable multiple warnings
+    - `# shellcheck source=path/to/file` - Tell ShellCheck where to find sourced file
+    - `# shellcheck shell=bash` - Specify shell type if shebang is missing

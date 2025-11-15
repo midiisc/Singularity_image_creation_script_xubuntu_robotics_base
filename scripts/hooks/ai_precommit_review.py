@@ -28,6 +28,10 @@ class Provider(str):
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CODE_MANUAL_PATH = REPO_ROOT / "prompts" / "Code_check_prompt_manual.txt"
+CODE_MANUAL_PART1 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART1.txt"
+CODE_MANUAL_PART2 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART2.txt"
+CODE_MANUAL_PART3 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART3.txt"
+CODE_MANUAL_PART4 = REPO_ROOT / "prompts" / "Code_check_prompt_manual-PART4.txt"
 CACHE_DIR = REPO_ROOT / ".git" / ".ai-review-cache"
 
 ALLOWED_SUFFIXES = {
@@ -372,11 +376,59 @@ def chunk_diff(diff: str, max_lines: int) -> List[str]:
 
 
 def load_manual() -> str:
+    """
+    Load the code check prompt manual.
+    If master entry point exists, load all parts sequentially and combine them.
+    This ensures all checklist items A1-P5 are available while maintaining 500-line context limits per part.
+    """
     if not CODE_MANUAL_PATH.is_file():
         raise ReviewFailure(
             f"Required prompt manual not found at {CODE_MANUAL_PATH}"
         )
-    return CODE_MANUAL_PATH.read_text(encoding="utf-8")
+    
+    # Check if this is the master entry point (contains sequential processing instructions)
+    master_content = CODE_MANUAL_PATH.read_text(encoding="utf-8")
+    if "SEQUENTIAL PROCESSING ARCHITECTURE" in master_content or "MASTER ENTRY POINT" in master_content:
+        # Load all parts sequentially
+        parts = []
+        part_files = [
+            CODE_MANUAL_PART1,
+            CODE_MANUAL_PART2,
+            CODE_MANUAL_PART3,
+            CODE_MANUAL_PART4,
+        ]
+        
+        for i, part_path in enumerate(part_files, 1):
+            if not part_path.is_file():
+                raise ReviewFailure(
+                    f"Required prompt manual PART {i} not found at {part_path}. "
+                    f"Master entry point requires all parts to be present."
+                )
+            part_content = part_path.read_text(encoding="utf-8")
+            # Remove header if it's a sequential checking header (to avoid duplication)
+            if "SEQUENTIAL CHECKING ENFORCED" in part_content.split('\n')[0:15]:
+                # Skip the header lines but keep the rest
+                lines = part_content.split('\n')
+                # Find where content actually starts (after header and separator)
+                start_idx = 0
+                for idx, line in enumerate(lines):
+                    if line.strip() and not line.strip().startswith("**") and not line.strip().startswith("---"):
+                        if idx > 5:  # Skip header block
+                            start_idx = idx
+                            break
+                part_content = '\n'.join(lines[start_idx:])
+            
+            parts.append(part_content)
+        
+        # Combine all parts with clear separators
+        combined = master_content.split("---")[0].strip()  # Use master header
+        combined += "\n\n---\n\n"
+        combined += "**SEQUENTIAL PROCESSING**: All parts loaded sequentially for complete checklist coverage.\n\n"
+        combined += "\n\n".join([f"**PART {i}**\n{part}" for i, part in enumerate(parts, 1)])
+        return combined
+    
+    # Fallback: return master entry point content as-is
+    return master_content
 
 
 def ensure_cache_dir() -> None:

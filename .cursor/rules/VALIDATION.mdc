@@ -86,11 +86,11 @@ globs:
 
 ## BASH SCRIPT VALIDATION
 
-**Validation uses**: `prompts/Code_check_prompt_manual.txt`
+**Validation uses**: `prompts/Code_check_prompt_manual.txt` (Master entry point - loads PART1-PART4 sequentially)
 
 ### Process:
 1. For each bash file in diff:
-   - Walk checklist A-O sequentially from `Code_check_prompt_manual.txt`
+   - Walk checklist A-O sequentially from `Code_check_prompt_manual.txt` (loads all parts sequentially)
    - Check each item: PASS/FAIL
    - Document findings
 
@@ -154,7 +154,7 @@ globs:
 - Formatting changes
 - Simple variable renames
 
-**CoT check uses**: `prompts/Advanced-CoT-Multi-Agent-Prompt.md` (or PART1/PART2/PART3 if split)
+**CoT check uses**: `prompts/Advanced-CoT-Multi-Agent-Prompt.md` (Master entry point - loads PART1 → PART2A → PART2B → PART3 sequentially)
 
 ### Process (FULL AUTOMATION):
 1. Agent analyzes commit diff automatically
@@ -205,8 +205,8 @@ Patterns are extracted from **BOTH** CI failures and AI review findings:
 1. **Pattern Extraction**: From CI failures OR AI review findings
 2. **Pattern Storage**: Added to `prompts/Pattern-Learning-Repository.md`
 3. **Prompt Enhancement**:
-   - `Code_check_prompt_manual.txt` - Adds new checklist items
-   - `Advanced-CoT-Multi-Agent-Prompt-PART1.md` - Adds pattern checks
+   - `Code_check_prompt_manual.txt` (Master entry point) - Adds new checklist items to appropriate PART file
+   - `Advanced-CoT-Multi-Agent-Prompt.md` (Master entry point) - Adds pattern checks to appropriate PART file
    - `Enhanced-Code-Review-Prompt-PART1.md` - Adds review criteria
 4. **Library Analysis**: Updated if library-related issues found
 5. **Future Prevention**: All patterns automatically checked in future commits/reviews

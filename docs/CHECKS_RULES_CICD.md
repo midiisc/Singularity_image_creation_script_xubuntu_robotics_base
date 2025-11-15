@@ -156,10 +156,10 @@ All git operations require explicit user approval:
 
 #### Code Validation (Updated - 2025-11-12)
 - **Bash Validation:** Runs automatically on push (not every commit)
-- **Bash Checklist:** `prompts/Code_check_prompt_manual.txt`
+- **Bash Checklist:** `prompts/Code_check_prompt_manual.txt` (Master entry point - loads PART1-PART4 sequentially)
 - **Auto-fix:** All errors automatically corrected
 - **CoT Auto-trigger:** Advanced CoT audit runs automatically for substantial/complex commits
-- **CoT Prompt:** `prompts/Advanced-CoT-Multi-Agent-Prompt.md`
+- **CoT Prompt:** `prompts/Advanced-CoT-Multi-Agent-Prompt-PART1.md` (Master entry point - loads all parts sequentially)
 - **Process:**
   1. On push: Extract diff and run bash validation
   2. Auto-fix all errors found
@@ -272,8 +272,8 @@ Before completing any work:
 ## 📖 Documentation References
 
 ### Prompt Files
-- `prompts/Advanced-CoT-Multi-Agent-Prompt.md` - Multi-agent CoT code review framework
-- `prompts/Code_check_prompt_manual.txt` - Comprehensive Bash code checklist
+- `prompts/Advanced-CoT-Multi-Agent-Prompt-PART1.md` - Multi-agent CoT code review framework (master entry point, loads all parts sequentially)
+- `prompts/Code_check_prompt_manual.txt` - Comprehensive Bash code checklist (master entry point, loads PART1-PART4 sequentially)
 
 ### Rule Files
 - `.cursor/rules/000-MANDATORY-READ-FIRST.mdc` - Pre-work verification checklist
