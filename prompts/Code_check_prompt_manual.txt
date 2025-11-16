@@ -43,6 +43,39 @@ When this master entry point is referenced, you MUST:
   4) Update the compact state capsule (no large code stored).
 - Only after all chunks pass for the current part may you unload it and proceed to the next part.
 
+**CHUNK LOADING/UNLOADING PROTOCOL (MANDATORY)**:
+- Exactly one code chunk may be resident in working memory at any time.
+- On chunk load:
+  1) Purge all non-capsule memory from any previously processed chunk(s),
+  2) Rehydrate context strictly from the compact state capsule (≤ 2KB) plus the newly loaded chunk’s text,
+  3) Ensure the active range is limited to the current chunk lines, including only the designated 20–40 line overlap.
+- During processing:
+  - Do not reference code outside the current chunk window except the permitted overlap.
+  - Do not cache embeddings, token buffers, or raw text from prior chunks beyond the capsule.
+  - All cross-chunk reasoning must be mediated through the capsule entries (names/flags/cursors), never by retaining prior chunk code.
+- On chunk unload (after PASS/N/A for the current part):
+  1) Write back updated results to the capsule (checklist pass map, symbol/context ledger, next chunk cursor),
+  2) Purge the current chunk’s text and any transient analysis artifacts,
+  3) Proceed to load the next chunk and rehydrate only from the capsule.
+
+**CHUNK MEMORY SAFEGUARDS (STRICT)**:
+- Memory budget for the capsule is capped at 2KB; do not exceed.
+- No speculative multi-chunk loading, peeking, or pre-tokenization is allowed.
+- No retention of prior chunk diffs, patches, or ASTs; only capsule metadata persists.
+- Overlap discipline:
+  - Overlap may be read and reasoned about, but duplication of non-overlap code across chunk boundaries is forbidden.
+  - If edits affect overlap lines, ensure idempotent re-validation when the next chunk loads; do not carry raw text across the boundary.
+- Determinism requirement:
+  - Rehydration from the capsule must yield identical decisions independent of any hidden buffers.
+  - Any discovery of hidden retained state is treated as a protocol violation; purge immediately and restart current chunk from capsule.
+
+**PROHIBITIONS TO PREVENT MEMORY LEAKS/DRIFT**:
+- No vector-store or embedding caches across chunks.
+- No streaming accumulation of token histories beyond the current chunk.
+- No background “global summary” growth beyond the capsule schema (pass map, symbol/context names, cursor).
+- No parallel chunk co-loading; chunks must be processed strictly one-at-a-time.
+- No cross-part shortcuts; all cross-part context must flow through the capsule, not retained code.
+
 **BATCHED TODO GENERATION & EXECUTION (20-ITEM STRICT SEQUENCE)**:
 - Always operate via strict, sequential todo batches:
   1) Generate the next 20 atomic todos from the current plan and review state,

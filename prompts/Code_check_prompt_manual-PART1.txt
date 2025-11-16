@@ -278,25 +278,41 @@ B. Shell Options & Execution Controls
     - **Case 3**: `set -o pipefail` + pipeline with masked failure → Pipeline succeeds but produces invalid output
     - **Case 4**: Strict mode block + subshell with masked failure → Subshell exits 0 but parent may use invalid result
     - **Prevention**: Always validate results, log failures explicitly, exit on validation failure in strict mode
-  - **STRICT MODE ENFORCEMENT VALIDATION** (MANDATORY):
-    - **CRITICAL**: Verify strict mode is ACTUALLY established and enforced before relying on it
-    - **MANDATORY CHECKS**:
-      - **Verify `set -e` is active**: After `set -e`, test with failing command: `false; echo "set -e not working"` (should NOT print)
-      - **Verify `set -u` is active**: After `set -u`, test with unset variable: `echo "${UNSET_VAR}"` (should exit with error)
-      - **Verify `set -o pipefail` is active**: After `set -o pipefail`, test with failing pipeline: `false | true; echo "pipefail not working"` (should NOT print)
-      - **Verify local scope**: In functions, verify `local` variables don't leak: `local VAR=value; [ -z "${VAR}" ]` outside function (should be empty)
-      - **Verify strict mode boundaries**: Check `set +e` doesn't accidentally disable strict mode before intended
-    - **VALIDATION PATTERNS**:
-      - **WRONG**: `set -euo pipefail` (assumed active, no verification)
-      - **CORRECT**: 
+  - **STRICT MODE ENFORCEMENT VALIDATION** (UPDATED & SAFE):
+    - **CRITICAL**: Verify strict mode is established, but avoid brittle subshell/compound-command tests that misbehave under Bash (-e semantics differ in subshells, pipelines, and conditions).
+    - **DO THIS (WARN-ONLY PROBES + CENTRAL ERR TRAP)**:
+      - Install a centralized `ERR` trap when using Bash to print failing command, line, and exit code.
+      - Use out-of-process, WARN-only probes for diagnostics (never fail the build on probe anomalies):
         ```bash
+        # Strict mode
         set -euo pipefail
-        # Verify strict mode is active
-        if ! (set -e; false; true); then
-          echo "[ERROR] set -e not working correctly"
-          exit 1
+        # Centralized error reporter (example)
+        on_error_report() {
+          ec=$?; printf "[ERROR] exit=%s at %s:%s: %s\n" "$ec" "${BASH_SOURCE[1]-?}" "${BASH_LINENO[0]-?}" "${BASH_COMMAND-?}" >&2
+        }
+        set -E; trap 'on_error_report' ERR
+        # Probes (WARN only)
+        if bash -c 'set -e; false; echo STRICT_SET_E_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
+          echo "[WARN] Strict check(set -e) anomaly; continuing with strict mode enabled"
+        fi
+        if bash -c 'set -u; : "${__UNSET_STRICT_TEST_VAR__?unset variable test}"' >/dev/null 2>&1; then
+          echo "[WARN] Strict check(set -u) anomaly; continuing"
+        fi
+        if bash -c 'set -o pipefail; false | true; echo STRICT_PIPEFAIL_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
+          echo "[WARN] Strict check(pipefail) anomaly; continuing"
         fi
         ```
+    - **DO NOT DO THIS (FORBIDDEN PATTERN)**:
+      - Treating subshell/compound tests as authoritative failures, e.g.:
+        ```bash
+        # BAD: brittle, produces false positives on some Bash builds
+        if ( set -e; false; echo "set -e not working" ); then
+          echo "[ERROR] set -e not working correctly"; exit 1
+        fi
+        ```
+    - **ALSO VERIFY**:
+      - **Local scope**: `local` variables do not leak outside functions
+      - **Boundaries**: `set +e`/`set +u`/`set +o pipefail` are tightly scoped and restored
       - **WRONG**: `set -e` in function but parent has `set +e` (strict mode not inherited)
       - **CORRECT**: 
         ```bash

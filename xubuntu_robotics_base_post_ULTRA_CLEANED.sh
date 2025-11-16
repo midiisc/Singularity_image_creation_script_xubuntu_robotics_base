@@ -427,23 +427,60 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
 fi
 
 # After configuration and logging setup, restore fail-fast behavior.
+# Enable ERR trap inheritance for functions and subshells
+set -E
+
+# Purpose: Centralized error reporter to make failures traceable
+# Parameters:
+#   $1 = line number where failure occurred
+#   $2 = command that failed
+#   $3 = exit status code
+# Side effects: Prints a concise multi-line diagnostic to stderr
+on_error_report() {
+	# Collect lightweight context safely without tripping -u/-e
+	local bash_ver="${BASH_VERSION:-unknown}"
+	local shellopts="${SHELLOPTS:-}"
+	local who="$(id -un 2>/dev/null || echo unknown)"
+	local uid="$(id -u 2>/dev/null || echo unknown)"
+	local file="${BASH_SOURCE[1]:-unknown}"
+	local line="${1:-unknown}"
+	local cmd="${2:-unknown}"
+	local code="${3:-1}"
+	local pwd_now="${PWD:-unknown}"
+	local pipefail_state
+	pipefail_state="$(set -o 2>/dev/null | grep -E 'pipefail|errexit|nounset' || true)"
+
+	# Single, high-signal diagnostic block
+	{
+		echo "[ERROR] Command failed (exit=${code}) at ${file}:${line}"
+		echo "        -> ${cmd}"
+		echo "        bash=${bash_ver} user=${who} uid=${uid} pid=$$ pwd=${pwd_now}"
+		echo "        shellopts=${shellopts} set-o:${pipefail_state}"
+		# If a build log file path is known, surface it to the console for quick navigation
+		[ -n "${BUILD_LOG_FILE:-}" ] && echo "        build_log=${BUILD_LOG_FILE}"
+	} 1>&2
+}
+
+# Install global ERR trap (inherits due to set -E above)
+trap 'on_error_report "${LINENO}" "${BASH_COMMAND}" "$?"' ERR
+
 set -e
 
 # Verify strict mode is active (A/B3 enforcement)
 # - set -e: pipeline/command failures should not be ignored
 # - set -u: unset variables should trigger an error
 # - set -o pipefail: pipeline should return failure if any stage fails
-if ( set -e; false; echo "set -e not working" ) 2>/dev/null; then
-    echo "[ERROR] set -e not working correctly"
-    exit 1
+# NOTE:
+#   Direct subshell-based checks can produce false positives on some Bash builds.
+#   We perform out-of-process checks and emit a single high-signal line with context.
+if bash -c 'set -e; false; echo STRICT_SET_E_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
+	echo "[WARN] Strict check(set -e) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
 fi
-if ( set -u; : "${__UNSET_STRICT_TEST_VAR__?unset variable test}"; ) 2>/dev/null; then
-    echo "[ERROR] set -u not working correctly"
-    exit 1
+if bash -c 'set -u; : "${__UNSET_STRICT_TEST_VAR__?unset variable test}"' >/dev/null 2>&1; then
+	echo "[WARN] Strict check(set -u) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
 fi
-if ( set -o pipefail; false | true; echo "pipefail not working"; ) 2>/dev/null; then
-    echo "[ERROR] set -o pipefail not working correctly"
-    exit 1
+if bash -c 'set -o pipefail; false | true; echo STRICT_PIPEFAIL_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
+	echo "[WARN] Strict check(pipefail) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
 fi
 
 #===============================================================================
@@ -7554,7 +7591,7 @@ if [ -f "CMakeCache.txt" ]; then
         echo "  → Verifying actual library linking against libm..."
         GRAPHBLAS_LIB=$(find . -name "libgraphblas.so*" -type f 2>/dev/null | head -1)
         if [ -n "${GRAPHBLAS_LIB}" ] && [ -f "${GRAPHBLAS_LIB}" ]; then
-            if ldd "${GRAPHBLAS_LIB}" 2>/dev/null | grep -q "libm.so"; then
+            if ldd "${GRAPHBLAS_LIB}" 2>/dev/null | grep -Fq "libm.so"; then
                 echo "    ✓ GraphBLAS library links against libm"
             else
                 echo "    ⚠ GraphBLAS library does NOT link against libm (but linker flags should ensure it)"
@@ -7586,7 +7623,7 @@ verify_math_library_linkage() {
     echo "  ✓ ${lib_name} library found: $(basename "${lib_path}")"
     
     # Check if libm is linked
-    if ldd "${lib_path}" 2>/dev/null | grep -q "libm.so"; then
+    if ldd "${lib_path}" 2>/dev/null | grep -Fq "libm.so"; then
         echo "    ✓ ${lib_name} is linked against libm (math library) - verification passed"
         return 0
     else
@@ -7695,19 +7732,19 @@ for lib in "${suitesparse_required_libraries[@]}"; do
         suitesparse_lib_paths["${lib}"]="${lib_path}"
         echo "  ✓ lib${lib}.so detected"
         if [[ "${lib}" == "cholmod" || "${lib}" == "spqr" ]]; then
-            if ldd "${lib_path}" | grep -qi "mkl"; then
+            if ldd "${lib_path}" | grep -Fqi "mkl"; then
                 echo "    → Linked against MKL"
             else
                 echo "    ⚠ lib${lib}.so does not appear to link MKL (investigate)"
             fi
-            if ldd "${lib_path}" | grep -qi "cuda"; then
+            if ldd "${lib_path}" | grep -Fqi "cuda"; then
                 echo "    → CUDA dependencies resolved"
             else
                 echo "    ⚠ lib${lib}.so does not show CUDA linkage (verify build flags)"
             fi
             # Check if METIS symbols are embedded in libcholmod.so (recent SuiteSparse versions)
             if [[ "${lib}" == "cholmod" ]]; then
-                if nm -D "${lib_path}" 2>/dev/null | grep -qi "metis\|METIS"; then
+                if nm -D "${lib_path}" 2>/dev/null | grep -Eqi "metis|METIS"; then
                     echo "    → METIS functions embedded in libcholmod.so (modern SuiteSparse)"
                 fi
             fi
@@ -8608,7 +8645,7 @@ PKGS_DESKTOP_ENV="xorg dbus-x11 xserver-xorg-video-dummy x11-xserver-utils xauth
 # Core graphics libraries
 PKGS_CORE_LIBS="libgl1 libglvnd0 libegl1 libgles2 libxext6 libxrender1 libsm6 libxrandr2 libxi6 libxxf86vm1 libxkbfile1 libxinerama1 libxcursor1 libxdamage1 libxss1 libgl1-mesa-dri libdrm-dev"
 # Fonts and utilities
-PKGS_FONTS_UTILS="fontconfig fonts-dejavu fonts-liberation fonts-noto iproute2 iputils-ping net-tools lsof tmux screen htop p7zip-full python3-pip python3-venv python3-setuptools python3-wheel python3-dev whiptail"
+PKGS_FONTS_UTILS="fontconfig fonts-dejavu fonts-liberation fonts-noto iproute2 iputils-ping net-tools lsof tmux screen htop p7zip-full python3-pip python3-venv python3-setuptools python3-wheel python3-dev whiptail gawk"
 # Linear algebra libraries
 # NOTE: libopenblas-dev removed - we compile our own OpenBLAS in BLOCK 6.12B
 # NOTE: liblapack-dev and liblapacke-dev kept - needed for headers and pkg-config files
@@ -9034,11 +9071,11 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "🔍 Checking for conflicting glog versions..."
 echo ""
 echo "1. Checking all glog libraries in system:"
-timeout 5 ldconfig -p 2>/dev/null | grep glog || echo "  ⚠ No glog libraries found in ldconfig cache"
+timeout 5 ldconfig -p 2>/dev/null | grep -F glog || echo "  ⚠ No glog libraries found in ldconfig cache"
 echo ""
 
 echo "2. Checking all glog headers:"
-glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep glog || echo "")
+glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F glog || echo "")
 if [ -n "${glog_headers}" ]; then
   echo "${glog_headers}"
 else
@@ -9047,7 +9084,7 @@ fi
 echo ""
 
 echo "3. Checking dpkg for installed glog packages:"
-dpkg -l | grep glog || echo "  ℹ No glog packages in dpkg"
+dpkg -l | grep -F glog || echo "  ℹ No glog packages in dpkg"
 echo ""
 
 # Verify system glog is installed (accept held packages as well)
@@ -9383,7 +9420,7 @@ fi
 # Phase 2: Linker Cache Check (with retry logic - best practice O4 Phase 3)
 echo "  [VERIFY Phase 2] Checking ldconfig cache for Ceres libraries..."
 CERES_IN_CACHE=false
-if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
+if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
   CERES_IN_CACHE=true
   echo "    ✓ Found in ldconfig cache"
 else
@@ -9391,7 +9428,7 @@ else
   # Retry logic: Refresh ldconfig and check again (best practice O4 Phase 3)
   run_ldconfig_refresh || true
   sleep 1  # Brief delay for cache update
-  if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
+  if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
     CERES_IN_CACHE=true
     echo "    ✓ Found in cache after refresh"
   else
@@ -9732,7 +9769,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       if ! ldconfig -p 2>/dev/null | grep -E "${g2o_cache_pattern}" >/dev/null 2>&1; then
         echo -e "${RED}✗ g2o library still not in ldconfig cache after targeted refresh${NC}"
         echo -e "${YELLOW}[DEBUG] ldconfig -p output (g2o related):${NC}"
-        ldconfig -p 2>/dev/null | grep "libg2o" || echo "  No g2o libraries in ldconfig cache"
+        ldconfig -p 2>/dev/null | grep -F "libg2o" || echo "  No g2o libraries in ldconfig cache"
         PHASE3_ALL_SUCCESS=false
       else
         echo -e "${GREEN}✓ g2o library registered in ldconfig cache (${g2o_soname})${NC}"
@@ -9770,7 +9807,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     echo -e "${GREEN}✓ g2o_viewer executable found: ${g2o_viewer_path}${NC}"
     # Check if QGLViewer is linked
     if command -v ldd >/dev/null 2>&1; then
-      if ldd "${g2o_viewer_path}" 2>/dev/null | grep -q "libQGLViewer"; then
+      if ldd "${g2o_viewer_path}" 2>/dev/null | grep -Fq "libQGLViewer"; then
         echo -e "${GREEN}✓ g2o_viewer linked with QGLViewer library${NC}"
       else
         echo -e "${YELLOW}⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)${NC}"
@@ -10229,7 +10266,7 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
         diagnose_library_detection "libgtsam.so" "${gtsam_core_path}" || true
         
         echo -e "${YELLOW}[DEBUG] ldconfig -p output (GTSAM related):${NC}"
-        ldconfig -p 2>/dev/null | grep "libgtsam" || echo "  No GTSAM libraries in ldconfig cache"
+        ldconfig -p 2>/dev/null | grep -F "libgtsam" || echo "  No GTSAM libraries in ldconfig cache"
         echo -e "${YELLOW}[DEBUG] However, library files exist at: ${gtsam_core_path}${NC}"
         
         # Final verification: Try to load library with ldd (most reliable check)

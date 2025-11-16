@@ -364,6 +364,25 @@ if ! install_host_tool "lsof" "lsof" "lsof file descriptor inspector"; then
     exit 1
 fi
 
+# Tool 10: gpg (for fetching and exporting keys)
+if ! install_host_tool "gpg" "gnupg" "GnuPG (gpg)"; then
+    echo "⚠ WARNING: gpg not available (GPG key prefetch will be skipped)" >&2
+fi
+
+# Tool 11: coreutils (for numfmt and other utilities)
+if ! command -v numfmt >/dev/null 2>&1; then
+    if ! install_host_tool "numfmt" "coreutils" "GNU coreutils (numfmt)"; then
+        echo "⚠ WARNING: coreutils (numfmt) not available; using fallback size formatting" >&2
+    fi
+fi
+
+# Tool 12: gawk (awk features across distros)
+if ! command -v awk >/dev/null 2>&1; then
+    if ! install_host_tool "awk" "gawk" "GNU awk"; then
+        echo "⚠ WARNING: awk not available; some parsing features may degrade" >&2
+    fi
+fi
+
 echo "✓ Host tool validation and installation complete"
 
 #===============================================================================
@@ -731,8 +750,22 @@ detect_container_system() {
 CONTAINER_CMD=$(detect_container_system)
 
 if [ "${CONTAINER_CMD}" = "none" ]; then
-    log_error "Neither singularity nor apptainer found in system"
+    log_warning "Neither singularity nor apptainer found. Attempting to install apptainer..."
+    # Try to install apptainer first
+    if ! install_host_tool "apptainer" "apptainer" "Apptainer container runtime"; then
+        log_warning "Failed to install apptainer. Attempting to install singularity-container..."
+        if ! install_host_tool "singularity" "singularity-container" "Singularity container runtime"; then
+            log_error "Failed to install both apptainer and singularity."
+            log_error "Please install one of them manually and re-run the script."
     exit 1
+        fi
+    fi
+    # Re-detect after installation attempts
+    CONTAINER_CMD=$(detect_container_system)
+    if [ "${CONTAINER_CMD}" = "none" ]; then
+        log_error "Container runtime still not available after installation attempts"
+        exit 1
+    fi
 fi
 # End if-fi block (self-contained)
 
@@ -834,9 +867,13 @@ strict_cleanup_our_dirs() {
         # Step 3: Remove with escalating force (chmod, chattr, rm)
         printf '%s\n' "${target_dirs}" | while IFS= read -r dir || [ -n "${dir}" ]; do
             [ ! -d "${dir}" ] && continue
-            sudo chmod -R 777 "${dir}" 2>/dev/null        # Make all writable
-            sudo chattr -i -R "${dir}" 2>/dev/null        # Remove immutable flags
-            sudo rm -rf "${dir}" 2>/dev/null || true      # Force remove
+            sudo chattr -i -R "${dir}" 2>/dev/null || true        # Remove immutable flags
+            # Try conservative permissions first; escalate only if needed
+            sudo chmod -R u+rwX,go+rX "${dir}" 2>/dev/null || true
+            sudo rm -rf "${dir}" 2>/dev/null || {
+                sudo chmod -R 777 "${dir}" 2>/dev/null || true
+                sudo rm -rf "${dir}" 2>/dev/null || true
+            }
         done
 
         # Check if cleanup was successful
@@ -1051,7 +1088,12 @@ comprehensive_cleanup() {
                         sudo rm -f "${sif_file}" 2>/dev/null || echo "        → Still locked!"
                     }
                 else
-                    echo "      ✓ Valid container ($(numfmt --to=iec-i --suffix=B "${sif_size}")): ${sif_name}"
+                    if command -v numfmt >/dev/null 2>&1; then
+                        human_size="$(numfmt --to=iec-i --suffix=B "${sif_size}" 2>/dev/null || echo "${sif_size}B")"
+                    else
+                        human_size="${sif_size}B"
+                    fi
+                    echo "      ✓ Valid container (${human_size}): ${sif_name}"
                 fi
                 # End nested if-else block
             done
@@ -2926,18 +2968,34 @@ log_with_timestamp "Building SIF: ${OUT_DIR}/${SIF_NAME}"
 # Critical: Try apptainer first (preferred), fallback to singularity
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."
-    sudo /usr/bin/apptainer build \
-        --tmpdir "${BUILD_TMP_DIR}" \
-        --force \
-        "${OUT_DIR}/${SIF_NAME}" \
-        "${DEF_NAME}"
+	# High-signal debug context
+	log "Apptainer version: $(/usr/bin/apptainer --version 2>/dev/null || echo unknown)"
+	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
+	log "Apptainer env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
+	# Echo full command before execution for easy tracing in logs
+	APPTAINER_CMD=(sudo /usr/bin/apptainer build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
+	log "Executing: ${APPTAINER_CMD[*]}"
+	# Prefer --debug if supported (non-fatal if not)
+	if /usr/bin/apptainer build --help 2>&1 | grep -q -- '--debug'; then
+		APPTAINER_CMD+=(--debug)
+	fi
+	# Run the command (traced) and let ERR trap handle failures with context
+	set -x
+	"${APPTAINER_CMD[@]}"
+	{ set +x; } 2>/dev/null || true
 elif [ -x /usr/bin/singularity ]; then
     warn "apptainer not found, falling back to singularity."
-    sudo /usr/bin/singularity build \
-        --tmpdir "${BUILD_TMP_DIR}" \
-        --force \
-        "${OUT_DIR}/${SIF_NAME}" \
-        "${DEF_NAME}"
+	log "Singularity version: $(/usr/bin/singularity --version 2>/dev/null || echo unknown)"
+	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
+	log "Singularity env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
+	SINGULARITY_CMD=(sudo /usr/bin/singularity build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
+	log "Executing: ${SINGULARITY_CMD[*]}"
+	if /usr/bin/singularity build --help 2>&1 | grep -q -- '--debug'; then
+		SINGULARITY_CMD+=(--debug)
+	fi
+	set -x
+	"${SINGULARITY_CMD[@]}"
+	{ set +x; } 2>/dev/null || true
 else
     err "Neither apptainer nor singularity found. Please install one to proceed."
 fi
