@@ -638,6 +638,8 @@ filter_errors_and_warnings() {
             fi
         fi
     done
+    # Always succeed to avoid triggering set -e via redirection pipelines
+    return 0
 }
 
 #--- Sub-block 8.4: Success logging function ---
@@ -1439,8 +1441,8 @@ touch "${LOG_FILE}" 2>/dev/null || {
 }
 
 # Set up output redirection with process substitution
-# Note: Process substitution may not work in all shells, but this is bash-specific
-exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings)
+# Note: Guard the pipelines so non-zero statuses don't trip set -e
+exec > >(tee -a "${LOG_FILE}" || true) 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings || true)
 
 # Log script start with detailed information
 echo "=============================================================================="
