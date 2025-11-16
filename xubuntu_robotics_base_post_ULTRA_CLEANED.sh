@@ -8,6 +8,57 @@
 #===============================================================================
 
 #===============================================================================
+# ENVIRONMENT/SHELL COMPATIBILITY PROBE & STRICT-MODE HELPERS (REUSABLE)
+#===============================================================================
+# Purpose: Detect active shell and capabilities, export diagnostics for use anywhere.
+# Provides helpers to reliably toggle strict mode with fallbacks in sections/functions.
+#-------------------------------------------------------------------------------
+DETECTED_SHELL_PATH="${SHELL:-$(ps -p $$ -o comm= 2>/dev/null || echo sh)}"
+DETECTED_SHELL_NAME="$(basename "${DETECTED_SHELL_PATH}" 2>/dev/null || echo sh)"
+DETECTED_BASH_VERSION="${BASH_VERSION:-}"
+if [ -n "${DETECTED_BASH_VERSION}" ]; then
+    IS_BASH=1
+else
+    IS_BASH=0
+fi
+SUPPORTS_PIPEFAIL="$( ( set -o pipefail ) >/dev/null 2>&1; echo $? )"
+if [ "${SUPPORTS_PIPEFAIL}" = "0" ]; then SUPPORTS_PIPEFAIL=1; else SUPPORTS_PIPEFAIL=0; fi
+SUPPORTS_ERRTRACE="$( ( set -o errtrace ) >/dev/null 2>&1; echo $? )"
+if [ "${SUPPORTS_ERRTRACE}" = "0" ]; then SUPPORTS_ERRTRACE=1; else SUPPORTS_ERRTRACE=0; fi
+export DETECTED_SHELL_PATH DETECTED_SHELL_NAME DETECTED_BASH_VERSION IS_BASH SUPPORTS_PIPEFAIL SUPPORTS_ERRTRACE
+
+# Helpers: strict_on / strict_off for controlled sections
+strict_on() {
+    if [ "${IS_BASH}" -eq 1 ]; then
+        set -e
+        set -u
+        if [ "${SUPPORTS_PIPEFAIL}" -eq 1 ]; then
+            set -o pipefail || true
+        fi
+        if [ "${SUPPORTS_ERRTRACE}" -eq 1 ]; then
+            set -E -o errtrace || true
+        fi
+        trap 'ec=$?; printf "[ERROR] Command failed (exit=%s) at %s:%s: %s\n" "${ec}" "${BASH_SOURCE[0]-?}" "${LINENO-?}" "${BASH_COMMAND-?}" >&2; exit "${ec}"' ERR
+    else
+        set -e
+        set -u
+    fi
+}
+
+strict_off() {
+    set +e || true
+    set +u || true
+    # pipefail and errtrace may not exist in all shells; ignore failures
+    set +o pipefail >/dev/null 2>&1 || true
+    set +o errtrace >/dev/null 2>&1 || true
+    trap - ERR 2>/dev/null || true
+}
+
+# Mark availability for downstream logic/tests
+STRICT_HELPERS_AVAILABLE=1
+export STRICT_HELPERS_AVAILABLE
+
+#===============================================================================
 # STRICT MODE - Controlled error handling
 #===============================================================================
 # Use strict mode with controlled sections for error handling

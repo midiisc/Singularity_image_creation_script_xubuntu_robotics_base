@@ -43,6 +43,55 @@ fi
 # Outputs: Environment variables, configuration
 set -euo pipefail  # -e: exit on error, -u: error on undefined var, -o pipefail: catch pipe errors
 
+#--- Sub-block 1.3: Environment/Shell compatibility probe and strict-mode helpers ---
+# Purpose: Detect active shell and capabilities, export diagnostics variables, and provide safe strict-mode toggles
+# Dependencies: None (foundational)
+# Outputs: Exported diagnostics variables and helper functions to be reused anywhere
+#
+# Exported variables:
+#   DETECTED_SHELL_PATH, DETECTED_SHELL_NAME, DETECTED_BASH_VERSION, IS_BASH,
+#   SUPPORTS_PIPEFAIL, SUPPORTS_ERRTRACE
+DETECTED_SHELL_PATH="${SHELL:-$(ps -p $$ -o comm= 2>/dev/null || echo sh)}"
+DETECTED_SHELL_NAME="$(basename "${DETECTED_SHELL_PATH}" 2>/dev/null || echo sh)"
+DETECTED_BASH_VERSION="${BASH_VERSION:-}"
+if [ -n "${DETECTED_BASH_VERSION}" ]; then
+    IS_BASH=1
+else
+    IS_BASH=0
+fi
+# Capability probes are executed in subshells to avoid altering current shell options
+SUPPORTS_PIPEFAIL="$( ( set -o pipefail ) >/dev/null 2>&1; echo $? )"
+if [ "${SUPPORTS_PIPEFAIL}" = "0" ]; then SUPPORTS_PIPEFAIL=1; else SUPPORTS_PIPEFAIL=0; fi
+SUPPORTS_ERRTRACE="$( ( set -o errtrace ) >/dev/null 2>&1; echo $? )"
+if [ "${SUPPORTS_ERRTRACE}" = "0" ]; then SUPPORTS_ERRTRACE=1; else SUPPORTS_ERRTRACE=0; fi
+export DETECTED_SHELL_PATH DETECTED_SHELL_NAME DETECTED_BASH_VERSION IS_BASH SUPPORTS_PIPEFAIL SUPPORTS_ERRTRACE
+
+# Helper: enable strict mode safely with fallbacks and ERR trap diagnostics
+enable_strict_mode_safely() {
+    # Purpose: Apply -e -u and pipefail where supported; attach ERR trap for reliable failure reporting
+    if [ "${IS_BASH}" -eq 1 ]; then
+        set -e
+        set -u
+        if [ "${SUPPORTS_PIPEFAIL}" -eq 1 ]; then
+            set -o pipefail || true
+        fi
+        if [ "${SUPPORTS_ERRTRACE}" -eq 1 ]; then
+            set -E -o errtrace || true
+        fi
+        # Attach a compact diagnostic handler; avoid referencing unset vars
+        trap 'ec=$?; printf "[ERROR] Command failed (exit=%s) at %s:%s: %s\n" "${ec}" "${BASH_SOURCE[0]-?}" "${LINENO-?}" "${BASH_COMMAND-?}" >&2; exit "${ec}"' ERR
+    else
+        # Non-bash shells: best-effort strictness without bash-only flags
+        set -e
+        set -u
+    fi
+}
+
+# Ensure strict mode remains active even if modified later; scripts can re-call this when entering critical sections
+STRICT_MODE_INITIALIZED=1
+export STRICT_MODE_INITIALIZED
+enable_strict_mode_safely
+
 #===============================================================================
 # BLOCK 2: LOAD CENTRALIZED CONFIGURATION
 #===============================================================================

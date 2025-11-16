@@ -189,6 +189,28 @@ A. Structure & Syntax
   - When using Bash 4+ features, add explicit version check: `if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then ... else ... fi`
 
 B. Shell Options & Execution Controls
+- B0. Environment/Shell probe and strict-mode helpers PRESENT (and EXPORTED) at top-level:
+  - REQUIRED exported variables (names exact):
+    - `DETECTED_SHELL_PATH`, `DETECTED_SHELL_NAME`, `DETECTED_BASH_VERSION`, `IS_BASH`,
+      `SUPPORTS_PIPEFAIL`, `SUPPORTS_ERRTRACE`
+  - REQUIRED helpers: either `enable_strict_mode_safely()` or the pair `strict_on()` and `strict_off()`
+  - PURPOSE: Allow scripts to adjust commands/controls dynamically (e.g., reliably toggle `set -e`, `-u`, `pipefail`)
+  - VALIDATION:
+    - Verify all required variables are defined once near the script start and exported
+    - Verify at least one helper exists and implements: enabling `-e`, `-u`, best-effort `pipefail`, and an ERR trap (for bash)
+    - Verify presence in BOTH core scripts:
+      - `build_xubuntu_robotics_base.sh`
+      - `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+    - Verify these variables are not clobbered later (no duplicate re-declarations without intent)
+  - DETECTION:
+    - `grep -nE 'DETECTED_SHELL_PATH|DETECTED_SHELL_NAME|DETECTED_BASH_VERSION|IS_BASH|SUPPORTS_PIPEFAIL|SUPPORTS_ERRTRACE'`
+    - `grep -nE 'strict_on\(\)|strict_off\(\)|enable_strict_mode_safely\(\)'`
+  - AUTO-FIX STRATEGY:
+    - Insert a compact probe block at the top (after shebang/header) that:
+      1) Detects shell and capabilities in subshells (to avoid side-effects)
+      2) Exports the variables above
+      3) Defines helpers to safely toggle strict mode and attach an ERR trap for diagnostics
+    - Ensure helpers are idempotent and can be re-called by any section/function
 - B1. Appropriate use/scope of `set -e`, `set -u`, `set -o pipefail`, `set -E`, `set -o errtrace`, and subshell guards.
 - B2. Documentation of intentional relaxations (e.g., `set +e`, `|| true`) and local scoping for risky sections.
 - B3. **STRICT MODE SILENT FAILURE PREVENTION**: In blocks with strict error settings (`set -e`, `set -euo pipefail`), enforce stricter validation:
@@ -306,6 +328,36 @@ B. Shell Options & Execution Controls
       - Block-level strict mode (set in specific blocks)
       - Subshell strict mode (explicitly set in subshells)
       - Background job strict mode (check exit codes with `wait`)
+
+- B4. Shell-behavior compatibility & feature gating based on detected shell:
+  - PURPOSE: Ensure commands/controls align with the detected shell and its capabilities (from the env probe variables).
+  - REQUIRED CONTROLS:
+    - Gate Bash-only features behind `IS_BASH==1` checks (e.g., `[[ ]]`, `mapfile`, `<()`, `declare -A`, `set -E -o errtrace`, `BASH_COMMAND`, `BASH_SOURCE`).
+    - Use POSIX-safe alternatives in non-bash shells (test `[ ]`, while-read loops, pipes instead of process substitution).
+    - Only apply `set -o pipefail` when `SUPPORTS_PIPEFAIL==1` (best-effort otherwise).
+    - Only apply `set -E -o errtrace` and ERR trap with `BASH_COMMAND` when `SUPPORTS_ERRTRACE==1` and `IS_BASH==1`.
+    - Avoid relying on subshell inheritance of strict mode; for subshells, explicitly restate needed options or use command groups.
+  - VALIDATION:
+    - Verify that any use of Bash-specific syntax is either:
+      1) guarded by `IS_BASH` and/or version checks, or
+      2) justified with no viable POSIX alternative (documented inline).
+    - Verify that traps using `BASH_COMMAND`/`BASH_SOURCE` are only set when `IS_BASH==1`; otherwise use a simpler message.
+    - Verify that functions/blocks that require strict mode explicitly invoke the provided helper(s) instead of assuming inherited state.
+  - DETECTION:
+    - `grep -nE '\[\[|<\(|readarray|mapfile|declare -A|\(\(' script.sh` to find Bash-only features.
+    - `grep -nE 'trap .*ERR' script.sh` to ensure trap uses are gated by `IS_BASH` or use portable fallbacks.
+    - Inspect subshells `(` `)` vs groups `{ ...; }` in strict blocks and confirm correct option scoping.
+  - AUTO-FIX STRATEGY:
+    - Surround Bash-only blocks with:
+      ```bash
+      if [ "${IS_BASH:-0}" -eq 1 ]; then
+        # bash-specific
+      else
+        # POSIX fallback
+      fi
+      ```
+    - Replace `[[ ... ]]` with `[ ... ]` where feasible; replace process substitution with pipes or temporary files when portability is required.
+    - Replace subshells in strict sections with command groups to retain options or re-enable strict options inside the subshell.
 
 C. Variables & Defaults
 - C1. Detection/handling of unbound variables with `${var:-default}` or `${var:?message}` as appropriate.
