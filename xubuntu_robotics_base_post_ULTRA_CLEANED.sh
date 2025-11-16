@@ -171,23 +171,23 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
 
     # Start logging to file while preserving terminal output
     # This creates a background process that tees output to both terminal and log file
-    echo "✓ Build logging enabled: ${BUILD_LOG_FILE}"
-    echo "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
-    echo "  Log directory: ${BUILD_LOG_DIR}"
-    echo "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
-    echo "  Keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent logs"
-    echo "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL:-60} seconds"
-    echo ""
+    printf '%s\n' "✓ Build logging enabled: ${BUILD_LOG_FILE}"
+    printf '%s\n' "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
+    printf '%s\n' "  Log directory: ${BUILD_LOG_DIR}"
+    printf '%s\n' "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
+    printf '%s\n' "  Keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent logs"
+    printf '%s\n' "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL:-60} seconds"
+    printf '%s\n' ""
     
     # Initialize error log with header
     if [ -z "${BUILD_ERROR_LOG}" ] || [ ! -f "${BUILD_ERROR_LOG}" ]; then
         touch "${BUILD_ERROR_LOG}" 2>/dev/null || true
     # ENDIF: BUILD_ERROR_LOG initialization check
     fi
-    echo "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    echo "Error Log Started: $(date)" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    echo "Build Log: ${BUILD_LOG_FILE}" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    echo "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    printf '%s\n' "Error Log Started: $(date)" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    printf '%s\n' "Build Log: ${BUILD_LOG_FILE}" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+    printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
     
     # Error/Warning Filter Function for container builds
     # This function filters error and warning messages and writes them to error log
@@ -313,35 +313,35 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             if type analyze_build_log >/dev/null 2>&1; then
                 analyze_build_log || true
             else
-                echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+                printf '%s\n' "⚠ Warning: analyze_build_log function not available, skipping log analysis"
             # ENDIF: analyze_build_log function availability check
             fi
             
-            echo ""
-            echo "═══════════════════════════════════════════════════════════════"
-            echo "  BUILD LOG END: $(date)"
-            echo "  Exit status: $exit_code"
-            echo "  Log file: ${BUILD_LOG_FILE}"
+            printf '%s\n' ""
+            printf '%s\n' "═══════════════════════════════════════════════════════════════"
+            printf '%s\n' "  BUILD LOG END: $(date)"
+            printf '%s\n' "  Exit status: $exit_code"
+            printf '%s\n' "  Log file: ${BUILD_LOG_FILE}"
             if [ -n "${BUILD_ERROR_LOG:-}" ] && [ -f "${BUILD_ERROR_LOG}" ]; then
-                echo "  Error log: ${BUILD_ERROR_LOG}"
+                printf '%s\n' "  Error log: ${BUILD_ERROR_LOG}"
             fi
-            echo "  Final sync completed: All output saved to disk"
-            echo "═══════════════════════════════════════════════════════════════"
+            printf '%s\n' "  Final sync completed: All output saved to disk"
+            printf '%s\n' "═══════════════════════════════════════════════════════════════"
         # ENDIF: BUILD_LOG_FILE existence check
         fi
     }
     trap cleanup_logging EXIT INT TERM
     
     # Record build start in log
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  BUILD LOG START: $(date)"
-    echo "  Script: xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
-    echo "  Log file: ${BUILD_LOG_FILE}"
-    echo "  Timestamp: ${BUILD_TIMESTAMP}"
-    echo "  PID: $$"
-    echo "  Sync job PID: ${BUILD_LOG_SYNC_PID}"
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' "  BUILD LOG START: $(date)"
+    printf '%s\n' "  Script: xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+    printf '%s\n' "  Log file: ${BUILD_LOG_FILE}"
+    printf '%s\n' "  Timestamp: ${BUILD_TIMESTAMP}"
+    printf '%s\n' "  PID: $$"
+    printf '%s\n' "  Sync job PID: ${BUILD_LOG_SYNC_PID}"
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' ""
     else
         echo "ℹ Logging disabled (not running in container build environment)"
     # ENDIF: container build environment check
@@ -349,6 +349,23 @@ fi
 
 # After configuration and logging setup, restore fail-fast behavior.
 set -e
+
+# Verify strict mode is active (A/B3 enforcement)
+# - set -e: pipeline/command failures should not be ignored
+# - set -u: unset variables should trigger an error
+# - set -o pipefail: pipeline should return failure if any stage fails
+if ( set -e; false; echo "set -e not working" ) 2>/dev/null; then
+    echo "[ERROR] set -e not working correctly"
+    exit 1
+fi
+if ( set -u; : "${__UNSET_STRICT_TEST_VAR__?unset variable test}"; ) 2>/dev/null; then
+    echo "[ERROR] set -u not working correctly"
+    exit 1
+fi
+if ( set -o pipefail; false | true; echo "pipefail not working"; ) 2>/dev/null; then
+    echo "[ERROR] set -o pipefail not working correctly"
+    exit 1
+fi
 
 #===============================================================================
 # BLOCK 1: INITIALIZATION AND CONFIGURATION
@@ -512,7 +529,8 @@ calculate_build_jobs() {
     jobs_by_mem=$((mem_gb / 3))
     
     # Use the minimum of the two (most conservative)
-    local jobs=$jobs_by_cpu
+    local jobs
+    jobs=$jobs_by_cpu
     if [ "${jobs_by_mem}" -lt "${jobs}" ]; then
         jobs=$jobs_by_mem
         echo "  ℹ Memory-limited: Using ${jobs} jobs (RAM: ${mem_gb}GB allows ~${jobs} parallel C++ jobs)" >&2
@@ -527,8 +545,8 @@ calculate_build_jobs() {
     
     # Allow override via environment variable (for testing/debugging)
     if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        # Validate override is numeric and positive
-        if [ "${BUILD_JOBS_OVERRIDE}" -gt 0 ] 2>/dev/null; then
+        # Validate override is numeric (digits only) and positive
+        if [[ "${BUILD_JOBS_OVERRIDE}" =~ ^[0-9]+$ ]] && [ $((10#${BUILD_JOBS_OVERRIDE})) -gt 0 ]; then
             jobs="${BUILD_JOBS_OVERRIDE}"
             echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
         else
@@ -568,7 +586,7 @@ dpkg_resolve_installed_package() {
     for candidate in "${candidates[@]}"; do
         local status_output
         status_output=$(dpkg-query -W -f='${Status}\n' "${candidate}" 2>/dev/null || echo "")
-        if [ -n "${status_output}" ] && grep -q "install ok installed" <<< "${status_output}"; then
+        if [ -n "${status_output}" ] && grep -Fq "install ok installed" <<< "${status_output}"; then
             printf '%s\n' "${candidate}"
             return 0
         # ENDIF: package installation status check
@@ -1395,7 +1413,7 @@ ensure_cuda_repository_configured() {
 
   local status_output
   status_output=$(dpkg-query -W -f='${Status}\n' "${keyring_pkg}" 2>/dev/null || echo "")
-  if [ -n "${status_output}" ] && grep -q "install ok installed" <<< "${status_output}"; then
+  if [ -n "${status_output}" ] && grep -Fq "install ok installed" <<< "${status_output}"; then
       return 0
   fi
 
@@ -1517,6 +1535,7 @@ probe_and_set_mirrors() {
     else
       MIRROR_COUNT=0
     fi
+    # ENDIF: dynamic mirrors non-empty (DYNAMIC_MIRRORS)
     
     # Explicit check for non-empty and sufficient mirrors
     if [ -n "${DYNAMIC_MIRRORS:-}" ] && [ "${MIRROR_COUNT:-0}" -ge 10 ]; then
@@ -1534,10 +1553,12 @@ probe_and_set_mirrors() {
       echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
       CANDIDATE_MIRRORS=""  # Will trigger fallback below
     fi
+    # ENDIF: sufficient dynamic mirrors (>=10)
   else
     echo "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
     CANDIDATE_MIRRORS=""  # Will trigger fallback
   fi
+  # ENDIF: fetched mirrors HTML (MIRRORS_HTML)
   
   # Fallback to curated static list if dynamic fetch failed
   # CRITICAL: Always include archive.ubuntu.com as first entry (guaranteed fallback)
@@ -1558,6 +1579,7 @@ probe_and_set_mirrors() {
     CANDIDATE_MIRRORS+=$'http://mirrors.ustc.edu.cn/ubuntu\n'
     CANDIDATE_MIRRORS+=$'http://ftp.jaist.ac.jp/pub/Linux/ubuntu\n'
   fi
+  # ENDIF: candidate mirrors empty -> using curated list
 
   # Run mirror tests in parallel (max 6 concurrent to avoid network congestion)
   local mirror_total
@@ -1567,6 +1589,7 @@ probe_and_set_mirrors() {
   if [ -n "${CANDIDATE_MIRRORS:-}" ]; then
     grep -v '^[[:space:]]*$' <<< "${CANDIDATE_MIRRORS}" | xargs -P 6 -I{} bash -c "test_mirror \"\$1\" \"\$2\" \"\$3\"" _ "{}" "${CODENAME}" "${PROBE_RESULTS}" || true
   fi
+  # ENDIF: candidate mirrors non-empty for probing
 
   # Display mirror probe results
   echo "--- Mirror Probe Results (speed score, url): ---"
@@ -1580,10 +1603,12 @@ probe_and_set_mirrors() {
       export FASTEST_MIRROR
       return 0
     fi
+    # ENDIF: probe results format valid
     LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || echo "[warn] Failed to sort results"
   else
     echo "[warn] No probe results written - all mirrors may have failed"
   fi
+  # ENDIF: probe results exist
 
   # Extract the fastest mirror that responded in under 15 seconds
   # Exclude mirrors that were rejected (score 999.9 = blocked/error/failed)
@@ -1610,12 +1635,14 @@ probe_and_set_mirrors() {
     FASTEST_MIRROR="${fastest_mirror_raw}"
     echo "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
   fi
+  # ENDIF: fastest mirror selection
   
   # Final safety check: Ensure FASTEST_MIRROR is set (should never be empty at this point)
   if [ -z "${FASTEST_MIRROR:-}" ]; then
     echo "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   fi
+  # ENDIF: FASTEST_MIRROR final non-empty check
   
   echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
@@ -1661,6 +1688,7 @@ probe_and_set_mirrors() {
       echo "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
       echo "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
     fi
+    # ENDIF: have valid escaped mirror for sed replacement
     
     # Verify the update was successful (more robust check)
     # Extract base URL without protocol for flexible matching
@@ -1745,10 +1773,13 @@ probe_and_set_mirrors() {
           fi
         fi
       fi
+      # ENDIF: mirror_no_protocol available for additional replacement
     fi
+    # ENDIF: archive.ubuntu.com still present in sources.list
   else
     echo "[warn] /etc/apt/sources.list not found - mirror selection skipped"
   fi
+  # ENDIF: main sources.list exists
 
   # Also update sources.list.d/ files (excluding PPAs which should stay on ppa.launchpad.net)
   # CRITICAL: Handle both .list (one-line format) and .sources (deb822 format) files
@@ -1819,6 +1850,7 @@ probe_and_set_mirrors() {
       # ENDIF: archive.ubuntu.com check
       fi
     done
+    # ENDFOR: iterate .list files
     
     # Process .sources files (deb822 format used by Ubuntu 24.04+)
     # deb822 format uses URIs= field instead of deb http://... format
@@ -1872,6 +1904,7 @@ probe_and_set_mirrors() {
   else
     echo "[info] /etc/apt/sources.list.d/ not found or empty"
   fi
+  # ENDIF: sources.list.d directory exists
 }
 # End probe_and_set_mirrors function (self-contained)
 
@@ -1903,6 +1936,7 @@ verify_fastest_mirror() {
     fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
     
     # D3: Use here-string instead of pipe pattern
+    local sources_content
     sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
     
     # Count lines using fastest mirror (use -F for fixed string if escaping fails)
@@ -1931,6 +1965,7 @@ verify_fastest_mirror() {
     echo "[warn] /etc/apt/sources.list not found"
     return 1
   fi
+  # ENDIF: main sources.list exists for verification
   
   # Check sources.list.d/ files (excluding PPAs) - both .list and .sources files
   if [ -d /etc/apt/sources.list.d ]; then
@@ -1948,6 +1983,7 @@ verify_fastest_mirror() {
       
       # Check for archive.ubuntu.com in non-PPA files
       # D3: Use here-string instead of pipe pattern
+      local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
       if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in $(basename "${sources_file}"):"
@@ -1956,6 +1992,7 @@ verify_fastest_mirror() {
       # ENDIF: archive.ubuntu.com check
       fi
     done
+    # ENDFOR: iterate .list files in verification
     
     # Check .sources files (deb822 format used by Ubuntu 24.04+)
     for sources_file in /etc/apt/sources.list.d/*.sources; do
@@ -1968,6 +2005,7 @@ verify_fastest_mirror() {
       
       # Check for archive.ubuntu.com in URIs= lines or anywhere in file
       # D3: Use here-string instead of pipe pattern
+      local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
       if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in deb822 file $(basename "${sources_file}"):"
@@ -1984,6 +2022,7 @@ verify_fastest_mirror() {
       issues_found=$((issues_found + 1))
     fi
   fi
+  # ENDIF: sources.list.d directory exists for verification
   
   # Summary
   if [ "${issues_found:-0}" -eq 0 ]; then
@@ -2068,6 +2107,7 @@ reapply_fastest_mirror() {
     # Also verify no archive.ubuntu.com remains
     # D3: Use here-string instead of pipe pattern
     # F2: Validate command substitution result
+    local sources_content
     sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
     if [ -n "${sources_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
@@ -2085,6 +2125,7 @@ reapply_fastest_mirror() {
   else
     echo "[warn] /etc/apt/sources.list not found"
   fi
+  # ENDIF: main sources.list exists for re-application
   
   # Update sources.list.d/ files (excluding PPAs) with aggressive replacement
   # CRITICAL: Handle both .list (one-line format) and .sources (deb822 format) files
@@ -2133,6 +2174,7 @@ reapply_fastest_mirror() {
       # Final check - remove any remaining archive.ubuntu.com references
       # D3: Use here-string instead of pipe pattern
       # F2: Validate command substitution result
+      local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
       if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
@@ -2182,6 +2224,7 @@ reapply_fastest_mirror() {
       # Final check for remaining archive.ubuntu.com
       # D3: Use here-string instead of pipe pattern
       # F2: Validate command substitution result
+      local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
       if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
@@ -2218,7 +2261,8 @@ reapply_fastest_mirror() {
   rm -f /var/lib/apt/lists/lock 2>/dev/null || true
   echo "[info] Running apt-get update to refresh package lists with new mirror..."
   # F2: Capture both output and exit code separately for proper validation
-  local apt_update_output apt_update_exit_code
+  local apt_update_output
+  local apt_update_exit_code
   apt_update_output=$(apt-get update -o Acquire::Retries=3 2>&1)
   apt_update_exit_code=$?
   # F2: Validate command substitution result (check exit code explicitly)
@@ -2314,6 +2358,8 @@ reapply_fastest_mirror() {
       
       echo "[info] Retrying apt-get update with default archive.ubuntu.com mirror..."
       # F2: Capture both output and exit code separately for proper validation
+      local retry_output
+      local retry_exit_code
       retry_output=$(apt-get update -o Acquire::Retries=3 2>&1)
       retry_exit_code=$?
       # F2: Validate command substitution result
@@ -2493,6 +2539,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_APT_CACHE:-/unknown}: 0 .deb files (directory not found)"
   fi
+  # ENDIF: container APT cache exists and accessible
   if [ -d /var/cache/apt/archives ] && [ -x /var/cache/apt/archives ]; then
     local deb_count
     deb_count=$(find /var/cache/apt/archives -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
@@ -2504,6 +2551,7 @@ cache_summary() {
   else
     echo " /var/cache/apt/archives: 0 .deb files (directory not found)"
   fi
+  # ENDIF: host APT archives directory exists
   echo "---"
   echo "Other Caches:"
   # J1: Validate directory exists and is accessible before operations
@@ -2519,6 +2567,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_CONDA_CACHE:-/unknown}: 0 files (directory not found)"
   fi
+  # ENDIF: container CONDA cache exists and accessible
   if [ -d "${CONTAINER_WHEELS_CACHE:-}" ] && [ -x "${CONTAINER_WHEELS_CACHE:-}" ]; then
     local file_count
     file_count=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
@@ -2530,6 +2579,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_WHEELS_CACHE:-/unknown}: 0 files (directory not found)"
   fi
+  # ENDIF: container WHEELS cache exists and accessible
   if [ -d "${CONTAINER_JULIA_CACHE:-}" ] && [ -x "${CONTAINER_JULIA_CACHE:-}" ]; then
     local file_count
     file_count=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
@@ -2541,6 +2591,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_JULIA_CACHE:-/unknown}: 0 files (directory not found)"
   fi
+  # ENDIF: container JULIA cache exists and accessible
   echo "---"
   echo "Cache Directory Sizes:"
   # J1: Validate directory exists and is accessible before operations
@@ -2552,6 +2603,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_APT_CACHE:-/unknown}: 0B (directory not found)"
   fi
+  # ENDIF: container APT cache size
   if [ -d "${CONTAINER_CONDA_CACHE:-}" ] && [ -x "${CONTAINER_CONDA_CACHE:-}" ]; then
     local size_output
     size_output=$(du -sh "${CONTAINER_CONDA_CACHE}" 2>/dev/null | cut -f1 || echo '0B')
@@ -2559,6 +2611,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_CONDA_CACHE:-/unknown}: 0B (directory not found)"
   fi
+  # ENDIF: container CONDA cache size
   if [ -d "${CONTAINER_WHEELS_CACHE:-}" ] && [ -x "${CONTAINER_WHEELS_CACHE:-}" ]; then
     local size_output
     size_output=$(du -sh "${CONTAINER_WHEELS_CACHE}" 2>/dev/null | cut -f1 || echo '0B')
@@ -2566,6 +2619,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_WHEELS_CACHE:-/unknown}: 0B (directory not found)"
   fi
+  # ENDIF: container WHEELS cache size
   if [ -d "${CONTAINER_JULIA_CACHE:-}" ] && [ -x "${CONTAINER_JULIA_CACHE:-}" ]; then
     local size_output
     size_output=$(du -sh "${CONTAINER_JULIA_CACHE}" 2>/dev/null | cut -f1 || echo '0B')
@@ -2573,6 +2627,7 @@ cache_summary() {
   else
     echo " ${CONTAINER_JULIA_CACHE:-/unknown}: 0B (directory not found)"
   fi
+  # ENDIF: container JULIA cache size
   echo "=========================================================="
   echo
 }
@@ -2967,6 +3022,7 @@ validate_and_repair_cache() {
     if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
         cache_dirs+=("${MINIFORGE_HOME}/pkgs")
     fi
+    # ENDIF: MINIFORGE_HOME exists
 
     for dir in "${cache_dirs[@]}"; do
         if [ -z "${dir:-}" ]; then
@@ -2993,6 +3049,7 @@ validate_and_repair_cache() {
         fi
         echo "✓ Validated: ${dir}"
     done
+    # ENDFOR: cache_dirs validation loop
 }
 # End validate_and_repair_cache function
 
@@ -3068,6 +3125,7 @@ if ! command -v curl &> /dev/null; then
 else
     echo "✓ curl is available"
 fi
+# ENDIF: curl availability check
 
 #--- Sub-block 9.2: Execute mirror probing ---
 # Critical: Select fastest mirror BEFORE any significant apt operations
@@ -3099,6 +3157,7 @@ if [ -f /etc/apt/sources.list ] && [ -r /etc/apt/sources.list ]; then
 else
   echo "    [warn] /etc/apt/sources.list not found or not readable"
 fi
+# ENDIF: sources.list preview
 
 echo ""
 echo "==> Verifying mirror configuration..."
@@ -3109,6 +3168,7 @@ else
     echo "[warn] Mirror verification found issues - attempting to re-apply..."
     reapply_fastest_mirror || echo "[ERROR] Failed to fix mirror issues"
 fi
+# ENDIF: verify_fastest_mirror result
 
 #--- Sub-block 9.4: Force apt-get update after mirror change ---
 # CRITICAL: apt-get --print-uris reads URIs from cached Release files in /var/lib/apt/lists/
@@ -3128,6 +3188,7 @@ if [ -d /var/lib/apt/lists ] && [ -w /var/lib/apt/lists ]; then
 else
     echo "[warn] ⚠ Cannot clear package list cache - directory not writable"
 fi
+# ENDIF: apt lists directory writable
 # Update package lists from the new mirror with validation
 # F2: Capture both output and exit code separately for proper validation
 apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
@@ -3156,6 +3217,7 @@ if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
 else
   echo "✓ Package lists refreshed - apt-aria will now use URIs from fastest mirror"
 fi
+# ENDIF: apt-get update exit code check
 
 #--- Sub-block 9.5: Enable additional APT repositories ---
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
@@ -3167,16 +3229,19 @@ echo -e "\n\033[1;34m===> Enabling the 'universe' repository for additional pack
 if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
     echo "[warn] ⚠ apt-get update had issues - continuing anyway"
 fi
+# ENDIF: apt-get update for enabling repos
 # H1: Check exit code of apt-get install operation
 if ! /usr/bin/apt-get install -y --no-install-recommends software-properties-common 2>&1; then
     echo "[ERROR] ⚠ Failed to install software-properties-common"
     exit 1
 fi
+# ENDIF: install software-properties-common
 # M1: Verify add-apt-repository command is available
 if ! command -v add-apt-repository &> /dev/null; then
     echo "[ERROR] ⚠ add-apt-repository not found after installation"
     exit 1
 fi
+# ENDIF: add-apt-repository availability
 # H1: Check exit codes of add-apt-repository operations
 if ! add-apt-repository -y universe 2>&1; then
     echo "[warn] ⚠ Failed to add universe repository (may already exist)"
@@ -3187,6 +3252,7 @@ fi
 if ! add-apt-repository -y ppa:agornostal/ulauncher 2>&1; then
     echo "[warn] ⚠ Failed to add ulauncher PPA (may already exist)"
 fi
+# ENDIF: add-apt-repository calls
 
 echo ""
 echo "==> Re-applying fastest mirror after add-apt-repository (which uses default URLs)..."
@@ -3229,11 +3295,18 @@ echo -e "${GREEN}✓ Base image synchronized.${NC}"
 # Critical: dpkg-sig for .deb package verification (optional - not available in all Ubuntu versions)
 # Dependencies: Block 6 (APT configuration), Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: Installed packages
+# Sub-block 10.1 Rationale:
+# - Purpose: Prefer dpkg-sig for native .deb signature verification when available.
+# - Behavior: Attempt install non-fatally; if unavailable, fall back to structural
+#   checks (dpkg-deb -I) and lenient signature presence checks later.
+# - Rationale: Some Ubuntu variants omit dpkg-sig; we retain build portability by
+#   not failing hard here while still enabling stronger verification where possible.
 echo "Installing dpkg-sig for .deb package verification (if available)..."
 # H1: Check exit code of apt-get install operation
 if ! /usr/bin/apt-get install -y --no-install-recommends dpkg-sig 2>/dev/null; then
     echo "⚠️  dpkg-sig not available, using alternative verification"
 fi
+# ENDIF: dpkg-sig install attempt
 
 # Import VirtualGL/TurboVNC GPG key for APT repositories
 echo "Importing VirtualGL/TurboVNC GPG key for APT..."
@@ -3264,7 +3337,21 @@ if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
 else
     echo "⚠ VIRTUALGL_TURBOVNC_GPG_KEY_URL not set - skipping GPG key import"
 fi
-
+# ENDIF: VIRTUALGL_TURBOVNC_GPG_KEY_URL presence
+#
+# Sub-block 10.2 Rationale and Security Notes:
+# - Purpose: Import the Drake GPG key from the pre-seeded build cache to verify
+#   repository metadata and packages originating from Drake-related APT sources.
+# - Source of truth: The key file 'drake.asc' is expected in '${CONTAINER_BIN_CACHE}'
+#   (copied via %files). This avoids relying on external keyservers at build time,
+#   improving reproducibility and reliability.
+# - Failure handling: All file operations are validated (existence, readability),
+#   and the resulting keyring file is checked after dearmor to prevent silent
+#   failures. Any failure in this block is treated as fatal to avoid proceeding
+#   with unverifiable repositories.
+# - Output: A keyring file at '/usr/share/keyrings/drake.gpg' suitable for use
+#   in APT 'signed-by=' entries.
+#
 #--- Sub-block 10.2: Import Drake GPG key ---
 # Critical: Import Drake robotics framework GPG key from cache
 # Dependencies: None (foundational)
@@ -3298,6 +3385,16 @@ fi
 
 #--- Sub-block 10.3: .deb package verification function ---
 # Purpose: Verify .deb packages using GPG signatures
+# Parameters:
+#   $1: Absolute path to the .deb file to verify (required)
+#   $2: GPG key ID (fingerprint or long key ID) used for verification (required)
+# Returns:
+#   0 on successful verification or acceptable fallback allowing installation;
+#   1 on hard failure (invalid package structure, missing inputs, or
+#   unrecoverable verification errors)
+# Side effects:
+#   - May import GPG keys into the temporary keyring of the build environment
+#   - Writes diagnostic messages to stdout/stderr for traceability
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 verify_deb_package() {
@@ -3383,6 +3480,19 @@ verify_deb_package() {
 
 #--- Sub-block 10.4: Unified cache configuration function ---
 # Purpose: Configure all package manager caches (APT, pip, conda, Julia)
+# Inputs:
+#   - Uses environment variables from earlier blocks and config.sh:
+#     CONTAINER_APT_CACHE, CONTAINER_CONDA_CACHE, PIP_CACHE_DIR, MINIFORGE_HOME
+# Outputs:
+#   - Writes APT cache policy to /etc/apt/apt.conf.d/90-cache.conf
+#   - Writes pip cache policy to /root/.config/pip/pip.conf
+#   - Optionally writes pre-conda config to ${MINIFORGE_HOME}/.condarc.pre
+# Guarantees:
+#   - All file writes and directory creations are validated with existence and
+#     permission checks, and failures are reported explicitly.
+# Security:
+#   - Paths are derived from environment variables set earlier; no untrusted input.
+#   - All heredocs are quoted when variable expansion is not desired.
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 setup_unified_cache() {
@@ -3486,6 +3596,7 @@ EOF
     else
         echo "⚠ WARNING: MINIFORGE_HOME not set - skipping conda cache configuration"
     fi
+    # ENDIF: MINIFORGE_HOME provided for conda cache configuration
 
 
 
@@ -3513,6 +3624,7 @@ EOF
         echo "[ERROR] ⚠ APT cache configuration file not found or not readable!"
         exit 1
     fi
+    # ENDIF: APT cache configuration verification
     
     echo "==> Initial caching configured successfully."
 }
@@ -3561,6 +3673,7 @@ else
     echo "WARNING: 'chattr' command not found. Pre-seeded cache is not protected."
 fi
 # End cache protection (if-else self-contained)
+# ENDIF: chattr availability and cache directory access checks
 
 #--- Sub-block 10.7: Install essential system tools ---
 # Critical: Tools needed for GPG verification, downloads, and system management
@@ -3587,6 +3700,7 @@ if ! command -v aria2c >/dev/null 2>&1; then
     echo "[ERROR] ⚠ aria2 installation succeeded but command not found"
     exit 1
 fi
+# ENDIF: aria2 installation and verification
 
 # Monitor cache after first package installation
 monitor_cache "After aria2 installation"
@@ -3627,6 +3741,7 @@ if command -v pgrep >/dev/null 2>&1; then
 else
     echo "⚠ WARNING: pgrep still not available - will use ps aux with grep fallbacks"
 fi
+# ENDIF: core APT/system utilities installed and pgrep verification
 debug_glibc "After installing core APT & System utilities"
 
 #--- Sub-block 10.10: Install network and download tools ---
@@ -3642,6 +3757,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install network and download tools"
     exit 1
 fi
+# ENDIF: network & download tools installation
 debug_glibc "After installing network & download tools"
 
 #--- Sub-block 10.11: Install security and encryption tools ---
@@ -3659,6 +3775,7 @@ if ! apt-get install -y --no-install-recommends \
     exit 1
 fi
 # debsig-verify removed - we use dpkg-deb for package verification instead
+# ENDIF: security & encryption tools installation
 debug_glibc "After installing security & encryption tools"
 
 #--- Sub-block 10.12: Install archive and compression tools ---
@@ -3677,6 +3794,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install archive and compression tools"
     exit 1
 fi
+# ENDIF: archive & compression tools installation
 debug_glibc "After installing archive & compression tools"
 # Monitor cache after 4 batches of installations
 monitor_cache "After 4 batches of essential tools"
@@ -3699,6 +3817,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install file and text utilities"
     exit 1
 fi
+# ENDIF: file & text utilities installation
 debug_glibc "After installing file & text utilities"
 
 #--- Sub-block 10.13a: Install advanced search and productivity CLI tools ---
@@ -3717,6 +3836,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install advanced search and productivity CLI tools"
     exit 1
 fi
+# ENDIF: advanced search/productivity tools installation
 
 # Ensure consistent command names regardless of Debian/Ubuntu packaging quirks
 # M1: Verify commands exist before creating symlinks
@@ -3762,6 +3882,7 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
 else
     echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
 fi
+# ENDIF: symlink normalization for fd and bat
 
 debug_glibc "After installing advanced search & productivity CLI tools"
 
@@ -3779,6 +3900,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install development and system tools"
     exit 1
 fi
+# ENDIF: development and system tools installation
 debug_glibc "After installing development and system tools"
 
 #--- Sub-block 10.15: Install apt-utils (optional) ---
@@ -3789,6 +3911,7 @@ debug_glibc "After installing development and system tools"
 if ! apt-get install -y --no-install-recommends apt-utils 2>/dev/null; then
     echo "Δ apt-utils not available (continuing without it)"
 fi
+# ENDIF: optional apt-utils installation
 
 #--- Sub-block 10.16: Install advanced package managers (optional) ---
 # Purpose: Install alternative APT frontends if available
@@ -3806,6 +3929,7 @@ fi
 if ! apt-get install -y --no-install-recommends synaptic 2>/dev/null; then
     echo "Δ synaptic not available (continuing without it)"
 fi
+# ENDIF: optional advanced package managers
 debug_glibc "After installing advanced package managers"
 
 #--- Sub-block 10.17: Verify essential tool installation ---
@@ -3850,6 +3974,7 @@ fi
 if ! command -v aptitude >/dev/null 2>&1; then
     echo "⚠ aptitude not available after optional install attempt (continuing without it)"
 fi
+# ENDIF: essential/optional tool verification
 
 #--- Sub-block 10.18: Check optional package managers ---
 # Purpose: Report availability of optional tools
@@ -3874,6 +3999,7 @@ if dpkg_resolve_installed_package "apt-utils" >/dev/null 2>&1; then
 else
     echo "Δ apt-utils package is not installed"
 fi
+# ENDIF: report optional package availability
 
 echo "✓ Essential tools installed and verified"
 
@@ -3892,6 +4018,7 @@ if ! apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install sshfs"
     exit 1
 fi
+# ENDIF: sshfs installation
 
 #--- Sub-block 10.20: Configure aliases for modern tools (MOVED TO BLOCK 24) ---
 # Purpose: Aliases configured after Rust tools are compiled from source
@@ -3911,6 +4038,17 @@ echo "==> Rust tool aliases will be configured in Block 24 after compilation"
 
 #--- Sub-block 11.1: Create APT tool aliasing wrapper ---
 # Purpose: Setup unified caching with aria2 acceleration
+# Rationale:
+# - Accelerate large .deb downloads (e.g., NVIDIA keys/toolkits) using aria2
+#   with parallel connections while preserving APT’s dependency resolution.
+# - Enforce a single cache location so subsequent installs reuse artifacts,
+#   lowering network usage and improving determinism.
+# - Wrapper only intercepts install-like commands; other apt subcommands pass
+#   through with unified cache options.
+# Security/Resilience:
+# - All file writes/symlinks are validated.
+# - Fallbacks to single-connection aria2 or plain apt-get retain reliability.
+# - chattr is optional; when available, it protects cached .debs from cleanup.
 # Dependencies: Block 6 (APT configuration), aria2
 # Outputs: Installed packages
 echo "==> Setting up APT tool aliasing for unified caching..."
@@ -3928,6 +4066,7 @@ if [ ! -d /usr/local/bin ] || [ ! -w /usr/local/bin ]; then
     echo "[ERROR] ⚠ /usr/local/bin directory not writable"
     exit 1
 fi
+# ENDIF: /usr/local/bin creation and writability
 
 # Configure APT to keep downloaded packages (prevent automatic cleanup)
 # J1: Validate parent directory exists before creating file
@@ -3951,10 +4090,27 @@ else
     echo "[ERROR] ⚠ /etc/apt/apt.conf.d directory not writable"
     exit 1
 fi
+# ENDIF: APT keep-packages configuration creation
 
 cat > /usr/local/bin/apt-aria <<'EOF'
 #!/usr/bin/env bash
 set -eo pipefail  # Removed -u to allow unbound variables with defaults
+
+# Purpose: A lightweight front-end for apt/apt-get that:
+#   - Forces a unified cache location across APT tools
+#   - Uses aria2c for accelerated downloads on install-like commands
+#   - Falls back gracefully to standard apt-get when necessary
+# Inputs:
+#   - Environment variable CONTAINER_APT_CACHE (optional)
+#   - Command-line arguments forwarded to apt/apt-get
+# Behavior:
+#   - For install/remove/purge/build-dep/source: collect URIs and download via aria2c
+#     into the cache, then run apt-get to perform installation from cache
+#   - For other commands: pass-through to apt-get with cache options
+# Safety:
+#   - Validates temporary files and ensures cleanup
+#   - Uses guarded command substitutions and here-strings to avoid unsafe pipes
+#   - Protects cache with chattr +i when available (best-effort)
 
 # Centralized APT cache configuration - All APT tools use this location
 # Set default cache location if not provided via environment variable
@@ -4182,6 +4338,12 @@ if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
 #!/bin/bash
 # Container cache environment variables
 # These ensure apt-aria wrapper and other tools can find cache directories
+#
+# Rationale:
+# - Provide cache locations in login shells and interactive sessions to ensure
+#   uniform behavior when tools are invoked outside the main build flow.
+# - Directories are created best-effort with errors suppressed to avoid
+#   blocking non-critical initialization paths.
 
 # Set default cache root if not already set
 export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
@@ -4244,6 +4406,12 @@ monitor_cache "After apt-aria wrapper setup"
 #--- Sub-block 11.2: Create APT tool symlinks for consistent caching ---
 # Critical: Ensure ALL apt commands use unified cache and aria2 acceleration
 # Dependencies: apt-aria wrapper (created above)
+# Rationale:
+# - Normalize invocation paths so scripts/tools calling `apt` or `apt-get`
+#   transparently leverage the apt-aria wrapper (caching + acceleration).
+# - Validates symlink creation and existence to prevent silent misconfiguration.
+# - Keeps original binaries available under /usr/bin; only PATH lookups that
+#   find /usr/local/bin first are redirected through the wrapper.
 # Outputs: Symlinks for apt/apt-get
 echo "Creating APT tool symlinks for consistent caching..."
 # J1: Validate target directory exists and is writable before creating symlinks
@@ -4275,6 +4443,11 @@ fi
 #--- Sub-block 11.3: Verify APT aliasing ---
 # Purpose: Confirm symlinks are properly configured
 # Dependencies: apt-aria wrapper and symlinks
+# Behavior:
+# - Prints resolved targets of /usr/local/bin/{apt,apt-get}
+# - Provides a concise confirmation that subsequent calls will use the wrapper
+# Safety:
+# - Guarded command substitutions; non-fatal reads default to informative text
 # Outputs: Verification output
 echo "Verifying APT tool aliasing..."
 # F2: Validate command substitution results
@@ -4459,17 +4632,26 @@ EOF
     }; then
         echo "[warn] ⚠ Failed to create /etc/profile.d/intel-mkl.sh"
     fi
-    chmod +x /etc/profile.d/intel-mkl.sh
+    # H1: Check exit code of chmod operation
+    if ! chmod +x /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+        echo "[warn] ⚠ Failed to chmod +x /etc/profile.d/intel-mkl.sh"
+    fi
     # shellcheck disable=SC1091
-    source /etc/profile.d/intel-mkl.sh
+    if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+        echo "[warn] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
+    fi
 fi
+# ENDIF: create and activate intel-mkl profile script
 
+# Persist MKLROOT in /etc/environment for non-interactive shells
+# Rationale: Ensures downstream tools invoked without a login shell find MKLROOT.
 touch /etc/environment
 if ! grep -q "^MKLROOT=" /etc/environment 2>/dev/null; then
     echo "MKLROOT=${MKLROOT}" >> /etc/environment
 else
     sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment
 fi
+# ENDIF: ensure MKLROOT in /etc/environment
 
 # H1: Check exit code of run_ldconfig_refresh operation
 if ! run_ldconfig_refresh 2>&1; then
@@ -4484,11 +4666,13 @@ if [ ! -d "${MKL_LIB_DIR}" ]; then
     echo -e "  ${RED}✗ Expected MKL library directory missing at ${MKL_LIB_DIR}${NC}"
     exit 1
 fi
+# ENDIF: MKL library directory exists
 
 if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
     echo -e "  ${RED}✗ Expected MKL include directory missing at ${MKL_INCLUDE_DIR}${NC}"
     exit 1
 fi
+# ENDIF: MKL include directory exists
 
 MKL_RT_LIB="${MKL_LIB_DIR}/libmkl_rt.so"
 if [ -f "${MKL_RT_LIB}" ]; then
@@ -4501,6 +4685,7 @@ else
     MKL_BLAS_LIBRARIES="${MKL_BLAS_COMPONENTS};-lgomp;-lpthread;-lm;-ldl"
     MKL_LINK_FLAGS="-Wl,--start-group ${MKL_LIB_DIR}/libmkl_intel_lp64.so ${MKL_LIB_DIR}/libmkl_core.so ${MKL_LIB_DIR}/libmkl_gnu_thread.so -Wl,--end-group -lgomp -lpthread -lm -ldl"
 fi
+# ENDIF: libmkl_rt selection and fallback
 
 export MKL_LIB_DIR MKL_INCLUDE_DIR MKL_BLAS_LIBRARIES MKL_LINK_FLAGS
 export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
@@ -4542,6 +4727,7 @@ if [ -f "${MKL_RT_LIB}" ] && [ -r "${MKL_RT_LIB}" ]; then
 else
     echo -e "  ${YELLOW}⚠ Skipping alternatives registration: ${MKL_RT_LIB} not found${NC}"
 fi
+# ENDIF: alternatives registration for MKL
 
 #--- Sub-block 12A.5: HPC MKL/CUDA tuning script ---
 # Note: HPC tuning script is installed via install.sh from container-scripts/
@@ -4615,6 +4801,7 @@ for lib_path in \
         BASE_OPENBLAS_FOUND=true
     fi
 done
+# ENDFOR: scan base image for OpenBLAS libraries
 
 if [ "${BASE_OPENBLAS_FOUND}" = true ]; then
     echo -e "${YELLOW}⚠ WARNING: OpenBLAS detected in base image${NC}"
@@ -5008,6 +5195,7 @@ else
     exit 1
 fi
 echo ""
+# ENDIF: OpenBLAS library presence and DYNAMIC_ARCH verification block
 
 #--- Sub-block 12.7: Update alternatives system ---
 # Purpose: Register OpenBLAS with the alternatives system (fallback role unless
@@ -5031,6 +5219,7 @@ if [ -z "${OPENBLAS_LIB_FILE}" ]; then
     printf '%s\n' "  ${RED}✗ OpenBLAS library file not found${NC}" >&2
     exit 1
 fi
+# ENDIF: determine OpenBLAS library file path
 
 # Update BLAS alternatives
 OPENBLAS_ALT_PRIORITY=100
@@ -5076,9 +5265,9 @@ if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
 else
     printf '%s\n' "  DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER}; OpenBLAS registered as fallback alternative"
 fi
-
 printf '%s\n' "  ${GREEN}✓ Alternatives system registration complete${NC}"
 echo ""
+# ENDIF: alternatives registration for OpenBLAS
 
 #--- Sub-block 12.8: Configure library paths ---
 # Purpose: Make OpenBLAS available system-wide via library paths
@@ -5132,6 +5321,7 @@ else
         printf '%s\n' "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
     fi
 fi
+# ENDIF: ldconfig cache verification
 
 # Set environment variables (for current session and future sessions)
 export LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
@@ -5219,7 +5409,9 @@ export PKG_CONFIG_PATH=${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PA
 export OpenBLAS_DIR=${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas
 export CMAKE_PREFIX_PATH=${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
 EOF
-chmod 0644 /etc/profile.d/openblas.sh
+if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
+  printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
+fi
 
 printf '%s\n' "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
 echo ""
@@ -6020,7 +6212,7 @@ early_verify_cached_files() {
       echo "✗ Julia gzip integrity check failed - archive is corrupted!"
       echo "  Attempting to re-download..."
       # Check HTTP status code for curl (I4)
-      http_code=$(curl -w "%{http_code}" -fsSL -o "${julia_file}" "${julia_url}" 2>&1 | tail -n1)
+      http_code="$(curl -fsSL -o "${julia_file}" -w "%{http_code}" "${julia_url}")"
       if [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
         if gzip -t "${julia_file}" 2>/dev/null; then
           echo "✓ Julia re-downloaded and gzip integrity verified"
@@ -6263,11 +6455,11 @@ EOF
 #     as a build-time dependency for METIS headers, but METIS functions are compiled into CHOLMOD.
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages (libgmp-dev, libmpfr-dev, libmetis-dev)
-echo -e "${YELLOW}[6.12B.1] Installing GMP, MPFR, and METIS (SuiteSparse prerequisites)...${NC}"
+printf '%b\n' "${YELLOW}[6.12B.1] Installing GMP, MPFR, and METIS (SuiteSparse prerequisites)...${NC}"
 echo "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
 echo "CHOLMOD's METIS support: METIS is embedded in libcholmod.so in recent SuiteSparse versions"
 echo "  → libmetis-dev provides headers needed at build time, but METIS functions are in libcholmod.so"
-if ! apt-get install -y libgmp-dev libmpfr-dev libmetis-dev; then
+if ! apt-get install -y --no-install-recommends libgmp-dev libmpfr-dev libmetis-dev; then
     echo "  ✗ Failed to install GMP/MPFR/METIS packages"
     exit 1
 fi
@@ -6405,7 +6597,7 @@ rm -rf "${SUITESPARSE_SOURCE_DIR}"
 mkdir -p "${SUITESPARSE_SOURCE_DIR}"
 monitor_cache "Before SuiteSparse source fetch"
 
-echo -e "${YELLOW}[6.12C.2] Fetching SuiteSparse source (${SUITESPARSE_VERSION})...${NC}"
+printf '%b\n' "${YELLOW}[6.12C.2] Fetching SuiteSparse source (${SUITESPARSE_VERSION})...${NC}"
 if git clone --depth 1 --branch "${SUITESPARSE_VERSION}" https://github.com/DrTimothyAldenDavis/SuiteSparse.git "${SUITESPARSE_SOURCE_DIR}/src"; then
     echo "  ✓ SuiteSparse repository cloned"
 else
@@ -9429,19 +9621,26 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     if command -v objdump >/dev/null 2>&1; then
       g2o_soname="$(objdump -p "${g2o_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}')"
     fi
+    # Fallback: try readelf if objdump not available or failed to extract SONAME
+    if [ -z "${g2o_soname}" ] && command -v readelf >/dev/null 2>&1; then
+      g2o_soname="$(readelf -d "${g2o_core_path}" 2>/dev/null | awk -F'[][]' '/SONAME/ {print $2; exit}')"
+    fi
     if [ -z "${g2o_soname}" ]; then
       g2o_soname="$(basename "${g2o_core_path}")"
     fi
     g2o_lib_dir="$(dirname "${g2o_core_path}")"
 
     # Check 2: Verify library is in linker cache
-    if ! ldconfig -p 2>/dev/null | grep -F "${g2o_soname}" >/dev/null 2>&1; then
+    # Some distros expose SONAME as libg2o_core.so.<MAJOR> while the real file is libg2o_core.so.X.Y.Z.
+    # Build a tolerant match pattern that accepts either exact SONAME or any libg2o_core.so.* entry.
+    g2o_cache_pattern="$(printf '%s|%s' "${g2o_soname}" 'libg2o_core\.so(\.[0-9]+)*')"
+    if ! ldconfig -p 2>/dev/null | grep -E "${g2o_cache_pattern}" >/dev/null 2>&1; then
       echo -e "${YELLOW}⚠ g2o library exists but ${g2o_soname} not in ldconfig cache (attempting fix)${NC}"
       echo -e "${YELLOW}[DEBUG] Running targeted ldconfig refresh for ${g2o_lib_dir}${NC}"
       # Use targeted directory update (faster and more reliable)
       run_ldconfig_refresh_dir "${g2o_lib_dir}" || run_ldconfig_refresh || true
 
-      if ! ldconfig -p 2>/dev/null | grep -F "${g2o_soname}" >/dev/null 2>&1; then
+      if ! ldconfig -p 2>/dev/null | grep -E "${g2o_cache_pattern}" >/dev/null 2>&1; then
         echo -e "${RED}✗ g2o library still not in ldconfig cache after targeted refresh${NC}"
         echo -e "${YELLOW}[DEBUG] ldconfig -p output (g2o related):${NC}"
         ldconfig -p 2>/dev/null | grep "libg2o" || echo "  No g2o libraries in ldconfig cache"

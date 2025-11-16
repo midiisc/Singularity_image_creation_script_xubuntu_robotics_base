@@ -264,6 +264,7 @@ export WHEELS_CACHE="${CACHE_DIR}/wheels"
         export ROS_DISTRO_CAPITALIZED
     else
         export ROS_DISTRO_CAPITALIZED="Unknown"
+    # ENDIF: ROS_DISTRO presence check
     fi
 # SIF_NAME and DEF_NAME are defined in BUILD OUTPUT CONFIGURATION section below
 # They are generated dynamically in build script if not set
