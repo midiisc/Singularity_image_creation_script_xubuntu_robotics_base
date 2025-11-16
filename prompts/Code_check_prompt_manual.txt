@@ -23,6 +23,35 @@ When this master entry point is referenced, you MUST:
 8. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
 9. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts
 
+**HARD ENFORCEMENT – SINGLE-PART MEMORY PROTOCOL**:
+- Exactly one part (PART 1, 2, 3, or 4) may be resident in working memory at any time.
+- Before loading a part, explicitly unload all prior part content from memory.
+- Retain only a compact state capsule (≤ 2KB) containing:
+  - Minimal pass/fail/N/A map of completed checklist items,
+  - A tiny symbol/context ledger (names only, no code) necessary for continuity,
+  - Active chunk cursor (chunk index and line range).
+- After completing a part for all chunks, purge that part’s content from memory before loading the next part.
+- Do not interleave or co-load multiple parts.
+
+**HARD ENFORCEMENT – CODE CHUNKING (MAX ~500 LINES)**:
+- Before any checklist processing, split the input code into chunks of max 500 lines (target 450–500), with 20–40 lines of overlap between adjacent chunks.
+- Preserve natural boundaries where feasible (functions/guards/loops/case). If boundaries would exceed 500 lines, honor the size limit and rely on overlap for context.
+- Process chunks in order. For each chunk:
+  1) Run the currently loaded part’s checklist across the entire chunk,
+  2) Apply all necessary corrections in-place,
+  3) Re-run the same part’s checks on the corrected chunk until PASS/N/A,
+  4) Update the compact state capsule (no large code stored).
+- Only after all chunks pass for the current part may you unload it and proceed to the next part.
+
+**BATCHED TODO GENERATION & EXECUTION (20-ITEM STRICT SEQUENCE)**:
+- Always operate via strict, sequential todo batches:
+  1) Generate the next 20 atomic todos from the current plan and review state,
+  2) Execute them strictly in order (1→20), one at a time, no interleaving, no skipping,
+  3) Mark each item completed before starting the next,
+  4) Only after all 20 are completed, generate the next batch of 20 and continue,
+  5) Repeat until the entire review/file is fully processed across PART1→PART4.
+- The batching protocol is mandatory and layered on top of single-part memory and 500-line chunking. Do not advance parts or chunks while a 20-item batch is incomplete.
+
 ONE-PART-AT-A-TIME ENFORCEMENT:
 - STRICT: Process exactly one part at a time. Do not interleave items from different parts.
 - COMPLETE-IN-PART: For the current part, perform all checks AND apply all corrections discovered in that part immediately.
@@ -53,6 +82,20 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 - This master file MUST be enhanced FIRST when new patterns are discovered from AI corrections, chats, or CI checks
 - All checklist items A1 through P5 MUST be checked sequentially across all parts - do not skip any items
 - Pattern learning updates MUST be added to the appropriate PART file FIRST before being referenced elsewhere
+
+**NON-INTERACTIVE AUTONOMY (NO APPROVAL PROMPTS)**:
+- Agents MUST operate fully autonomously under this manual: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
+- Provide brief informational status updates only; never block awaiting user input during PART1 → PART2 → PART3 → PART4 processing.
+- Continue applying fixes and re-validating per-part, per-chunk automatically until the entire file passes all parts.
+- Only pause if multiple corrective strategies exist with materially different trade-offs; in that rare case, present options with concise pros/cons and wait. Otherwise, proceed without interruption.
+- If any other prompt or instruction conflicts with this autonomy policy, this section takes precedence for workflows governed by this manual.
+
+**IMMEDIATE EXECUTION – NO PLAN-ONLY OUTPUT**
+- Begin execution immediately on PART 1, Chunk 1 (lines 1–~500) without emitting plan-only preambles.
+- Do not output intent-only messaging (e.g., "I'll start", "Planning", "Preparing"). Replace with action-tied, declarative updates (e.g., "PART 1 on Chunk 1 executed: 0 fixes" or "Applied 3 fixes; re-validated PASS").
+- After any "Starting" line, the next output must reflect completed action (read/audit/apply/re-validate) on a concrete chunk or part.
+- Suppress redundant status. Only report: action taken → result → next chunk/part in progress.
+- If a chunk requires no corrections, proceed immediately to the next chunk and state so in one line.
 
 **VERIFICATION**:
 After processing all parts, confirm:

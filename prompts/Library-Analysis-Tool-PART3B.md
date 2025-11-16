@@ -1,5 +1,10 @@
 # Library Documentation & Flag Extraction Tool - PART 3B
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING (PART 3B)
+- Only PART 3B content may be loaded while executing this part. Unload other tool/manual parts from memory.
+- Use master chunking: max 500 lines (target 450–500) with 20–40 lines overlap. Process chunks in order.
+- For each chunk: execute PART 3B tasks fully → apply fixes → re-run PART 3B checks until PASS/N/A. Keep only compact capsule (≤ 2KB): status map, symbol names, chunk cursor.
+- On completion, unload PART 3B and finalize outputs.
 **SEQUENTIAL CHECKING ENFORCED**: This is PART 3B of PART 3 (FINAL). You MUST have completed PART 1, PART 2, and PART 3A before starting this part. This completes the Library Analysis Tool.
 
 ---

@@ -26,6 +26,11 @@ When this master entry point is referenced, you MUST:
 10. **PROCESS ALL TASKS IN PART 3B**: Execute all remaining workflow and integration tasks from PART 3B
 11. **FINAL CONFIRMATION**: Verify all components have been processed across all parts
 
+**HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING**:
+- Exactly one part (this master or one PART) may be loaded in memory at a time. Unload previous part content before loading the next; retain only a compact capsule (≤ 2KB) with status map, symbol names, and active chunk cursor.
+- When analyzing code/scripts, split inputs into chunks of max 500 lines (target 450–500) with 20–40 line overlaps. Process chunks in order; for each chunk: execute tasks fully, apply fixes, and re-run checks until PASS/N/A before moving on.
+- If A–P checklist checks are required, invoke `prompts/Code_check_prompt_manual.txt` and honor its sequential (PART1→PART2→PART3→PART4), single-part memory, and chunking rules.
+
 ONE-PART-AT-A-TIME ENFORCEMENT:
 - STRICT: Execute one part at a time; do not interleave commands/analysis across parts.
 - COMPLETE-IN-PART: Apply all fixes and generate all outputs for the current part before advancing.

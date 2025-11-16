@@ -2,7 +2,21 @@
 
 **SEQUENTIAL CHECKING ENFORCED**: This is PART 2B of PART 2. You MUST have completed PART 1 and PART 2A before starting this part. After completing PART 2B, proceed to PART 3: `Advanced-CoT-Multi-Agent-Prompt-PART3.md`.
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 2B)
+- Only PART 2B content may be loaded while executing this part. Unload other CoT/Manual parts from memory.
+- Use the master chunking rules: max 500 lines (target 450–500) with 20–40 lines overlap; process chunks in order.
+- For each chunk: execute PART 2B tasks fully → apply fixes → re-run PART 2B tasks until PASS/N/A. Maintain only compact capsule (≤ 2KB) with status, symbol names, chunk cursor.
+- Proceed to PART 3 only after all chunks pass for PART 2B; unload PART 2B before loading PART 3.
+
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from `prompts/Advanced-CoT-Multi-Agent-Prompt.md`:
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
       "prevention": "Always use RAII; never rely on success path cleanup"
     },

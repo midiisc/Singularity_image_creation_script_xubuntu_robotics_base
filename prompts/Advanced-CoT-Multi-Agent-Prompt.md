@@ -23,6 +23,36 @@ When this master entry point is referenced, you MUST:
 8. **PROCESS ALL TASKS IN PART 3**: Execute all implementation, metrics, and final template tasks (sections 6-8) from PART 3
 9. **FINAL CONFIRMATION**: Verify all phases and sections have been processed across all parts
 
+**NON-INTERACTIVE AUTONOMY (NO APPROVAL PROMPTS)**:
+- Operate fully autonomously under this prompt: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
+- Provide brief informational status updates only; never block awaiting user input during PART1 → PART2A → PART2B → PART3 processing.
+- Continue applying fixes and re-validating per-part, per-chunk automatically until the entire file passes all parts.
+- Do not output permission-seeking or interrogative phrases (e.g., "confirm", "okay to proceed", "shall I", "waiting for approval"). Use declarative status only.
+- Only pause if multiple corrective strategies exist with materially different trade-offs; in that rare case, present options with concise pros/cons and wait. Otherwise, proceed without interruption.
+- If any other instruction conflicts with this autonomy policy, this section takes precedence for workflows governed by this prompt.
+
+**IMMEDIATE EXECUTION – NO PLAN-ONLY OUTPUT**
+- Start execution immediately: run PART 1 tasks on the first chunk without emitting planning-only text.
+- Replace intent/prep language with action-tied, declarative results (e.g., "PART 1 Chunk A: applied 2 fixes; re-validated PASS").
+- After any "Starting" line, the next output MUST report completed action on a concrete chunk/part.
+- If a chunk has no corrections, proceed silently to the next chunk and state the skip in one line.
+- Keep cadence: action → result → next action in progress.
+
+**HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING**:
+- Exactly one prompt-part (from this Advanced CoT flow or Code Check Manual) may be resident in memory at a time. Before loading a new part, unload prior part content; retain only a compact capsule (≤ 2KB) with: minimal status map, symbol names only, and active chunk cursor.
+- Before analysis, split the input code into chunks of max 500 lines (target 450–500) with 20–40 lines of overlap. Preserve natural boundaries when feasible; if not possible without exceeding the limit, honor the size limit and rely on overlap.
+- For each chunk and for the currently-loaded part: run tasks/checks completely, apply fixes, and re-run until PASS/N/A. Only then proceed to the next chunk. After all chunks pass for the current part, unload it and proceed to the next part.
+- If this CoT flow triggers A–P checklist checks, it MUST do so through `prompts/Code_check_prompt_manual.txt` with its strict sequential (PART1→PART2→PART3→PART4), single-part memory, and chunking rules.
+
+**BATCHED TODO GENERATION & EXECUTION (20-ITEM STRICT SEQUENCE)**:
+- All CoT-driven reviews MUST follow a strict 20-item batching protocol:
+  1) Generate the next 20 atomic todos from the current reasoning plan and state,
+  2) Execute them in order (1→20), one at a time, without interleaving or skipping,
+  3) Mark each as completed before starting the next,
+  4) Only after all 20 complete, generate the next batch of 20 and continue,
+  5) Repeat until the entire review/file is complete across all parts (PART1 → PART2A → PART2B → PART3).
+- The batching protocol is mandatory and complements the single-part memory and 500-line chunking rules. Do not advance parts/chunks while a 20-item batch is incomplete.
+
 ONE-PART-AT-A-TIME ENFORCEMENT:
 - STRICT: Work on exactly one part at a time; do not interleave sections across parts.
 - COMPLETE-IN-PART: Apply all fixes/corrections identified during a part before moving on.

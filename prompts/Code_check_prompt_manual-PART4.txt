@@ -6,7 +6,22 @@
 - This is the final part - complete all checklist items here
 - **DO NOT SKIP**: All checklist items A1 through P5 must be checked sequentially across all parts
 
+**HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 4)**:
+- Only PART 4 content may be loaded while executing this part. Unload other parts from memory.
+- Continue with the same chunking (max 500 lines, 20–40 lines overlap) in order.
+- For each chunk: run PART 4 checklist fully → apply fixes → re-run PART 4 checks until PASS/N/A.
+- Keep only a compact capsule (≤ 2KB): checklist status, symbol names, chunk cursor; do not store large code excerpts.
+- After all chunks pass for PART 4, unload PART 4 and produce final verification per master file.
+
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from `prompts/Code_check_prompt_manual.txt`:
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
   - **AUTO-FIX WORKFLOW**:
     1. Run ShellCheck: `shellcheck script.sh` or `shellcheck -x script.sh` (for sourced scripts)

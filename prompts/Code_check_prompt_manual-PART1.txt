@@ -10,6 +10,13 @@
 - **DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts
 - Complete PART 1 before proceeding to PART 2
 
+**HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 1)**:
+- Only PART 1 content may be loaded while executing this part. Unload any other part from memory.
+- Split the input code into chunks of max 500 lines (target 450–500) with 20–40 lines overlap.
+- For each chunk in order: run PART 1 checklist fully → apply fixes → re-run PART 1 checks until PASS/N/A.
+- Maintain a compact capsule only: checklist pass map, symbol names, chunk cursor. Do not retain large code in memory.
+- Proceed to PART 2 only after all chunks pass for PART 1, and unload PART 1 from memory.
+
 **MANDATORY FOR ALL REVIEWS**: 
 - ALL other review prompts (Advanced CoT, Enhanced Code Review, etc.) MUST reference and strictly follow this manual
 - This manual MUST be enhanced FIRST when new patterns are discovered from AI corrections, chats, or CI checks
@@ -17,6 +24,14 @@
 - Pattern learning updates MUST be added to this manual FIRST before being referenced elsewhere
 
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from `prompts/Code_check_prompt_manual.txt`:
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
 You will be given a Bash script segment for audit and correction, specified by a line range or a distinct code block that may differ from earlier reviews.
 

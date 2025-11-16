@@ -1,6 +1,11 @@
 # Comprehensive Build Flags Analysis Prompt
 ## 5-Phase Architecture with Mixture of Reasoning Experts
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING
+- If this prompt analyzes any code/scripts, follow the master manual’s chunking: max 500 lines (target 450–500) with 20–40 line overlap. Process chunks in order.
+- Only the currently active section/part should be resident in memory; unload others. Retain only a ≤ 2KB capsule (status map, symbol names, chunk cursor).
+- When this prompt triggers A–P checks, it MUST invoke `prompts/Code_check_prompt_manual.txt` and honor its sequential (PART1→PART2→PART3→PART4), single-part memory, and chunking rules.
+- Apply fixes for each chunk and re-run checks until PASS/N/A before proceeding to the next chunk/section.
 **Purpose**: This prompt provides a complete, production-ready system for comprehensively analyzing compilation flags in large C++ libraries like SuiteSparse, Ceres, GTSAM, and others.
 
 **Target Completeness**: >=95% flag coverage with multi-source validation

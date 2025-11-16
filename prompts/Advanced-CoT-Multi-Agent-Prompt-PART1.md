@@ -1,6 +1,11 @@
 # ADVANCED Code Review Prompt: Multi-Agent Chain-of-Thought - PART 1
 ## Prompt Engineering Best Practices for Robotics HPC Stack
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 1)
+- Only PART 1 content may be loaded while executing this part. Unload other CoT/Manual parts from memory.
+- Use the same chunking as the master rules: max 500 lines (target 450–500) with 20–40 lines overlap. Process chunks in order.
+- For each chunk: execute PART 1 tasks fully → apply fixes → re-run PART 1 tasks until PASS/N/A. Update only the compact capsule (≤ 2KB): checklist/task status, symbol names, chunk cursor; do not retain large code.
+- Proceed to PART 2A (or PART 2) only after all chunks pass for PART 1; unload PART 1 before loading the next part.
 **This is PART 1 of 3. See also:**
 - `Advanced-CoT-Multi-Agent-Prompt-PART2.md` - Parts 3-5 (Verification Chain, Self-Correction, Advanced Techniques)
 - `Advanced-CoT-Multi-Agent-Prompt-PART3.md` - Parts 6-8 (Implementation, Metrics, Final Template)
@@ -33,6 +38,14 @@
 **ONLY PROCEED TO PART 2 WHEN ALL PART 1 TASKS ARE COMPLETE.**
 
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from `prompts/Advanced-CoT-Multi-Agent-Prompt.md`:
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
 ## EXECUTIVE SUMMARY
 

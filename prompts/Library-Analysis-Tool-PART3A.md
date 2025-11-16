@@ -1,6 +1,11 @@
 # Library Documentation & Flag Extraction Tool - PART 3
 ## Automated Analyzer + AI Prompt Integration
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING (PART 3A)
+- Only PART 3A content may be loaded while executing this part. Unload other tool/manual parts from memory.
+- Use master chunking: max 500 lines (target 450–500) with 20–40 lines overlap. Process chunks in order.
+- For each chunk: execute PART 3A tasks fully → apply fixes → re-run PART 3A checks until PASS/N/A. Keep only compact capsule (≤ 2KB): status map, symbol names, chunk cursor.
+- Proceed to PART 3B only after all chunks pass; unload PART 3A before loading PART 3B.
 **This is PART 3 of 3. See also:**
 - `Library-Analysis-Tool-PART1.md` - Part 1 (Executable Bash Script)
 - `Library-Analysis-Tool-PART2.md` - Part 2 (How to Use, Agent-Facing Prompt Flow)

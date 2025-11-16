@@ -1,0 +1,126 @@
+SEQUENTIAL FOUR-PART CODE CHECK (NON-INTERRUPTING) - RUNBOOK
+
+Purpose:
+- Provide a reusable, copy-pasteable instruction/template to run the full four-part Code Check Manual without confirmation pauses.
+- Offer two modes:
+  1) Non-interactive script-driven (recommended): uses the repo’s enforcement script to process PART1 → PART2 → PART3 → PART4 sequentially, auto-fixing between parts.
+  2) Chat-only invocation template: for inline reviews without modifying files, including a 500-line context window mode.
+
+Repository prerequisites:
+- Manual entry point: prompts/Code_check_prompt_manual.txt
+- Enforcement script: scripts/helpers/enforce_pre_commit_validation.sh
+ - Chunked runner: scripts/helpers/run_sequential_chunked_review.sh
+
+
+============================================================
+MODE 1 — NON-INTERACTIVE (RECOMMENDED)
+============================================================
+Description:
+- Runs the complete flow automatically (PART1 → PART2 → PART3 → PART4), applying corrections after each part, re-validating, and then continuing without asking for confirmation.
+- Blocks commits if validation fails; safe to run repeatedly.
+
+Steps:
+1) Stage your intended changes (optional; the script can also check the whole repo):
+   git add -A
+
+2) Run the enforcement script:
+   /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/helpers/enforce_pre_commit_validation.sh
+
+3) Expected behavior:
+   - Loads prompts/Code_check_prompt_manual.txt
+   - Processes PART 1 completely → auto-applies fixes → re-validates PART 1
+   - Proceeds to PART 2 → auto-applies fixes → re-validates PART 2
+   - Proceeds to PART 3 → auto-applies fixes → re-validates PART 3
+   - Proceeds to PART 4 → auto-applies fixes → re-validates PART 4
+   - Only after all parts pass does it allow committing; otherwise it blocks
+
+4) Rerun as needed until all checks pass.
+
+Notes:
+- This respects repository rules (auto-fix, re-validate, block on failure).
+- No mid-process confirmations are required.
+
+
+============================================================
+MODE 1B — CHUNKED WITH OVERLAP (SCRIPT, MAINTAIN CONTEXT)
+============================================================
+Description:
+- Processes a specific file in ≈500-line windows with configurable overlap to preserve cross-window context.
+- For each window, the runner exports scope variables (file, start, end) and invokes the enforcement script, which executes PART1 → PART4 sequentially and applies fixes before moving to the next window.
+- No reports are generated; only edits/corrections are applied.
+
+Command example:
+
+  /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/helpers/run_sequential_chunked_review.sh \
+    --file /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh \
+    --window 500 \
+    --overlap 50 \
+    --continue-on-error
+
+Key flags:
+- --window <n>: lines per chunk (default 500)
+- --overlap <n>: overlapping lines between chunks to maintain context (e.g., 50–100)
+- --continue-on-error: continue processing remaining windows after a failure
+- --dry-run: print planned windows and env scoping; do not invoke enforcement
+
+Scoping env vars (consumed best-effort by downstream tools):
+- CODE_CHECK_SCOPE_FILE, CODE_CHECK_SCOPE_START_LINE, CODE_CHECK_SCOPE_END_LINE
+- CODE_CHECK_SEQUENTIAL=1, CODE_CHECK_ASSUME_YES=1, CODE_CHECK_NO_REPORT=1, CODE_CHECK_CHUNKED_MODE=1
+- CODE_CHECK_TOTAL_WINDOWS, CODE_CHECK_CURRENT_WINDOW
+
+Notes:
+- If the enforcement pipeline does not read the scope variables, it still runs safely without producing reports and will process the broader context.
+- This script does not commit/push; it only performs sequential validate/fix cycles. Use your normal workflow to review diffs and commit when ready.
+
+
+============================================================
+MODE 2 — CHAT-ONLY (INLINE REVIEW, NO FILE MODIFICATION)
+============================================================
+Description:
+- Use this when you want an end-to-end review without applying changes automatically.
+- Paste the following exact template into your assistant/chat message (adjust Scope as needed).
+
+Copy-paste template:
+
+Instruction (non-interrupting):
+- Process the full manual sequentially in one run: PART1 → PART2 → PART3 → PART4.
+- After each part: auto-apply all corrections (conceptually, as a proposal), re-run that part to confirm pass, then continue.
+- Do NOT ask to proceed; assume consent. Pause only on truly unfixable conflicts with multiple materially different solutions; otherwise select a best-practice default and continue.
+- If you hit time/context limits, continue automatically from the last fully completed part until all four parts finish.
+- Keep interim reporting minimal; produce one consolidated report at the end, broken down by part with proposed diffs/fixes.
+
+500-line context mode:
+- When reviewing large files, consume source code in windows of ≈500 lines at a time per file, sequentially.
+- Complete a window’s checks/corrections and re-validate that window before proceeding to the next window.
+- Preserve state between windows (symbols, flags, pending fixes) and ensure cross-window consistency at each part boundary.
+
+Scope:
+- Review and correct all staged and changed bash files in the repository.
+- Enforce documentation headers, function docs (>10 lines), control structure closing markers, and multi-phase markers per repository rules.
+
+@prompts/Code_check_prompt_manual.txt
+
+
+============================================================
+TIPS & TROUBLESHOOTING
+============================================================
+- If the chat assistant still pauses: add explicit language:
+  “If you are about to ask to proceed to the next part, do not ask—proceed automatically. Only stop if there are multiple valid solutions with material trade-offs.”
+
+- To resume after interruption: “Resume from the next unpublished part. If PART 2 was last fully completed, continue with PART 3, then PART 4, with the same rules.”
+
+- Prefer Mode 1 (script) when you want real changes applied and re-validated against repo policies.
+
+- Use Mode 2 (chat) for dry-run reviews or when you need a single consolidated proposal before editing files.
+
+
+============================================================
+QUICK COMMANDS
+============================================================
+# Stage everything (optional)
+git add -A
+
+# Run full, non-interactive sequential validation
+/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/helpers/enforce_pre_commit_validation.sh
+
+

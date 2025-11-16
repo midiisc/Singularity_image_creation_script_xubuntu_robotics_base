@@ -1,6 +1,11 @@
 # ENHANCED Code Review Prompt: Robotics HPC Stack + Multi-Language - PART 1
 ## Industry Best Practices for Pre-Commit Checks
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 1)
+- Only this PART’s content may be loaded while executing this part. Unload other review/manual parts from memory.
+- Use master chunking: max 500 lines (target 450–500) with 20–40 lines overlap. Process chunks in order.
+- For each chunk: execute PART 1 checks fully → apply fixes → re-run PART 1 checks until PASS/N/A. Keep only compact capsule (≤ 2KB): status map, symbol names, chunk cursor.
+- Proceed to PART 2 only after all chunks pass; unload PART 1 before loading PART 2.
 **This is PART 1 of 3. See also:**
 - `Enhanced-Code-Review-Prompt-PART2.md` - Part 2 (Enhanced Sequential Audit Checklist continued)
 - `Enhanced-Code-Review-Prompt-PART3.md` - Part 3 (Correction Summary, Tools & Automation)
@@ -33,6 +38,31 @@
 **ONLY PROCEED TO PART 2 WHEN ALL PART 1 TASKS ARE COMPLETE.**
 
 ---
+
+## Non-Interactive Autonomy (No Approval Prompts)
+- Operate fully autonomously while executing this prompt: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
+- Provide brief informational status updates only; never block awaiting user input during PART 1 → PART 2 → PART 3 processing.
+- Continue applying fixes and re-validating per-part, per-chunk automatically until all parts are complete.
+- Do not output permission-seeking or interrogative phrases (e.g., "confirm", "okay to proceed", "shall I", "waiting for approval"). Use declarative status only.
+- Only pause if multiple corrective strategies exist with materially different trade-offs; in that rare case, present options with concise pros/cons and wait. Otherwise, proceed without interruption.
+- If any other instruction conflicts with this autonomy policy, this section takes precedence for workflows governed by this prompt.
+
+## Immediate Execution – No Plan-Only Output
+- Begin execution immediately on PART 1, Chunk 1; do not emit planning-only preambles.
+- Replace intent/prep language with action-tied results (e.g., "Part 1 Chunk 1 audited: 0 fixes" or "Applied 4 fixes; re-validated PASS").
+- After any "Starting" line, the next output must reflect a completed action on a concrete chunk/part.
+- If a chunk requires no changes, proceed immediately to the next chunk and state that in one line.
+- Keep updates terse: action → result → next action.
+
+---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from the master files (`prompts/Code_check_prompt_manual.txt` and `prompts/Advanced-CoT-Multi-Agent-Prompt.md`):
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
 ## Executive Overview
 

@@ -1396,6 +1396,12 @@ exec > >(tee -a "${LOG_FILE}") 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and
 # Log script start with detailed information
 echo "=============================================================================="
 echo "Build Script Start: $(date)"
+echo "Host shell diagnostics:"
+echo "  PID: $$, PPID: ${PPID:-unknown}"
+echo "  0: ${0:-unknown}"
+echo "  SHELL: ${SHELL:-unknown}"
+echo "  BASH_VERSION: ${BASH_VERSION:-n/a}"
+echo "  Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
 echo "Log File: ${LOG_FILE}"
 echo "Error Log: ${ERROR_LOG}"
 echo "Working directory: $(pwd)"
@@ -2577,8 +2583,19 @@ From: ${BASE_IMAGE}
     # Check if the build process can see the post script on the host
     /bin/echo "--- [DEBUG] Running 'ls -l' on host for xubuntu_robotics_base_post_ULTRA_CLEANED.sh:"
     /bin/ls -l xubuntu_robotics_base_post_ULTRA_CLEANED.sh
-
-    set -euo pipefail
+    
+    # Enable strict mode (portable across /bin/sh and /bin/bash)
+    if [ -n "${BASH_VERSION:-}" ]; then
+        set -euo pipefail
+    else
+        set -eu
+    fi
+    echo "[%setup] shell diagnostics:"
+    echo "  PID: $$, PPID: ${PPID:-unknown}"
+    echo "  SHELL: ${SHELL:-unknown}"
+    echo "  BASH_VERSION: ${BASH_VERSION:-n/a}"
+    echo "  0: ${0:-unknown}"
+    echo "  Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
     umask 022
 
     # NOTE: All version configurations loaded from config.sh (sourced at top of build script)
@@ -2630,7 +2647,19 @@ From: ${BASE_IMAGE}
 
 # === %post Section ===
 %post -c /bin/bash
-    set -euo pipefail
+    # Enable strict mode (portable across /bin/sh and /bin/bash)
+    if [ -n "${BASH_VERSION:-}" ]; then
+        set -euo pipefail
+    else
+        set -eu
+    fi
+    echo "[%post] shell diagnostics:"
+    echo "  PID: $$, PPID: ${PPID:-unknown}"
+    echo "  SHELL: ${SHELL:-unknown}"
+    echo "  BASH_VERSION: ${BASH_VERSION:-n/a}"
+    echo "  0: ${0:-unknown}"
+    echo "  Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
+    echo "  bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
     umask 022
     # Source configuration to make all variables available in %post section
     # This must happen BEFORE any validation code that uses these variables

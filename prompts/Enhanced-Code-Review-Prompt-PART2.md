@@ -1,6 +1,11 @@
 # ENHANCED Code Review Prompt: Robotics HPC Stack + Multi-Language - PART 2
 ## Industry Best Practices for Pre-Commit Checks
 
+HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 2)
+- Only this PART’s content may be loaded while executing this part. Unload other review/manual parts from memory.
+- Use master chunking: max 500 lines (target 450–500) with 20–40 lines overlap. Process chunks in order.
+- For each chunk: execute PART 2 checks fully → apply fixes → re-run PART 2 checks until PASS/N/A. Keep only compact capsule (≤ 2KB): status map, symbol names, chunk cursor.
+- Proceed to PART 3 only after all chunks pass; unload PART 2 before loading PART 3.
 **This is PART 2 of 3. See also:**
 - `Enhanced-Code-Review-Prompt-PART1.md` - Part 1 (Pre-Review Setup, Context Review, Checklist start)
 - `Enhanced-Code-Review-Prompt-PART3.md` - Part 3 (Correction Summary, Tools & Automation)
@@ -38,6 +43,14 @@
 **ONLY PROCEED TO PART 3 WHEN ALL PART 2 TASKS ARE COMPLETE.**
 
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from the master files (`prompts/Code_check_prompt_manual.txt` and `prompts/Advanced-CoT-Multi-Agent-Prompt.md`):
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
  * 
  * @par Example:

@@ -6,7 +6,22 @@
 - After completing this part, continue with PART 4: `Code_check_prompt_manual-PART4.txt`
 - **DO NOT SKIP**: All checklist items must be checked sequentially
 
+**HARD ENFORCEMENT – SINGLE-PART MEMORY & CHUNKING (PART 3)**:
+- Only PART 3 content may be loaded while executing this part. Unload other parts from memory.
+- Use the established chunks (max 500 lines, 20–40 overlap) and process in order.
+- For each chunk: run PART 3 checklist fully → apply fixes → re-run PART 3 checks until PASS/N/A.
+- Retain only the compact capsule (≤ 2KB) with checklist status, symbol names, chunk cursor; no large code buffers.
+- Proceed to PART 4 only after all chunks pass for PART 3, then unload PART 3 from memory.
+
 ---
+
+## Mandatory 20-Item Todo Batching (Strict Sequence)
+- This part inherits the batching protocol from `prompts/Code_check_prompt_manual.txt`:
+  - Generate the next 20 atomic todos from current plan/state,
+  - Execute strictly in order 1→20, one at a time, no interleaving or skipping,
+  - Mark each completed before starting the next,
+  - Only after all 20 complete, generate the next 20 and continue,
+  - Do not advance chunks/sections while a 20-item batch is incomplete.
 
     fi
     ```

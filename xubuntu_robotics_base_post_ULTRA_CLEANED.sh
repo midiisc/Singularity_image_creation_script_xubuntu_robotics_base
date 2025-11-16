@@ -19,6 +19,17 @@ set -o pipefail  # Always enable pipefail for better error detection
 set +e  # Start with -e disabled (will be enabled in critical sections)
 set +u  # Temporarily allow unset variables until config is loaded
 
+#-------------------------------------------------------------------------------
+# Shell diagnostics (help identify interpreter inside %post script)
+echo "---- [%post script] shell diagnostics ----"
+echo "PID: $$, PPID: ${PPID:-unknown}"
+echo "0: ${0:-unknown}"
+echo "SHELL: ${SHELL:-unknown}"
+echo "BASH_VERSION: ${BASH_VERSION:-n/a}"
+echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
+echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
+echo "------------------------------------------"
+
 #===============================================================================
 # CRITICAL: Source centralized configuration
 #===============================================================================
@@ -53,6 +64,18 @@ set -u
 DEFAULT_BLAS_PROVIDER="${DEFAULT_BLAS_PROVIDER:-MKL}"
 DEFAULT_BLAS_PROVIDER="$(printf '%s\n' "${DEFAULT_BLAS_PROVIDER}" | tr '[:lower:]' '[:upper:]')"
 export DEFAULT_BLAS_PROVIDER
+
+# Validate BLAS provider selection (A5a robustness + C5 defaults)
+case "${DEFAULT_BLAS_PROVIDER}" in
+    MKL|OPENBLAS)
+        # OK
+        ;;
+    *)
+        echo "⚠ Warning: Invalid DEFAULT_BLAS_PROVIDER='${DEFAULT_BLAS_PROVIDER}'. Falling back to 'MKL'."
+        DEFAULT_BLAS_PROVIDER="MKL"
+        export DEFAULT_BLAS_PROVIDER
+        ;;
+esac
 
 #===============================================================================
 # BUILD LOGGING SYSTEM
@@ -259,6 +282,11 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         (
             # Note: Cannot use 'local' in subshell, use regular variable
             sync_interval="${BUILD_LOG_SYNC_INTERVAL:-60}"
+            # Validate sync interval is a positive integer (A5a robustness)
+            if ! [[ "${sync_interval}" =~ ^[0-9]+$ ]] || [ $((10#${sync_interval})) -le 0 ]; then
+                echo "  ⚠ Warning: Invalid BUILD_LOG_SYNC_INTERVAL='${BUILD_LOG_SYNC_INTERVAL:-}', defaulting to 60" >&2
+                sync_interval=60
+            fi
             while true; do
                 sleep "${sync_interval}"
                 # Sync both log files to disk
@@ -1410,6 +1438,11 @@ ensure_cuda_repository_configured() {
   local keyring_pkg="cuda-keyring"
   local keyring_deb="${NVIDIA_KEYRING_DEB:-cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb}"
   local install_needed=false
+  
+  # Validate required inputs before proceeding (A5a robustness)
+  if [ -z "${NVIDIA_KEYRING_VER:-}" ] && [ -z "${NVIDIA_KEYRING_DEB:-}" ]; then
+      echo "[WARN] NVIDIA_KEYRING_VER/DEB not provided; using default filename pattern" >&2
+  fi
 
   local status_output
   status_output=$(dpkg-query -W -f='${Status}\n' "${keyring_pkg}" 2>/dev/null || echo "")
@@ -1424,7 +1457,12 @@ ensure_cuda_repository_configured() {
   fi
 
   local tmp_path="/tmp/${keyring_deb}"
-  local keyring_url="${CUDA_REPO_URL}/${keyring_deb}"
+  # Validate CUDA_REPO_URL
+  if [ -z "${CUDA_REPO_URL:-}" ]; then
+      echo "[ERROR] CUDA_REPO_URL is not set; cannot download CUDA keyring." >&2
+      return 1
+  fi
+  local keyring_url="${CUDA_REPO_URL%/}/${keyring_deb}"
 
   if [ -n "${cached_path}" ] && [ -f "${cached_path}" ]; then
       echo "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
