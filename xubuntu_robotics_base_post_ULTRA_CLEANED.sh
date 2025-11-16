@@ -4040,7 +4040,6 @@ if is_install_command "$@"; then
         echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
         # F2: Validate command substitution result
         # D3: Use here-string instead of echo | head (unsafe pipe pattern)
-        local error_preview
         error_preview=$(head -3 <<< "${APT_OUTPUT}" || echo "")
         if [ -n "${error_preview:-}" ]; then
             echo "[apt-aria] Error output: ${error_preview}"
@@ -4057,7 +4056,6 @@ if is_install_command "$@"; then
         sed "s/ //g" | \
         grep -E "^https?://.*\.deb$" | sort -u > "${URI_FILE}" 2>/dev/null && [ -s "${URI_FILE}" ]; then
         # F2: Validate command substitution result
-        local uri_count
         uri_count=$(wc -l < "${URI_FILE}" || echo "0")
         if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
             uri_count="0"
@@ -4087,7 +4085,6 @@ if is_install_command "$@"; then
     # J1: Validate file exists and is non-empty before operations
     if [ -s "${URI_FILE}" ]; then
         # F2: Validate command substitution result
-        local uri_count
         uri_count=$(wc -l < "${URI_FILE}" || echo "0")
         if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
             uri_count="0"
@@ -4131,7 +4128,7 @@ if is_install_command "$@"; then
         if [ -d "${CACHE}" ] && [ -x "${CACHE}" ]; then
             # Use find to safely handle glob expansion
             # H4: Validate find/exec operation result
-            local chattr_exit_code=0
+            chattr_exit_code=0
             find "${CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} + 2>/dev/null || chattr_exit_code=$?
             if [ "${chattr_exit_code:-0}" -eq 0 ]; then
                 echo "[apt-aria] chattr command executed successfully"

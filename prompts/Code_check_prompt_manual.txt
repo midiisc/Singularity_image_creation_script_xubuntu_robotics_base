@@ -23,6 +23,13 @@ When this master entry point is referenced, you MUST:
 8. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
 9. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts
 
+ONE-PART-AT-A-TIME ENFORCEMENT:
+- STRICT: Process exactly one part at a time. Do not interleave items from different parts.
+- COMPLETE-IN-PART: For the current part, perform all checks AND apply all corrections discovered in that part immediately.
+- RE-VALIDATE: After applying corrections for the current part, re-run that part’s checks to confirm PASS/N/A before proceeding.
+- CARRY FORWARD: Persist outputs/context needed by the next part (findings, symbol tables, flags), then continue to the next part.
+- NO SKIPPING: Do not load the next part until the current part is fully completed and re-validated.
+
 **CONTEXT MANAGEMENT**:
 - Each part is processed independently with full context (under 500 lines each)
 - Symbol tables and cross-references maintained across parts (as documented in each part)

@@ -23,6 +23,13 @@ When this master entry point is referenced, you MUST:
 8. **PROCESS ALL TASKS IN PART 3**: Execute all implementation, metrics, and final template tasks (sections 6-8) from PART 3
 9. **FINAL CONFIRMATION**: Verify all phases and sections have been processed across all parts
 
+ONE-PART-AT-A-TIME ENFORCEMENT:
+- STRICT: Work on exactly one part at a time; do not interleave sections across parts.
+- COMPLETE-IN-PART: Apply all fixes/corrections identified during a part before moving on.
+- RE-VALIDATE: Re-run that part’s validations/checklists to confirm PASS/N/A post-corrections.
+- CARRY FORWARD: Persist artifacts (findings, JSON outputs, symbol/context tables) for the next part.
+- BLOCK NEXT PART until the current part is fully completed and re-validated.
+
 **CONTEXT MANAGEMENT**:
 - Each part is processed independently with full context (under 500 lines each)
 - Cross-references maintained across parts (as documented in each part)

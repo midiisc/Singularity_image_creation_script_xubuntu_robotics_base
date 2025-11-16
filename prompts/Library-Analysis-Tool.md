@@ -26,6 +26,13 @@ When this master entry point is referenced, you MUST:
 10. **PROCESS ALL TASKS IN PART 3B**: Execute all remaining workflow and integration tasks from PART 3B
 11. **FINAL CONFIRMATION**: Verify all components have been processed across all parts
 
+ONE-PART-AT-A-TIME ENFORCEMENT:
+- STRICT: Execute one part at a time; do not interleave commands/analysis across parts.
+- COMPLETE-IN-PART: Apply all fixes and generate all outputs for the current part before advancing.
+- RE-VALIDATE: Re-run the current part’s checks to confirm PASS/N/A after corrections and artifact generation.
+- CARRY FORWARD: Persist generated artifacts (JSON, manifests, summaries) for consumption by subsequent parts.
+- BLOCK NEXT PART until the current part is fully completed and re-validated.
+
 **CONTEXT MANAGEMENT**:
 - Each part is processed independently with full context (under 500 lines each)
 - Script components and cross-references maintained across parts (as documented in each part)

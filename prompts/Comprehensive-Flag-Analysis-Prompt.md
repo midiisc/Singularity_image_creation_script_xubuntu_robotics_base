@@ -9,6 +9,13 @@
 
 ## Overview: 5-Phase Architecture
 
+SEQUENTIAL PHASE ENFORCEMENT:
+- STRICT: Execute one phase at a time (Phases 1→5) without interleaving.
+- COMPLETE-IN-PHASE: Finish all tasks and apply all corrections in the current phase before moving on.
+- RE-VALIDATE: Re-run the current phase’s validations to confirm PASS/N/A post-corrections and artifact generation.
+- CARRY FORWARD: Persist outputs (manifests, extracted flags, JSON databases) for the next phase.
+- BLOCK NEXT PHASE until the current phase is fully completed and re-validated.
+
 ### Phase 1: Discovery (Automated Preprocessing)
 - Recursively find ALL build-related files (CMakeLists.txt, *.cmake, changelogs, docs)
 - Categorize by type (cmake, config, changelog, docs)
