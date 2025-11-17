@@ -12773,13 +12773,29 @@ if ! cmake "${OPENCV_CMAKE_ARGS[@]}" ..; then
   if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
     export SuiteSparse_ROOT="${SAVED_SUITESPARSE_ROOT}"
   fi
-  echo "ERROR: Failed to configure OpenCV with CMake"
+  echo -e "${RED}ERROR: Failed to configure OpenCV with CMake${NC}"
+  if [ -f CMakeFiles/CMakeError.log ]; then
+    echo "---- CMakeFiles/CMakeError.log (last 200 lines) ----"
+    tail -n 200 CMakeFiles/CMakeError.log || true
+  else
+    echo "[INFO] CMakeFiles/CMakeError.log not found"
+  fi
+  if [ -f CMakeCache.txt ]; then
+    echo "---- Extracting LAPACK/MKL/TBB cache entries ----"
+    grep -E '^(LAPACK_|MKL_|TBB_)' CMakeCache.txt || true
+  fi
   exit 1
 fi
 
 if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
   export SuiteSparse_ROOT="${SAVED_SUITESPARSE_ROOT}"
 fi
+
+if [ -f CMakeCache.txt ]; then
+  echo "---- Verified LAPACK/MKL/TBB cache selections ----"
+  grep -E '^(LAPACK_IMPL|LAPACK_LIBRARIES|LAPACK_INCLUDE_DIR|LAPACK_CBLAS_H|LAPACK_LAPACKE_H|MKL_ROOT_DIR|MKL_INCLUDE_DIR|MKL_LIBRARIES|TBB_DIR|TBB_ROOT_DIR|TBB_INCLUDE_DIR|TBB_LIBRARIES)' CMakeCache.txt || true
+fi
+
 
 #--- Sub-block 20.9: Verify OpenCV CMake configuration ---
 # Critical: Check that key dependencies were detected and verify MKL (not OpenBLAS) and system TBB (not MKL TBB)
