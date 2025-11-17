@@ -214,9 +214,83 @@ J. Edge Cases & Resiliency
   - **CRITICAL**: Every directory path used (cd, create files in, list contents) MUST be checked for existence before first use
   - **MANDATORY CHECKS**:
     - **Before reading**: `[ -f "${FILE_PATH}" ] || { echo "[ERROR] File not found: ${FILE_PATH}"; exit 1; }`
-    - **Before writing**: `[ -d "$(dirname "${FILE_PATH}")" ] || mkdir -p "$(dirname "${FILE_PATH}")" || { echo "[ERROR] Cannot create directory for: ${FILE_PATH}"; exit 1; }`
+    - **Before writing**: Check parent directory exists, create if missing (see MISSING PARENT DIRECTORY HANDLING below)
     - **Before directory operations**: `[ -d "${DIR_PATH}" ] || { echo "[ERROR] Directory not found: ${DIR_PATH}"; exit 1; }`
     - **Before executing**: `[ -x "${SCRIPT_PATH}" ] || { echo "[ERROR] Script not executable: ${SCRIPT_PATH}"; exit 1; }`
+  - **MISSING PARENT DIRECTORY HANDLING** (MANDATORY - see master file for full requirements):
+    - **MANDATORY**: When writing to a file, if the parent directory does not exist:
+      - Show a warning message: `echo "[WARNING] Parent directory does not exist: ${PARENT_DIR}"`
+      - Create the parent directory: `mkdir -p "${PARENT_DIR}" || { echo "[ERROR] Failed to create parent directory: ${PARENT_DIR}"; return 1; }`
+      - Verify creation: `[ -d "${PARENT_DIR}" ] || { echo "[ERROR] Parent directory creation failed: ${PARENT_DIR}"; return 1; }`
+      - Log success: `echo "[INFO] Parent directory created successfully: ${PARENT_DIR}"`
+    - **EXAMPLE - CORRECT**:
+      ```bash
+      OUTPUT_FILE="/path/to/nonexistent/dir/file.txt"
+      PARENT_DIR=$(dirname "${OUTPUT_FILE}")
+      
+      if [ ! -d "${PARENT_DIR}" ]; then
+        echo "[WARNING] Parent directory does not exist: ${PARENT_DIR}"
+        echo "[INFO] Creating parent directory: ${PARENT_DIR}"
+        mkdir -p "${PARENT_DIR}" || {
+          echo "[ERROR] Failed to create parent directory: ${PARENT_DIR}"
+          return 1
+        }
+        echo "[INFO] Parent directory created successfully: ${PARENT_DIR}"
+      fi
+      
+      # Now safe to write to file
+      echo "content" > "${OUTPUT_FILE}"
+      ```
+    - **EXAMPLE - WRONG** (no parent directory check):
+      ```bash
+      # This will fail if /path/to/nonexistent/dir doesn't exist
+      echo "content" > "/path/to/nonexistent/dir/file.txt"
+      ```
+  - **MISSING FILE HANDLING** (MANDATORY - see master file for full requirements):
+    - **MANDATORY**: When a file is expected to exist but doesn't:
+      - Show a warning message: `echo "[WARNING] File does not exist: ${FILE_PATH}"`
+      - Create the file with appropriate content (if applicable)
+      - Create parent directory if needed (using MISSING PARENT DIRECTORY HANDLING above)
+      - Verify file creation: `[ -f "${FILE_PATH}" ] || { echo "[ERROR] Failed to create file: ${FILE_PATH}"; return 1; }`
+      - Log success: `echo "[INFO] File created successfully: ${FILE_PATH}"`
+    - **EXAMPLE - CORRECT**:
+      ```bash
+      CONFIG_FILE="/etc/myapp/config.conf"
+      
+      if [ ! -f "${CONFIG_FILE}" ]; then
+        echo "[WARNING] Configuration file does not exist: ${CONFIG_FILE}"
+        echo "[INFO] Creating configuration file: ${CONFIG_FILE}"
+        
+        # Create parent directory if needed
+        PARENT_DIR=$(dirname "${CONFIG_FILE}")
+        if [ ! -d "${PARENT_DIR}" ]; then
+          echo "[WARNING] Parent directory does not exist: ${PARENT_DIR}"
+          mkdir -p "${PARENT_DIR}" || {
+            echo "[ERROR] Failed to create parent directory: ${PARENT_DIR}"
+            return 1
+          }
+        fi
+        
+        # Create file with default content
+        cat > "${CONFIG_FILE}" << 'EOF'
+        # Default configuration
+        key=value
+        EOF
+        
+        # Verify file was created
+        if [ ! -f "${CONFIG_FILE}" ]; then
+          echo "[ERROR] Failed to create configuration file: ${CONFIG_FILE}"
+          return 1
+        fi
+        
+        echo "[INFO] Configuration file created successfully: ${CONFIG_FILE}"
+      fi
+      ```
+    - **EXAMPLE - WRONG** (no file existence check):
+      ```bash
+      # This will fail if file doesn't exist
+      source "/etc/myapp/config.conf"
+      ```
   - **REQUIRED VALIDATION PATTERNS**:
     - **File read**: `[ -r "${FILE}" ] && [ -f "${FILE}" ]` (readable AND regular file)
     - **File write**: `[ -w "$(dirname "${FILE}")" ]` (parent directory writable)
@@ -523,3 +597,28 @@ O. Testing, Validation & Graceful Degradation
     - `# shellcheck disable=SC2086,SC2155` - Disable multiple warnings
     - `# shellcheck source=path/to/file` - Tell ShellCheck where to find sourced file
     - `# shellcheck shell=bash` - Specify shell type if shebang is missing
+
+---
+
+**SHELLCHECK VALIDATION (MANDATORY AFTER PART 3 CORRECTIONS)**:
+- **CRITICAL REQUIREMENT**: After completing all PART 3 checklist items (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14) and applying all corrections, you MUST run ShellCheck validation before proceeding to PART 4.
+- **VALIDATION WORKFLOW** (see O5 above for detailed requirements):
+  1. Run ShellCheck on the corrected chunk(s): `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
+  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155, SC2164, SC2207)
+  3. Fix ALL ShellCheck issues found (zero tolerance policy)
+  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
+  5. Repeat until ShellCheck reports zero errors and zero warnings
+  6. Document all ShellCheck fixes with error codes in corrections summary
+- **COMMON SHELLCHECK ISSUES IN PART 3 SCOPE**:
+  - SC2164: Use `cd ... || exit` or `cd ... || return` (I1, N1) → Fix: `cd "${DIR}" || return 1`
+  - SC2207: Prefer `mapfile` or `read -a` (I1) → Fix: Use `mapfile -t array < <(command)` instead of `array=($(command))`
+  - SC2001: Use `${var//search/replace}` instead of `sed` (I1) → Fix: Use parameter expansion when possible
+  - SC2154: Variable referenced but not assigned (J1, K1) → Fix: Check for typos, ensure variable is set
+  - SC1090/SC1091: Can't follow sourced file (L1) → Fix: Add `# shellcheck source=path` directive
+  - SC2145: Argument mixes string and array (M1) → Fix: Use `"${array[@]}"` or `"${array[*]}"` consistently
+- **INTEGRATION**: All corrections applied during PART 3 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
+- **BLOCKING**: Do NOT proceed to PART 4 until PART 3 corrections are complete AND ShellCheck validation passes with zero errors/warnings.
+
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 3 of 4. After completing all checklist items in this part (continues H, covers I-J-K-L-M-O partial) AND ShellCheck validation passes, continue with PART 4: `Code_check_prompt_manual-PART4.txt` (continues O, covers P, Steps 3-4, Protocols).
+
+**DO NOT SKIP**: All checklist items must be checked sequentially. Complete PART 3 (including ShellCheck validation) before proceeding to PART 4.

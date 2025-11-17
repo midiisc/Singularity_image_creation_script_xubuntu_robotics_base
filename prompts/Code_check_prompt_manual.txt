@@ -15,39 +15,46 @@ When this master entry point is referenced, you MUST:
 
 1. **LOAD PART 1 FIRST**: Read `prompts/Code_check_prompt_manual-PART1.txt` completely
 2. **PROCESS ALL CHECKLIST ITEMS IN PART 1**: Execute all checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) from PART 1
-3. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
-4. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
-5. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
-6. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14) from PART 3
-7. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
-8. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
-9. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts
+3. **SHELLCHECK VALIDATION AFTER PART 1**: After all PART 1 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 2.
+4. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
+5. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
+6. **SHELLCHECK VALIDATION AFTER PART 2**: After all PART 2 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 3.
+7. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
+8. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14) from PART 3
+9. **SHELLCHECK VALIDATION AFTER PART 3**: After all PART 3 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 4.
+10. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
+11. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
+12. **SHELLCHECK VALIDATION AFTER PART 4**: After all PART 4 corrections are complete, run final ShellCheck validation on the entire corrected script. Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings.
+13. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts AND ShellCheck validation passes with zero errors/warnings
 
 **HARD ENFORCEMENT – SINGLE-PART MEMORY PROTOCOL**:
 - Exactly one part (PART 1, 2, 3, or 4) may be resident in working memory at any time.
 - Before loading a part, explicitly unload all prior part content from memory.
-- Retain only a compact state capsule (≤ 2KB) containing:
+- Retain only a compact state capsule containing:
   - Minimal pass/fail/N/A map of completed checklist items,
-  - A tiny symbol/context ledger (names only, no code) necessary for continuity,
+  - A symbol/context ledger (names only, no code) necessary for continuity,
   - Active chunk cursor (chunk index and line range).
-- After completing a part for all chunks, purge that part’s content from memory before loading the next part.
+- After completing a part for all chunks, purge that part's content from memory before loading the next part.
 - Do not interleave or co-load multiple parts.
 
 **HARD ENFORCEMENT – CODE CHUNKING (MAX ~500 LINES)**:
 - Before any checklist processing, split the input code into chunks of max 500 lines (target 450–500), with 20–40 lines of overlap between adjacent chunks.
 - Preserve natural boundaries where feasible (functions/guards/loops/case). If boundaries would exceed 500 lines, honor the size limit and rely on overlap for context.
 - Process chunks in order. For each chunk:
-  1) Run the currently loaded part’s checklist across the entire chunk,
+  1) Run the currently loaded part's checklist across the entire chunk,
   2) Apply all necessary corrections in-place,
-  3) Re-run the same part’s checks on the corrected chunk until PASS/N/A,
-  4) Update the compact state capsule (no large code stored).
-- Only after all chunks pass for the current part may you unload it and proceed to the next part.
+  3) Re-run the same part's checks on the corrected chunk until PASS/N/A,
+  4) Run ShellCheck validation on the corrected chunk (after all checklist corrections),
+  5) Fix any ShellCheck issues found,
+  6) Re-run ShellCheck until zero errors/warnings,
+  7) Update the compact state capsule (no large code stored).
+- Only after all chunks pass for the current part AND all chunks are ShellCheck compliant may you unload it and proceed to the next part.
 
 **CHUNK LOADING/UNLOADING PROTOCOL (MANDATORY)**:
 - Exactly one code chunk may be resident in working memory at any time.
 - On chunk load:
   1) Purge all non-capsule memory from any previously processed chunk(s),
-  2) Rehydrate context strictly from the compact state capsule (≤ 2KB) plus the newly loaded chunk’s text,
+  2) Rehydrate context strictly from the compact state capsule plus the newly loaded chunk's text,
   3) Ensure the active range is limited to the current chunk lines, including only the designated 20–40 line overlap.
 - During processing:
   - Do not reference code outside the current chunk window except the permitted overlap.
@@ -59,7 +66,7 @@ When this master entry point is referenced, you MUST:
   3) Proceed to load the next chunk and rehydrate only from the capsule.
 
 **CHUNK MEMORY SAFEGUARDS (STRICT)**:
-- Memory budget for the capsule is capped at 2KB; do not exceed.
+- Capsule must contain only minimal metadata: pass/fail maps, symbol names (not code), and cursor positions.
 - No speculative multi-chunk loading, peeking, or pre-tokenization is allowed.
 - No retention of prior chunk diffs, patches, or ASTs; only capsule metadata persists.
 - Overlap discipline:
@@ -88,9 +95,10 @@ When this master entry point is referenced, you MUST:
 ONE-PART-AT-A-TIME ENFORCEMENT:
 - STRICT: Process exactly one part at a time. Do not interleave items from different parts.
 - COMPLETE-IN-PART: For the current part, perform all checks AND apply all corrections discovered in that part immediately.
-- RE-VALIDATE: After applying corrections for the current part, re-run that part’s checks to confirm PASS/N/A before proceeding.
+- RE-VALIDATE: After applying corrections for the current part, re-run that part's checks to confirm PASS/N/A before proceeding.
+- SHELLCHECK-VALIDATE: After all part corrections are complete, run ShellCheck validation. Fix all ShellCheck issues. Re-run ShellCheck until zero errors/warnings. Only then proceed to next part.
 - CARRY FORWARD: Persist outputs/context needed by the next part (findings, symbol tables, flags), then continue to the next part.
-- NO SKIPPING: Do not load the next part until the current part is fully completed and re-validated.
+- NO SKIPPING: Do not load the next part until the current part is fully completed, re-validated, AND ShellCheck compliant.
 
 **CONTEXT MANAGEMENT**:
 - Each part is processed independently with full context (under 500 lines each)
@@ -130,12 +138,151 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 - Suppress redundant status. Only report: action taken → result → next chunk/part in progress.
 - If a chunk requires no corrections, proceed immediately to the next chunk and state so in one line.
 
+**SHELLCHECK COMPLIANCE REQUIREMENTS (MANDATORY)**:
+- **INDUSTRY BEST PRACTICE**: ShellCheck is the industry-standard static analysis tool for shell scripts. All corrections MUST be ShellCheck compliant.
+- **ZERO TOLERANCE POLICY**: Scripts MUST pass ShellCheck with zero errors and zero warnings before audit completion.
+- **PART-LEVEL VALIDATION**: ShellCheck validation runs at the END of each part's processing, AFTER all other corrections are applied:
+  - After PART 1 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 2
+  - After PART 2 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 3
+  - After PART 3 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 4
+  - After PART 4 corrections complete → Run final ShellCheck → Fix all issues → Re-validate → Complete audit
+- **SHELLCHECK COMMAND OPTIONS**:
+  - For standalone scripts: `shellcheck script.sh` or `shellcheck -s bash script.sh` (if Bash-specific)
+  - For sourced scripts: `shellcheck -x script.sh` (allows external sourcing)
+  - For POSIX compliance: `shellcheck -s sh script.sh` (strict POSIX mode)
+  - Machine-readable output: `shellcheck --format=gcc script.sh` (for CI/CD integration)
+- **AUTO-FIX WORKFLOW**:
+  1. Run ShellCheck: `shellcheck script.sh` (or appropriate options)
+  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155)
+  3. Apply corrections for each ShellCheck issue
+  4. Re-run ShellCheck to verify fixes
+  5. Repeat until zero errors and zero warnings
+  6. Document all fixes with ShellCheck error codes in corrections summary
+- **COMMON SHELLCHECK ISSUES TO FIX**:
+  - SC2086: Double quote to prevent globbing and word splitting
+  - SC2155: Declare and assign separately to avoid masking return values
+  - SC1090: Can't follow non-constant source (use `# shellcheck source=path` directive)
+  - SC1091: Not following sourced file (use `# shellcheck source=path` directive)
+  - SC2001: Use `${var//search/replace}` instead of `sed`
+  - SC2004: `$`/`${}` is unnecessary on arithmetic variables
+  - SC2006: Use `$(..)` instead of backticks
+  - SC2015: Note that `A && B || C` is not `if-then-else`
+  - SC2034: Variable appears unused (verify or remove)
+  - SC2046: Quote this to prevent word splitting
+  - SC2068: Double quote array expansions to avoid re-splitting elements
+  - SC2086: Double quote to prevent globbing and word splitting
+  - SC2119: Use `"$@"` if function's `$1` should mean script's `$1`
+  - SC2120: Function doesn't end with `return` statement
+  - SC2128: Expanding an array without an index only gives the first element
+  - SC2145: Argument mixes string and array (use `"${array[@]}"` or `"${array[*]}"`)
+  - SC2154: Variable is referenced but not assigned (check for typos)
+  - SC2164: Use `cd ... || exit` or `cd ... || return` in case `cd` fails
+  - SC2181: Check exit code directly with `if mycmd;`, not indirectly with `$?`
+  - SC2207: Prefer `mapfile` or `read -a` to split command output (or quote to avoid splitting)
+- **INTEGRATION WITH CORRECTIONS**:
+  - All corrections applied during checklist processing (A1-P5) MUST be ShellCheck compliant
+  - If a correction introduces a ShellCheck issue, fix it immediately
+  - ShellCheck validation at part end ensures all corrections are compliant
+  - Final ShellCheck validation ensures the entire script is compliant
+- **DOCUMENTATION REQUIREMENT**: All ShellCheck fixes MUST be documented with error codes in the corrections summary (e.g., "SC2086: Fixed unquoted variable in line 42")
+
+**FILE AND DIRECTORY HANDLING REQUIREMENTS (MANDATORY)**:
+- **MISSING PARENT DIRECTORY HANDLING**: When writing to a file or creating a directory, if the parent directory does not exist:
+  - **MANDATORY**: Show a warning message indicating the parent directory is missing
+  - **MANDATORY**: Create the parent directory (and any intermediate directories) using `mkdir -p`
+  - **MANDATORY**: Verify the directory was created successfully before proceeding
+  - **EXAMPLE - CORRECT**:
+    ```bash
+    OUTPUT_FILE="/path/to/nonexistent/dir/file.txt"
+    PARENT_DIR=$(dirname "${OUTPUT_FILE}")
+    
+    if [ ! -d "${PARENT_DIR}" ]; then
+      echo "[WARNING] Parent directory does not exist: ${PARENT_DIR}"
+      echo "[INFO] Creating parent directory: ${PARENT_DIR}"
+      mkdir -p "${PARENT_DIR}" || {
+        echo "[ERROR] Failed to create parent directory: ${PARENT_DIR}"
+        return 1
+      }
+      echo "[INFO] Parent directory created successfully: ${PARENT_DIR}"
+    fi
+    
+    # Now safe to write to file
+    echo "content" > "${OUTPUT_FILE}"
+    ```
+  - **EXAMPLE - WRONG** (no parent directory check):
+    ```bash
+    # This will fail if /path/to/nonexistent/dir doesn't exist
+    echo "content" > "/path/to/nonexistent/dir/file.txt"
+    ```
+- **MISSING FILE HANDLING**: When a file is expected to exist but doesn't:
+  - **MANDATORY**: Show a warning message indicating the file is missing
+  - **MANDATORY**: Create the file with appropriate permissions and content (if applicable)
+  - **MANDATORY**: Verify the file was created successfully before proceeding
+  - **EXAMPLE - CORRECT**:
+    ```bash
+    CONFIG_FILE="/etc/myapp/config.conf"
+    
+    if [ ! -f "${CONFIG_FILE}" ]; then
+      echo "[WARNING] Configuration file does not exist: ${CONFIG_FILE}"
+      echo "[INFO] Creating configuration file: ${CONFIG_FILE}"
+      
+      # Create parent directory if needed
+      PARENT_DIR=$(dirname "${CONFIG_FILE}")
+      if [ ! -d "${PARENT_DIR}" ]; then
+        mkdir -p "${PARENT_DIR}" || {
+          echo "[ERROR] Failed to create parent directory: ${PARENT_DIR}"
+          return 1
+        }
+      fi
+      
+      # Create file with default content
+      cat > "${CONFIG_FILE}" << 'EOF'
+      # Default configuration
+      key=value
+      EOF
+      
+      # Verify file was created
+      if [ ! -f "${CONFIG_FILE}" ]; then
+        echo "[ERROR] Failed to create configuration file: ${CONFIG_FILE}"
+        return 1
+      fi
+      
+      echo "[INFO] Configuration file created successfully: ${CONFIG_FILE}"
+    fi
+    ```
+  - **EXAMPLE - WRONG** (no file existence check):
+    ```bash
+    # This will fail if file doesn't exist
+    source "/etc/myapp/config.conf"
+    ```
+- **INTEGRATION WITH ERROR HANDLING**: File and directory creation MUST be integrated with proper error handling:
+  - Check exit codes of `mkdir -p` and file creation operations
+  - Provide clear error messages if creation fails
+  - Use appropriate return codes or exit codes on failure
+  - Log warnings and actions taken for auditability
+- **PERMISSIONS CONSIDERATION**: When creating directories or files:
+  - Use appropriate permissions (consider `umask` and security requirements)
+  - For sensitive files/directories, set restrictive permissions explicitly
+  - Document permission choices in comments when non-standard
+- **APPLICABILITY**: These requirements apply to:
+  - File write operations (`>`, `>>`, `tee`, etc.)
+  - Directory creation operations (`mkdir`, `install -d`, etc.)
+  - Configuration file handling
+  - Log file creation
+  - Temporary file/directory creation (though `mktemp` handles this automatically)
+  - Any operation that assumes a file or directory exists
+
 **VERIFICATION**:
 After processing all parts, confirm:
 - ✅ PART 1 checklist items processed (A1-A6, B1-B3, C1-C6, D1-D4 partial)
+- ✅ PART 1 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 2 checklist items processed (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial)
+- ✅ PART 2 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 3 checklist items processed (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14)
+- ✅ PART 3 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 4 checklist items processed (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
+- ✅ PART 4 ShellCheck validation passed (zero errors, zero warnings)
+- ✅ Final ShellCheck validation passed on entire script (zero errors, zero warnings)
 - ✅ All checklist items A1 through P5 checked sequentially without skipping any
 
 ---

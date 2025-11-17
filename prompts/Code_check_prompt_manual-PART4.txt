@@ -88,6 +88,28 @@ P. Build Flag Analysis & CMake Configuration
   - **REQUIRED**: Troubleshooting guide with common errors and concrete solutions
   - **REQUIRED**: Analysis report with completeness metrics and validation results
 
+---
+
+**FINAL SHELLCHECK VALIDATION (MANDATORY AFTER PART 4 CORRECTIONS)**:
+- **CRITICAL REQUIREMENT**: After completing all PART 4 checklist items (N1-N5, O1-O5, P1-P5) and applying all corrections, you MUST run final ShellCheck validation on the ENTIRE corrected script before proceeding to Steps 3-4.
+- **FINAL VALIDATION WORKFLOW** (see O5 in PART 3 for detailed requirements):
+  1. Run ShellCheck on the ENTIRE corrected script: `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
+  2. Capture all errors and warnings with error codes across the entire script
+  3. Fix ALL ShellCheck issues found (zero tolerance policy)
+  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
+  5. Repeat until ShellCheck reports zero errors and zero warnings for the ENTIRE script
+  6. Document all ShellCheck fixes with error codes in corrections summary (Step 3)
+  7. Report ShellCheck status in Step 4: exit code, total errors/warnings found, auto-fixed count, remaining issues (if any)
+- **COMMON SHELLCHECK ISSUES IN PART 4 SCOPE**:
+  - SC2034: Variable appears unused (N5) → Fix: Remove unused variable or mark with `# shellcheck disable=SC2034` if intentionally unused
+  - SC2120: Function doesn't end with return (P1-P5) → Fix: Add explicit `return 0` or `return` at function end
+  - SC2145: Argument mixes string and array (P1-P5) → Fix: Use `"${array[@]}"` or `"${array[*]}"` consistently
+  - SC1090/SC1091: Can't follow sourced file → Fix: Add `# shellcheck source=path` directive
+  - Any remaining issues from PART 1, PART 2, PART 3 that were not caught earlier
+- **INTEGRATION**: All corrections applied during PART 4 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
+- **BLOCKING**: Do NOT proceed to Steps 3-4 until PART 4 corrections are complete AND final ShellCheck validation passes with zero errors/warnings on the ENTIRE script.
+- **FINAL VERIFICATION**: The entire script must pass ShellCheck with zero errors and zero warnings before the audit is considered complete.
+
 Step 3 – Corrections Summary
 1. List each correction with the corresponding checklist ID(s) (e.g., "C1, D1: Added default guard for `$FOO` and quoted expansion"). Reference line numbers for clarity.
 2. Provide the corrected Bash code snippet for the audited block.
@@ -97,7 +119,7 @@ Step 3 – Corrections Summary
 6. Reference any commands/tools you used (e.g., `rg "dpkg -l"`, `ctags`, `grep -nE` for variable declarations per C6) so the audit trail shows how issues were validated.
 
 Step 4 – Finalization
-1. Confirm explicitly that every checklist item from A1 through O5 (including ShellCheck validation) has been evaluated and passes after corrections.
+1. Confirm explicitly that every checklist item from A1 through P5 (including ShellCheck validation at each part level AND final ShellCheck validation) has been evaluated and passes after corrections.
 2. Note any residual concerns or follow-up recommendations (monitoring, tests, manual validation), and summarize how chunk splitting preserved context, including how shared symbols were tracked, if applicable.
 3. State: "Block fully audited and corrected."
 4. Reaffirm that no new files were created for the purpose of this review, and that all symbols now have a single declaration positioned before first use.

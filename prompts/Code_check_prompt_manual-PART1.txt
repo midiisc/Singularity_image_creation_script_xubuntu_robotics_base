@@ -594,6 +594,24 @@ D. Quoting & Expansion Safety
 
 ---
 
-**SEQUENTIAL CHECKING ENFORCED**: This is PART 1 of 4. After completing all checklist items in this part (A-B-C-D partial), continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H).
+**SHELLCHECK VALIDATION (MANDATORY AFTER PART 1 CORRECTIONS)**:
+- **CRITICAL REQUIREMENT**: After completing all PART 1 checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) and applying all corrections, you MUST run ShellCheck validation before proceeding to PART 2.
+- **VALIDATION WORKFLOW**:
+  1. Run ShellCheck on the corrected chunk(s): `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
+  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155)
+  3. Fix ALL ShellCheck issues found (zero tolerance policy)
+  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
+  5. Repeat until ShellCheck reports zero errors and zero warnings
+  6. Document all ShellCheck fixes with error codes in corrections summary
+- **COMMON SHELLCHECK ISSUES IN PART 1 SCOPE**:
+  - SC2086: Unquoted variables (A5, D1) → Fix by quoting: `"${VAR}"`
+  - SC2155: Declare and assign separately (C1) → Fix: `local result; result=$(command)`
+  - SC2006: Backticks instead of `$()` (A3) → Fix: Replace `` `command` `` with `$(command)`
+  - SC2034: Variable appears unused (C6) → Verify or remove unused variables
+  - SC1090/SC1091: Can't follow sourced file → Add `# shellcheck source=path` directive
+- **INTEGRATION**: All corrections applied during PART 1 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
+- **BLOCKING**: Do NOT proceed to PART 2 until PART 1 corrections are complete AND ShellCheck validation passes with zero errors/warnings.
 
-**DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts. Complete PART 1 before proceeding to PART 2.
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 1 of 4. After completing all checklist items in this part (A-B-C-D partial) AND ShellCheck validation passes, continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H).
+
+**DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts. Complete PART 1 (including ShellCheck validation) before proceeding to PART 2.
