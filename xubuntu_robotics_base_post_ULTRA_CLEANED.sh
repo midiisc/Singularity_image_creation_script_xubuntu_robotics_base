@@ -12090,9 +12090,19 @@ GCC_VERSION_FOR_OPENCV=""
 GCC_MAJOR_FOR_OPENCV=""
 if command -v gcc-12 &>/dev/null; then
     # Use gcc-12 if specified, otherwise check default gcc
+    # F2: Validate result format after command substitution with || echo ""
     GCC_VERSION_FOR_OPENCV=$(gcc-12 --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # Validate version format matches expected pattern (e.g., "12.3")
+    if [ -n "${GCC_VERSION_FOR_OPENCV}" ] && ! [[ "${GCC_VERSION_FOR_OPENCV}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+      GCC_VERSION_FOR_OPENCV=""
+    fi
 elif command -v gcc &>/dev/null; then
+    # F2: Validate result format after command substitution with || echo ""
     GCC_VERSION_FOR_OPENCV=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # Validate version format matches expected pattern (e.g., "12.3")
+    if [ -n "${GCC_VERSION_FOR_OPENCV}" ] && ! [[ "${GCC_VERSION_FOR_OPENCV}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+      GCC_VERSION_FOR_OPENCV=""
+    fi
 fi
 
 if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
@@ -12111,7 +12121,9 @@ if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
         # GCC 12+ generally works better, but keep basic compatibility flags
         OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
         OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
+    # ENDIF: GCC_MAJOR_FOR_OPENCV version check
     fi
+# ENDIF: GCC_VERSION_FOR_OPENCV check
 fi
 
 # MKL Configuration for OpenCV (CRITICAL: Use threaded MKL, not sequential)
@@ -12285,7 +12297,8 @@ fi
 # CMAKE_IGNORE_PATH prevents CMake from finding MKL TBB when searching for TBB
 if [ -d "/opt/intel/oneapi/tbb" ]; then
   OPENCV_CMAKE_ARGS+=("-DCMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb")
-  echo "[INFO] Excluding MKL TBB from search path (using system TBB)"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "[INFO] Excluding MKL TBB from search path (using system TBB)"
 fi
 # CRITICAL: Also add CMAKE_LIBRARY_PATH to help detection
 # This path helps CMake find libraries even if CMAKE_PREFIX_PATH is not sufficient
@@ -12295,54 +12308,62 @@ fi
 # CRITICAL: Verify MKL headers exist before CMake configuration
 # OpenCV's OpenCVFindLAPACK.cmake requires mkl_cblas.h and mkl_lapack.h for LAPACK detection
 # This verification prevents silent failures and provides clear error messages
-echo "Verifying MKL installation for OpenCV LAPACK detection..."
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying MKL installation for OpenCV LAPACK detection..."
 MKL_HEADERS_OK=true
 if [ -z "${MKLROOT:-}" ]; then
-  echo -e "  ${RED}✗ ERROR: MKLROOT is not set${NC}"
+  printf '%s\n' "  ${RED}✗ ERROR: MKLROOT is not set${NC}"
   MKL_HEADERS_OK=false
 else
   MKL_INCLUDE_DIR="${MKLROOT}/include"
   if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
-    echo -e "  ${RED}✗ ERROR: MKL include directory not found: ${MKL_INCLUDE_DIR}${NC}"
+    printf '%s\n' "  ${RED}✗ ERROR: MKL include directory not found: ${MKL_INCLUDE_DIR}${NC}"
     MKL_HEADERS_OK=false
   else
     # Verify required LAPACK headers exist
     if [ ! -f "${MKL_INCLUDE_DIR}/mkl_cblas.h" ]; then
-      echo -e "  ${RED}✗ ERROR: MKL CBLAS header not found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
+      printf '%s\n' "  ${RED}✗ ERROR: MKL CBLAS header not found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
       MKL_HEADERS_OK=false
     else
-      echo -e "  ${GREEN}✓ MKL CBLAS header found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
+      printf '%s\n' "  ${GREEN}✓ MKL CBLAS header found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
+    # ENDIF: mkl_cblas.h existence check
     fi
     if [ ! -f "${MKL_INCLUDE_DIR}/mkl_lapack.h" ]; then
-      echo -e "  ${RED}✗ ERROR: MKL LAPACK header not found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
+      printf '%s\n' "  ${RED}✗ ERROR: MKL LAPACK header not found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
       MKL_HEADERS_OK=false
     else
-      echo -e "  ${GREEN}✓ MKL LAPACK header found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
+      printf '%s\n' "  ${GREEN}✓ MKL LAPACK header found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
+    # ENDIF: mkl_lapack.h existence check
     fi
     # Verify MKL libraries exist
     MKL_LIB_DIR="${MKLROOT}/lib/intel64"
     if [ ! -d "${MKL_LIB_DIR}" ]; then
-      echo -e "  ${RED}✗ ERROR: MKL library directory not found: ${MKL_LIB_DIR}${NC}"
+      printf '%s\n' "  ${RED}✗ ERROR: MKL library directory not found: ${MKL_LIB_DIR}${NC}"
       MKL_HEADERS_OK=false
     else
       # Check for either libmkl_rt.so or component libraries
       if [ -f "${MKL_LIB_DIR}/libmkl_rt.so" ]; then
-        echo -e "  ${GREEN}✓ MKL runtime library found: ${MKL_LIB_DIR}/libmkl_rt.so${NC}"
+        printf '%s\n' "  ${GREEN}✓ MKL runtime library found: ${MKL_LIB_DIR}/libmkl_rt.so${NC}"
       elif [ -f "${MKL_LIB_DIR}/libmkl_intel_lp64.so" ] && [ -f "${MKL_LIB_DIR}/libmkl_core.so" ] && [ -f "${MKL_LIB_DIR}/libmkl_gnu_thread.so" ]; then
-        echo -e "  ${GREEN}✓ MKL component libraries found (libmkl_intel_lp64.so, libmkl_core.so, libmkl_gnu_thread.so)${NC}"
+        printf '%s\n' "  ${GREEN}✓ MKL component libraries found (libmkl_intel_lp64.so, libmkl_core.so, libmkl_gnu_thread.so)${NC}"
       else
-        echo -e "  ${RED}✗ ERROR: MKL libraries not found in ${MKL_LIB_DIR}${NC}"
+        printf '%s\n' "  ${RED}✗ ERROR: MKL libraries not found in ${MKL_LIB_DIR}${NC}"
         MKL_HEADERS_OK=false
+      # ENDIF: MKL library existence check
       fi
+    # ENDIF: MKL_LIB_DIR existence check
     fi
+  # ENDIF: MKL_INCLUDE_DIR existence check
   fi
+# ENDIF: MKLROOT check
 fi
 
 # CRITICAL: Comprehensive TBB detection and verification for OpenCV
 # OpenCV's OpenCVDetectTBB.cmake searches for TBB via find_package(TBB) or environment
 # This verification queries the local system to find all TBB components and sets all paths explicitly
 # Strategy: Multi-phase discovery (CMake config → library → headers → version headers) with system query
-echo "Verifying TBB installation for OpenCV TBB detection (comprehensive system query)..."
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying TBB installation for OpenCV TBB detection (comprehensive system query)..."
 TBB_OK=true
 
 # Phase 1: Discover TBB CMake config directory (preferred method for modern TBB)
@@ -12359,34 +12380,41 @@ TBB_CMAKE_CANDIDATES=(
   "/usr/local/lib/x86_64-linux-gnu/cmake/tbb"
 )
 
-echo "  Phase 1: Searching for TBB CMake config directory..."
+printf '%s\n' "  Phase 1: Searching for TBB CMake config directory..."
 for candidate_dir in "${TBB_CMAKE_CANDIDATES[@]}"; do
   if [ -d "${candidate_dir}" ] && { [ -f "${candidate_dir}/TBBConfig.cmake" ] || [ -f "${candidate_dir}/tbb-config.cmake" ] || [ -f "${candidate_dir}/TBBConfigVersion.cmake" ]; }; then
     TBB_CMAKE_DIR="${candidate_dir}"
-    echo -e "  ${GREEN}✓ TBB CMake config found at: ${TBB_CMAKE_DIR}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB CMake config found at: ${TBB_CMAKE_DIR}${NC}"
     break
+  # ENDIF: TBB CMake config file check
   fi
+# ENDFOR: candidate_dir
 done
 
 # Fallback: Search entire /usr tree for TBB CMake config (comprehensive system query)
 if [ -z "${TBB_CMAKE_DIR}" ]; then
-  echo "  Searching entire /usr tree for TBB CMake config..."
+  printf '%s\n' "  Searching entire /usr tree for TBB CMake config..."
   tbb_found_dir=""
   while IFS= read -r -d '' found_path && [ -z "${tbb_found_dir:-}" ]; do
     if [ -n "${found_path:-}" ] && [ -d "${found_path}" ]; then
       # Verify it contains TBB CMake config files
       if [ -f "${found_path}/TBBConfig.cmake" ] || [ -f "${found_path}/tbb-config.cmake" ] || [ -f "${found_path}/TBBConfigVersion.cmake" ]; then
         tbb_found_dir="${found_path}"
+      # ENDIF: TBB CMake config file check
       fi
+    # ENDIF: found_path validation check
     fi
+  # ENDWHILE: TBB CMake config search loop
   done < <(find /usr -type d \( -path "*/cmake/TBB" -o -path "*/cmake/tbb" \) -print0 2>/dev/null || true)
   
   if [ -n "${tbb_found_dir:-}" ] && [ -d "${tbb_found_dir}" ]; then
     TBB_CMAKE_DIR="${tbb_found_dir}"
-    echo -e "  ${GREEN}✓ TBB CMake config found via system search: ${TBB_CMAKE_DIR}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB CMake config found via system search: ${TBB_CMAKE_DIR}${NC}"
   else
-    echo -e "  ${YELLOW}⚠ TBB CMake config directory not found (will use explicit TBB_LIBRARIES and TBB_INCLUDE_DIR)${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ TBB CMake config directory not found (will use explicit TBB_LIBRARIES and TBB_INCLUDE_DIR)${NC}"
+  # ENDIF: tbb_found_dir validation check
   fi
+# ENDIF: TBB_CMAKE_DIR empty check
 fi
 
 # Phase 2: Discover TBB library (query system for all possible locations)
@@ -12404,24 +12432,24 @@ TBB_LIB_CANDIDATES=(
   "/usr/local/lib/x86_64-linux-gnu/libtbb.so.12"
 )
 
-echo "  Phase 2: Searching for TBB library..."
+printf '%s\n' "  Phase 2: Searching for TBB library..."
 for candidate_lib in "${TBB_LIB_CANDIDATES[@]}"; do
   if [ -f "${candidate_lib}" ]; then
     TBB_LIB_PATH="${candidate_lib}"
-    echo -e "  ${GREEN}✓ TBB library found at: ${TBB_LIB_PATH}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB library found at: ${TBB_LIB_PATH}${NC}"
     break
   fi
 done
 
 # Fallback: Search entire /usr tree for libtbb.so (comprehensive system query)
 if [ -z "${TBB_LIB_PATH}" ]; then
-  echo "  Searching entire /usr tree for libtbb.so..."
+  printf '%s\n' "  Searching entire /usr tree for libtbb.so..."
   tbb_lib_found=$(find /usr/lib* /usr/local/lib* -type f \( -name "libtbb.so" -o -name "libtbb.so.*" \) 2>/dev/null | head -1 || echo "")
   if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
     TBB_LIB_PATH="${tbb_lib_found}"
-    echo -e "  ${GREEN}✓ TBB library found via system search: ${TBB_LIB_PATH}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB library found via system search: ${TBB_LIB_PATH}${NC}"
   else
-    echo -e "  ${RED}✗ ERROR: TBB library not found${NC}"
+    printf '%s\n' "  ${RED}✗ ERROR: TBB library not found${NC}"
     TBB_OK=false
   fi
 fi
@@ -12435,24 +12463,24 @@ TBB_INCLUDE_CANDIDATES=(
   "/usr/include/oneapi/tbb"
 )
 
-echo "  Phase 3: Searching for TBB include directory..."
+printf '%s\n' "  Phase 3: Searching for TBB include directory..."
 for candidate_include in "${TBB_INCLUDE_CANDIDATES[@]}"; do
   if [ -d "${candidate_include}" ]; then
     TBB_INCLUDE_PATH="${candidate_include}"
-    echo -e "  ${GREEN}✓ TBB include directory found at: ${TBB_INCLUDE_PATH}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB include directory found at: ${TBB_INCLUDE_PATH}${NC}"
     break
   fi
 done
 
 # Fallback: Search entire /usr tree for tbb include directory
 if [ -z "${TBB_INCLUDE_PATH}" ]; then
-  echo "  Searching entire /usr tree for tbb include directory..."
+  printf '%s\n' "  Searching entire /usr tree for tbb include directory..."
   tbb_include_found=$(find /usr/include /usr/local/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
   if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
     TBB_INCLUDE_PATH="${tbb_include_found}"
-    echo -e "  ${GREEN}✓ TBB include directory found via system search: ${TBB_INCLUDE_PATH}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB include directory found via system search: ${TBB_INCLUDE_PATH}${NC}"
   else
-    echo -e "  ${RED}✗ ERROR: TBB include directory not found${NC}"
+    printf '%s\n' "  ${RED}✗ ERROR: TBB include directory not found${NC}"
     TBB_OK=false
   fi
 fi
@@ -12465,19 +12493,19 @@ TBB_VERSION_HEADER_FOUND=false
 TBB_VERSION_HEADER_PATH=""
 
 if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
-  echo "  Phase 4: Verifying TBB headers..."
+  printf '%s\n' "  Phase 4: Verifying TBB headers..."
   
   # Check for legacy header (tbb/tbb.h)
   TBB_INCLUDE_LEGACY="${TBB_INCLUDE_PATH}/tbb.h"
   if [ -f "${TBB_INCLUDE_LEGACY}" ]; then
-    echo -e "  ${GREEN}✓ TBB legacy header found: ${TBB_INCLUDE_LEGACY}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB legacy header found: ${TBB_INCLUDE_LEGACY}${NC}"
     TBB_HEADERS_OK=true
   fi
   
   # Check for oneAPI header (oneapi/tbb/version.h)
   TBB_INCLUDE_ONEAPI="/usr/include/oneapi/tbb/version.h"
   if [ -f "${TBB_INCLUDE_ONEAPI}" ]; then
-    echo -e "  ${GREEN}✓ TBB oneAPI header found: ${TBB_INCLUDE_ONEAPI}${NC}"
+    printf '%s\n' "  ${GREEN}✓ TBB oneAPI header found: ${TBB_INCLUDE_ONEAPI}${NC}"
     TBB_HEADERS_OK=true
   fi
   
@@ -12493,17 +12521,17 @@ if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
     if [ -f "${version_header}" ]; then
       TBB_VERSION_HEADER_PATH="${version_header}"
       TBB_VERSION_HEADER_FOUND=true
-      echo -e "  ${GREEN}✓ TBB version header found: ${TBB_VERSION_HEADER_PATH}${NC}"
+      printf '%s\n' "  ${GREEN}✓ TBB version header found: ${TBB_VERSION_HEADER_PATH}${NC}"
       break
     fi
   done
   
   if [ "${TBB_VERSION_HEADER_FOUND}" != true ]; then
-    echo -e "  ${YELLOW}⚠ TBB version header not found (OpenCV may still work if other headers exist)${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ TBB version header not found (OpenCV may still work if other headers exist)${NC}"
   fi
   
   if [ "${TBB_HEADERS_OK}" != true ]; then
-    echo -e "  ${RED}✗ ERROR: No TBB headers found (checked ${TBB_INCLUDE_LEGACY} and ${TBB_INCLUDE_ONEAPI})${NC}"
+    printf '%s\n' "  ${RED}✗ ERROR: No TBB headers found (checked ${TBB_INCLUDE_LEGACY} and ${TBB_INCLUDE_ONEAPI})${NC}"
     TBB_OK=false
   fi
 fi
@@ -12516,15 +12544,15 @@ if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
   TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}")
   # Validate base directory exists
   if [ -z "${TBB_BASE_INCLUDE_DIR}" ] || [ ! -d "${TBB_BASE_INCLUDE_DIR}" ]; then
-    echo -e "  ${YELLOW}⚠ Failed to extract base include directory, using tbb subdirectory${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ Failed to extract base include directory, using tbb subdirectory${NC}"
     TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
   else
     # Verify base directory contains both tbb and oneapi/tbb subdirectories (Ubuntu 24.04 structure)
     if [ -d "${TBB_BASE_INCLUDE_DIR}/tbb" ] && [ -d "${TBB_BASE_INCLUDE_DIR}/oneapi/tbb" ]; then
-      echo -e "  ${GREEN}✓ TBB base include directory verified: ${TBB_BASE_INCLUDE_DIR}${NC}"
-      echo -e "    Contains: ${TBB_BASE_INCLUDE_DIR}/tbb and ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb"
+      printf '%s\n' "  ${GREEN}✓ TBB base include directory verified: ${TBB_BASE_INCLUDE_DIR}${NC}"
+      printf '%s\n' "    Contains: ${TBB_BASE_INCLUDE_DIR}/tbb and ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb"
     else
-      echo -e "  ${YELLOW}⚠ TBB base directory structure unexpected, using tbb subdirectory${NC}"
+      printf '%s\n' "  ${YELLOW}⚠ TBB base directory structure unexpected, using tbb subdirectory${NC}"
       TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
     fi
   fi
@@ -12540,15 +12568,18 @@ if [ -n "${TBB_LIB_PATH}" ]; then
   if [ -z "${TBB_ROOT_DIR}" ] || [ ! -d "${TBB_ROOT_DIR}" ]; then
     TBB_ROOT_DIR="/usr"
   fi
-  echo -e "  ${GREEN}✓ TBB root directory: ${TBB_ROOT_DIR}${NC}"
+  # ENDIF: TBB_ROOT_DIR validation check
+  printf '%s\n' "  ${GREEN}✓ TBB root directory: ${TBB_ROOT_DIR}${NC}"
 else
   TBB_ROOT_DIR="/usr"
 fi
+# ENDIF: TBB_LIB_PATH check
 
 # Phase 7: Update OPENCV_CMAKE_ARGS with all discovered TBB paths (explicit and robust)
 # CRITICAL: Remove old TBB variables and add new ones with discovered paths
 # This ensures all TBB paths are explicitly set, making detection more reliable
-echo "  Phase 7: Setting explicit TBB CMake variables with discovered paths..."
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Phase 7: Setting explicit TBB CMake variables with discovered paths..."
 
 # Remove existing TBB variables from OPENCV_CMAKE_ARGS
 NEW_OPENCV_CMAKE_ARGS=()
@@ -12562,17 +12593,19 @@ OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 # Add all discovered TBB paths explicitly
 if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
   OPENCV_CMAKE_ARGS+=("-DTBB_DIR=${TBB_CMAKE_DIR}")
-  echo -e "  ${GREEN}✓ Setting TBB_DIR=${TBB_CMAKE_DIR}${NC}"
+  printf '%s\n' "  ${GREEN}✓ Setting TBB_DIR=${TBB_CMAKE_DIR}${NC}"
 fi
 
 if [ -n "${TBB_ROOT_DIR}" ]; then
   OPENCV_CMAKE_ARGS+=("-DTBB_ROOT_DIR=${TBB_ROOT_DIR}")
-  echo -e "  ${GREEN}✓ Setting TBB_ROOT_DIR=${TBB_ROOT_DIR}${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ Setting TBB_ROOT_DIR=${TBB_ROOT_DIR}${NC}"
 fi
 
 if [ -n "${TBB_LIB_PATH}" ] && [ -f "${TBB_LIB_PATH}" ]; then
   OPENCV_CMAKE_ARGS+=("-DTBB_LIBRARIES=${TBB_LIB_PATH}")
-  echo -e "  ${GREEN}✓ Setting TBB_LIBRARIES=${TBB_LIB_PATH}${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ Setting TBB_LIBRARIES=${TBB_LIB_PATH}${NC}"
 fi
 
 # CRITICAL: Set TBB_INCLUDE_DIRS to base directory (not tbb subdirectory)
@@ -12580,19 +12613,22 @@ fi
 if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [ -d "${TBB_BASE_INCLUDE_DIR}" ]; then
   OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIR=${TBB_BASE_INCLUDE_DIR}")
   OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR}")
-  echo -e "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory)${NC}"
-  echo -e "    This allows OpenCV to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
-  echo -e "    and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory)${NC}"
+  printf '%s\n' "    This allows OpenCV to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
+  printf '%s\n' "    and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
 elif [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
   # Fallback: use tbb subdirectory if base directory extraction failed
   OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
   OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
-  echo -e "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - tbb subdirectory)${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - tbb subdirectory)${NC}"
 fi
 
 # Phase 8: Add discovered TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUDE_PATH
 # This ensures CMake can find TBB even if explicit variables are ignored
-echo "  Phase 8: Adding TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUDE_PATH..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Phase 8: Adding TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUDE_PATH..."
 
 # Update CMAKE_PREFIX_PATH to include TBB root directory
 # Find CMAKE_PREFIX_PATH in OPENCV_CMAKE_ARGS and update it
@@ -12601,12 +12637,14 @@ NEW_OPENCV_CMAKE_ARGS=()
 for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
   if [[ "${arg}" =~ ^-DCMAKE_PREFIX_PATH= ]]; then
     # Extract existing CMAKE_PREFIX_PATH value
-    EXISTING_PREFIX_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_PREFIX_PATH=//')
+    # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+    EXISTING_PREFIX_PATH=$(sed 's/^-DCMAKE_PREFIX_PATH=//' <<< "${arg}")
     # Add TBB_ROOT_DIR if not already present
     if [ -n "${TBB_ROOT_DIR}" ] && [[ ! "${EXISTING_PREFIX_PATH}" =~ ${TBB_ROOT_DIR} ]]; then
       UPDATED_PREFIX_PATH="${TBB_ROOT_DIR}:${EXISTING_PREFIX_PATH}"
       NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${UPDATED_PREFIX_PATH}")
-      echo -e "  ${GREEN}✓ Added TBB_ROOT_DIR to CMAKE_PREFIX_PATH: ${TBB_ROOT_DIR}${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${GREEN}✓ Added TBB_ROOT_DIR to CMAKE_PREFIX_PATH: ${TBB_ROOT_DIR}${NC}"
       CMAKE_PREFIX_PATH_UPDATED=true
     else
       NEW_OPENCV_CMAKE_ARGS+=("${arg}")
@@ -12624,12 +12662,14 @@ NEW_OPENCV_CMAKE_ARGS=()
 for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
   if [[ "${arg}" =~ ^-DCMAKE_INCLUDE_PATH= ]]; then
     # Extract existing CMAKE_INCLUDE_PATH value
-    EXISTING_INCLUDE_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_INCLUDE_PATH=//')
+    # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+    EXISTING_INCLUDE_PATH=$(sed 's/^-DCMAKE_INCLUDE_PATH=//' <<< "${arg}")
     # Add TBB_BASE_INCLUDE_DIR if not already present
     if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [[ ! "${EXISTING_INCLUDE_PATH}" =~ ${TBB_BASE_INCLUDE_DIR} ]]; then
       UPDATED_INCLUDE_PATH="${TBB_BASE_INCLUDE_DIR}:${EXISTING_INCLUDE_PATH}"
       NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_INCLUDE_PATH=${UPDATED_INCLUDE_PATH}")
-      echo -e "  ${GREEN}✓ Added TBB_BASE_INCLUDE_DIR to CMAKE_INCLUDE_PATH: ${TBB_BASE_INCLUDE_DIR}${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${GREEN}✓ Added TBB_BASE_INCLUDE_DIR to CMAKE_INCLUDE_PATH: ${TBB_BASE_INCLUDE_DIR}${NC}"
       CMAKE_INCLUDE_PATH_UPDATED=true
     else
       NEW_OPENCV_CMAKE_ARGS+=("${arg}")
@@ -12649,12 +12689,14 @@ if [ -n "${TBB_LIB_PATH}" ]; then
   for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
     if [[ "${arg}" =~ ^-DCMAKE_LIBRARY_PATH= ]]; then
       # Extract existing CMAKE_LIBRARY_PATH value
-      EXISTING_LIBRARY_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_LIBRARY_PATH=//')
+      # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
+      EXISTING_LIBRARY_PATH=$(sed 's/^-DCMAKE_LIBRARY_PATH=//' <<< "${arg}")
       # Add TBB_LIB_DIR if not already present
       if [ -n "${TBB_LIB_DIR}" ] && [[ ! "${EXISTING_LIBRARY_PATH}" =~ ${TBB_LIB_DIR} ]]; then
         UPDATED_LIBRARY_PATH="${TBB_LIB_DIR}:${EXISTING_LIBRARY_PATH}"
         NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=${UPDATED_LIBRARY_PATH}")
-        echo -e "  ${GREEN}✓ Added TBB_LIB_DIR to CMAKE_LIBRARY_PATH: ${TBB_LIB_DIR}${NC}"
+        # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ${GREEN}✓ Added TBB_LIB_DIR to CMAKE_LIBRARY_PATH: ${TBB_LIB_DIR}${NC}"
         CMAKE_LIBRARY_PATH_UPDATED=true
       else
         NEW_OPENCV_CMAKE_ARGS+=("${arg}")
@@ -12666,37 +12708,106 @@ if [ -n "${TBB_LIB_PATH}" ]; then
   OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 fi
 
-echo -e "  ${GREEN}✓ All TBB paths configured explicitly${NC}"
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  ${GREEN}✓ All TBB paths configured explicitly${NC}"
+
+# CRITICAL: Set TBBROOT environment variable for OpenCV's OpenCVDetectTBB.cmake
+# OpenCVDetectTBB.cmake first tries find_package(TBB) in $ENV{TBBROOT}/cmake or $ENV{TBBROOT}/lib/cmake/tbb
+# If TBB_DIR is found, set TBBROOT to the parent directory
+if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
+  # Extract root from TBB_CMAKE_DIR (e.g., /usr/lib/x86_64-linux-gnu/cmake/TBB -> /usr)
+  TBBROOT_FROM_DIR=$(dirname "$(dirname "$(dirname "${TBB_CMAKE_DIR}")")")
+  if [ -d "${TBBROOT_FROM_DIR}" ]; then
+    export TBBROOT="${TBBROOT_FROM_DIR}"
+    printf '%s\n' "  ${GREEN}✓ Setting TBBROOT=${TBBROOT} for OpenCV TBB detection${NC}"
+  fi
+# ENDIF: TBB_CMAKE_DIR check
+fi
+
+# CRITICAL: Add TBB include directory to CPATH for OpenCV's environment-based TBB detection
+# OpenCVDetectTBB.cmake searches for tbb/tbb.h via find_path with PATHS ENV CPATH
+if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [ -d "${TBB_BASE_INCLUDE_DIR}" ]; then
+  if [ -z "${CPATH:-}" ]; then
+    export CPATH="${TBB_BASE_INCLUDE_DIR}"
+  else
+    export CPATH="${TBB_BASE_INCLUDE_DIR}:${CPATH}"
+  fi
+  printf '%s\n' "  ${GREEN}✓ Added TBB include directory to CPATH: ${TBB_BASE_INCLUDE_DIR}${NC}"
+# ENDIF: TBB_BASE_INCLUDE_DIR check
+fi
+
+# CRITICAL: Add TBB library directory to LIBRARY_PATH for OpenCV's environment-based TBB detection
+# OpenCVDetectTBB.cmake searches for libtbb.so via find_library with PATHS ENV LIBRARY_PATH
+if [ -n "${TBB_LIB_PATH}" ] && [ -f "${TBB_LIB_PATH}" ]; then
+  TBB_LIB_DIR_FOR_ENV=$(dirname "${TBB_LIB_PATH}")
+  if [ -d "${TBB_LIB_DIR_FOR_ENV}" ]; then
+    if [ -z "${LIBRARY_PATH:-}" ]; then
+      export LIBRARY_PATH="${TBB_LIB_DIR_FOR_ENV}"
+    else
+      export LIBRARY_PATH="${TBB_LIB_DIR_FOR_ENV}:${LIBRARY_PATH}"
+    fi
+    printf '%s\n' "  ${GREEN}✓ Added TBB library directory to LIBRARY_PATH: ${TBB_LIB_DIR_FOR_ENV}${NC}"
+  fi
+# ENDIF: TBB_LIB_PATH check
+fi
 
 # Abort if critical dependencies are missing
 if [ "${MKL_HEADERS_OK}" != "true" ] || [ "${TBB_OK}" != "true" ]; then
-  echo -e "${RED}ERROR: Critical dependencies missing for OpenCV configuration.${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "${RED}ERROR: Critical dependencies missing for OpenCV configuration.${NC}"
     if [ "${MKL_HEADERS_OK}" != "true" ]; then
-      echo -e "${RED}  → MKL headers or libraries not found${NC}"
-      echo -e "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKL_INCLUDE_DIR:-<unset>}${NC}"
-      echo -e "${YELLOW}  Required: MKL libraries in ${MKL_LIB_DIR:-<unset>}${NC}"
+      printf '%s\n' "${RED}  → MKL headers or libraries not found${NC}"
+      printf '%s\n' "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKL_INCLUDE_DIR:-<unset>}${NC}"
+      printf '%s\n' "${YELLOW}  Required: MKL libraries in ${MKL_LIB_DIR:-<unset>}${NC}"
     fi
   if [ "${TBB_OK}" != "true" ]; then
-    echo -e "${RED}  → TBB library or headers not found${NC}"
-    echo -e "${YELLOW}  Required: libtbb-dev package installed${NC}"
+    printf '%s\n' "${RED}  → TBB library or headers not found${NC}"
+    printf '%s\n' "${YELLOW}  Required: libtbb-dev package installed${NC}"
     if [ -n "${TBB_LIB_PATH}" ]; then
-      echo -e "${YELLOW}  Expected: TBB library at ${TBB_LIB_PATH}${NC}"
+      printf '%s\n' "${YELLOW}  Expected: TBB library at ${TBB_LIB_PATH}${NC}"
     else
-      echo -e "${YELLOW}  Expected: TBB library at /usr/lib/x86_64-linux-gnu/libtbb.so${NC}"
+      printf '%s\n' "${YELLOW}  Expected: TBB library at /usr/lib/x86_64-linux-gnu/libtbb.so${NC}"
     fi
     if [ -n "${TBB_INCLUDE_PATH}" ]; then
-      echo -e "${YELLOW}  Expected: TBB headers in ${TBB_INCLUDE_PATH}${NC}"
+      printf '%s\n' "${YELLOW}  Expected: TBB headers in ${TBB_INCLUDE_PATH}${NC}"
     else
-      echo -e "${YELLOW}  Expected: TBB headers at /usr/include/tbb/tbb.h or /usr/include/oneapi/tbb/version.h${NC}"
+      printf '%s\n' "${YELLOW}  Expected: TBB headers at /usr/include/tbb/tbb.h or /usr/include/oneapi/tbb/version.h${NC}"
     fi
   fi
   exit 1
 fi
 
-# Additional CMake variables for LAPACK detection
+# CRITICAL: Additional CMake variables for LAPACK detection (aligned with OpenCVFindLAPACK.cmake)
+# OpenCVFindLAPACK.cmake calls ocv_lapack_check which requires:
+# - LAPACK_INCLUDE_DIR: Path to directory containing mkl_cblas.h and mkl_lapack.h
+# - LAPACK_CBLAS_H: Name of CBLAS header (mkl_cblas.h for MKL)
+# - LAPACK_LAPACKE_H: Name of LAPACKE header (mkl_lapack.h for MKL)
+# - LAPACK_LIBRARIES: Semicolon-separated list of MKL library files
 # These help OpenCV's OpenCVFindLAPACK.cmake locate MKL headers more reliably
 OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIR=${MKL_INCLUDE_DIR}")
 OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIRS=${MKL_INCLUDE_DIR}")
+# CRITICAL: Set LAPACK_CBLAS_H and LAPACK_LAPACKE_H explicitly for OpenCV's ocv_lapack_check
+# OpenCVFindLAPACK.cmake uses these to find headers via _find_header_file_in_dirs macro
+OPENCV_CMAKE_ARGS+=("-DLAPACK_CBLAS_H=mkl_cblas.h")
+OPENCV_CMAKE_ARGS+=("-DLAPACK_LAPACKE_H=mkl_lapack.h")
+# CRITICAL: Set MKL_ROOT_DIR (OpenCVFindMKL.cmake looks for MKL_ROOT_DIR, not just MKL_ROOT)
+# OpenCVFindMKL.cmake checks: if(NOT MKL_ROOT_DIR AND DEFINED MKL_INCLUDE_DIR AND EXISTS "${MKL_INCLUDE_DIR}/mkl.h")
+# Then it checks: if(NOT MKL_ROOT_DIR) and uses ENV{MKLROOT}
+# Setting MKL_ROOT_DIR explicitly ensures reliable detection
+if [ -n "${MKLROOT:-}" ] && [ -d "${MKLROOT}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DMKL_ROOT_DIR=${MKLROOT}")
+  printf '%s\n' "  ${GREEN}✓ Setting MKL_ROOT_DIR=${MKLROOT} for OpenCV MKL detection${NC}"
+# ENDIF: MKLROOT check
+fi
+# CRITICAL: Set MKL_INCLUDE_DIRS (OpenCVFindMKL.cmake sets MKL_INCLUDE_DIRS from MKL_INCLUDE_DIR)
+# OpenCVFindMKL.cmake: set(MKL_INCLUDE_DIR "${MKL_ROOT_DIR}/include")
+# Then: set(MKL_INCLUDE_DIRS "${MKL_INCLUDE_DIR}")
+# Setting both ensures compatibility
+if [ -n "${MKL_INCLUDE_DIR:-}" ] && [ -d "${MKL_INCLUDE_DIR}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DMKL_INCLUDE_DIRS=${MKL_INCLUDE_DIR}")
+  printf '%s\n' "  ${GREEN}✓ Setting MKL_INCLUDE_DIRS=${MKL_INCLUDE_DIR} for OpenCV MKL detection${NC}"
+# ENDIF: MKL_INCLUDE_DIR check
+fi
 
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
 # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
@@ -12745,7 +12856,8 @@ fi
 
 # Final decision: Enable only if all three phases passed
 if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ] && [ "${NV_CODEC_LIB_ENCODE_FOUND}" = "true" ]; then
-  echo "  → NVIDIA NVDEC/NVENC interfaces detected; enabling Video Codec support in OpenCV"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  → NVIDIA NVDEC/NVENC interfaces detected; enabling Video Codec support in OpenCV"
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=ON")
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=ON")
   if [ -n "${NV_CODEC_SDK_DIR}" ]; then
@@ -12756,7 +12868,8 @@ if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ]
   fi
   NVIDIA_VIDEO_SDK_INSTALLED=true
 else
-  echo "  → NVIDIA Video Codec SDK support not fully detected; OpenCV will be built without NVDEC/NVENC acceleration"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  → NVIDIA Video Codec SDK support not fully detected; OpenCV will be built without NVDEC/NVENC acceleration"
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=OFF")
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=OFF")
 fi
@@ -12764,7 +12877,8 @@ fi
 # Temporarily clear SuiteSparse_ROOT so CMake relies on SuiteSparse_DIR instead of emitting warnings.
 SAVED_SUITESPARSE_ROOT="${SuiteSparse_ROOT:-}"
 if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
-  echo "Temporarily unsetting SuiteSparse_ROOT for OpenCV configuration (SuiteSparse_DIR is explicitly provided)."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Temporarily unsetting SuiteSparse_ROOT for OpenCV configuration (SuiteSparse_DIR is explicitly provided)."
   unset SuiteSparse_ROOT
 fi
 
@@ -12773,15 +12887,19 @@ if ! cmake "${OPENCV_CMAKE_ARGS[@]}" ..; then
   if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
     export SuiteSparse_ROOT="${SAVED_SUITESPARSE_ROOT}"
   fi
-  echo -e "${RED}ERROR: Failed to configure OpenCV with CMake${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "${RED}ERROR: Failed to configure OpenCV with CMake${NC}"
   if [ -f CMakeFiles/CMakeError.log ]; then
-    echo "---- CMakeFiles/CMakeError.log (last 200 lines) ----"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "---- CMakeFiles/CMakeError.log (last 200 lines) ----"
     tail -n 200 CMakeFiles/CMakeError.log || true
   else
-    echo "[INFO] CMakeFiles/CMakeError.log not found"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "[INFO] CMakeFiles/CMakeError.log not found"
   fi
   if [ -f CMakeCache.txt ]; then
-    echo "---- Extracting LAPACK/MKL/TBB cache entries ----"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "---- Extracting LAPACK/MKL/TBB cache entries ----"
     grep -E '^(LAPACK_|MKL_|TBB_)' CMakeCache.txt || true
   fi
   exit 1
@@ -12792,7 +12910,8 @@ if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
 fi
 
 if [ -f CMakeCache.txt ]; then
-  echo "---- Verified LAPACK/MKL/TBB cache selections ----"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "---- Verified LAPACK/MKL/TBB cache selections ----"
   grep -E '^(LAPACK_IMPL|LAPACK_LIBRARIES|LAPACK_INCLUDE_DIR|LAPACK_CBLAS_H|LAPACK_LAPACKE_H|MKL_ROOT_DIR|MKL_INCLUDE_DIR|MKL_LIBRARIES|TBB_DIR|TBB_ROOT_DIR|TBB_INCLUDE_DIR|TBB_LIBRARIES)' CMakeCache.txt || true
 fi
 
@@ -12801,7 +12920,8 @@ fi
 # Critical: Check that key dependencies were detected and verify MKL (not OpenBLAS) and system TBB (not MKL TBB)
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-echo "Verifying CMake configuration..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying CMake configuration..."
 # Verify LAPACK detection (must be MKL, not OpenBLAS)
 lapack_found=false
 lapack_impl=""
@@ -12813,88 +12933,112 @@ if grep -Eq "^LAPACK(_lapack)?_FOUND:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
     # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
     lapack_impl=$(cut -d= -f2 <<< "${lapack_impl_line}" | tr -d '\n' || echo "")
     if [ "${lapack_impl}" = "MKL" ]; then
-      echo -e "  ${GREEN}✓ LAPACK detected by CMake: MKL (using ${MKL_BLA_VENDOR})${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${GREEN}✓ LAPACK detected by CMake: MKL (using ${MKL_BLA_VENDOR})${NC}"
     elif [ "${lapack_impl}" = "OpenBLAS" ]; then
-      echo -e "  ${RED}✗ ERROR: LAPACK detected as OpenBLAS (should be MKL)${NC}"
-      echo -e "  ${YELLOW}  Check MKL configuration and ensure WITH_MKL=ON${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${RED}✗ ERROR: LAPACK detected as OpenBLAS (should be MKL)${NC}"
+      printf '%s\n' "  ${YELLOW}  Check MKL configuration and ensure WITH_MKL=ON${NC}"
       lapack_found=false
     else
-      echo -e "  ${YELLOW}⚠ LAPACK detected: ${lapack_impl} (expected MKL)${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${YELLOW}⚠ LAPACK detected: ${lapack_impl} (expected MKL)${NC}"
     fi
   else
-    echo -e "  ${GREEN}✓ LAPACK detected by CMake (using ${MKL_BLA_VENDOR})${NC}"
+    # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ${GREEN}✓ LAPACK detected by CMake (using ${MKL_BLA_VENDOR})${NC}"
   fi
 else
-  echo -e "  ${RED}✗ LAPACK not detected by CMake${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}✗ LAPACK not detected by CMake${NC}"
   grep -E "^LAPACK" CMakeCache.txt | head -10 || true
 fi
 lapack_libs_line=$(grep -E "^LAPACK_LIBRARIES" CMakeCache.txt 2>/dev/null | head -1 || true)
 if [ -n "${lapack_libs_line}" ]; then
-  echo "  • ${lapack_libs_line}"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  • ${lapack_libs_line}"
   # Verify MKL libraries are used (not OpenBLAS)
   if grep -qE "(mkl_intel_lp64|mkl_gnu_thread|mkl_core)" <<< "${lapack_libs_line}"; then
-    echo -e "  ${GREEN}✓ LAPACK libraries verified: Using MKL (correct)${NC}"
+    # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ${GREEN}✓ LAPACK libraries verified: Using MKL (correct)${NC}"
   elif grep -qE "openblas" <<< "${lapack_libs_line}"; then
-    echo -e "  ${RED}✗ ERROR: LAPACK libraries point to OpenBLAS (should be MKL)${NC}"
+    # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ${RED}✗ ERROR: LAPACK libraries point to OpenBLAS (should be MKL)${NC}"
   fi
 fi
 
 tbb_found=false
 if grep -Eq "^TBB_FOUND:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
   tbb_found=true
-  echo -e "  ${GREEN}✓ Intel TBB detected by CMake${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ Intel TBB detected by CMake${NC}"
 else
-  echo -e "  ${RED}✗ Intel TBB not detected by CMake${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}✗ Intel TBB not detected by CMake${NC}"
 fi
 
 # Verify TBB is from system paths (not MKL TBB)
 if [ "${tbb_found}" = "true" ]; then
-  echo "Verifying TBB source (must be system TBB, not MKL TBB)..."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Verifying TBB source (must be system TBB, not MKL TBB)..."
   TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
   if [ -n "${TBB_LIB_PATH:-}" ]; then
       if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
-        echo -e "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
-        echo "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
-        echo "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
-        echo "  Solution: Ensure CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb is set"
+        # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ${RED}ERROR: TBB is from MKL path: ${TBB_LIB_PATH}${NC}"
+        printf '%s\n' "  This should not happen - TBB should be from system (/usr/lib/x86_64-linux-gnu/libtbb.so)"
+        printf '%s\n' "  Check CMAKE_IGNORE_PATH and TBB_DIR/TBB_LIBRARIES settings"
+        printf '%s\n' "  Solution: Ensure CMAKE_IGNORE_PATH=/opt/intel/oneapi/tbb is set"
         tbb_found=false
       elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
-        echo -e "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
+        # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ${GREEN}✓ TBB verified: Using system TBB from ${TBB_LIB_PATH}${NC}"
         # Verify TBB version (should be TBB_INTERFACE_VERSION >= 6000)
         TBB_VERSION_LINE=$(grep -E "^TBB_INTERFACE_VERSION" CMakeCache.txt 2>/dev/null | head -1 || true)
         if [ -n "${TBB_VERSION_LINE}" ]; then
-          echo "  • ${TBB_VERSION_LINE}"
+          # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+          printf '%s\n' "  • ${TBB_VERSION_LINE}"
         fi
       else
-        echo -e "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
+        # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ${YELLOW}⚠ WARNING: TBB path is ${TBB_LIB_PATH} (expected /usr/lib/x86_64-linux-gnu/libtbb.so)${NC}"
       fi
   else
-      echo -e "  ${YELLOW}⚠ WARNING: Could not verify TBB library path${NC}"
+      # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+      printf '%s\n' "  ${YELLOW}⚠ WARNING: Could not verify TBB library path${NC}"
   fi
 fi
 
 if grep -Eq "^WITH_NVCUVID:BOOL=ON" CMakeCache.txt; then
-  echo -e "  ${GREEN}✓ NVIDIA Video Codec SDK support enabled (NVDEC/NVENC)${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ NVIDIA Video Codec SDK support enabled (NVDEC/NVENC)${NC}"
 else
-  echo -e "  ${YELLOW}• NVIDIA Video Codec SDK support disabled (expected if SDK or drivers missing)${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${YELLOW}• NVIDIA Video Codec SDK support disabled (expected if SDK or drivers missing)${NC}"
 fi
 if grep -Eq "^WITH_NVCUVENC:BOOL=ON" CMakeCache.txt; then
-  echo -e "  ${GREEN}✓ NVIDIA NVENC hardware encoder enabled${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ NVIDIA NVENC hardware encoder enabled${NC}"
 else
-  echo -e "  ${YELLOW}• NVIDIA NVENC hardware encoder disabled${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${YELLOW}• NVIDIA NVENC hardware encoder disabled${NC}"
 fi
 
 video_modules_ok=true
 if grep -Eq "^BUILD_opencv_video:BOOL=ON" CMakeCache.txt; then
-  echo -e "  ${GREEN}✓ opencv_video module will be built${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ opencv_video module will be built${NC}"
 else
-  echo -e "  ${RED}✗ opencv_video module disabled${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}✗ opencv_video module disabled${NC}"
   video_modules_ok=false
 fi
 if grep -Eq "^BUILD_opencv_videoio:BOOL=ON" CMakeCache.txt; then
-  echo -e "  ${GREEN}✓ opencv_videoio module will be built${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${GREEN}✓ opencv_videoio module will be built${NC}"
 else
-  echo -e "  ${RED}✗ opencv_videoio module disabled${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}✗ opencv_videoio module disabled${NC}"
   video_modules_ok=false
 fi
 
@@ -12905,36 +13049,43 @@ if [ -n "${MKL_THREADING_CACHE}" ]; then
   # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
   MKL_THREADING_VALUE=$(cut -d= -f2 <<< "${MKL_THREADING_CACHE}" | tr -d '\n' || echo "")
   if [ "${MKL_THREADING_VALUE}" = "GNU" ]; then
-    echo -e "  ${GREEN}✓ MKL threading layer verified: GNU OpenMP (libgomp)${NC}"
+    # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ${GREEN}✓ MKL threading layer verified: GNU OpenMP (libgomp)${NC}"
     # shellcheck disable=SC2034 # mkl_threading_verified used for conditional logic
     mkl_threading_verified=true
   else
-    echo -e "  ${YELLOW}⚠ MKL threading layer: ${MKL_THREADING_VALUE} (expected GNU)${NC}"
+    # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ${YELLOW}⚠ MKL threading layer: ${MKL_THREADING_VALUE} (expected GNU)${NC}"
   fi
 fi
 
 config_error=false
 if [ "${lapack_found}" != "true" ]; then
   config_error=true
-  echo -e "  ${RED}→ LAPACK detection failed – check MKL installation and CMake flags${NC}"
-  echo -e "  ${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKLROOT}/include${NC}"
-  echo -e "  ${YELLOW}  Required: MKL libraries accessible, BLA_VENDOR=Intel10_64lp${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}→ LAPACK detection failed – check MKL installation and CMake flags${NC}"
+  printf '%s\n' "  ${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKLROOT}/include${NC}"
+  printf '%s\n' "  ${YELLOW}  Required: MKL libraries accessible, BLA_VENDOR=Intel10_64lp${NC}"
 fi
 if [ "${tbb_found}" != "true" ]; then
   config_error=true
-  echo -e "  ${RED}→ TBB detection failed – ensure libtbb-dev is installed and accessible${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}→ TBB detection failed – ensure libtbb-dev is installed and accessible${NC}"
 fi
 if [ "${video_modules_ok}" != "true" ]; then
   config_error=true
-  echo -e "  ${RED}→ Required OpenCV video modules are disabled – verify CMake cache${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  ${RED}→ Required OpenCV video modules are disabled – verify CMake cache${NC}"
 fi
 
 if [ "${config_error}" = "true" ]; then
-  echo -e "${RED}ERROR: Critical numerical backends missing from OpenCV configuration. Aborting build.${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "${RED}ERROR: Critical numerical backends missing from OpenCV configuration. Aborting build.${NC}"
   exit 1
 fi
 
-echo "Configuration summary:"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Configuration summary:"
 grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 
 #--- Sub-block 20.10: Build OpenCV with ninja ---
@@ -12942,17 +13093,21 @@ grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 BUILD_JOBS=$(calculate_build_jobs)
-echo "Building OpenCV with $BUILD_JOBS parallel jobs..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Building OpenCV with ${BUILD_JOBS} parallel jobs..."
 mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
-echo "  System: $(nproc) cores, ${mem_info} RAM"
-echo ""
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  System: $(nproc) cores, ${mem_info} RAM"
+printf '%s\n' ""
 
 # Build with fallback to single-threaded on failure
 if ! ninja -j"${BUILD_JOBS}"; then
-    echo ""
-    echo "⚠️  Parallel build failed, retrying single-threaded..."
+    printf '%s\n' ""
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠️  Parallel build failed, retrying single-threaded..."
     if ! ninja -j1; then
-        echo "ERROR: Failed to build OpenCV even with single-threaded compilation"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "ERROR: Failed to build OpenCV even with single-threaded compilation"
         exit 1
     fi
 fi
@@ -12961,8 +13116,9 @@ fi
 # Purpose: Install compiled OpenCV libraries to system
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "Installing..."
-ninja install 2>&1 | tee /tmp/opencv_install.log || { echo "ERROR: Failed to install OpenCV"; exit 1; }
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing..."
+ninja install 2>&1 | tee /tmp/opencv_install.log || { printf '%s\n' "ERROR: Failed to install OpenCV"; exit 1; }
 
 #--- Sub-block 20.12: Update linker cache ---
 # Critical: Ensure OpenCV libraries are in linker cache
@@ -12975,19 +13131,22 @@ run_ldconfig_refresh_from_install_output "/tmp/opencv_install.log" 200
 # Critical: Test OpenCV Python bindings and CUDA support
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-echo "Verifying installation..."
-python3 -c "import cv2; print('OpenCV version:', cv2.__version__); print('CUDA:', cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else 'N/A')" || echo "WARNING: OpenCV Python verification failed"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying installation..."
+python3 -c "import cv2; print('OpenCV version:', cv2.__version__); print('CUDA:', cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else 'N/A')" || printf '%s\n' "WARNING: OpenCV Python verification failed"
 
-pkg-config --modversion opencv4 || echo "pkg-config not found (normal for some builds)"
+pkg-config --modversion opencv4 || printf '%s\n' "pkg-config not found (normal for some builds)"
 
-echo "Build complete!"
-echo "==============="
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Build complete!"
+printf '%s\n' "==============="
 
 #--- Sub-block 20.14: Protect compiled OpenCV from APT overwrites ---
 # Critical: Prevent APT from installing ANY system OpenCV packages
 # Strategy: Use APT pinning with negative priority to block ALL libopencv-* packages
 # Benefits: Simple, robust, survives apt-mark unhold, no dummy packages needed
-echo "Protecting compiled OpenCV from APT overwrites..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Protecting compiled OpenCV from APT overwrites..."
 
 # Create APT preferences directory
 mkdir -p /etc/apt/preferences.d
@@ -13018,26 +13177,31 @@ EOF
 
 # Verify the preferences file was created
 if [ -f "/etc/apt/preferences.d/block-system-opencv" ]; then
-    echo "✓ Created APT preferences to block ALL system OpenCV packages"
-    echo "  - Blocks: libopencv-* (all OpenCV development and runtime packages)"
-    echo "  - Method: APT pinning with Pin-Priority: -1"
-    echo "  - Survives: apt-mark unhold and apt-get operations"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ Created APT preferences to block ALL system OpenCV packages"
+    printf '%s\n' "  - Blocks: libopencv-* (all OpenCV development and runtime packages)"
+    printf '%s\n' "  - Method: APT pinning with Pin-Priority: -1"
+    printf '%s\n' "  - Survives: apt-mark unhold and apt-get operations"
 else
-    echo "✗ ERROR: Failed to create OpenCV protection file"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ ERROR: Failed to create OpenCV protection file"
     exit 1
 fi
 
 # Update APT cache to apply the new preferences
-echo "Updating APT cache to apply OpenCV protection..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Updating APT cache to apply OpenCV protection..."
 apt-get update || true
 
 # Verify protection is active by checking the preferences file and APT status
-echo "Verifying OpenCV protection..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying OpenCV protection..."
 OPENCV_VERIFICATION_PASSED=false
 
 # Method 1: Check if preferences file exists and has correct content
 if [ -f "/etc/apt/preferences.d/block-system-opencv" ] && grep -q "Pin-Priority: -1" /etc/apt/preferences.d/block-system-opencv; then
-    echo "✓ OpenCV protection file verified (Pin-Priority: -1 active)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ OpenCV protection file verified (Pin-Priority: -1 active)"
     OPENCV_VERIFICATION_PASSED=true
 fi
 
@@ -13064,15 +13228,18 @@ if priority <= 0:
 sys.exit(1)
 PY
 then
-    echo "✓ OpenCV protection verified via python-apt policy check (packages blocked)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ OpenCV protection verified via python-apt policy check (packages blocked)"
     OPENCV_VERIFICATION_PASSED=true
 fi
 
 if [ "${OPENCV_VERIFICATION_PASSED:-}" = true ]; then
-    echo "✓ OpenCV protection completed and verified (APT pinning method)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ OpenCV protection completed and verified (APT pinning method)"
 else
-    echo "⚠ OpenCV protection file created, but runtime verification inconclusive"
-    echo "  This is usually fine - APT pinning is active even if verification fails"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ OpenCV protection file created, but runtime verification inconclusive"
+    printf '%s\n' "  This is usually fine - APT pinning is active even if verification fails"
 fi
 
 #--- Sub-block 20.15: Cleanup OpenCV build files ---
@@ -13096,9 +13263,11 @@ rm -rf /tmp/opencv /tmp/opencv_contrib
 #--- Sub-block 21.1: Initialize Julia environment setup ---
 # Dependencies: Block 8.5 (Julia installation), Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-echo "==> Julia ${JULIA_LTS_VER:-1.10.x} install & envs"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "==> Julia ${JULIA_LTS_VER:-1.10.x} install & envs"
 if [ -x "${JULIA_BIN:-}" ]; then
-  echo "Julia installed successfully"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Julia installed successfully"
 
   #--- Sub-block 21.2: Create CxxWrap artifact override ---
   # Critical: Force Julia to use source-built CxxWrap instead of binary JLL
@@ -13108,44 +13277,52 @@ if [ -x "${JULIA_BIN:-}" ]; then
 [3eaa8dc6-92ce-5c4c-91c6-662a904cf5c7]
 libcxxwrap_julia = "/opt/libcxxwrap-julia"
 OVERRIDE
-  echo "✓ Artifact override created for CxxWrap source build"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "✓ Artifact override created for CxxWrap source build"
 
   #--- Sub-block 21.3: Setup Julia base environment ---
   # Purpose: Update base environment and install IJulia for Jupyter
-  echo "Setting up Julia base environment..."
-  "${JULIA_BIN}" -e 'using Pkg; Pkg.update(); Pkg.add(["IJulia"]); using IJulia;' || echo "[warn] IJulia setup failed"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Setting up Julia base environment..."
+  "${JULIA_BIN}" -e 'using Pkg; Pkg.update(); Pkg.add(["IJulia"]); using IJulia;' || printf '%s\n' "[warn] IJulia setup failed"
 
   #--- Sub-block 21.4: Install CxxWrap Julia package ---
   # Critical: Install CxxWrap package using source build via artifact override
-  echo "Installing CxxWrap Julia package (will use source build)..."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Installing CxxWrap Julia package (will use source build)..."
   if [ -z "${CXXWRAP_JL_VERSION:-}" ]; then
-    echo "ERROR: CXXWRAP_JL_VERSION is not set. Check /etc/config.sh."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "ERROR: CXXWRAP_JL_VERSION is not set. Check /etc/config.sh."
     exit 1
   fi
   if ! "${JULIA_BIN}" -e "using Pkg; Pkg.add(PackageSpec(name=\"CxxWrap\", version=\"${CXXWRAP_JL_VERSION}\")); Pkg.build(\"CxxWrap\")"; then
-    echo "[warn] CxxWrap Julia package installation failed"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "[warn] CxxWrap Julia package installation failed"
   fi
 
   #--- Sub-block 21.5: Verify CxxWrap source build usage ---
   # Purpose: Confirm Julia is using our source-built CxxWrap
   # shellcheck disable=SC2016 # Intentional: Julia code needs single quotes
-  "${JULIA_BIN}" -e 'using CxxWrap; build_path = CxxWrap.prefix_path(); println("✓ CxxWrap using: ", build_path); if !occursin("/opt/libcxxwrap-julia", build_path) @warn "CxxWrap may not be using source build! Path: $build_path" end' || echo "[warn] CxxWrap Julia package setup failed"
+  "${JULIA_BIN}" -e 'using CxxWrap; build_path = CxxWrap.prefix_path(); println("✓ CxxWrap using: ", build_path); if !occursin("/opt/libcxxwrap-julia", build_path) @warn "CxxWrap may not be using source build! Path: $build_path" end' || printf '%s\n' "[warn] CxxWrap Julia package setup failed"
 
   #--- Sub-block 21.6: Create robotics Julia environment ---
   # Purpose: Set up dedicated environment for robotics packages
-  echo "Setting up Julia robotics environment..."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Setting up Julia robotics environment..."
   mkdir -p "${JULIA_HOME}envs"
-  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/robotics_env\"); Pkg.add([\"RigidBodyDynamics\", \"MeshCat\", \"ControlSystems\", \"DifferentialEquations\", \"ForwardDiff\", \"StaticArrays\", \"Rotations\", \"CoordinateTransformations\", \"Interpolations\", \"Optim\"]); Pkg.precompile()" || echo "[warn] Robotic env setup failed"
+  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/robotics_env\"); Pkg.add([\"RigidBodyDynamics\", \"MeshCat\", \"ControlSystems\", \"DifferentialEquations\", \"ForwardDiff\", \"StaticArrays\", \"Rotations\", \"CoordinateTransformations\", \"Interpolations\", \"Optim\"]); Pkg.precompile()" || printf '%s\n' "[warn] Robotic env setup failed"
 
   #--- Sub-block 21.7: Create CUDA Julia environment ---
   # Purpose: Set up dedicated environment for CUDA packages
-  echo "Setting up Julia CUDA environment..."
-  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/cuda_env\"); Pkg.instantiate()" || echo "[warn] CUDA env setup failed"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Setting up Julia CUDA environment..."
+  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/cuda_env\"); Pkg.instantiate()" || printf '%s\n' "[warn] CUDA env setup failed"
 
   #--- Sub-block 21.8: Register IJulia kernel ---
   # Purpose: Make Julia available in Jupyter notebooks
-  echo "Registering Julia kernel..."
-  "${JULIA_BIN}" -e 'using IJulia; IJulia.installkernel("Julia 1.10 (base)", "--project=@.")' || echo "[warn] Julia kernel registration failed"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "Registering Julia kernel..."
+  "${JULIA_BIN}" -e 'using IJulia; IJulia.installkernel("Julia 1.10 (base)", "--project=@.")' || printf '%s\n' "[warn] Julia kernel registration failed"
 
 
 
@@ -13157,12 +13334,14 @@ set -euo pipefail
 
 JULIA_BIN="${JULIA_BIN:-${JULIA_HOME}/bin/julia}"
 if ! command -v "$JULIA_BIN" >/dev/null 2>&1; then
-  echo "[precompile_julia_cuda] ${JULIA_BIN:-} not found; skipping."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "[precompile_julia_cuda] ${JULIA_BIN:-} not found; skipping."
   exit 0
 fi
 
 if ! command -v nvidia-smi >/dev/null 2>&1; then
-  echo "[precompile_julia_cuda] no NVIDIA GPU visible; skipping."
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "[precompile_julia_cuda] no NVIDIA GPU visible; skipping."
   exit 0
 fi
 
@@ -13200,7 +13379,8 @@ EOS
     /usr/local/bin/precompile_julia_cuda.sh || true
   fi
 else
-  echo "[warn] Julia installation may have failed"
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "[warn] Julia installation may have failed"
 fi
 # End Julia environment setup (if block self-contained)
 
@@ -13226,7 +13406,9 @@ debug_glibc "After OpenCV Compile and Install"
 # Purpose: Begin ROS 2 vision library recompilation
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 5: Recompiling ROS 2 vision libraries against custom OpenCV ###${NC}"
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "${BLUE}### PHASE 5: Recompiling ROS 2 vision libraries against custom OpenCV ###${NC}"
 PHASE5_SUCCESS=true
 
 #--- Sub-block 22.3: Source ROS 2 environment ---
@@ -13247,7 +13429,8 @@ cd /ros_overlay_ws
 # Purpose: Get cv_bridge and vision_opencv source code
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-git clone --branch rolling https://github.com/ros-perception/vision_opencv.git src/vision_opencv || { echo "ERROR: Failed to clone vision_opencv"; exit 1; }
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+git clone --branch rolling https://github.com/ros-perception/vision_opencv.git src/vision_opencv || { printf '%s\n' "ERROR: Failed to clone vision_opencv"; exit 1; }
 
 #--- Sub-block 22.6: Build vision_opencv with custom OpenCV ---
 # Critical: Compile against our optimized OpenCV in /usr/local
@@ -13259,13 +13442,16 @@ colcon build --cmake-args -D CMAKE_BUILD_TYPE=Release -D CMAKE_POLICY_DEFAULT_CM
 # Critical: Confirm cv_bridge uses custom OpenCV
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "${YELLOW}[Phase 5 | Verification] Checking linkage of new cv_bridge library...${NC}"
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "${YELLOW}[Phase 5 | Verification] Checking linkage of new cv_bridge library...${NC}"
 if timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep -q "/usr/local/lib/libopencv_core"; then
-  echo -e "${GREEN}✓ New cv_bridge is correctly linked to custom OpenCV in /usr/local.${NC}"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "${GREEN}✓ New cv_bridge is correctly linked to custom OpenCV in /usr/local.${NC}"
   export PHASE5_STATUS="PASS"
 else
-  echo -e "${RED}✗ FAILED: New cv_bridge is NOT linked to custom OpenCV. Overlay failed.${NC}"
-  timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep opencv || echo "  (ldd check failed or timed out)"
+  # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "${RED}✗ FAILED: New cv_bridge is NOT linked to custom OpenCV. Overlay failed.${NC}"
+  timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep opencv || printf '%s\n' "  (ldd check failed or timed out)"
   PHASE5_SUCCESS=false
   export PHASE5_STATUS="FAIL"
   exit 1
@@ -13276,7 +13462,8 @@ fi
 # Purpose: Make overlay active in all new shell sessions
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc
 
 debug_glibc "After building ROS2 CV_Bridge"
 
@@ -13284,10 +13471,11 @@ debug_glibc "After building ROS2 CV_Bridge"
 # CRITICAL: Ensure ROS dependencies didn't pull in system Ceres packages
 # Dependencies: Block 12 (ROS overlay compilation)
 # Outputs: Warning if system Ceres detected
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "POST-ROS CHECK: Verifying no system Ceres was installed"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "POST-ROS CHECK: Verifying no system Ceres was installed"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 CERES_PACKAGE_CANDIDATES=(
     "libceres-dev"
@@ -13302,35 +13490,43 @@ for pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
 done
 
 if [ ${#CERES_INSTALLED_PACKAGES[@]} -gt 0 ]; then
-    echo "⚠️  WARNING: System Ceres packages were installed during ROS operations!"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠️  WARNING: System Ceres packages were installed during ROS operations!"
     for installed_pkg in "${CERES_INSTALLED_PACKAGES[@]}"; do
-        echo "  ${installed_pkg}"
+        printf '%s\n' "  ${installed_pkg}"
     done
-    echo ""
-    echo "Removing system Ceres to prevent conflicts with /usr/local Ceres..."
+    printf '%s\n' ""
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Removing system Ceres to prevent conflicts with /usr/local Ceres..."
     if ! apt-get remove -y "${CERES_INSTALLED_PACKAGES[@]}"; then
-        echo "[warn] Failed to remove one or more system Ceres packages"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "[warn] Failed to remove one or more system Ceres packages"
         # shellcheck disable=SC2034 # PHASE5_SUCCESS used for phase tracking
         PHASE5_SUCCESS=false
     fi
     apt-get autoremove -y || true
     run_ldconfig_refresh
-    echo "✓ System Ceres removed"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ System Ceres removed"
 else
-    echo "✓ No system Ceres packages detected after ROS operations"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ No system Ceres packages detected after ROS operations"
 fi
 
 # Verify our compiled Ceres is still present
 if ! ldconfig -p | grep -q "libceres.so"; then
-    echo "✗ ERROR: Compiled Ceres (/usr/local) is missing!"
-    echo "  This should not happen. Check Block 8 (Ceres compilation)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ ERROR: Compiled Ceres (/usr/local) is missing!"
+    printf '%s\n' "  This should not happen. Check Block 8 (Ceres compilation)"
     exit 1
 else
-    echo "✓ Compiled Ceres (/usr/local) is present and ready"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ Compiled Ceres (/usr/local) is present and ready"
 fi
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 #===============================================================================
 # BLOCK 23: ADDITIONAL ROBOTICS/ML LIBRARIES
@@ -13345,13 +13541,15 @@ echo ""
 #--- Sub-block 23.1: Initialize additional libraries installation ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Additional system libraries for robotics/ML."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "==> Additional system libraries for robotics/ML."
 
 #--- Sub-block 23.2: Fix broken dependencies ---
 # Purpose: Resolve any dependency issues from previous installations
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Fixing broken dependencies..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Fixing broken dependencies..."
 apt-get -y --fix-broken install || true
 dpkg --configure -a || true
 apt-get -y autoremove || true
@@ -13362,29 +13560,35 @@ apt-get -y autoremove || true
 # Outputs: Environment variables, configuration
 # Note: This is safe for OpenCV - we use APT pinning (Pin-Priority: -1) which survives unhold
 # Note: APT pinning in /etc/apt/preferences.d/ blocks all custom-compiled libraries
-echo "Clearing package holds (custom libraries protected by APT pinning)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Clearing package holds (custom libraries protected by APT pinning)..."
 
 # Robust method: Get held packages, validate, and unhold with proper quoting
 HELD_PACKAGES=$(dpkg --get-selections 2>/dev/null | grep -E '[[:space:]]hold$' | awk '{print $1}' || true)
 if [ -n "${HELD_PACKAGES}" ]; then
-    echo "  Found held packages, releasing holds..."
-    # Use xargs with -r (no-run-if-empty) for safety and proper quoting
-    echo "${HELD_PACKAGES}" | xargs -r apt-mark unhold 2>/dev/null || true
-    echo "  ✓ Package holds cleared"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  Found held packages, releasing holds..."
+    # D3: Use here-string instead of echo | xargs (unsafe pipe pattern)
+    xargs -r apt-mark unhold 2>/dev/null <<< "${HELD_PACKAGES}" || true
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ Package holds cleared"
 else
-    echo "  No held packages found (already clear)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  No held packages found (already clear)"
 fi
 
 #--- Sub-block 23.4: Install essential package tools ---
 # Purpose: Ensure pkg-config is available
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing essential dependencies..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing essential dependencies..."
 ESSENTIAL_ROBOTICS_PKGS=(
     "pkg-config"
 )
 if ! install_packages_resilient "Essential robotics dependencies" "${ESSENTIAL_ROBOTICS_PKGS[@]}"; then
-    echo "[warn] Failed to install essential robotics dependencies (pkg-config)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "[warn] Failed to install essential robotics dependencies (pkg-config)"
 fi
 
 #--- Sub-block 23.5: Update package lists ---
@@ -13397,13 +13601,15 @@ apt-get update || true
 # Purpose: Document that PCL/VTK already available via Drake
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "PCL and VTK libraries already available via Drake dependencies"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "PCL and VTK libraries already available via Drake dependencies"
 
 #--- Sub-block 23.7: Install Python VTK bindings ---
 # Purpose: Add Python bindings for VTK scripting (non-fatal)
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing Python VTK bindings if available..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing Python VTK bindings if available..."
 PYTHON_VTK_CANDIDATES=(
     "python3-vtk9"
     "python3-vtk7"
@@ -13416,7 +13622,8 @@ for vtk_pkg in "${PYTHON_VTK_CANDIDATES[@]}"; do
     fi
 done
 if [ "${PYTHON_VTK_INSTALLED}" = false ]; then
-    echo "Δ Python VTK bindings not available"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Δ Python VTK bindings not available"
 fi
 
 #--- Sub-block 23.8: Monitor cache after installation ---
@@ -13436,13 +13643,15 @@ debug_glibc "After Robotics/ML libraries installation"
 # Outputs: COLMAP, Open3D optimized binaries
 #-------------------------------------------------------------------------------
 
-echo "==> Installing 3D Reconstruction Tools (COLMAP + Open3D)"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "==> Installing 3D Reconstruction Tools (COLMAP + Open3D)"
 
 #--- Sub-block 24.1: Configure pip to protect compiled libraries ---
 # Critical: Prevent pip from installing precompiled binaries that would overwrite our optimized libraries
 # Dependencies: None (foundational)
 # Outputs: Configured pip environment
-echo "Configuring pip to protect compiled libraries..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Configuring pip to protect compiled libraries..."
 
 # Create pip configuration to prefer system packages and prevent binary overwrites
 mkdir -p /root/.config/pip
@@ -13472,17 +13681,19 @@ ENVSCRIPT
 chmod +x /etc/profile.d/compiled-libs.sh
 
 # Verify our compiled libraries are in place
-echo "Verifying compiled libraries..."
-echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'Not in pkg-config')"
-echo "  OpenCV: $(pkg-config --modversion opencv4 2>/dev/null || echo 'Not in pkg-config')"
-ceres_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libceres || echo 0)
-echo "  Ceres: ${ceres_count} libraries"
-g2o_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libg2o || echo 0)
-echo "  G2O: ${g2o_count} libraries"
-gtsam_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || echo 0)
-echo "  GTSAM: ${gtsam_count} libraries"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying compiled libraries..."
+printf '%s\n' "  glog: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'Not in pkg-config')"
+printf '%s\n' "  OpenCV: $(pkg-config --modversion opencv4 2>/dev/null || printf '%s\n' 'Not in pkg-config')"
+ceres_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libceres || printf '%s\n' 0)
+printf '%s\n' "  Ceres: ${ceres_count} libraries"
+g2o_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libg2o || printf '%s\n' 0)
+printf '%s\n' "  G2O: ${g2o_count} libraries"
+gtsam_count=$(timeout 5 ldconfig -p 2>/dev/null | grep -c libgtsam || printf '%s\n' 0)
+printf '%s\n' "  GTSAM: ${gtsam_count} libraries"
 
-echo "✓ pip configured to protect compiled libraries"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ pip configured to protect compiled libraries"
 
 #--- Sub-block 24.2: Install COLMAP dependencies ---
 # Note: libgoogle-glog-dev (system glog) installed via PKGS_CORE_DEPS in Block 2
@@ -13490,7 +13701,8 @@ echo "✓ pip configured to protect compiled libraries"
 # Also includes QGLViewer dependencies for G2O visualization tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing COLMAP dependencies (includes QGLViewer for G2O visualization)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing COLMAP dependencies (includes QGLViewer for G2O visualization)..."
 COLMAP_DEP_PACKAGES=(
     "libqt5core5a"
     "libqt5gui5"
@@ -13526,106 +13738,130 @@ COLMAP_DEP_PACKAGES=(
     "libcurl4-openssl-dev"
 )
 if ! install_packages_resilient "COLMAP dependencies" "${COLMAP_DEP_PACKAGES[@]}"; then
-    echo "⚠ Some COLMAP dependencies unavailable (non-fatal)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ Some COLMAP dependencies unavailable (non-fatal)"
 fi
 # Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
 # Refresh library cache after installing QGLViewer (required for G2O viewer build)
 if dpkg -l | grep -q "^ii.*libqglviewer"; then
-    echo "Refreshing library cache for QGLViewer..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Refreshing library cache for QGLViewer..."
     run_ldconfig_refresh
 fi
 
-echo "✓ COLMAP dependencies installed (includes QGLViewer for G2O visualization)"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ COLMAP dependencies installed (includes QGLViewer for G2O visualization)"
 
 #--- Sub-block 24.3: PRE-FLIGHT CHECKS - Verify glog and Ceres before COLMAP ---
 # CRITICAL: Verify dependency versions to prevent compilation failures
 # Dependencies: Block 7 (glog), Block 8 (Ceres)
 # Outputs: Diagnostic information
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "PRE-FLIGHT CHECK: Verifying glog and Ceres before COLMAP"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "PRE-FLIGHT CHECK: Verifying glog and Ceres before COLMAP"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # 1. Check glog version (CRITICAL)
-echo "1. Checking glog installation:"
-GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "1. Checking glog installation:"
+GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' "unknown")
 # SC2012: Use find instead of ls to better handle non-alphanumeric filenames
-GLOG_SONAME=$(find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name "libglog.so*" -type l -o -name "libglog.so*" -type f 2>/dev/null | head -1 | xargs readlink -f 2>/dev/null || echo "")
+GLOG_SONAME=$(find /usr/lib/x86_64-linux-gnu -maxdepth 1 -name "libglog.so*" -type l -o -name "libglog.so*" -type f 2>/dev/null | head -1 | xargs readlink -f 2>/dev/null || printf '%s\n' "")
 if [ "${GLOG_VERSION}" != "unknown" ]; then
-    echo "  ✓ glog version: ${GLOG_VERSION}"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ glog version: ${GLOG_VERSION}"
     if [ -n "${GLOG_SONAME}" ]; then
-        echo "  ✓ glog soname: ${GLOG_SONAME}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ glog soname: ${GLOG_SONAME}"
     else
-        echo "  ⚠ glog soname: not found (library may not exist)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ glog soname: not found (library may not exist)"
     fi
-    echo "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo '/usr/lib/x86_64-linux-gnu')"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || printf '%s\n' '/usr/lib/x86_64-linux-gnu')"
     
     # Verify it's glog 0.6.x (required for COLMAP 3.12.6)
     # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
     GLOG_MAJOR=$(cut -d. -f1 <<< "${GLOG_VERSION}")
     GLOG_MINOR=$(cut -d. -f2 <<< "${GLOG_VERSION}")
     if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
-        echo "  ✓ glog 0.6.x detected - COMPATIBLE with COLMAP 3.12.6"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ glog 0.6.x detected - COMPATIBLE with COLMAP 3.12.6"
     else
-        echo "  ⚠️  WARNING: glog ${GLOG_VERSION} detected - expected 0.6.x for COLMAP 3.12.6"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠️  WARNING: glog ${GLOG_VERSION} detected - expected 0.6.x for COLMAP 3.12.6"
     fi
 else
-    echo "  ✗ ERROR: glog not found via pkg-config!"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: glog not found via pkg-config!"
     exit 1
 fi
 
 # 2. Check for multiple glog installations (CONFLICT RISK)
-echo ""
-echo "2. Checking for multiple glog installations:"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "2. Checking for multiple glog installations:"
 GLOG_COUNT=$(find /usr /usr/local -name "libglog.so*" 2>/dev/null | wc -l)
 # Ensure GLOG_COUNT is numeric for comparison
 GLOG_COUNT=${GLOG_COUNT:-0}
 if [ "${GLOG_COUNT}" -gt 3 ]; then  # .so, .so.1, .so.0.6.0 = 3 files expected
-    echo "  ⚠️  WARNING: Found ${GLOG_COUNT} glog library files (potential conflict)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠️  WARNING: Found ${GLOG_COUNT} glog library files (potential conflict)"
     find /usr /usr/local -name "libglog.so*" 2>/dev/null | sed 's/^/    /'
 else
-    echo "  ✓ Single glog installation detected (clean state)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ Single glog installation detected (clean state)"
 fi
 
 # 3. Check Ceres installation and glog linkage
-echo ""
-echo "3. Checking Ceres installation:"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "3. Checking Ceres installation:"
 if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
-    CERES_LOCATION=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || echo "")
+    CERES_LOCATION=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || printf '%s\n' "")
     if [ -z "${CERES_LOCATION}" ]; then
-        echo "  ✗ ERROR: Ceres library path is empty!"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✗ ERROR: Ceres library path is empty!"
         exit 1
     fi
     if [ ! -f "${CERES_LOCATION}" ]; then
-        echo "  ✗ ERROR: Ceres library file not found: ${CERES_LOCATION}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✗ ERROR: Ceres library file not found: ${CERES_LOCATION}"
         exit 1
     fi
-    echo "  ✓ Ceres found: ${CERES_LOCATION}"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ Ceres found: ${CERES_LOCATION}"
     
     # Check if Ceres links to glog
     if timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep -q "libglog"; then
-        CERES_GLOG=$(timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog || echo "")
-        echo "  ✓ Ceres glog linkage:"
-        echo "    ${CERES_GLOG}"
+        CERES_GLOG=$(timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog || printf '%s\n' "")
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ Ceres glog linkage:"
+        printf '%s\n' "    ${CERES_GLOG}"
         
         # Verify it's not "not found"
         if grep -q "not found" <<< "${CERES_GLOG}"; then
-            echo "  ✗ ERROR: Ceres cannot find glog library!"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ✗ ERROR: Ceres cannot find glog library!"
             exit 1
         fi
     else
-        echo "  ℹ Ceres uses internal MINIGLOG (isolated from system glog)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ℹ Ceres uses internal MINIGLOG (isolated from system glog)"
     fi
 else
-    echo "  ✗ ERROR: Ceres not found in linker cache!"
-    echo "  Ceres must be compiled before COLMAP (Block 8 → Block 13A)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: Ceres not found in linker cache!"
+    printf '%s\n' "  Ceres must be compiled before COLMAP (Block 8 → Block 13A)"
     exit 1
 fi
 
 # 4. Check for system Ceres packages (should be blocked)
-echo ""
-echo "4. Checking for conflicting system Ceres packages:"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "4. Checking for conflicting system Ceres packages:"
 CERES_CONFLICT_PKGS=()
 for ceres_pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
     if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
@@ -13633,50 +13869,62 @@ for ceres_pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
     fi
 done
 if [ ${#CERES_CONFLICT_PKGS[@]} -gt 0 ]; then
-    echo "  ⚠️  WARNING: System Ceres packages detected!"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠️  WARNING: System Ceres packages detected!"
     for conflict_pkg in "${CERES_CONFLICT_PKGS[@]}"; do
-        echo "    ${conflict_pkg}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "    ${conflict_pkg}"
     done
-    echo "  This may cause conflicts with compiled Ceres in /usr/local"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  This may cause conflicts with compiled Ceres in /usr/local"
 else
-    echo "  ✓ No system Ceres packages (clean state)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ No system Ceres packages (clean state)"
 fi
 
 # 5. Summary
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "PRE-FLIGHT CHECK SUMMARY:"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "PRE-FLIGHT CHECK SUMMARY:"
 if [ -n "${GLOG_SONAME:-}" ]; then
-    echo "  glog: ${GLOG_VERSION} (${GLOG_SONAME})"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  glog: ${GLOG_VERSION} (${GLOG_SONAME})"
 else
-    echo "  glog: ${GLOG_VERSION} (soname not available)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  glog: ${GLOG_VERSION} (soname not available)"
 fi
-echo "  Ceres: Installed in /usr/local"
-echo "  Status: Ready for COLMAP compilation"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Ceres: Installed in /usr/local"
+printf '%s\n' "  Status: Ready for COLMAP compilation"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 #--- Sub-block 24.4: Download COLMAP source ---
 # Purpose: Clone COLMAP with specific version
 # Dependencies: None (foundational)
 # Outputs: COLMAP source code
 cd /tmp || exit 1
-echo "Downloading COLMAP ${COLMAP_VERSION}..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Downloading COLMAP ${COLMAP_VERSION}..."
 
 # Remove existing colmap directory if it exists to prevent clone failure
 rm -rf /tmp/colmap
 
 if ! clone_with_retry "https://github.com/colmap/colmap.git" "/tmp/colmap" "${COLMAP_VERSION}"; then
-    echo "⚠ COLMAP ${COLMAP_VERSION} tag not found, trying main branch"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ COLMAP ${COLMAP_VERSION} tag not found, trying main branch"
     rm -rf /tmp/colmap
     if ! clone_with_retry "https://github.com/colmap/colmap.git" "/tmp/colmap" "main"; then
-        echo "ERROR: Failed to clone COLMAP after all retry attempts"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "ERROR: Failed to clone COLMAP after all retry attempts"
         exit 1
     fi
 fi
 
 cd /tmp/colmap || exit 1
-echo "✓ COLMAP source downloaded"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ COLMAP source downloaded"
 
 #--- Sub-block 24.5: Configure COLMAP with CMake ---
 # Critical: Enable CUDA, OpenMP, CGAL, GUI for maximum performance
@@ -13693,52 +13941,65 @@ echo "✓ COLMAP source downloaded"
 #   - Added -fpermissive flag for template instantiation robustness
 #   - Using Ninja generator for better error messages and build performance
 #
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Configuring COLMAP ${COLMAP_VERSION} with CUDA optimizations..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Configuring COLMAP ${COLMAP_VERSION} with CUDA optimizations..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Pre-flight check: Verify system glog is available for COLMAP
-echo "🔍 Verifying system glog availability for COLMAP..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "🔍 Verifying system glog availability for COLMAP..."
 if [ ! -d "/usr/lib/x86_64-linux-gnu/cmake/glog" ]; then
-    echo "✗ ERROR: System glog CMake config not found"
-    echo "  Expected: /usr/lib/x86_64-linux-gnu/cmake/glog"
-    echo "  Install: sudo apt-get install libgoogle-glog-dev"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ ERROR: System glog CMake config not found"
+    printf '%s\n' "  Expected: /usr/lib/x86_64-linux-gnu/cmake/glog"
+    printf '%s\n' "  Install: sudo apt-get install libgoogle-glog-dev"
     exit 1
 fi
 if [ ! -f "/usr/lib/x86_64-linux-gnu/libglog.so" ]; then
-    echo "✗ ERROR: System libglog.so not found"
-    echo "  Expected: /usr/lib/x86_64-linux-gnu/libglog.so"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ ERROR: System libglog.so not found"
+    printf '%s\n' "  Expected: /usr/lib/x86_64-linux-gnu/libglog.so"
     exit 1
 fi
 
 # Check for conflicting glog installations
 if [ -d "/usr/local/lib/cmake/glog" ] || [ -f "/usr/local/lib/libglog.so" ]; then
-    echo "⚠ WARNING: Conflicting glog found in /usr/local"
-    echo "  This may cause compilation issues with COLMAP"
-    echo "  System will use -DCMAKE_IGNORE_PATH to prefer system glog"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ WARNING: Conflicting glog found in /usr/local"
+    printf '%s\n' "  This may cause compilation issues with COLMAP"
+    printf '%s\n' "  System will use -DCMAKE_IGNORE_PATH to prefer system glog"
     find /usr/local -name "*glog*" -type f 2>/dev/null | head -5 || true
 fi
 
-echo "✓ System glog is available for COLMAP"
-echo "  Location: /usr/lib/x86_64-linux-gnu"
-echo "  CMake config: /usr/lib/x86_64-linux-gnu/cmake/glog"
-echo "  Version: $(pkg-config --modversion libglog 2>/dev/null || echo 'unknown')"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ System glog is available for COLMAP"
+printf '%s\n' "  Location: /usr/lib/x86_64-linux-gnu"
+printf '%s\n' "  CMake config: /usr/lib/x86_64-linux-gnu/cmake/glog"
+printf '%s\n' "  Version: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'unknown')"
 
 # Clean build directory (critical for rebuilds)
-echo ""
-echo "🧹 Cleaning build directory for fresh COLMAP build..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "🧹 Cleaning build directory for fresh COLMAP build..."
 # Clear ccache to prevent corruption from previous failed builds
-echo "  Clearing ccache..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Clearing ccache..."
 if command -v ccache >/dev/null 2>&1; then
-    CCACHE_BEFORE=$(ccache -s 2>/dev/null | grep "cache size" || echo "unknown")
+    CCACHE_BEFORE=$(ccache -s 2>/dev/null | grep "cache size" || printf '%s\n' "unknown")
     ccache -C 2>/dev/null || true
-    echo "  ✓ ccache cleared (was: ${CCACHE_BEFORE})"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ ccache cleared (was: ${CCACHE_BEFORE})"
 else
-    echo "  ℹ ccache not available (OK)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ℹ ccache not available (OK)"
 fi
 rm -rf build CMakeCache.txt CMakeFiles
-mkdir -p build && cd build
-echo "✓ Clean build directory created"
+mkdir -p build || exit 1
+# H1: Check exit code of cd operation
+cd build || exit 1
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ Clean build directory created"
 
 #===============================================================================
 # CUDA Compiler Compatibility Workarounds for COLMAP
@@ -13748,16 +14009,18 @@ COLMAP_CUDA_FLAGS="-Xcompiler -fopenmp"
 GCC_VERSION_FOR_COLMAP=""
 GCC_MAJOR_FOR_COLMAP=""
 if command -v gcc &>/dev/null; then
-    GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || printf '%s\n' "")
     if [ -n "${GCC_VERSION_FOR_COLMAP}" ]; then
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
         GCC_MAJOR_FOR_COLMAP=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_COLMAP}")
-        echo "  Detected GCC version for COLMAP: ${GCC_VERSION_FOR_COLMAP}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  Detected GCC version for COLMAP: ${GCC_VERSION_FOR_COLMAP}"
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
         # Validate GCC_MAJOR_FOR_COLMAP is numeric before comparison
         if [ "${GCC_MAJOR_FOR_COLMAP}" = "11" ]; then
-            echo -e "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
+            # D3b: Replace echo -e with printf for POSIX compliance and to avoid variable flag interpretation
+            printf '%s\n' "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
             COLMAP_CUDA_FLAGS="-allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
         elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -gt "11" ] 2>/dev/null; then
             # GCC 12+ generally works better, but keep basic compatibility flags
@@ -13767,8 +14030,9 @@ if command -v gcc &>/dev/null; then
 fi
 
 # CMake configuration with Ninja generator
-echo ""
-echo "⚙️ Running CMake configuration (this may take a few minutes)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "⚙️ Running CMake configuration (this may take a few minutes)..."
 
 COLMAP_CMAKE_ARGS=(
   # CRITICAL: Use explicit paths for compiled libraries (Ceres, SuiteSparse, OpenCV, Eigen)
