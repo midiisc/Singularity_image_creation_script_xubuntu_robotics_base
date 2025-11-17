@@ -4948,20 +4948,72 @@ if ! run_ldconfig_refresh 2>&1; then
 fi
 echo -e "${GREEN}✓ Intel MKL installation and environment configuration complete${NC}"
 
-MKL_LIB_DIR="${MKLROOT}/lib/intel64"
-MKL_INCLUDE_DIR="${MKLROOT}/include"
+# ------------------------------------------------------------------------------
+# Dynamic MKL directory discovery (supports versioned layouts like 2025.3)
+# ------------------------------------------------------------------------------
+MKL_INCLUDE_DIR=""
+MKL_LIB_DIR=""
+MKL_INCLUDE_CANDIDATES=(
+    "${MKLROOT}/include"
+    "${MKLROOT}/../include"
+    "${MKLROOT}/../../include"
+)
+MKL_LIB_CANDIDATES=(
+    "${MKLROOT}/lib/intel64"
+    "${MKLROOT}/lib/intel64_lin"
+    "${MKLROOT}/lib/linux/intel64"
+    "${MKLROOT}/lib"
+    "${MKLROOT}/../lib/intel64"
+    "${MKLROOT}/../lib"
+)
 
-if [ ! -d "${MKL_LIB_DIR}" ]; then
-    echo -e "  ${RED}✗ Expected MKL library directory missing at ${MKL_LIB_DIR}${NC}"
+for candidate in "${MKL_INCLUDE_CANDIDATES[@]}"; do
+    if [ -z "${candidate}" ]; then
+        continue
+    fi
+    if [ -d "${candidate}" ] && [ -f "${candidate}/mkl_cblas.h" ]; then
+        MKL_INCLUDE_DIR="$(realpath -m "${candidate}")"
+        break
+    fi
+# ENDFOR: MKL include candidate scan
+done
+
+if [ -z "${MKL_INCLUDE_DIR}" ]; then
+    found_include="$(find "${MKLROOT}" -maxdepth 4 -type f -name "mkl_cblas.h" -print -quit 2>/dev/null || true)"
+    if [ -n "${found_include}" ]; then
+        MKL_INCLUDE_DIR="$(dirname "${found_include}")"
+    fi
+fi
+
+if [ -z "${MKL_INCLUDE_DIR}" ] || [ ! -d "${MKL_INCLUDE_DIR}" ]; then
+    echo -e "  ${RED}✗ Unable to locate MKL include directory under ${MKLROOT}${NC}"
     exit 1
 fi
-# ENDIF: MKL library directory exists
+echo "  ✓ MKL include directory resolved: ${MKL_INCLUDE_DIR}"
 
-if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
-    echo -e "  ${RED}✗ Expected MKL include directory missing at ${MKL_INCLUDE_DIR}${NC}"
+for candidate in "${MKL_LIB_CANDIDATES[@]}"; do
+    if [ -z "${candidate}" ]; then
+        continue
+    fi
+    if [ -d "${candidate}" ] && compgen -G "${candidate}/libmkl_*.so" >/dev/null; then
+        MKL_LIB_DIR="$(realpath -m "${candidate}")"
+        break
+    fi
+# ENDFOR: MKL lib candidate scan
+done
+
+if [ -z "${MKL_LIB_DIR}" ]; then
+    found_lib="$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || true)"
+    if [ -n "${found_lib}" ]; then
+        MKL_LIB_DIR="$(dirname "${found_lib}")"
+    fi
+fi
+
+if [ -z "${MKL_LIB_DIR}" ] || [ ! -d "${MKL_LIB_DIR}" ]; then
+    echo -e "  ${RED}✗ Unable to locate MKL library directory under ${MKLROOT}${NC}"
     exit 1
 fi
-# ENDIF: MKL include directory exists
+echo "  ✓ MKL library directory resolved: ${MKL_LIB_DIR}"
 
 MKL_RT_LIB="${MKL_LIB_DIR}/libmkl_rt.so"
 if [ -f "${MKL_RT_LIB}" ]; then
@@ -12127,8 +12179,8 @@ OPENCV_CMAKE_ARGS=(
   # LAPACK Headers: Required for OpenCV's LAPACK detection
   # OpenCV's OpenCVFindLAPACK.cmake requires mkl_cblas.h and mkl_lapack.h
   # CRITICAL: Both LAPACK_INCLUDE_DIR and LAPACK_INCLUDE_DIRS must be set for reliable detection
-  "-DLAPACK_INCLUDE_DIR=${MKLROOT}/include"
-  "-DLAPACK_INCLUDE_DIRS=${MKLROOT}/include"
+    "-DLAPACK_INCLUDE_DIR=${MKL_INCLUDE_DIR}"
+    "-DLAPACK_INCLUDE_DIRS=${MKL_INCLUDE_DIR}"
   # MKL Root: Required for OpenCV's OpenCVFindMKL.cmake to locate MKL installation
   "-DMKL_ROOT=${MKLROOT}"
   # MKL Threading: GNU OpenMP (libgomp) for GCC toolchain compatibility
@@ -12196,7 +12248,7 @@ OPENCV_CMAKE_ARGS=(
   "-DCMAKE_CUDA_STANDARD_REQUIRED=ON"
   # CMAKE_INCLUDE_PATH: Help CMake find headers for TBB and MKL
   # Includes /usr/include for system TBB headers and MKLROOT/include for MKL headers
-  "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include:${MKLROOT:-}/include"
+    "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include:${MKL_INCLUDE_DIR}"
   "-DCMAKE_CXX_FLAGS=-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_C_FLAGS=-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_EXE_LINKER_FLAGS=-flto -fopenmp"
@@ -12237,7 +12289,7 @@ fi
 # CRITICAL: Also add CMAKE_LIBRARY_PATH to help detection
 # This path helps CMake find libraries even if CMAKE_PREFIX_PATH is not sufficient
 # Note: CMAKE_INCLUDE_PATH is already set in the array above (line ~8801)
-OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:${MKLROOT:-}/lib/intel64")
+  OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:${MKL_LIB_DIR}")
 
 # CRITICAL: Verify MKL headers exist before CMake configuration
 # OpenCV's OpenCVFindLAPACK.cmake requires mkl_cblas.h and mkl_lapack.h for LAPACK detection
@@ -12297,9 +12349,13 @@ TBB_OK=true
 TBB_CMAKE_DIR=""
 TBB_CMAKE_CANDIDATES=(
   "/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  "/usr/lib/x86_64-linux-gnu/cmake/tbb"
   "/usr/lib/cmake/TBB"
+  "/usr/lib/cmake/tbb"
   "/usr/local/lib/cmake/TBB"
+  "/usr/local/lib/cmake/tbb"
   "/usr/local/lib/x86_64-linux-gnu/cmake/TBB"
+  "/usr/local/lib/x86_64-linux-gnu/cmake/tbb"
 )
 
 echo "  Phase 1: Searching for TBB CMake config directory..."
@@ -12322,7 +12378,7 @@ if [ -z "${TBB_CMAKE_DIR}" ]; then
         tbb_found_dir="${found_path}"
       fi
     fi
-  done < <(find /usr -type d -path "*/cmake/TBB" -print0 2>/dev/null || true)
+  done < <(find /usr -type d \( -path "*/cmake/TBB" -o -path "*/cmake/tbb" \) -print0 2>/dev/null || true)
   
   if [ -n "${tbb_found_dir:-}" ] && [ -d "${tbb_found_dir}" ]; then
     TBB_CMAKE_DIR="${tbb_found_dir}"
@@ -12336,10 +12392,15 @@ fi
 TBB_LIB_PATH=""
 TBB_LIB_CANDIDATES=(
   "/usr/lib/x86_64-linux-gnu/libtbb.so"
+  "/usr/lib/x86_64-linux-gnu/libtbb.so.12"
   "/usr/lib/libtbb.so"
+  "/usr/lib/libtbb.so.12"
   "/usr/lib64/libtbb.so"
+  "/usr/lib64/libtbb.so.12"
   "/usr/local/lib/libtbb.so"
+  "/usr/local/lib/libtbb.so.12"
   "/usr/local/lib/x86_64-linux-gnu/libtbb.so"
+  "/usr/local/lib/x86_64-linux-gnu/libtbb.so.12"
 )
 
 echo "  Phase 2: Searching for TBB library..."
@@ -12354,7 +12415,7 @@ done
 # Fallback: Search entire /usr tree for libtbb.so (comprehensive system query)
 if [ -z "${TBB_LIB_PATH}" ]; then
   echo "  Searching entire /usr tree for libtbb.so..."
-  tbb_lib_found=$(find /usr/lib* /usr/local/lib* -name "libtbb.so" -type f 2>/dev/null | head -1 || echo "")
+  tbb_lib_found=$(find /usr/lib* /usr/local/lib* -type f \( -name "libtbb.so" -o -name "libtbb.so.*" \) 2>/dev/null | head -1 || echo "")
   if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
     TBB_LIB_PATH="${tbb_lib_found}"
     echo -e "  ${GREEN}✓ TBB library found via system search: ${TBB_LIB_PATH}${NC}"
@@ -12370,6 +12431,7 @@ TBB_INCLUDE_CANDIDATES=(
   "/usr/include/tbb"
   "/usr/local/include/tbb"
   "/usr/include/x86_64-linux-gnu/tbb"
+  "/usr/include/oneapi/tbb"
 )
 
 echo "  Phase 3: Searching for TBB include directory..."
@@ -12608,11 +12670,11 @@ echo -e "  ${GREEN}✓ All TBB paths configured explicitly${NC}"
 # Abort if critical dependencies are missing
 if [ "${MKL_HEADERS_OK}" != "true" ] || [ "${TBB_OK}" != "true" ]; then
   echo -e "${RED}ERROR: Critical dependencies missing for OpenCV configuration.${NC}"
-  if [ "${MKL_HEADERS_OK}" != "true" ]; then
-    echo -e "${RED}  → MKL headers or libraries not found${NC}"
-    echo -e "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKLROOT:-<unset>}/include${NC}"
-    echo -e "${YELLOW}  Required: MKL libraries in ${MKLROOT:-<unset>}/lib/intel64${NC}"
-  fi
+    if [ "${MKL_HEADERS_OK}" != "true" ]; then
+      echo -e "${RED}  → MKL headers or libraries not found${NC}"
+      echo -e "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKL_INCLUDE_DIR:-<unset>}${NC}"
+      echo -e "${YELLOW}  Required: MKL libraries in ${MKL_LIB_DIR:-<unset>}${NC}"
+    fi
   if [ "${TBB_OK}" != "true" ]; then
     echo -e "${RED}  → TBB library or headers not found${NC}"
     echo -e "${YELLOW}  Required: libtbb-dev package installed${NC}"
@@ -12632,8 +12694,8 @@ fi
 
 # Additional CMake variables for LAPACK detection
 # These help OpenCV's OpenCVFindLAPACK.cmake locate MKL headers more reliably
-OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIR=${MKLROOT}/include")
-OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIRS=${MKLROOT}/include")
+OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIR=${MKL_INCLUDE_DIR}")
+OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIRS=${MKL_INCLUDE_DIR}")
 
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
 # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
@@ -12697,10 +12759,25 @@ else
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=OFF")
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=OFF")
 fi
+
+# Temporarily clear SuiteSparse_ROOT so CMake relies on SuiteSparse_DIR instead of emitting warnings.
+SAVED_SUITESPARSE_ROOT="${SuiteSparse_ROOT:-}"
+if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
+  echo "Temporarily unsetting SuiteSparse_ROOT for OpenCV configuration (SuiteSparse_DIR is explicitly provided)."
+  unset SuiteSparse_ROOT
+fi
+
 # Execute the CMake command
 if ! cmake "${OPENCV_CMAKE_ARGS[@]}" ..; then
+  if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
+    export SuiteSparse_ROOT="${SAVED_SUITESPARSE_ROOT}"
+  fi
   echo "ERROR: Failed to configure OpenCV with CMake"
   exit 1
+fi
+
+if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
+  export SuiteSparse_ROOT="${SAVED_SUITESPARSE_ROOT}"
 fi
 
 #--- Sub-block 20.9: Verify OpenCV CMake configuration ---
