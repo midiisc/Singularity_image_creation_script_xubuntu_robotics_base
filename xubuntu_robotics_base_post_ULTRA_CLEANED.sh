@@ -471,16 +471,32 @@ set -e
 # - set -u: unset variables should trigger an error
 # - set -o pipefail: pipeline should return failure if any stage fails
 # NOTE:
+#   These checks are informational only - warnings do NOT stop script execution.
+#   Script continues regardless of check results (non-blocking warnings).
 #   Direct subshell-based checks can produce false positives on some Bash builds.
 #   We perform out-of-process checks and emit a single high-signal line with context.
+
+# Check set -e (errexit)
 if bash -c 'set -e; false; echo STRICT_SET_E_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
 	echo "[WARN] Strict check(set -e) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
+	echo "[INFO] Script continues - this is a non-blocking warning"
 fi
+
+# Check set -u (nounset)
 if bash -c 'set -u; : "${__UNSET_STRICT_TEST_VAR__?unset variable test}"' >/dev/null 2>&1; then
 	echo "[WARN] Strict check(set -u) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
+	echo "[INFO] Script continues - this is a non-blocking warning"
 fi
-if bash -c 'set -o pipefail; false | true; echo STRICT_PIPEFAIL_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
+
+# Check set -o pipefail
+# FIX: Added set -e to the pipefail check - pipefail alone doesn't stop execution, it only affects exit code
+# Without set -e, the pipeline fails but execution continues, causing false positive warnings
+# Root cause: Original check tested pipefail in isolation, which always "fails" because pipefail
+# only affects exit codes, not execution flow. Combined with set -e, the check is now accurate.
+if bash -c 'set -e -o pipefail; false | true; echo STRICT_PIPEFAIL_SHOULD_NOT_PRINT' >/dev/null 2>&1; then
 	echo "[WARN] Strict check(pipefail) anomaly; bash=${BASH_VERSION:-?} shellopts=${SHELLOPTS:-} file=${BASH_SOURCE[0]} line=${LINENO}"
+	echo "[INFO] Script continues - this is a non-blocking warning"
+	echo "[INFO] If this warning appears, it indicates pipefail+errexit may not be working correctly in this Bash environment"
 fi
 
 #===============================================================================
@@ -7770,7 +7786,8 @@ if [ -f "CMakeCache.txt" ]; then
     LINKER_FLAGS_CHECK=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" CMakeCache.txt 2>/dev/null | cut -d'=' -f2- || echo "")
     # Validate variable before using in here-string (D3, F2)
     # D3c: Use grep -F for fixed-string matching (literal pattern)
-    if [ -n "${LINKER_FLAGS_CHECK}" ] && grep -Fq "-lm" <<< "${LINKER_FLAGS_CHECK}"; then
+    # CRITICAL: Use -- to prevent grep from interpreting -lm as an option
+    if [ -n "${LINKER_FLAGS_CHECK}" ] && grep -Fq -- "-lm" <<< "${LINKER_FLAGS_CHECK}"; then
         printf '%s\n' "  ✓ Verified: CMAKE_SHARED_LINKER_FLAGS contains -lm"
     else
         printf '%s\n' "  ⚠ WARNING: CMAKE_SHARED_LINKER_FLAGS does NOT contain -lm" >&2
@@ -7829,13 +7846,14 @@ if ! cmake --build . -j"$(nproc)"; then
         EXE_LINKER_FLAGS=$(grep -i "^CMAKE_EXE_LINKER_FLAGS:" "CMakeCache.txt" 2>/dev/null | cut -d'=' -f2- || echo "")
         # Validate variable before using in here-string (D3, F2)
         # D3c: Use grep -F for fixed-string matching (literal pattern)
-        if [ -n "${LINKER_FLAGS}" ] && grep -Fq "-lm" <<< "${LINKER_FLAGS}"; then
+        # CRITICAL: Use -- to prevent grep from interpreting -lm as an option
+        if [ -n "${LINKER_FLAGS}" ] && grep -Fq -- "-lm" <<< "${LINKER_FLAGS}"; then
             printf '%s\n' "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES" >&2
         else
             printf '%s\n' "    - CMAKE_SHARED_LINKER_FLAGS contains -lm: NO" >&2
             printf '%s\n' "      Actual flags: ${LINKER_FLAGS:0:80}..." >&2
         fi
-        if [ -n "${EXE_LINKER_FLAGS}" ] && grep -Fq "-lm" <<< "${EXE_LINKER_FLAGS}"; then
+        if [ -n "${EXE_LINKER_FLAGS}" ] && grep -Fq -- "-lm" <<< "${EXE_LINKER_FLAGS}"; then
             printf '%s\n' "    - CMAKE_EXE_LINKER_FLAGS contains -lm: YES" >&2
         else
             printf '%s\n' "    - CMAKE_EXE_LINKER_FLAGS contains -lm: NO" >&2
@@ -7868,12 +7886,13 @@ if [ -f "CMakeCache.txt" ]; then
     # Check both shared and executable linker flags
     # Validate variables before using in here-strings (D3, F2)
     # D3c: Use grep -F for fixed-string matching (literal pattern)
-    if [ -n "${LINKER_FLAGS}" ] && grep -Fq "-lm" <<< "${LINKER_FLAGS}"; then
+    # CRITICAL: Use -- to prevent grep from interpreting -lm as an option
+    if [ -n "${LINKER_FLAGS}" ] && grep -Fq -- "-lm" <<< "${LINKER_FLAGS}"; then
       SHARED_HAS_LM="YES"
     else
       SHARED_HAS_LM="NO"
     fi
-    if [ -n "${EXE_LINKER_FLAGS}" ] && grep -Fq "-lm" <<< "${EXE_LINKER_FLAGS}"; then
+    if [ -n "${EXE_LINKER_FLAGS}" ] && grep -Fq -- "-lm" <<< "${EXE_LINKER_FLAGS}"; then
       EXE_HAS_LM="YES"
     else
       EXE_HAS_LM="NO"
@@ -7983,7 +8002,8 @@ verify_math_library_linkage() {
                     LINKER_FLAGS=$(grep -i "^CMAKE_SHARED_LINKER_FLAGS:" "${cmake_cache}" 2>/dev/null | cut -d'=' -f2- || echo "")
                     # Validate variable before using in here-string (D3, F2)
                     # D3c: Use grep -F for fixed-string matching (literal pattern)
-                    if [ -n "${LINKER_FLAGS}" ] && grep -Fq "-lm" <<< "${LINKER_FLAGS}"; then
+                    # CRITICAL: Use -- to prevent grep from interpreting -lm as an option
+                    if [ -n "${LINKER_FLAGS}" ] && grep -Fq -- "-lm" <<< "${LINKER_FLAGS}"; then
                         printf '%s\n' "      - CMAKE_SHARED_LINKER_FLAGS contains -lm: YES" >&2
                         printf '%s\n' "      → NOTE: Even though NO_LIBM=${NO_LIBM_VALUE}, linker flags include -lm, so linking should work" >&2
                     else
@@ -9164,7 +9184,7 @@ install_and_verify_group() {
     # Check package status (optimize: single dpkg call)
     local pkg_status
     pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-    if grep -q "ok installed" <<< "${pkg_status}"; then
+    if grep -Fq "ok installed" <<< "${pkg_status}"; then
       echo -e "  - ${pkg}: ${GREEN}OK${NC}"
     else
       echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
@@ -9284,7 +9304,8 @@ install_and_verify_group "BuildTools" "${PKGS_BUILD_TOOLS_ARRAY[@]}"
 # --- Special install for gdb to avoid dependency conflicts ---
 echo -e "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
 apt-get install -y --no-install-recommends gdb
-if dpkg -s "gdb" 2>/dev/null | grep -q "Status: install ok installed"; then
+gdb_status=$(dpkg -s "gdb" 2>/dev/null || echo "")
+if grep -Fq "Status: install ok installed" <<< "${gdb_status}"; then
   echo -e "  - gdb: ${GREEN}OK${NC}"
 else
   echo -e "  - gdb: ${RED}FAIL${NC}"
@@ -9430,7 +9451,11 @@ tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
 
 # Window 1: ROS workspace (using ROS_DISTRO from environment/config.sh)
 ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
-ROS_WINDOW_NAME="${ROS_WINDOW_NAME^}"
+# A6: Use POSIX-compliant uppercase first character (Bash 4+ ${var^} not portable)
+# Extract first character, uppercase it, then append rest using POSIX-compliant commands
+first_char=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c1)
+rest_chars=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c2-)
+ROS_WINDOW_NAME="$(printf '%s%s' "$(printf '%s' "${first_char}" | tr '[:lower:]' '[:upper:]')" "${rest_chars}")"
 tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
 tmux_conda_prefix "${SESSION}:1"
 tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy} >/dev/null 2>&1 || true" C-m
@@ -9522,33 +9547,55 @@ clone_with_retry() {
     local retry_count=0
     
     # Convert relative paths to absolute (critical for Singularity environment)
+    # A5: Using [[ ]] for pattern matching (Bash-specific, documented: needs pattern matching)
     if [[ "${target_dir}" != /* ]]; then
+        # C2/SC2155: Declare and assign separately to avoid masking return values
         local parent_dir
         parent_dir="$(cd "$(dirname "${target_dir}")" 2>/dev/null && pwd || echo "")"
-        if [ -n "${parent_dir}" ]; then
+        # C5: Unbound variable protection with validation
+        if [ -n "${parent_dir:-}" ]; then
             target_dir="${parent_dir}/$(basename "${target_dir}")"
         else
             # If still relative, use current directory
-            target_dir="$(pwd)/${target_dir}"
+            # C5: Unbound variable protection
+            target_dir="$(pwd || echo "")/${target_dir}"
+            # H4: Validate result
+            if [ -z "${target_dir}" ]; then
+                printf "[ERROR] Failed to determine current directory\n" >&2
+                return 1
+            fi
         fi
     fi
     
-    echo "Cloning ${repo_url} to ${target_dir}..."
+    # A5a: Use printf instead of echo for robustness (handles special characters)
+    printf "Cloning %s to %s...\n" "${repo_url}" "${target_dir}"
     
     # CRITICAL: Remove existing directory before cloning (essential for Singularity builds)
     # In Singularity, /tmp persists between build attempts, so directories may already exist
     if [ -d "${target_dir}" ] || [ -f "${target_dir}" ]; then
-        echo "  Removing existing target directory: ${target_dir}"
-        rm -rf "${target_dir}" 2>/dev/null || true
+        # A5a: Use printf instead of echo for robustness
+        printf "  Removing existing target directory: %s\n" "${target_dir}"
+        # H4: Validate removal result (best effort, non-critical for build)
+        if ! rm -rf "${target_dir}" 2>/dev/null; then
+            printf "[WARN] Failed to remove existing directory: %s (continuing anyway)\n" "${target_dir}" >&2
+        fi
     fi
     
     while [ "${retry_count}" -lt "${max_retries}" ]; do
-        echo "Attempt $((retry_count + 1))/${max_retries}..."
+        # A5a: Use printf instead of echo for robustness
+        printf "Attempt %d/%d...\n" $((retry_count + 1)) "${max_retries}"
         
         # Configure git for better network handling
-        git config --global http.postBuffer 524288000
-        git config --global http.maxRequestBuffer 100M
-        git config --global core.compression 0
+        # H1: Exit status checks for external commands
+        if ! git config --global http.postBuffer 524288000; then
+            printf "[WARN] Failed to set git http.postBuffer\n" >&2
+        fi
+        if ! git config --global http.maxRequestBuffer 100M; then
+            printf "[WARN] Failed to set git http.maxRequestBuffer\n" >&2
+        fi
+        if ! git config --global core.compression 0; then
+            printf "[WARN] Failed to set git core.compression\n" >&2
+        fi
         
         # Try cloning with different strategies
         local clone_success=false
@@ -9588,23 +9635,30 @@ clone_with_retry() {
         fi
         
         if [ "${clone_success}" = true ]; then
-            echo "✓ Successfully cloned ${repo_url}"
+            # A5a: Use printf instead of echo for robustness
+            printf "✓ Successfully cloned %s\n" "${repo_url}"
             return 0
         else
-            echo "✗ Clone attempt $((retry_count + 1)) failed"
+            # A5a: Use printf instead of echo for robustness
+            printf "✗ Clone attempt %d failed\n" $((retry_count + 1))
             retry_count=$((retry_count + 1))
             
             # Clean up failed attempt
-            rm -rf "${target_dir}" 2>/dev/null || true
+            # H4: Validate removal result (best effort, non-critical)
+            if ! rm -rf "${target_dir}" 2>/dev/null; then
+                printf "[WARN] Failed to clean up failed clone directory: %s\n" "${target_dir}" >&2
+            fi
             
             if [ "${retry_count}" -lt "${max_retries}" ]; then
-                echo "Waiting 10 seconds before retry..."
+                # A5a: Use printf instead of echo for robustness
+                printf "Waiting 10 seconds before retry...\n"
                 sleep 10
             fi
         fi
     done
     
-    echo "✗ Failed to clone ${repo_url} after ${max_retries} attempts"
+    # A5a: Use printf instead of echo for robustness
+    printf "✗ Failed to clone %s after %d attempts\n" "${repo_url}" "${max_retries}"
     return 1
 }
 
@@ -9636,132 +9690,185 @@ clone_with_retry() {
 #
 # Dependencies: APT repositories configured
 # Outputs: System glog library in /usr (installed via apt)
-echo -e "\n${YELLOW}[PHASE 3 | glog] Using Ubuntu system package (libgoogle-glog-dev)...${NC}"
-echo "✓ glog will be installed via apt as libgoogle-glog-dev (0.6.0-2.1build1)"
-echo "  - Includes Ubuntu's compatibility patches for COLMAP"
-echo "  - No compilation needed"
-echo ""
+# A5a: echo -e with color variables is acceptable (variables are safe constants)
+printf "\n%s[PHASE 3 | glog] Using Ubuntu system package (libgoogle-glog-dev)...%s\n" "${YELLOW}" "${NC}"
+# A5a: Use printf instead of echo for robustness
+printf "✓ glog will be installed via apt as libgoogle-glog-dev (0.6.0-2.1build1)\n"
+printf "  - Includes Ubuntu's compatibility patches for COLMAP\n"
+printf "  - No compilation needed\n"
+printf "\n"
 monitor_cache "After glog setup (system package)"
 
 #--- Sub-block 17.3: Verify System glog Installation ---
 # Purpose: Verify Ubuntu's glog 0.6.0 is installed and check for version conflicts
 # Dependencies: PKGS_CORE_DEPS (libgoogle-glog-dev already installed from apt)
 # Outputs: Verified glog installation
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Verifying system glog installation for COLMAP compatibility..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo for robustness
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+printf "Verifying system glog installation for COLMAP compatibility...\n"
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
 # Check for multiple glog installations (potential conflict)
-echo "🔍 Checking for conflicting glog versions..."
-echo ""
-echo "1. Checking all glog libraries in system:"
-timeout 5 ldconfig -p 2>/dev/null | grep -F glog || echo "  ⚠ No glog libraries found in ldconfig cache"
-echo ""
-
-echo "2. Checking all glog headers:"
-glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F glog || echo "")
-if [ -n "${glog_headers}" ]; then
-  echo "${glog_headers}"
+# A5a: Use printf instead of echo for robustness
+printf "🔍 Checking for conflicting glog versions...\n"
+printf "\n"
+printf "1. Checking all glog libraries in system:\n"
+# H1: Exit status check for timeout command
+if timeout 5 ldconfig -p 2>/dev/null | grep -F glog; then
+    : # Libraries found
 else
-  echo "  ⚠ No glog headers found"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ⚠ No glog libraries found in ldconfig cache\n"
 fi
-echo ""
+printf "\n"
 
-echo "3. Checking dpkg for installed glog packages:"
-dpkg -l | grep -F glog || echo "  ℹ No glog packages in dpkg"
-echo ""
+# A5a: Use printf instead of echo for robustness
+printf "2. Checking all glog headers:\n"
+# C5/H4: Command substitution with error handling
+glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F glog || echo "")
+# C5: Unbound variable protection
+if [ -n "${glog_headers:-}" ]; then
+    # A5a: Use printf instead of echo for robustness
+    printf "%s\n" "${glog_headers}"
+else
+    # A5a: Use printf instead of echo for robustness
+    printf "  ⚠ No glog headers found\n"
+fi
+printf "\n"
+
+# A5a: Use printf instead of echo for robustness
+printf "3. Checking dpkg for installed glog packages:\n"
+# H1: Exit status check for dpkg command
+if dpkg -l 2>/dev/null | grep -F glog; then
+    : # Packages found
+else
+    # A5a: Use printf instead of echo for robustness
+    printf "  ℹ No glog packages in dpkg\n"
+fi
+printf "\n"
 
 # Verify system glog is installed (accept held packages as well)
 GLOG_PKG_NAME="libgoogle-glog-dev"
-RESOLVED_GLOG_PKG=$(dpkg_resolve_installed_package "${GLOG_PKG_NAME}" 2>/dev/null || true)
+# C5/H4: Command substitution with error handling and validation
+RESOLVED_GLOG_PKG=$(dpkg_resolve_installed_package "${GLOG_PKG_NAME}" 2>/dev/null || echo "")
+# C5: Unbound variable protection with validation
 if [ -z "${RESOLVED_GLOG_PKG:-}" ]; then
-    echo "✗ ERROR: libgoogle-glog-dev not installed!"
-    echo "  This should have been installed via PKGS_CORE_DEPS"
+    # A5a: Use printf instead of echo for robustness
+    printf "✗ ERROR: libgoogle-glog-dev not installed!\n" >&2
+    printf "  This should have been installed via PKGS_CORE_DEPS\n" >&2
     exit 1
 fi
 
-INSTALLED_GLOG=$(dpkg_get_installed_version "${GLOG_PKG_NAME}" || true)
+# C5/H4: Command substitution with error handling and validation
+INSTALLED_GLOG=$(dpkg_get_installed_version "${GLOG_PKG_NAME}" 2>/dev/null || echo "")
+# C5: Unbound variable protection with validation
 if [ -z "${INSTALLED_GLOG:-}" ]; then
     INSTALLED_GLOG="unknown"
 fi
-echo "✓ Found system glog: ${INSTALLED_GLOG}"
-echo ""
+# A5a: Use printf instead of echo for robustness
+printf "✓ Found system glog: %s\n" "${INSTALLED_GLOG}"
+printf "\n"
 
 # Verify CMake can find glog
-echo "4. Verifying CMake can detect glog..."
+# A5a: Use printf instead of echo for robustness
+printf "4. Verifying CMake can detect glog...\n"
+# J1: Directory existence validation
 if [ -d "/usr/lib/x86_64-linux-gnu/cmake/glog" ]; then
-    echo "  ✓ CMake config found: /usr/lib/x86_64-linux-gnu/cmake/glog"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✓ CMake config found: /usr/lib/x86_64-linux-gnu/cmake/glog\n"
+    # J1: File existence validation
     if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glog/glog-config.cmake" ]; then
-        echo "  ✓ glog-config.cmake exists"
+        # A5a: Use printf instead of echo for robustness
+        printf "  ✓ glog-config.cmake exists\n"
     fi
 else
-    echo "  ⚠ WARNING: glog CMake config not found in expected location"
-    echo "    COLMAP may have issues finding glog"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ⚠ WARNING: glog CMake config not found in expected location\n" >&2
+    printf "    COLMAP may have issues finding glog\n" >&2
 fi
-echo ""
+printf "\n"
 
 # Check glog version for COLMAP compatibility
-echo "5. Checking glog version compatibility with COLMAP 3.12.6..."
+# A5a: Use printf instead of echo for robustness
+printf "5. Checking glog version compatibility with COLMAP 3.12.6...\n"
+# C5/H4: Command substitution with error handling and validation
 GLOG_VERSION=$(pkg-config --modversion libglog 2>/dev/null || echo "unknown")
-if [ "${GLOG_VERSION}" != "unknown" ]; then
-    echo "  ✓ pkg-config reports glog version: ${GLOG_VERSION}"
+# C5: Unbound variable protection
+if [ "${GLOG_VERSION:-unknown}" != "unknown" ]; then
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✓ pkg-config reports glog version: %s\n" "${GLOG_VERSION}"
     # Extract major.minor version
-    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-    GLOG_MAJOR=$(cut -d. -f1 <<< "${GLOG_VERSION}")
-    GLOG_MINOR=$(cut -d. -f2 <<< "${GLOG_VERSION}")
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern) - CORRECT
+    GLOG_MAJOR=$(cut -d. -f1 <<< "${GLOG_VERSION}" || echo "")
+    GLOG_MINOR=$(cut -d. -f2 <<< "${GLOG_VERSION}" || echo "")
     
+    # C5: Unbound variable protection with validation
     # Validate version components are numeric before comparison
-    if [ -n "${GLOG_MAJOR}" ] && [ -n "${GLOG_MINOR}" ] && \
+    if [ -n "${GLOG_MAJOR:-}" ] && [ -n "${GLOG_MINOR:-}" ] && \
        grep -qE '^[0-9]+$' <<< "${GLOG_MAJOR}" && \
        grep -qE '^[0-9]+$' <<< "${GLOG_MINOR}"; then
         if [ "${GLOG_MAJOR}" -eq 0 ] && [ "${GLOG_MINOR}" -eq 6 ]; then
-            echo "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches"
-            echo "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)"
+            # A5a: Use printf instead of echo for robustness
+            printf "  ℹ Using glog 0.6.x - Ubuntu's version includes compatibility patches\n"
+            printf "    for COLMAP 3.12.6 (CHECK macros, PREDICT macros, etc.)\n"
         fi
     else
-        echo "  ⚠ WARNING: Could not parse glog version format: ${GLOG_VERSION}"
+        # A5a: Use printf instead of echo for robustness
+        printf "  ⚠ WARNING: Could not parse glog version format: %s\n" "${GLOG_VERSION}" >&2
     fi
 else
-    echo "  ℹ glog version not available via pkg-config (non-fatal)"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ℹ glog version not available via pkg-config (non-fatal)\n"
 fi
-echo ""
+printf "\n"
 
 # Test if glog headers are accessible
-echo "6. Testing glog header accessibility..."
+# A5a: Use printf instead of echo for robustness
+printf "6. Testing glog header accessibility...\n"
+# J1: File existence validation before use
 if [ -f "/usr/include/glog/logging.h" ]; then
-    echo "  ✓ glog headers found: /usr/include/glog/logging.h"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✓ glog headers found: /usr/include/glog/logging.h\n"
 else
-    echo "  ✗ ERROR: glog headers not found"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✗ ERROR: glog headers not found\n" >&2
     exit 1
 fi
-echo ""
+printf "\n"
 
 # WARNING: Check for /usr/local glog installation (would conflict)
-echo "7. Checking for conflicting /usr/local glog installation..."
+# A5a: Use printf instead of echo for robustness
+printf "7. Checking for conflicting /usr/local glog installation...\n"
+# J1: File existence validation
 if [ -f "/usr/local/include/glog/logging.h" ] || [ -f "/usr/local/lib/libglog.so" ]; then
-    echo "  ⚠ WARNING: Found glog in /usr/local!"
-    echo "    This may conflict with system glog in /usr"
-    echo "    /usr/local has higher priority in CMake searches"
-    echo ""
-    echo "  Files found:"
-    [ -f "/usr/local/include/glog/logging.h" ] && echo "    - /usr/local/include/glog/logging.h"
-    [ -f "/usr/local/lib/libglog.so" ] && echo "    - /usr/local/lib/libglog.so"
-    echo ""
-    echo "  Recommendation: Remove /usr/local glog or use CMAKE_IGNORE_PATH"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ⚠ WARNING: Found glog in /usr/local!\n" >&2
+    printf "    This may conflict with system glog in /usr\n" >&2
+    printf "    /usr/local has higher priority in CMake searches\n" >&2
+    printf "\n"
+    printf "  Files found:\n"
+    # J1: File existence validation
+    [ -f "/usr/local/include/glog/logging.h" ] && printf "    - /usr/local/include/glog/logging.h\n"
+    [ -f "/usr/local/lib/libglog.so" ] && printf "    - /usr/local/lib/libglog.so\n"
+    printf "\n"
+    printf "  Recommendation: Remove /usr/local glog or use CMAKE_IGNORE_PATH\n"
 else
-    echo "  ✓ No conflicting /usr/local glog found"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✓ No conflicting /usr/local glog found\n"
 fi
-echo ""
+printf "\n"
 
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "System glog verification complete"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-echo "Compatibility Configuration:"
-echo "  glog:          System package (Ubuntu ${INSTALLED_GLOG})"
-echo "  Ceres Solver:  Internal MINIGLOG (bundled, isolated)"
-echo "  COLMAP:        System glog (Ubuntu's patched 0.6.0)"
-echo ""
+# A5a: Use printf instead of echo for robustness
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+printf "System glog verification complete\n"
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+printf "\n"
+printf "Compatibility Configuration:\n"
+# A5a: Use printf instead of echo for robustness (variable is safe, validated above)
+printf "  glog:          System package (Ubuntu %s)\n" "${INSTALLED_GLOG}"
+printf "  Ceres Solver:  Internal MINIGLOG (bundled, isolated)\n"
+printf "  COLMAP:        System glog (Ubuntu's patched 0.6.0)\n"
+printf "\n"
 monitor_cache "After glog verification"
 
 #--- Sub-block 17.4: Compile Ceres Solver ---
@@ -9769,34 +9876,71 @@ monitor_cache "After glog verification"
 # Dependencies: PHASE 1 (Build tools), Block 6.13 (NVIDIA CUDA)
 # Note: Uses internal MINIGLOG (bundled), NOT system glog - fully isolated
 # Outputs: Optimized Ceres library
-echo -e "\n${YELLOW}[PHASE 3 | Ceres] Compiling from source...${NC}"
+# A5a: echo -e with color variables is acceptable (variables are safe constants)
+printf "\n%s[PHASE 3 | Ceres] Compiling from source...%s\n" "${YELLOW}" "${NC}"
 
 # CRITICAL: Remove system Ceres to prevent conflicts
 # System Ceres 2.2.0 uses older configuration, we'll build from source
 # Using MINIGLOG=OFF to share system glog 0.6.0 with COLMAP (unified approach)
 if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
-    echo "⚠️  Removing system Ceres packages to compile from source..."
-    echo "  (We'll build Ceres with system glog 0.6.0 for consistency with COLMAP)"
-    apt-get remove -y libceres-dev libceres2 2>/dev/null || true
-    apt-get autoremove -y
-    echo "✓ System Ceres removed"
+    # A5a: Use printf instead of echo for robustness
+    printf "⚠️  Removing system Ceres packages to compile from source...\n"
+    printf "  (We'll build Ceres with system glog 0.6.0 for consistency with COLMAP)\n"
+    # H4: Validate removal result
+    if ! apt-get remove -y libceres-dev libceres2 2>/dev/null; then
+        printf "[WARN] Failed to remove system Ceres packages (continuing anyway)\n" >&2
+    fi
+    # H1: Exit status check for external command
+    if ! apt-get autoremove -y; then
+        printf "[WARN] apt-get autoremove failed (continuing anyway)\n" >&2
+    fi
+    # A5a: Use printf instead of echo for robustness
+    printf "✓ System Ceres removed\n"
 else
-    echo "✓ No system Ceres found (clean state)"
+    # A5a: Use printf instead of echo for robustness
+    printf "✓ No system Ceres found (clean state)\n"
 fi
 # Ensure we're not inside the directory before removing it
-cd / || true
+# H1: Exit status check for cd command
+if ! cd /; then
+    printf "[ERROR] Failed to change to root directory\n" >&2
+    exit 1
+fi
 rm -rf /tmp/ceres-solver
 # Using CERES_VERSION from config.sh
+# C5: Unbound variable protection
+if [ -z "${CERES_VERSION:-}" ]; then
+    printf "[ERROR] CERES_VERSION not set\n" >&2
+    exit 1
+fi
 if ! clone_with_retry "https://github.com/ceres-solver/ceres-solver.git" "/tmp/ceres-solver" "${CERES_VERSION}"; then
-    echo "ERROR: Failed to clone Ceres Solver after all retry attempts"
+    # A5a: Use printf instead of echo for robustness
+    printf "[ERROR] Failed to clone Ceres Solver after all retry attempts\n" >&2
     exit 1
 fi
 # Use explicit, separate commands for navigation
-cd /tmp/ceres-solver || { echo "ERROR: Failed to access ceres-solver directory"; exit 1; }
+# H1: Exit status check for cd command
+if ! cd /tmp/ceres-solver; then
+    # A5a: Use printf instead of echo for robustness
+    printf "[ERROR] Failed to access ceres-solver directory\n" >&2
+    exit 1
+fi
 # Remove existing build directory if it exists (critical for Singularity rebuilds)
-rm -rf build
-mkdir -p build
-cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
+# H4: Validate removal result (best effort)
+if ! rm -rf build; then
+    printf "[WARN] Failed to remove existing build directory (continuing anyway)\n" >&2
+fi
+# J1: Directory creation with validation
+if ! mkdir -p build; then
+    printf "[ERROR] Failed to create build directory\n" >&2
+    exit 1
+fi
+# H1: Exit status check for cd command
+if ! cd build; then
+    # A5a: Use printf instead of echo for robustness
+    printf "[ERROR] Failed to access build directory\n" >&2
+    exit 1
+fi
 
 #--- Sub-block 17.5: Configure Ceres with CMake ---
 # Critical: CMake configuration with optimizations (OpenMP enabled via -fopenmp in CXX_FLAGS)
@@ -9838,32 +9982,42 @@ cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
 # If SuiteSparse_DIR is not set or config file doesn't exist, Ceres falls back to bundled finder
 # Phase 1: Check if SuiteSparse_DIR is set and valid (C5: unbound variable protection)
 CERES_SUITESPARSE_FLAGS=""
+# J1: Directory and file existence validation
 if [ -n "${SuiteSparse_DIR:-}" ] && [ -d "${SuiteSparse_DIR}" ] && [ -f "${SuiteSparse_DIR}/SuiteSparseConfig.cmake" ]; then
-    echo "  → Using SuiteSparse_DIR: ${SuiteSparse_DIR}"
-    echo "  → SuiteSparseConfig.cmake found: ${SuiteSparse_DIR}/SuiteSparseConfig.cmake"
+    # A5a: Use printf instead of echo for robustness
+    printf "  → Using SuiteSparse_DIR: %s\n" "${SuiteSparse_DIR}"
+    printf "  → SuiteSparseConfig.cmake found: %s/SuiteSparseConfig.cmake\n" "${SuiteSparse_DIR}"
+    # D1: Proper quoting for path variables
     CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=${SuiteSparse_DIR}"
 else
-    echo "  ⚠ SuiteSparse_DIR not set or SuiteSparseConfig.cmake not found"
-    echo "  → SuiteSparse_DIR: ${SuiteSparse_DIR:-unset}"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ⚠ SuiteSparse_DIR not set or SuiteSparseConfig.cmake not found\n" >&2
+    printf "  → SuiteSparse_DIR: %s\n" "${SuiteSparse_DIR:-unset}"
     if [ -n "${SuiteSparse_DIR:-}" ]; then
-        echo "  → SuiteSparseConfig.cmake: ${SuiteSparse_DIR}/SuiteSparseConfig.cmake (not found)"
+        # A5a: Use printf instead of echo for robustness
+        printf "  → SuiteSparseConfig.cmake: %s/SuiteSparseConfig.cmake (not found)\n" "${SuiteSparse_DIR}"
     fi
     # Phase 2: Validate SUITESPARSE_INSTALL_PREFIX before using (C5: unbound variable protection)
     if [ -z "${SUITESPARSE_INSTALL_PREFIX:-}" ]; then
-        echo "  ✗ ERROR: SUITESPARSE_INSTALL_PREFIX not set"
+        # A5a: Use printf instead of echo for robustness
+        printf "  ✗ ERROR: SUITESPARSE_INSTALL_PREFIX not set\n" >&2
         exit 1
     fi
-    echo "  → Using CMAKE_PREFIX_PATH: ${SUITESPARSE_INSTALL_PREFIX}"
+    # A5a: Use printf instead of echo for robustness
+    printf "  → Using CMAKE_PREFIX_PATH: %s\n" "${SUITESPARSE_INSTALL_PREFIX}"
     # Phase 3: Build CMAKE_PREFIX_PATH with proper fallback (C5: unbound variable protection)
     if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
+        # D1: Proper quoting for path variables
         CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}"
     else
+        # D1: Proper quoting for path variables
         CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}"
     fi
 fi
 # Phase 4: Validate CERES_SUITESPARSE_FLAGS is set before use (C5: unbound variable protection, H1: error check)
 if [ -z "${CERES_SUITESPARSE_FLAGS:-}" ]; then
-    echo "  ✗ ERROR: Failed to configure SuiteSparse flags for Ceres"
+    # A5a: Use printf instead of echo for robustness
+    printf "  ✗ ERROR: Failed to configure SuiteSparse flags for Ceres\n" >&2
     exit 1
 fi
 
@@ -9904,20 +10058,34 @@ cmake .. \
 
 #--- Sub-block 17.6: Build and install Ceres ---
 # Critical: Compile with ninja using memory-aware job calculation
-BUILD_JOBS=$(calculate_build_jobs)
-echo "Building Ceres with ${BUILD_JOBS} parallel jobs..."
-if command -v nproc >/dev/null 2>&1 && command -v free >/dev/null 2>&1; then
-    echo "  System: $(nproc) cores, $(free -h | awk '/^Mem:/ {print $2}') RAM"
+# C5/H4: Command substitution with error handling and validation
+BUILD_JOBS=$(calculate_build_jobs 2>/dev/null || echo "1")
+# C5: Unbound variable protection with validation
+if [ -z "${BUILD_JOBS:-}" ] || ! [ "${BUILD_JOBS}" -gt 0 ] 2>/dev/null; then
+    BUILD_JOBS=1
+    printf "[WARN] Invalid BUILD_JOBS, using 1\n" >&2
 fi
-echo ""
+# A5a: Use printf instead of echo for robustness
+printf "Building Ceres with %d parallel jobs...\n" "${BUILD_JOBS}"
+if command -v nproc >/dev/null 2>&1 && command -v free >/dev/null 2>&1; then
+    # C5/H4: Command substitutions with error handling
+    nproc_output=$(nproc 2>/dev/null || echo "unknown")
+    mem_output=$(free -h 2>/dev/null | awk '/^Mem:/ {print $2}' || echo "unknown")
+    # A5a: Use printf instead of echo for robustness
+    printf "  System: %s cores, %s RAM\n" "${nproc_output}" "${mem_output}"
+fi
+printf "\n"
 
 # Build with fallback to single-threaded on failure
-# Note: BUILD_JOBS is intentionally unquoted to allow numeric value
+# H1: Exit status check for build command
 if ! ninja -j"${BUILD_JOBS}"; then
-    echo ""
-    echo "⚠️  Parallel build failed, retrying single-threaded..."
+    printf "\n"
+    # A5a: Use printf instead of echo for robustness
+    printf "⚠️  Parallel build failed, retrying single-threaded...\n"
+    # H1: Exit status check for fallback build
     if ! ninja -j1; then
-        echo "ERROR: Failed to build Ceres even with single-threaded compilation"
+        # A5a: Use printf instead of echo for robustness
+        printf "[ERROR] Failed to build Ceres even with single-threaded compilation\n" >&2
         exit 1
     fi
 fi
@@ -9932,19 +10100,23 @@ set -o pipefail  # Re-enable pipefail
 # CRITICAL: Multi-phase installation verification (best practice O4)
 # Phase 1: Verify installation command succeeded (exit code check)
 if [ "${INSTALL_EXIT_CODE}" -ne 0 ]; then
-  echo "ERROR: Ceres installation failed with exit code ${INSTALL_EXIT_CODE}"
-  exit 1
+    # A5a: Use printf instead of echo for robustness
+    printf "[ERROR] Ceres installation failed with exit code %d\n" "${INSTALL_EXIT_CODE}" >&2
+    exit 1
 fi
 
 # Phase 2: Verify log file contains successful installation indicators
+# J1: File existence validation before use
 if [ ! -f "/tmp/ceres_install.log" ]; then
-  echo "ERROR: Installation log file not found"
-  exit 1
+    # A5a: Use printf instead of echo for robustness
+    printf "[ERROR] Installation log file not found\n" >&2
+    exit 1
 fi
 
 # Check for installation success indicators in log
 if ! grep -qiE "(installing|installed|build files have been written)" /tmp/ceres_install.log; then
-  echo "  [WARN] Installation log may not indicate successful installation, continuing with verification..."
+    # A5a: Use printf instead of echo for robustness
+    printf "  [WARN] Installation log may not indicate successful installation, continuing with verification...\n" >&2
 fi
 
 # Phase 3: Verify library files exist before refreshing ldconfig (best practice O4 - Phase 1: File Existence)
@@ -9952,19 +10124,23 @@ CERES_LIB_FOUND=false
 for lib_path in /usr/local/lib/libceres.so* /usr/local/lib64/libceres.so*; do
   if [ -f "${lib_path}" ]; then
     CERES_LIB_FOUND=true
-    echo "  [VERIFY] Found Ceres library file: ${lib_path}"
+    # A5a: Use printf instead of echo for robustness
+    printf "  [VERIFY] Found Ceres library file: %s\n" "${lib_path}"
     break
   fi
 done
 
 if [ "${CERES_LIB_FOUND}" = false ]; then
-  echo "  [WARN] Ceres library files not found in standard locations, will attempt directory detection from log..."
+  # A5a: Use printf instead of echo for robustness
+  printf "  [WARN] Ceres library files not found in standard locations, will attempt directory detection from log...\n"
 fi
 
 # Phase 4: Use dynamic directory detection from installation output (extracts actual install paths)
-echo "  [INFO] Extracting library installation directories from installation log..."
+# A5a: Use printf instead of echo for robustness
+printf "  [INFO] Extracting library installation directories from installation log...\n"
 run_ldconfig_refresh_from_install_output "/tmp/ceres_install.log" 200 || {
-  echo "  [WARN] Directory extraction from log failed, falling back to standard locations..."
+  # A5a: Use printf instead of echo for robustness
+  printf "  [WARN] Directory extraction from log failed, falling back to standard locations...\n"
   # Fallback: Refresh standard locations
   for std_dir in /usr/local/lib /usr/local/lib64; do
     if [ -d "${std_dir}" ]; then
@@ -9976,25 +10152,30 @@ run_ldconfig_refresh_from_install_output "/tmp/ceres_install.log" 200 || {
 #--- Sub-block 17.7: Multi-phase Ceres installation verification (best practice O4) ---
 # Critical: Multi-phase verification with retry logic (95% reliability vs 70% for single-phase)
 # Phase 1: File Existence Check (MANDATORY - files can exist but not be in cache)
-echo "  [VERIFY Phase 1] Checking for Ceres library files..."
+# A5a: Use printf instead of echo for robustness
+printf "  [VERIFY Phase 1] Checking for Ceres library files...\n"
 CERES_FILE_FOUND=false
 for lib_path in /usr/local/lib/libceres.so* /usr/local/lib64/libceres.so*; do
   if [ -f "${lib_path}" ]; then
     CERES_FILE_FOUND=true
-    echo "    ✓ Found: ${lib_path}"
+    # A5a: Use printf instead of echo for robustness
+    printf "    ✓ Found: %s\n" "${lib_path}"
     break
   fi
 done
 
 if [ "${CERES_FILE_FOUND}" = false ]; then
-  echo -e "  ${RED}✗ [Phase 1 FAILED] Ceres library files not found${NC}"
-  echo "    → Searching in detected directories from installation log..."
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "  %s✗ [Phase 1 FAILED] Ceres library files not found%s\n" "${RED}" "${NC}"
+  # A5a: Use printf instead of echo for robustness
+  printf "    → Searching in detected directories from installation log...\n"
   # Search in directories that were detected from installation output
   if [ -f "/tmp/ceres_install.log" ]; then
     while IFS= read -r detected_dir; do
       if [ -d "${detected_dir}" ] && find "${detected_dir}" -maxdepth 1 -name "libceres.so*" -type f 2>/dev/null | head -1 | grep -q .; then
         CERES_FILE_FOUND=true
-        echo "    ✓ Found in detected directory: ${detected_dir}"
+        # A5a: Use printf instead of echo for robustness
+        printf "    ✓ Found in detected directory: %s\n" "${detected_dir}"
         break
       fi
     done < <(grep -E "^  \[VERIFY\] Validated library directory:" /tmp/ceres_install.log 2>/dev/null | sed 's/.*: //' || true)
@@ -10002,35 +10183,45 @@ if [ "${CERES_FILE_FOUND}" = false ]; then
 fi
 
 # Phase 2: Linker Cache Check (with retry logic - best practice O4 Phase 3)
-echo "  [VERIFY Phase 2] Checking ldconfig cache for Ceres libraries..."
+# A5a: Use printf instead of echo for robustness
+printf "  [VERIFY Phase 2] Checking ldconfig cache for Ceres libraries...\n"
 CERES_IN_CACHE=false
 if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
   CERES_IN_CACHE=true
-  echo "    ✓ Found in ldconfig cache"
+  # A5a: Use printf instead of echo for robustness
+  printf "    ✓ Found in ldconfig cache\n"
 else
-  echo "    ⚠ Not in cache, refreshing and retrying..."
+  # A5a: Use printf instead of echo for robustness
+  printf "    ⚠ Not in cache, refreshing and retrying...\n"
   # Retry logic: Refresh ldconfig and check again (best practice O4 Phase 3)
   run_ldconfig_refresh || true
   sleep 1  # Brief delay for cache update
   if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
     CERES_IN_CACHE=true
-    echo "    ✓ Found in cache after refresh"
+    # A5a: Use printf instead of echo for robustness
+    printf "    ✓ Found in cache after refresh\n"
   else
-    echo "    ✗ Still not in cache after refresh"
+    # A5a: Use printf instead of echo for robustness
+    printf "    ✗ Still not in cache after refresh\n"
   fi
 fi
 
 # Phase 3: Final verification (file existence takes priority over cache - best practice O4)
 if [ "${CERES_FILE_FOUND}" = true ]; then
-  echo -e "  ${GREEN}✓ [VERIFICATION PASSED] Ceres installation verified (library files exist)${NC}"
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "  %s✓ [VERIFICATION PASSED] Ceres installation verified (library files exist)%s\n" "${GREEN}" "${NC}"
   if [ "${CERES_IN_CACHE}" = false ]; then
-    echo "    ⚠ Note: Libraries exist but not yet in cache (may need additional refresh)"
+    # A5a: Use printf instead of echo for robustness
+    printf "    ⚠ Note: Libraries exist but not yet in cache (may need additional refresh)\n"
   fi
   # Installation succeeded if files exist (file existence is authoritative)
 else
-  echo -e "  ${RED}✗ [VERIFICATION FAILED] Ceres installation verification failed${NC}"
-  echo "    → Debug: Library files not found in expected locations"
-  echo "    → Action: Review installation log: /tmp/ceres_install.log"
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "  %s✗ [VERIFICATION FAILED] Ceres installation verification failed%s\n" "${RED}" "${NC}"
+  # A5a: Use printf instead of echo for robustness
+  printf "    → Debug: Library files not found in expected locations\n"
+  # A5a: Use printf instead of echo for robustness
+  printf "    → Action: Review installation log: /tmp/ceres_install.log\n"
   PHASE3_ALL_SUCCESS=false
 fi
 
@@ -10038,25 +10229,32 @@ fi
   # Critical: Confirm APT pinning is still protecting compiled Ceres
   # Note: APT pinning was applied early in Block 7.5.5 (before any apt operations)
   # Strategy: Just verify it's still in place
-  echo "Verifying Ceres APT protection..."
+  # A5a: Use printf instead of echo for robustness
+  printf "Verifying Ceres APT protection...\n"
   
   if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
-      echo "✓ APT preferences file exists (early protection active)"
-      echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
-      echo "  - Applied in: Block 7.5.5 (before apt operations)"
+      # A5a: Use printf instead of echo for robustness
+      printf "✓ APT preferences file exists (early protection active)\n"
+      # A5a: Use printf instead of echo for robustness
+      printf "  - Blocks: libceres-dev, libceres3, libceres2, libceres1\n"
+      # A5a: Use printf instead of echo for robustness
+      printf "  - Applied in: Block 7.5.5 (before apt operations)\n"
       
       # Double-check no system Ceres packages slipped through
       if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
-          echo "✗ ERROR: System Ceres packages detected despite APT pinning!"
+          # A5a: Use printf instead of echo for robustness
+          printf "✗ ERROR: System Ceres packages detected despite APT pinning!\n" >&2
           dpkg -l | grep libceres
           exit 1
       fi
   else
-      echo "✗ ERROR: Ceres protection file missing (should have been created in Block 7.5.5)"
+      # A5a: Use printf instead of echo for robustness
+      printf "✗ ERROR: Ceres protection file missing (should have been created in Block 7.5.5)\n" >&2
       exit 1
   fi
   
-  echo "✓ Ceres protected from APT overwrites (verified)"
+  # A5a: Use printf instead of echo for robustness
+  printf "✓ Ceres protected from APT overwrites (verified)\n"
 
 # Verify TBB configuration for Ceres (ensure system TBB, not MKL TBB)
 echo "Verifying TBB configuration for Ceres..."
@@ -10090,10 +10288,14 @@ debug_glibc "After installing CERES"
 # Reference: https://github.com/cvg/pyceres
 # Release: v2.5 (https://github.com/cvg/pyceres/archive/refs/tags/v2.5.tar.gz)
 # Note: PyCeres is required by PyCOLMAP for cost functions feature
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Building PyCeres ${PYCERES_VERSION} Python bindings for Ceres Solver..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo for robustness
+printf "\n"
+# A5a: Use printf instead of echo for robustness
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+# A5a: Use printf instead of echo for robustness
+printf "Building PyCeres %s Python bindings for Ceres Solver...\n" "${PYCERES_VERSION}"
+# A5a: Use printf instead of echo for robustness
+printf "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
 
 # Set library paths to prioritize our compiled Ceres
 export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
@@ -10103,19 +10305,24 @@ export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 cd /tmp || exit 1
 rm -rf pyceres
 if ! clone_with_retry "https://github.com/cvg/pyceres.git" "/tmp/pyceres" "v${PYCERES_VERSION}"; then
-    echo "⚠ PyCeres clone failed, trying PyPI installation as fallback..."
+    # A5a: Use printf instead of echo for robustness
+    printf "⚠ PyCeres clone failed, trying PyPI installation as fallback...\n"
     if python3 -m pip install --no-binary opencv-python,opencv-contrib-python pyceres 2>&1 | tee /tmp/pyceres_install.log; then
-        echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
+        # A5a: Use printf instead of echo for robustness
+        printf "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)\n"
     else
-        echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
+        # A5a: Use printf instead of echo for robustness
+        printf "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)\n"
     fi
 else
     cd /tmp/pyceres || exit 1
-  echo "Building PyCeres from source (linking against compiled Ceres)..."
+  # A5a: Use printf instead of echo for robustness
+  printf "Building PyCeres from source (linking against compiled Ceres)...\n"
   
   # Patch CMakeLists.txt to set minimum CMake version to 3.15 (required by scikit-build-core)
   if [ -f CMakeLists.txt ]; then
-    echo "Updating CMake minimum version to 3.15 for scikit-build-core compatibility..."
+    # A5a: Use printf instead of echo for robustness
+    printf "Updating CMake minimum version to 3.15 for scikit-build-core compatibility...\n"
     sed -i 's/cmake_minimum_required(VERSION [0-9.]*)/cmake_minimum_required(VERSION 3.15)/' CMakeLists.txt
   fi
   
@@ -10135,23 +10342,29 @@ else
         --config-settings=cmake.build-type=Release \
         --config-settings=build.verbose=true \
         . 2>&1 | tee /tmp/pyceres_install.log; then
-      echo "✓ PyCeres built and installed from source (using compiled Ceres)"
+      # A5a: Use printf instead of echo for robustness
+      printf "✓ PyCeres built and installed from source (using compiled Ceres)\n"
 
       if python3 - <<'PY' 2>/tmp/pyceres_import.log; then
 import pyceres
 print(f"pyceres version: {getattr(pyceres, '__version__', 'unknown')}")
 PY
-        echo "✓ PyCeres Python module verified"
+        # A5a: Use printf instead of echo for robustness
+        printf "✓ PyCeres Python module verified\n"
       else
-        echo "⚠ PyCeres import check failed"
+        # A5a: Use printf instead of echo for robustness
+        printf "⚠ PyCeres import check failed\n"
         sed 's/^/  /' /tmp/pyceres_import.log || true
       fi
   else
-      echo "⚠ PyCeres source build failed, trying PyPI..."
+      # A5a: Use printf instead of echo for robustness
+      printf "⚠ PyCeres source build failed, trying PyPI...\n"
       if python3 -m pip install --disable-pip-version-check pyceres 2>&1 | tee -a /tmp/pyceres_install.log; then
-          echo "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)"
+          # A5a: Use printf instead of echo for robustness
+          printf "✓ PyCeres installed from PyPI (will use compiled Ceres via LD_LIBRARY_PATH)\n"
       else
-          echo "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)"
+          # A5a: Use printf instead of echo for robustness
+          printf "⚠ PyCeres installation failed (non-fatal, PyCOLMAP cost functions may not work)\n"
       fi
   fi
 
@@ -10165,7 +10378,8 @@ fi
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages, library cache refresh
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
-  echo -e "\n${YELLOW}[PHASE 3 | QGLViewer] Installing dependencies for G2O visualization...${NC}"
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "\n%s[PHASE 3 | QGLViewer] Installing dependencies for G2O visualization...%s\n" "${YELLOW}" "${NC}"
   
   # Critical: Qt5 and QGLViewer packages required for g2o_viewer
   # Note: qt5-default removed in Ubuntu 24.04, replaced by qtbase5-dev/qtbase5-dev-tools
@@ -10181,25 +10395,31 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   )
   
   if ! install_packages_resilient "QGLViewer dependencies for G2O" "${QGLVIEWER_DEP_PACKAGES[@]}"; then
-    echo "⚠ Some QGLViewer dependencies unavailable (non-fatal - G2O will build without viewer)"
+    # A5a: Use printf instead of echo for robustness
+    printf "⚠ Some QGLViewer dependencies unavailable (non-fatal - G2O will build without viewer)\n"
   fi
   
   # Refresh library cache after installing QGLViewer (required for CMake detection)
   if dpkg -l | grep -q "^ii.*libqglviewer"; then
-    echo "Refreshing library cache for QGLViewer..."
+    # A5a: Use printf instead of echo for robustness
+    printf "Refreshing library cache for QGLViewer...\n"
     run_ldconfig_refresh
     
     # Verify QGLViewer installation
     if pkg-config --exists libQGLViewer-qt5 2>/dev/null || \
        [ -f /usr/include/QGLViewer/qglviewer.h ] || \
        [ -f /usr/local/include/QGLViewer/qglviewer.h ]; then
-      echo -e "${GREEN}✓ QGLViewer dependencies installed successfully${NC}"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "%s✓ QGLViewer dependencies installed successfully%s\n" "${GREEN}" "${NC}"
     else
-      echo -e "${YELLOW}⚠ QGLViewer not found via pkg-config or standard paths${NC}"
-      echo "  G2O will attempt to build without viewer if QGLViewer is unavailable"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "%s⚠ QGLViewer not found via pkg-config or standard paths%s\n" "${YELLOW}" "${NC}"
+      # A5a: Use printf instead of echo for robustness
+      printf "  G2O will attempt to build without viewer if QGLViewer is unavailable\n"
     fi
   else
-    echo -e "${YELLOW}⚠ QGLViewer packages not installed - G2O will build without viewer${NC}"
+    # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+    printf "%s⚠ QGLViewer packages not installed - G2O will build without viewer%s\n" "${YELLOW}" "${NC}"
   fi
 fi
 
@@ -10208,24 +10428,28 @@ fi
 # Dependencies: PHASE 1 (Build tools), Sub-block 8.2 (Ceres Solver - optional but recommended), Sub-block 17.9b (QGLViewer dependencies)
 # Outputs: Configured system components
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
-  echo -e "\n${YELLOW}[PHASE 3 | g2o] Compiling from source...${NC}"
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "\n%s[PHASE 3 | g2o] Compiling from source...%s\n" "${YELLOW}" "${NC}"
   # Ensure we're not inside the directory before removing it
   cd / || true
   rm -rf /tmp/g2o
   # Using G2O_VERSION from config.sh
   if ! clone_with_retry "https://github.com/RainerKuemmerle/g2o.git" "/tmp/g2o" "${G2O_VERSION}"; then
-    echo "ERROR: Failed to clone G2O after all retry attempts"
+    # A5a: Use printf instead of echo for robustness
+    printf "ERROR: Failed to clone G2O after all retry attempts\n" >&2
     exit 1
   fi
-  cd /tmp/g2o || { echo "ERROR: Failed to access g2o directory"; exit 1; }
+  cd /tmp/g2o || { printf "ERROR: Failed to access g2o directory\n" >&2; exit 1; }
   # Remove existing build directory if it exists (critical for Singularity rebuilds)
   rm -rf build
   if ! mkdir -p build; then
-    echo "ERROR: Failed to create build dir"
+    # A5a: Use printf instead of echo for robustness
+    printf "ERROR: Failed to create build dir\n" >&2
     exit 1
   fi
   if ! cd build; then
-    echo "ERROR: Failed to access build dir"
+    # A5a: Use printf instead of echo for robustness
+    printf "ERROR: Failed to access build dir\n" >&2
     exit 1
   fi
 
@@ -10295,15 +10519,16 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
   #--- Sub-block 17.12: Build and install g2o ---
   # Critical: Compile g2o with ninja using half CPU cores
-  ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build g2o"; exit 1; }
-  ninja install 2>&1 | tee /tmp/g2o_install.log || { echo "ERROR: Failed to install g2o"; exit 1; }
+  ninja -j$(($(nproc) / 2)) || { printf "ERROR: Failed to build g2o\n" >&2; exit 1; }
+  ninja install 2>&1 | tee /tmp/g2o_install.log || { printf "ERROR: Failed to install g2o\n" >&2; exit 1; }
   # Use dynamic directory detection from installation output
   run_ldconfig_refresh_from_install_output "/tmp/g2o_install.log" 200
 
   #--- Sub-block 17.13: Verify g2o installation ---
   # Critical: Confirm g2o libraries are installed and in linker cache
   # Multi-phase verification: File existence → Linker cache → Retry with refresh → Directory registration
-  echo -e "${BLUE}[DEBUG] Verifying g2o installation...${NC}"
+  # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+  printf "%s[DEBUG] Verifying g2o installation...%s\n" "${BLUE}" "${NC}"
   
   # Phase 1: Check if library files exist (handle multi-arch libdirs and versioned libraries)
   g2o_core_candidates=(
@@ -10328,12 +10553,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   done
 
   if [ -z "${g2o_core_path}" ]; then
-    echo -e "${RED}✗ g2o compilation FAILED: libg2o.so not found under /usr/local${NC}"
-    echo -e "${YELLOW}[DEBUG] Searching for libg2o*.so under /usr/local:${NC}"
-    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null || echo "  No g2o libraries found"
+    printf "%s✗ g2o compilation FAILED: libg2o.so not found under /usr/local%s\n" "${RED}" "${NC}"
+    printf "%s[DEBUG] Searching for libg2o*.so under /usr/local:%s\n" "${YELLOW}" "${NC}"
+    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null || printf "  No g2o libraries found\n"
     PHASE3_ALL_SUCCESS=false
   else
-    echo -e "${GREEN}✓ g2o library file found: ${g2o_core_path}${NC}"
+    printf "%s✓ g2o library file found: %s%s\n" "${GREEN}" "${g2o_core_path}" "${NC}"
 
     # Determine SONAME used by ldconfig
     g2o_soname=""
@@ -10357,12 +10582,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       g2o_lib_dir=$(realpath "$(dirname "${g2o_core_path}")" 2>/dev/null || echo "")
       # If still invalid, use parent directory of file path
       if [ -z "${g2o_lib_dir}" ] || [ ! -d "${g2o_lib_dir}" ]; then
-        echo -e "${YELLOW}⚠ WARNING: Failed to extract valid library directory from ${g2o_core_path}, using fallback${NC}"
+        printf "%s⚠ WARNING: Failed to extract valid library directory from %s, using fallback%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
         # Try to find directory by searching for common library paths
         for fallback_dir in "/usr/local/lib" "/usr/local/lib64" "/usr/local/lib/x86_64-linux-gnu"; do
           if [ -d "${fallback_dir}" ] && [ -f "${fallback_dir}/$(basename "${g2o_core_path}")" ] 2>/dev/null; then
             g2o_lib_dir="${fallback_dir}"
-            echo -e "${YELLOW}[DEBUG] Using fallback directory: ${g2o_lib_dir}${NC}"
+            printf "%s[DEBUG] Using fallback directory: %s%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
             break
           fi
         done
@@ -10371,50 +10596,50 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     
     # CRITICAL: If directory extraction failed completely, library file exists so don't fail - just warn
     if [ -z "${g2o_lib_dir}" ] || [ ! -d "${g2o_lib_dir}" ]; then
-      echo -e "${YELLOW}⚠ WARNING: Could not determine library directory, but library file exists at ${g2o_core_path}${NC}"
-      echo -e "${YELLOW}[DEBUG] Library exists but ldconfig refresh may be skipped (non-fatal)${NC}"
+      printf "%s⚠ WARNING: Could not determine library directory, but library file exists at %s%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
+      printf "%s[DEBUG] Library exists but ldconfig refresh may be skipped (non-fatal)%s\n" "${YELLOW}" "${NC}"
       # Library file exists, so this is not a fatal failure - flag remains unchanged
     else
-      echo -e "${BLUE}[DEBUG] Library directory: ${g2o_lib_dir}${NC}"
-      echo -e "${BLUE}[DEBUG] SONAME: ${g2o_soname}${NC}"
+      printf "%s[DEBUG] Library directory: %s%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
+      printf "%s[DEBUG] SONAME: %s%s\n" "${BLUE}" "${g2o_soname}" "${NC}"
       
       # Phase 2: Verify library is available using comprehensive verification function
       if ! verify_library_available "libg2o_core.so" "${g2o_core_path}"; then
-        echo -e "${YELLOW}⚠ g2o library exists but not fully verified (attempting fix)${NC}"
-        echo -e "${YELLOW}[DEBUG] Running targeted ldconfig refresh for ${g2o_lib_dir}${NC}"
+        printf "%s⚠ g2o library exists but not fully verified (attempting fix)%s\n" "${YELLOW}" "${NC}"
+        printf "%s[DEBUG] Running targeted ldconfig refresh for %s%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
         
         # Step 1: Ensure directory is registered in ld.so.conf.d (CRITICAL - must be done before refresh)
-        echo -e "${BLUE}[DEBUG] Step 1: Verifying ${g2o_lib_dir} is registered in ld.so.conf.d...${NC}"
+        printf "%s[DEBUG] Step 1: Verifying %s is registered in ld.so.conf.d...%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
         if ensure_library_path_registered "${g2o_lib_dir}"; then
-          echo -e "${GREEN}✓ Directory ${g2o_lib_dir} is registered in ld.so.conf.d${NC}"
+          printf "%s✓ Directory %s is registered in ld.so.conf.d%s\n" "${GREEN}" "${g2o_lib_dir}" "${NC}"
           
           # Verify registration was successful by checking all conf files
           conf_verified=false
           for conf_file in /etc/ld.so.conf.d/*.conf /etc/ld.so.conf; do
             if [ -f "${conf_file}" ] && grep -q "^${g2o_lib_dir}\$" "${conf_file}" 2>/dev/null; then
-              echo -e "${GREEN}✓ Confirmed registration in ${conf_file}${NC}"
+              printf "%s✓ Confirmed registration in %s%s\n" "${GREEN}" "${conf_file}" "${NC}"
               conf_verified=true
               break
             fi
           done
           if [ "${conf_verified}" = false ]; then
-            echo -e "${YELLOW}⚠ WARNING: Directory registered but not found in conf files (may need manual verification)${NC}"
+            printf "%s⚠ WARNING: Directory registered but not found in conf files (may need manual verification)%s\n" "${YELLOW}" "${NC}"
           fi
         else
-          echo -e "${YELLOW}⚠ WARNING: Failed to register ${g2o_lib_dir} in ld.so.conf.d, but continuing...${NC}"
+          printf "%s⚠ WARNING: Failed to register %s in ld.so.conf.d, but continuing...%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
         fi
         
         # Step 2: Confirm library files exist in directory (best practice - verify before refresh)
         lib_count=""
         lib_count=$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l || echo "0")
-        echo -e "${BLUE}[DEBUG] Step 2: Confirmed ${lib_count} g2o library file(s) in ${g2o_lib_dir}${NC}"
+        printf "%s[DEBUG] Step 2: Confirmed %s g2o library file(s) in %s%s\n" "${BLUE}" "${lib_count}" "${g2o_lib_dir}" "${NC}"
         if [ "${lib_count}" -eq 0 ]; then
-          echo -e "${YELLOW}⚠ WARNING: No g2o library files found in ${g2o_lib_dir} (unexpected)${NC}"
+          printf "%s⚠ WARNING: No g2o library files found in %s (unexpected)%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
         else
-          echo -e "${BLUE}[DEBUG] Library files in directory:${NC}"
+          printf "%s[DEBUG] Library files in directory:%s\n" "${BLUE}" "${NC}"
           find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -5 | while IFS= read -r lib_file || [ -n "${lib_file}" ]; do
             if [ -n "${lib_file}" ]; then
-              echo -e "${BLUE}[DEBUG]   - $(basename "${lib_file}")${NC}"
+              printf "%s[DEBUG]   - %s%s\n" "${BLUE}" "$(basename "${lib_file}")" "${NC}"
             fi
           done
         fi
@@ -10423,9 +10648,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
         # Note: run_ldconfig_refresh_dir automatically ensures path is registered in ld.so.conf.d
         # CRITICAL: Add || true to ensure ldconfig failures are non-fatal when files exist
         # Library file exists, so ldconfig issues are warnings, not fatal errors
-        echo -e "${BLUE}[DEBUG] Step 3: Executing targeted ldconfig refresh for ${g2o_lib_dir}...${NC}"
+        printf "%s[DEBUG] Step 3: Executing targeted ldconfig refresh for %s...%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
         run_ldconfig_refresh_dir "${g2o_lib_dir}" 2>&1 || run_ldconfig_refresh 2>&1 || {
-          echo -e "${YELLOW}⚠ WARNING: ldconfig refresh failed, but library file exists - continuing (non-fatal)${NC}"
+          printf "%s⚠ WARNING: ldconfig refresh failed, but library file exists - continuing (non-fatal)%s\n" "${YELLOW}" "${NC}"
           true  # Explicitly ensure non-fatal
         }
         
@@ -10433,46 +10658,46 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
         sleep 0.2
         
         # Phase 3: Retry verification after refresh using improved method
-        echo -e "${BLUE}[DEBUG] Step 4: Re-checking library verification after refresh...${NC}"
+        printf "%s[DEBUG] Step 4: Re-checking library verification after refresh...%s\n" "${BLUE}" "${NC}"
         if ! verify_library_available "libg2o_core.so" "${g2o_core_path}"; then
-          echo -e "${YELLOW}⚠ g2o library still not fully verified, running diagnostics...${NC}"
+          printf "%s⚠ g2o library still not fully verified, running diagnostics...%s\n" "${YELLOW}" "${NC}"
           diagnose_library_detection "libg2o_core.so" "${g2o_core_path}" || true
           
-          echo -e "${YELLOW}[DEBUG] ldconfig -p output (g2o related):${NC}"
-          ldconfig -p 2>/dev/null | grep -F "libg2o" || echo "  No g2o libraries in ldconfig cache"
-          echo -e "${YELLOW}[DEBUG] However, library files exist at: ${g2o_core_path}${NC}"
+          printf "%s[DEBUG] ldconfig -p output (g2o related):%s\n" "${YELLOW}" "${NC}"
+          ldconfig -p 2>/dev/null | grep -F "libg2o" || printf "  No g2o libraries in ldconfig cache\n"
+          printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
           
           # Additional diagnostics
-          echo -e "${BLUE}[DEBUG] Diagnostic information:${NC}"
-          echo -e "${BLUE}[DEBUG]   Library file: ${g2o_core_path}${NC}"
-          echo -e "${BLUE}[DEBUG]   Library directory: ${g2o_lib_dir}${NC}"
-          echo -e "${BLUE}[DEBUG]   Directory registered in ld.so.conf.d: $([ -f /etc/ld.so.conf.d/00-compiled-libs.conf ] && grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf && echo "yes" || echo "no")${NC}"
-          echo -e "${BLUE}[DEBUG]   Libraries in directory: $(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l)${NC}"
+          printf "%s[DEBUG] Diagnostic information:%s\n" "${BLUE}" "${NC}"
+          printf "%s[DEBUG]   Library file: %s%s\n" "${BLUE}" "${g2o_core_path}" "${NC}"
+          printf "%s[DEBUG]   Library directory: %s%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
+          printf "%s[DEBUG]   Directory registered in ld.so.conf.d: %s%s\n" "${BLUE}" "$([ -f /etc/ld.so.conf.d/00-compiled-libs.conf ] && grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf && echo "yes" || echo "no")" "${NC}"
+          printf "%s[DEBUG]   Libraries in directory: %s%s\n" "${BLUE}" "$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l)" "${NC}"
           
           # Final verification: Try to load library with ldd (most reliable check)
           if command -v ldd >/dev/null 2>&1 && ldd "${g2o_core_path}" >/dev/null 2>&1; then
-            echo -e "${GREEN}✓ g2o library is valid and loadable (ldd verification passed)${NC}"
-            echo -e "${GREEN}✓ g2o installation successful (files present and valid, cache may update later)${NC}"
+            printf "%s✓ g2o library is valid and loadable (ldd verification passed)%s\n" "${GREEN}" "${NC}"
+            printf "%s✓ g2o installation successful (files present and valid, cache may update later)%s\n" "${GREEN}" "${NC}"
           else
-            echo -e "${GREEN}✓ g2o installation appears successful (files present, cache may be delayed)${NC}"
+            printf "%s✓ g2o installation appears successful (files present, cache may be delayed)%s\n" "${GREEN}" "${NC}"
           fi
           # CRITICAL: Don't mark as failed if files exist - cache may update later
           # PHASE3_ALL_SUCCESS flag remains unchanged (stays true) since library file exists
-          echo -e "${YELLOW}[INFO] Library file exists at ${g2o_core_path} - build will continue${NC}"
-          echo -e "${YELLOW}[INFO] Library can still be used (cache is optimization, not requirement)${NC}"
-          echo -e "${YELLOW}[INFO] Cache will be updated on next system restart or manual ldconfig run${NC}"
+          printf "%s[INFO] Library file exists at %s - build will continue%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
+          printf "%s[INFO] Library can still be used (cache is optimization, not requirement)%s\n" "${YELLOW}" "${NC}"
+          printf "%s[INFO] Cache will be updated on next system restart or manual ldconfig run%s\n" "${YELLOW}" "${NC}"
         else
-          echo -e "${GREEN}✓ g2o library registered and verified${NC}"
+          printf "%s✓ g2o library registered and verified%s\n" "${GREEN}" "${NC}"
         fi
       else
-        echo -e "${GREEN}✓ g2o library found and verified${NC}"
+        printf "%s✓ g2o library found and verified%s\n" "${GREEN}" "${NC}"
       fi
     fi
   fi
 
   #--- Sub-block 17.13b: Verify g2o_viewer executable (QGL Viewer) ---
   # Critical: Confirm g2o_viewer is built and installed (requires G2O_BUILD_APPS=ON)
-  echo -e "${BLUE}[DEBUG] Verifying g2o_viewer executable...${NC}"
+  printf "%s[DEBUG] Verifying g2o_viewer executable...%s\n" "${BLUE}" "${NC}"
   
   g2o_viewer_candidates=(
     "/usr/local/bin/g2o_viewer"
@@ -10488,20 +10713,20 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   done
 
   if [ -z "${g2o_viewer_path}" ]; then
-    echo -e "${YELLOW}⚠ g2o_viewer executable not found${NC}"
-    echo -e "${YELLOW}[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:${NC}"
-    find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /usr/local"
-    find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || echo "  No g2o_viewer found in /tmp/g2o"
-    echo -e "${YELLOW}  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev-qt5, qt5-qmake)${NC}"
-    echo -e "${YELLOW}  If QGLViewer is not available, G2O will build without viewer tools${NC}"
+    printf "%s⚠ g2o_viewer executable not found%s\n" "${YELLOW}" "${NC}"
+    printf "%s[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:%s\n" "${YELLOW}" "${NC}"
+    find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /usr/local\n"
+    find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /tmp/g2o\n"
+    printf "%s  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev-qt5, qt5-qmake)%s\n" "${YELLOW}" "${NC}"
+    printf "%s  If QGLViewer is not available, G2O will build without viewer tools%s\n" "${YELLOW}" "${NC}"
   else
-    echo -e "${GREEN}✓ g2o_viewer executable found: ${g2o_viewer_path}${NC}"
+    printf "%s✓ g2o_viewer executable found: %s%s\n" "${GREEN}" "${g2o_viewer_path}" "${NC}"
     # Check if QGLViewer is linked
     if command -v ldd >/dev/null 2>&1; then
       if ldd "${g2o_viewer_path}" 2>/dev/null | grep -Fq "libQGLViewer"; then
-        echo -e "${GREEN}✓ g2o_viewer linked with QGLViewer library${NC}"
+        printf "%s✓ g2o_viewer linked with QGLViewer library%s\n" "${GREEN}" "${NC}"
       else
-        echo -e "${YELLOW}⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)${NC}"
+        printf "%s⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)%s\n" "${YELLOW}" "${NC}"
       fi
     fi
   fi
@@ -10534,15 +10759,15 @@ Pin-Priority: -1
 EOF
   
   if [ -f "/etc/apt/preferences.d/block-system-g2o" ]; then
-      echo "✓ Created APT preferences to block system G2O packages"
-      echo "  - Blocks: libg2o-dev, libg2o0, libg2o20130302"
-      echo "  - Method: APT pinning with Pin-Priority: -1"
+      printf "✓ Created APT preferences to block system G2O packages\n"
+      printf "  - Blocks: libg2o-dev, libg2o0, libg2o20130302\n"
+      printf "  - Method: APT pinning with Pin-Priority: -1\n"
   else
-      echo "✗ ERROR: Failed to create G2O protection file"
+      printf "✗ ERROR: Failed to create G2O protection file\n"
       exit 1
   fi
   
-  echo "✓ G2O protected from APT overwrites (APT pinning method)"
+  printf "✓ G2O protected from APT overwrites (APT pinning method)\n"
 
   # Verify TBB configuration for g2o (ensure system TBB, not MKL TBB)
   echo "Verifying TBB configuration for g2o..."
@@ -10551,18 +10776,18 @@ EOF
     TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
     if [ -n "${TBB_LIB_PATH}" ]; then
       if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
-        echo -e "  ${RED}ERROR: g2o is using MKL TBB: ${TBB_LIB_PATH}${NC}"
-        echo "  This may cause runtime conflicts. System TBB should be used."
+        printf "  %sERROR: g2o is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
+        printf "  This may cause runtime conflicts. System TBB should be used.\n"
       elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
-        echo -e "  ${GREEN}OK: g2o is using system TBB: ${TBB_LIB_PATH}${NC}"
+        printf "  %sOK: g2o is using system TBB: %s%s\n" "${GREEN}" "${TBB_LIB_PATH}" "${NC}"
       else
-        echo -e "  ${YELLOW}WARNING: g2o TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+        printf "  %sWARNING: g2o TBB source uncertain: %s%s\n" "${YELLOW}" "${TBB_LIB_PATH}" "${NC}"
       fi
     else
-      echo "  INFO: TBB not detected in g2o configuration (may not be required)"
+      printf "  INFO: TBB not detected in g2o configuration (may not be required)\n"
     fi
   else
-    echo "  INFO: CMakeCache.txt not found, skipping TBB verification"
+    printf "  INFO: CMakeCache.txt not found, skipping TBB verification\n"
   fi
 
   # Cleanup
@@ -10574,9 +10799,9 @@ debug_glibc "After installing g2o"
 # Purpose: Build GTSAM SLAM library with TBB and Python bindings
 # Dependencies: PHASE 1 (Build tools), sparse solvers (CHOLMOD, METIS)
 # Outputs: Configured system components
-echo -e "\n${BLUE}[DEBUG] PHASE3_ALL_SUCCESS before GTSAM compilation: ${PHASE3_ALL_SUCCESS}${NC}"
+printf "\n%s[DEBUG] PHASE3_ALL_SUCCESS before GTSAM compilation: %s%s\n" "${BLUE}" "${PHASE3_ALL_SUCCESS}" "${NC}"
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
-  echo -e "${YELLOW}[PHASE 3 | GTSAM] Compiling from source...${NC}"
+  printf "%s[PHASE 3 | GTSAM] Compiling from source...%s\n" "${YELLOW}" "${NC}"
   # Ensure we're not inside the directory before removing it
   cd / || true
   rm -rf /tmp/gtsam
@@ -10676,33 +10901,33 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     if [ -f "${TBB_INCLUDE_PATH}/version.h" ]; then
       TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/version.h"
       TBB_VERSION_HEADER_FOUND=true
-      echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+      printf "[INFO] TBB version header found at %s\n" "${TBB_VERSION_HEADER_PATH}"
       
       # Phase 2b: On Ubuntu 24.04, tbb/version.h is a wrapper that includes ../oneapi/tbb/version.h
       # Verify the actual oneapi version header exists (required for the wrapper to work)
       if [ -f "${ONEAPI_TBB_VERSION_HEADER}" ]; then
-        echo "[INFO] TBB oneapi version header found at ${ONEAPI_TBB_VERSION_HEADER} (required by wrapper)"
+        printf "[INFO] TBB oneapi version header found at %s (required by wrapper)\n" "${ONEAPI_TBB_VERSION_HEADER}"
       else
         # Use safe color variables with defaults (C1, C5: Unbound variable protection)
         YELLOW="${YELLOW:-}"
         NC="${NC:-}"
         if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
-          echo -e "${YELLOW}[WARNING] TBB oneapi version header not found at ${ONEAPI_TBB_VERSION_HEADER}${NC}"
-          echo -e "${YELLOW}The wrapper at ${TBB_VERSION_HEADER_PATH} may not work correctly.${NC}"
+          printf "%s[WARNING] TBB oneapi version header not found at %s%s\n" "${YELLOW}" "${ONEAPI_TBB_VERSION_HEADER}" "${NC}"
+          printf "%sThe wrapper at %s may not work correctly.%s\n" "${YELLOW}" "${TBB_VERSION_HEADER_PATH}" "${NC}"
         else
-          echo "[WARNING] TBB oneapi version header not found at ${ONEAPI_TBB_VERSION_HEADER}"
-          echo "The wrapper at ${TBB_VERSION_HEADER_PATH} may not work correctly."
+          printf "[WARNING] TBB oneapi version header not found at %s\n" "${ONEAPI_TBB_VERSION_HEADER}"
+          printf "The wrapper at %s may not work correctly.\n" "${TBB_VERSION_HEADER_PATH}"
         fi
         # Don't fail here - let CMake try, but warn
       fi
     elif [ -f "${TBB_INCLUDE_PATH}/tbb_version.h" ]; then
       TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/tbb_version.h"
       TBB_VERSION_HEADER_FOUND=true
-      echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+      printf "[INFO] TBB version header found at %s\n" "${TBB_VERSION_HEADER_PATH}"
     elif [ -f "${TBB_INCLUDE_PATH}/version.h.in" ]; then
       TBB_VERSION_HEADER_PATH="${TBB_INCLUDE_PATH}/version.h.in"
       TBB_VERSION_HEADER_FOUND=true
-      echo "[INFO] TBB version header template found at ${TBB_VERSION_HEADER_PATH}"
+      printf "[INFO] TBB version header template found at %s\n" "${TBB_VERSION_HEADER_PATH}"
     else
       # Phase 2c: Search for version header in subdirectories
       # F2: Command substitution validation - validate find result format
@@ -10712,7 +10937,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       if [ -n "${tbb_version_header_found}" ] && [ -f "${tbb_version_header_found}" ]; then
         TBB_VERSION_HEADER_PATH="${tbb_version_header_found}"
         TBB_VERSION_HEADER_FOUND=true
-        echo "[INFO] TBB version header found at ${TBB_VERSION_HEADER_PATH}"
+        printf "[INFO] TBB version header found at %s\n" "${TBB_VERSION_HEADER_PATH}"
       fi
     fi
     
@@ -10723,65 +10948,65 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       YELLOW="${YELLOW:-}"
       NC="${NC:-}"
       if [ -n "${RED}" ] && [ -n "${NC}" ]; then
-        echo -e "${RED}ERROR: TBB version header not found in ${TBB_INCLUDE_PATH}${NC}"
+        printf "%sERROR: TBB version header not found in %s%s\n" "${RED}" "${TBB_INCLUDE_PATH}" "${NC}"
       else
-        echo "ERROR: TBB version header not found in ${TBB_INCLUDE_PATH}"
+        printf "ERROR: TBB version header not found in %s\n" "${TBB_INCLUDE_PATH}"
       fi
       if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
-        echo -e "${YELLOW}GTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version.${NC}"
-        echo -e "${YELLOW}Diagnostic information:${NC}"
+        printf "%sGTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version.%s\n" "${YELLOW}" "${NC}"
+        printf "%sDiagnostic information:%s\n" "${YELLOW}" "${NC}"
       else
-        echo "GTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version."
-        echo "Diagnostic information:"
+        printf "GTSAM's FindTBB.cmake requires a version header (version.h or tbb_version.h) to determine TBB version.\n"
+        printf "Diagnostic information:\n"
       fi
-      echo "  TBB include directory: ${TBB_INCLUDE_PATH}"
+      printf "  TBB include directory: %s\n" "${TBB_INCLUDE_PATH}"
       if [ -d "${TBB_INCLUDE_PATH}" ]; then
-        echo "  Directory exists: YES"
-        echo "  Contents of ${TBB_INCLUDE_PATH}:"
+        printf "  Directory exists: YES\n"
+        printf "  Contents of %s:\n" "${TBB_INCLUDE_PATH}"
         # SC2012: Use find instead of ls for better handling of non-alphanumeric filenames
         # Use parentheses to group -type f and -type d conditions correctly
         find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 | while IFS= read -r item || [ -n "${item}" ]; do
           if [ -n "${item}" ]; then
-            echo "    ${item}"
+            printf "    %s\n" "${item}"
           fi
-        done || echo "    (cannot list contents)"
-        echo ""
-        echo "  Searching for version headers:"
+        done || printf "    (cannot list contents)\n"
+        printf "\n"
+        printf "  Searching for version headers:\n"
         find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 | while IFS= read -r version_file; do
           if [ -n "${version_file}" ]; then
-            echo "    ${version_file}"
+            printf "    %s\n" "${version_file}"
           fi
-        done || echo "    (no version files found)"
+        done || printf "    (no version files found)\n"
       else
-        echo "  Directory exists: NO"
+        printf "  Directory exists: NO\n"
       fi
       # ENDIF: TBB_INCLUDE_PATH directory check
-      echo ""
-      echo "  TBB library path: ${TBB_LIB_PATH}"
-      echo "  TBB library exists: $([ -f "${TBB_LIB_PATH}" ] && echo "YES" || echo "NO")"
-      echo ""
-      echo "  Checking for oneapi TBB headers:"
+      printf "\n"
+      printf "  TBB library path: %s\n" "${TBB_LIB_PATH}"
+      printf "  TBB library exists: %s\n" "$([ -f "${TBB_LIB_PATH}" ] && echo "YES" || echo "NO")"
+      printf "\n"
+      printf "  Checking for oneapi TBB headers:\n"
       if [ -d "/usr/include/oneapi/tbb" ]; then
-        echo "    /usr/include/oneapi/tbb exists: YES"
+        printf "    /usr/include/oneapi/tbb exists: YES\n"
         if [ -f "/usr/include/oneapi/tbb/version.h" ]; then
-          echo "    /usr/include/oneapi/tbb/version.h exists: YES"
+          printf "    /usr/include/oneapi/tbb/version.h exists: YES\n"
         else
-          echo "    /usr/include/oneapi/tbb/version.h exists: NO"
+          printf "    /usr/include/oneapi/tbb/version.h exists: NO\n"
         fi
         # ENDIF: oneapi/tbb/version.h check
       else
-        echo "    /usr/include/oneapi/tbb exists: NO"
+        printf "    /usr/include/oneapi/tbb exists: NO\n"
       fi
       # ENDIF: oneapi/tbb directory check
-      echo ""
+      printf "\n"
       if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
-        echo -e "${YELLOW}Possible solutions:${NC}"
+        printf "%sPossible solutions:%s\n" "${YELLOW}" "${NC}"
       else
-        echo "Possible solutions:"
+        printf "Possible solutions:\n"
       fi
-      echo "  1. Ensure libtbb-dev is properly installed: apt-get install --reinstall libtbb-dev"
-      echo "  2. Verify TBB installation: dpkg -L libtbb-dev (then grep for version.h in output)"
-      echo "  3. Check if TBB headers are in a different location"
+      printf "  1. Ensure libtbb-dev is properly installed: apt-get install --reinstall libtbb-dev\n"
+      printf "  2. Verify TBB installation: dpkg -L libtbb-dev (then grep for version.h in output)\n"
+      printf "  3. Check if TBB headers are in a different location\n"
       exit 1
     fi
     # ENDIF: TBB_VERSION_HEADER_FOUND check
@@ -10791,14 +11016,14 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     YELLOW="${YELLOW:-}"
     NC="${NC:-}"
     if [ -n "${RED}" ] && [ -n "${NC}" ]; then
-      echo -e "${RED}ERROR: TBB include directory not found at ${TBB_INCLUDE_PATH}${NC}"
+      printf "%sERROR: TBB include directory not found at %s%s\n" "${RED}" "${TBB_INCLUDE_PATH}" "${NC}"
     else
-      echo "ERROR: TBB include directory not found at ${TBB_INCLUDE_PATH}"
+      printf "ERROR: TBB include directory not found at %s\n" "${TBB_INCLUDE_PATH}"
     fi
     if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
-      echo -e "${YELLOW}Ensure libtbb-dev is installed: apt-get install libtbb-dev${NC}"
+      printf "%sEnsure libtbb-dev is installed: apt-get install libtbb-dev%s\n" "${YELLOW}" "${NC}"
     else
-      echo "Ensure libtbb-dev is installed: apt-get install libtbb-dev"
+      printf "Ensure libtbb-dev is installed: apt-get install libtbb-dev\n"
     fi
     exit 1
   fi
@@ -10887,7 +11112,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D CMAKE_INSTALL_RPATH="/usr/local/lib" \
     -D CMAKE_INSTALL_RPATH_USE_LINK_PATH=TRUE \
     -D GTSAM_BUILD_PYTHON=ON \
-    -D GTSAM_PYTHON_VERSION=${SYSTEM_PYTHON_VER} \
+    -D GTSAM_PYTHON_VERSION="${SYSTEM_PYTHON_VER}" \
     -D GTSAM_BUILD_WITH_MARCH_NATIVE=OFF \
     -D CMAKE_CXX_STANDARD=17 \
     -D CMAKE_CXX_STANDARD_REQUIRED=ON \
@@ -10906,7 +11131,11 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   #--- Sub-block 17.18: Verify GTSAM installation ---
   # Critical: Confirm GTSAM libraries are installed and in linker cache
   # Multi-phase verification: File existence → Linker cache → Retry with refresh
-  echo -e "${BLUE}[DEBUG] Verifying GTSAM installation...${NC}"
+  if [ -n "${BLUE}" ] && [ -n "${NC}" ]; then
+    printf "%s[DEBUG] Verifying GTSAM installation...%s\n" "${BLUE}" "${NC}"
+  else
+    printf "[DEBUG] Verifying GTSAM installation...\n"
+  fi
   
   # Phase 1: Check if library files exist (handle multi-arch libdirs and versioned libraries)
   gtsam_core_candidates=(
@@ -10925,12 +11154,24 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   done
   
   if [ -z "${gtsam_core_path}" ]; then
-    echo -e "${RED}✗ GTSAM compilation FAILED: libgtsam.so not found under /usr/local${NC}"
-    echo -e "${YELLOW}[DEBUG] Searching for libgtsam*.so under /usr/local:${NC}"
+    if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+      printf "%s✗ GTSAM compilation FAILED: libgtsam.so not found under /usr/local%s\n" "${RED}" "${NC}"
+    else
+      printf "✗ GTSAM compilation FAILED: libgtsam.so not found under /usr/local\n"
+    fi
+    if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+      printf "%s[DEBUG] Searching for libgtsam*.so under /usr/local:%s\n" "${YELLOW}" "${NC}"
+    else
+      printf "[DEBUG] Searching for libgtsam*.so under /usr/local:\n"
+    fi
     find /usr/local -maxdepth 2 -name "libgtsam*.so*" -print 2>/dev/null || echo "  No GTSAM libraries found"
     PHASE3_ALL_SUCCESS=false
   else
-    echo -e "${GREEN}✓ GTSAM library file found: ${gtsam_core_path}${NC}"
+    if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+      printf "%s✓ GTSAM library file found: %s%s\n" "${GREEN}" "${gtsam_core_path}" "${NC}"
+    else
+      printf "✓ GTSAM library file found: %s\n" "${gtsam_core_path}"
+    fi
     
     # Determine SONAME used by ldconfig
     gtsam_soname=""
@@ -10944,8 +11185,13 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
     
     # Phase 2: Verify library is available using comprehensive verification function
     if ! verify_library_available "libgtsam.so" "${gtsam_core_path}"; then
-      echo -e "${YELLOW}⚠ GTSAM library exists but not fully verified (attempting fix)${NC}"
-      echo -e "${YELLOW}[DEBUG] Running targeted ldconfig refresh for ${gtsam_lib_dir}${NC}"
+      if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+        printf "%s⚠ GTSAM library exists but not fully verified (attempting fix)%s\n" "${YELLOW}" "${NC}"
+        printf "%s[DEBUG] Running targeted ldconfig refresh for %s%s\n" "${YELLOW}" "${gtsam_lib_dir}" "${NC}"
+      else
+        printf "⚠ GTSAM library exists but not fully verified (attempting fix)\n"
+        printf "[DEBUG] Running targeted ldconfig refresh for %s\n" "${gtsam_lib_dir}"
+      fi
       
       # Use targeted directory update (faster and more reliable)
       # Note: run_ldconfig_refresh_dir automatically ensures path is registered in ld.so.conf.d
@@ -10953,26 +11199,55 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
       
       # Phase 3: Retry verification after refresh using improved method
       if ! verify_library_available "libgtsam.so" "${gtsam_core_path}"; then
-        echo -e "${YELLOW}⚠ GTSAM library still not fully verified, running diagnostics...${NC}"
+        if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+          printf "%s⚠ GTSAM library still not fully verified, running diagnostics...%s\n" "${YELLOW}" "${NC}"
+        else
+          printf "⚠ GTSAM library still not fully verified, running diagnostics...\n"
+        fi
         diagnose_library_detection "libgtsam.so" "${gtsam_core_path}" || true
         
-        echo -e "${YELLOW}[DEBUG] ldconfig -p output (GTSAM related):${NC}"
-        ldconfig -p 2>/dev/null | grep -F "libgtsam" || echo "  No GTSAM libraries in ldconfig cache"
-        echo -e "${YELLOW}[DEBUG] However, library files exist at: ${gtsam_core_path}${NC}"
+        if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+          printf "%s[DEBUG] ldconfig -p output (GTSAM related):%s\n" "${YELLOW}" "${NC}"
+        else
+          printf "[DEBUG] ldconfig -p output (GTSAM related):\n"
+        fi
+        ldconfig -p 2>/dev/null | grep -F "libgtsam" || printf "  No GTSAM libraries in ldconfig cache\n"
+        if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+          printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${gtsam_core_path}" "${NC}"
+        else
+          printf "[DEBUG] However, library files exist at: %s\n" "${gtsam_core_path}"
+        fi
         
         # Final verification: Try to load library with ldd (most reliable check)
         if command -v ldd >/dev/null 2>&1 && ldd "${gtsam_core_path}" >/dev/null 2>&1; then
-          echo -e "${GREEN}✓ GTSAM library is valid and loadable (ldd verification passed)${NC}"
-          echo -e "${GREEN}✓ GTSAM installation successful (files present and valid, cache may update later)${NC}"
+          if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+            printf "%s✓ GTSAM library is valid and loadable (ldd verification passed)%s\n" "${GREEN}" "${NC}"
+            printf "%s✓ GTSAM installation successful (files present and valid, cache may update later)%s\n" "${GREEN}" "${NC}"
+          else
+            printf "✓ GTSAM library is valid and loadable (ldd verification passed)\n"
+            printf "✓ GTSAM installation successful (files present and valid, cache may update later)\n"
+          fi
         else
-          echo -e "${GREEN}✓ GTSAM installation appears successful (files present, cache may be delayed)${NC}"
+          if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+            printf "%s✓ GTSAM installation appears successful (files present, cache may be delayed)%s\n" "${GREEN}" "${NC}"
+          else
+            printf "✓ GTSAM installation appears successful (files present, cache may be delayed)\n"
+          fi
         fi
         # Don't mark as failed if files exist - cache may update later
       else
-        echo -e "${GREEN}✓ GTSAM library registered and verified${NC}"
+        if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+          printf "%s✓ GTSAM library registered and verified%s\n" "${GREEN}" "${NC}"
+        else
+          printf "✓ GTSAM library registered and verified\n"
+        fi
       fi
     else
-      echo -e "${GREEN}✓ GTSAM library found and verified${NC}"
+      if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+        printf "%s✓ GTSAM library found and verified%s\n" "${GREEN}" "${NC}"
+      else
+        printf "✓ GTSAM library found and verified\n"
+      fi
     fi
   fi
 
@@ -11012,47 +11287,77 @@ EOF
       exit 1
   fi
   
-  echo "✓ GTSAM protected from APT overwrites (APT pinning method)"
+  printf "✓ GTSAM protected from APT overwrites (APT pinning method)\n"
 
   # Verify TBB configuration for GTSAM (CRITICAL - GTSAM requires TBB)
-  echo "Verifying TBB configuration for GTSAM..."
-  cd /tmp/gtsam/build || true
+  printf "Verifying TBB configuration for GTSAM...\n"
+  # SC2164: cd with error handling - using || true for cleanup operation (directory may not exist)
+  cd /tmp/gtsam/build 2>/dev/null || true
   if [ -f "CMakeCache.txt" ]; then
     TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
     TBB_FOUND=$(grep -E "^GTSAM_WITH_TBB:BOOL=(ON|TRUE)" CMakeCache.txt 2>/dev/null || echo "")
     
     if [ -n "${TBB_FOUND}" ]; then
-      echo "  OK: GTSAM_WITH_TBB is enabled"
+      printf "  OK: GTSAM_WITH_TBB is enabled\n"
       if [ -n "${TBB_LIB_PATH}" ]; then
-        if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
-          echo -e "  ${RED}ERROR: GTSAM is using MKL TBB: ${TBB_LIB_PATH}${NC}"
-          echo "  This WILL cause runtime conflicts. System TBB is required."
-          echo "  Recommendation: Rebuild GTSAM with -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB"
-        elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
-          echo -e "  ${GREEN}OK: GTSAM is using system TBB: ${TBB_LIB_PATH}${NC}"
+        if grep -qE -- "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
+          if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+            printf "  %sERROR: GTSAM is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
+          else
+            printf "  ERROR: GTSAM is using MKL TBB: %s\n" "${TBB_LIB_PATH}"
+          fi
+          printf "  This WILL cause runtime conflicts. System TBB is required.\n"
+          printf "  Recommendation: Rebuild GTSAM with -DTBB_DIR=/usr/lib/x86_64-linux-gnu/cmake/TBB\n"
+        elif grep -qE -- "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
+          if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+            printf "  %sOK: GTSAM is using system TBB: %s%s\n" "${GREEN}" "${TBB_LIB_PATH}" "${NC}"
+          else
+            printf "  OK: GTSAM is using system TBB: %s\n" "${TBB_LIB_PATH}"
+          fi
         else
-          echo -e "  ${YELLOW}WARNING: GTSAM TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+          if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+            printf "  %sWARNING: GTSAM TBB source uncertain: %s%s\n" "${YELLOW}" "${TBB_LIB_PATH}" "${NC}"
+          else
+            printf "  WARNING: GTSAM TBB source uncertain: %s\n" "${TBB_LIB_PATH}"
+          fi
         fi
       else
-        echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found${NC}"
-        echo "  This may indicate TBB_DIR or TBB_ROOT_DIR was not set correctly"
-        echo "  Check that TBB is installed (use: dpkg -l and search for libtbb)"
-        echo "  Verify TBB_DIR points to CMake config: ls -la /usr/lib/x86_64-linux-gnu/cmake/TBB"
-        echo "  If TBB_DIR is not set, GTSAM's FindTBB.cmake may not find system TBB"
+        if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+          printf "  %sWARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found%s\n" "${YELLOW}" "${NC}"
+        else
+          printf "  WARNING: GTSAM_WITH_TBB enabled but TBB_LIBRARIES not found\n"
+        fi
+        printf "  This may indicate TBB_DIR or TBB_ROOT_DIR was not set correctly\n"
+        printf "  Check that TBB is installed (use: dpkg -l and search for libtbb)\n"
+        printf "  Verify TBB_DIR points to CMake config: ls -la /usr/lib/x86_64-linux-gnu/cmake/TBB\n"
+        printf "  If TBB_DIR is not set, GTSAM's FindTBB.cmake may not find system TBB\n"
       fi
     else
-      echo -e "  ${YELLOW}WARNING: GTSAM_WITH_TBB is disabled (TBB support not enabled)${NC}"
+      if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+        printf "  %sWARNING: GTSAM_WITH_TBB is disabled (TBB support not enabled)%s\n" "${YELLOW}" "${NC}"
+      else
+        printf "  WARNING: GTSAM_WITH_TBB is disabled (TBB support not enabled)\n"
+      fi
     fi
   else
-    echo "  INFO: CMakeCache.txt not found, skipping TBB verification"
+    printf "  INFO: CMakeCache.txt not found, skipping TBB verification\n"
   fi
 
   # Cleanup
   cd / && rm -rf /tmp/gtsam
 else
-  echo -e "${RED}⚠ [PHASE 3 | GTSAM] SKIPPED - Previous phase failure detected!${NC}"
-  echo -e "${RED}  PHASE3_ALL_SUCCESS = ${PHASE3_ALL_SUCCESS}${NC}"
-  echo -e "${YELLOW}  Check the g2o compilation/verification logs above for errors.${NC}"
+  if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+    printf "%s⚠ [PHASE 3 | GTSAM] SKIPPED - Previous phase failure detected!%s\n" "${RED}" "${NC}"
+    printf "%s  PHASE3_ALL_SUCCESS = %s%s\n" "${RED}" "${PHASE3_ALL_SUCCESS}" "${NC}"
+  else
+    printf "⚠ [PHASE 3 | GTSAM] SKIPPED - Previous phase failure detected!\n"
+    printf "  PHASE3_ALL_SUCCESS = %s\n" "${PHASE3_ALL_SUCCESS}"
+  fi
+  if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
+    printf "%s  Check the g2o compilation/verification logs above for errors.%s\n" "${YELLOW}" "${NC}"
+  else
+    printf "  Check the g2o compilation/verification logs above for errors.\n"
+  fi
 fi
 debug_glibc "After GTSAM section (compiled or skipped)"
 
@@ -11061,10 +11366,18 @@ debug_glibc "After GTSAM section (compiled or skipped)"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
-  echo -e "${GREEN}✓ [PHASE 3] All high-level dependencies compiled and installed successfully.${NC}"
+  if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
+    printf "%s✓ [PHASE 3] All high-level dependencies compiled and installed successfully.%s\n" "${GREEN}" "${NC}"
+  else
+    printf "✓ [PHASE 3] All high-level dependencies compiled and installed successfully.\n"
+  fi
   export PHASE3_STATUS="PASS"
 else
-  echo -e "${RED}✗ [PHASE 3] One or more compilations failed. Please review logs.${NC}"
+  if [ -n "${RED}" ] && [ -n "${NC}" ]; then
+    printf "%s✗ [PHASE 3] One or more compilations failed. Please review logs.%s\n" "${RED}" "${NC}"
+  else
+    printf "✗ [PHASE 3] One or more compilations failed. Please review logs.\n"
+  fi
   export PHASE3_STATUS="FAIL"
   exit 1
 fi
@@ -11185,17 +11498,18 @@ if ! ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"; then
   echo "[julia] ERROR: Failed to create Julia symlink"
   exit 1
 fi
-echo "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
+printf '%s\n' "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
 
 #--- Sub-block 18.10: Verify Julia installation ---
 # Critical: Ensure julia binary is executable
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
-echo "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
+printf '%s\n' "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
 JULIA_BIN="${JULIA_HOME}/bin/julia"
-if [ ! -x "${JULIA_BIN}" ]; then
-  echo "[julia] ERROR: ${JULIA_HOME}/bin/julia not found or not executable"
-  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 || echo "  /opt directory empty or not accessible"
+  if [ ! -x "${JULIA_BIN}" ]; then
+  printf '%s\n' "[julia] ERROR: ${JULIA_HOME}/bin/julia not found or not executable" >&2
+  # D3: Use here-string instead of echo | head (unsafe pipe pattern)
+  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 || printf '%s\n' "  /opt directory empty or not accessible"
   exit 1
 fi
 # End Julia verification (if self-contained)
@@ -11204,56 +11518,68 @@ fi
 # Critical: Make Julia available for rest of build script
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
-echo "==> Updating PATH to include Julia for subsequent build steps..."
+printf '%s\n' "==> Updating PATH to include Julia for subsequent build steps..."
 # Export PATH to include Julia (critical for subshells and subsequent commands)
 export PATH="${JULIA_HOME}/bin:${PATH}"
 # Clear the shell's command lookup cache
 hash -r
 # Verify julia command is found
 if ! command -v julia >/dev/null 2>&1; then
-    echo "ERROR: Julia executable not found in PATH after update."
-    echo "Julia HOME: ${JULIA_HOME}"
-    echo "PATH: ${PATH}"
-    echo "Contents of ${JULIA_HOME}/bin:"
-    find "${JULIA_HOME}/bin" -maxdepth 1 -type f -ls 2>/dev/null || echo "Directory does not exist!"
+    printf '%s\n' "ERROR: Julia executable not found in PATH after update." >&2
+    printf '%s\n' "Julia HOME: ${JULIA_HOME}"
+    printf '%s\n' "PATH: ${PATH}"
+    printf '%s\n' "Contents of ${JULIA_HOME}/bin:"
+    find "${JULIA_HOME}/bin" -maxdepth 1 -type f -ls 2>/dev/null || printf '%s\n' "Directory does not exist!"
     exit 1
 fi
-echo "✓ Julia is now available in the PATH."
-# Quick smoke test
-"${JULIA_BIN}" --version || true
+printf '%s\n' "✓ Julia is now available in the PATH."
+# Quick smoke test (H4: Validate result after masked failure)
+if ! "${JULIA_BIN}" --version >/dev/null 2>&1; then
+  printf '%s\n' "[WARN] Julia version check failed, but continuing (binary exists)" >&2
+fi
 
 #--- Sub-block 18.12: Build libCxxWrap-julia from source ---
 # Purpose: Build C++ wrapper library for Julia-C++ interop
 # Dependencies: Block 8.5 (Julia installation), PHASE 1 (Build tools)
 # Outputs: Julia packages, environments
-echo "==> Building libCxxWrap-julia from source for OpenCV/Integration"
+printf '%s\n' "==> Building libCxxWrap-julia from source for OpenCV/Integration"
 CXXWRAP_PREFIX="/opt/libcxxwrap-julia"
 if [ -z "${LIBCXXWRAP_JULIA_VERSION:-}" ]; then
-  echo "ERROR: LIBCXXWRAP_JULIA_VERSION is not set. Check /etc/config.sh."
+  printf '%s\n' "ERROR: LIBCXXWRAP_JULIA_VERSION is not set. Check /etc/config.sh." >&2
   exit 1
 fi
 LIBCXXWRAP_JULIA_TAG="${LIBCXXWRAP_JULIA_TAG:-v${LIBCXXWRAP_JULIA_VERSION}}"
-echo "  Using libcxxwrap-julia release ${LIBCXXWRAP_JULIA_TAG}"
+printf '%s\n' "  Using libcxxwrap-julia release ${LIBCXXWRAP_JULIA_TAG}"
 if [ -x "${JULIA_BIN:-}" ]; then
   if [ ! -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
-    echo "Building libCxxWrap-julia from source..."
+    printf '%s\n' "Building libCxxWrap-julia from source..."
     # Get Julia paths
-    JULIA_INCLUDE=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "include", "julia"))')
-    JULIA_LIB=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "lib"))')
-    echo "  Julia include: ${JULIA_INCLUDE}"
-    echo "  Julia library: ${JULIA_LIB}"
+    # C1: Validate command substitution results
+    JULIA_INCLUDE=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "include", "julia"))' || echo "")
+    JULIA_LIB=$("${JULIA_BIN}" -e 'print(joinpath(Sys.BINDIR, "..", "lib"))' || echo "")
+    if [ -z "${JULIA_INCLUDE}" ] || [ -z "${JULIA_LIB}" ]; then
+      printf '%s\n' "ERROR: Failed to get Julia paths" >&2
+      exit 1
+    fi
+    printf '%s\n' "  Julia include: ${JULIA_INCLUDE}"
+    printf '%s\n' "  Julia library: ${JULIA_LIB}"
     # Clone and build
     BUILD_DIR="/tmp/cxxwrap_build"
     rm -rf "${BUILD_DIR}"
     if ! clone_with_retry "https://github.com/JuliaInterop/libcxxwrap-julia.git" "${BUILD_DIR}" "${LIBCXXWRAP_JULIA_TAG}"; then
-      echo "ERROR: Failed to clone libcxxwrap-julia after all retry attempts"
+      printf '%s\n' "ERROR: Failed to clone libcxxwrap-julia after all retry attempts" >&2
       exit 1
     fi
-    cd "${BUILD_DIR}" || { echo "ERROR: Failed to access libcxxwrap-julia directory"; exit 1; }
+    # J1: Validate directory exists before cd
+    if [ ! -d "${BUILD_DIR}" ]; then
+      printf '%s\n' "ERROR: Build directory not found: ${BUILD_DIR}" >&2
+      exit 1
+    fi
+    cd "${BUILD_DIR}" || { printf '%s\n' "ERROR: Failed to access libcxxwrap-julia directory" >&2; exit 1; }
     # Clean build directory for fresh compilation
     rm -rf build
     mkdir -p build
-    cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
+    cd build || { printf '%s\n' "ERROR: Failed to access build directory" >&2; exit 1; }
 
     if ! cmake .. \
       -DCMAKE_INSTALL_PREFIX="${CXXWRAP_PREFIX}" \
@@ -11262,34 +11588,46 @@ if [ -x "${JULIA_BIN:-}" ]; then
       -DJulia_INCLUDE_DIRS="${JULIA_INCLUDE}" \
       -DJulia_LIBRARY_DIR="${JULIA_LIB}" \
       -DCMAKE_INSTALL_LIBDIR=lib; then
-      echo "ERROR: CMake configuration failed for libCxxWrap-julia"
+      printf '%s\n' "ERROR: CMake configuration failed for libCxxWrap-julia" >&2
       exit 1
     fi
 
     #--- Sub-block 18.13: Build and install CxxWrap ---
     # Critical: Compile with make using all CPU cores
     if ! make -j"$(nproc)"; then
-      echo "ERROR: Build failed for libCxxWrap-julia"
+      printf '%s\n' "ERROR: Build failed for libCxxWrap-julia" >&2
       exit 1
     fi
     if ! make install; then
-      echo "ERROR: Installation failed for libCxxWrap-julia"
+      printf '%s\n' "ERROR: Installation failed for libCxxWrap-julia" >&2
       exit 1
     fi
 
     cd /
     rm -rf "${BUILD_DIR}"
-    echo "✓ Libcxxwrap-julia built to ${CXXWRAP_PREFIX}"
+    printf '%s\n' "✓ Libcxxwrap-julia built to ${CXXWRAP_PREFIX}"
   else
-    echo "✓ Libcxxwrap-julia already installed"
+    printf '%s\n' "✓ Libcxxwrap-julia already installed"
   fi
   # End CxxWrap build check (if-else self-contained)
 
 
   #--- Sub-block 18.14: Fix CMake target export for CxxWrap ---
   # Critical: Ensure OpenCV can find JlCxx CMake target
-  if ! grep -q "JlCxx::cxxwrap_julia" "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake"; then
-    echo "Adding CMake target export to JlCxxConfig.cmake..."
+  # D3c: Use -F flag for fixed-string matching (literal pattern)
+  if ! grep -Fq "JlCxx::cxxwrap_julia" "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake"; then
+    printf '%s\n' "Adding CMake target export to JlCxxConfig.cmake..."
+    # J1: Validate parent directory exists before writing
+    CMAKE_CONFIG_DIR="${CXXWRAP_PREFIX}/lib/cmake/JlCxx"
+    if [ ! -d "${CMAKE_CONFIG_DIR}" ]; then
+      printf '%s\n' "[WARNING] Parent directory does not exist: ${CMAKE_CONFIG_DIR}"
+      printf '%s\n' "[INFO] Creating parent directory: ${CMAKE_CONFIG_DIR}"
+      mkdir -p "${CMAKE_CONFIG_DIR}" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: ${CMAKE_CONFIG_DIR}" >&2
+        exit 1
+      }
+      printf '%s\n' "[INFO] Parent directory created successfully: ${CMAKE_CONFIG_DIR}"
+    fi
     cat >> "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" << 'CMAKE_FIX'
 
 
@@ -11311,7 +11649,7 @@ set(JlCxx_FOUND TRUE)
 set(JlCxx_INCLUDE_DIRS "/opt/libcxxwrap-julia/include")
 set(JlCxx_LIBRARIES "/opt/libcxxwrap-julia/lib/libcxxwrap_julia.so")
 CMAKE_FIX
-    echo "✓ CMake target export added"
+    printf '%s\n' "✓ CMake target export added"
   fi
   # End CMake target fix (if self-contained)
 
@@ -11330,16 +11668,16 @@ CMAKE_FIX
   #--- Sub-block 18.16: Verify CxxWrap CMake configuration ---
   # Critical: Ensure JlCxx CMake config file exists
   if [ -f "${CXXWRAP_PREFIX}/lib/cmake/JlCxx/JlCxxConfig.cmake" ]; then
-    echo "✓ JlCxx CMake config ready"
+    printf '%s\n' "✓ JlCxx CMake config ready"
   else
-    echo "✗ JlCxx CMake config not found"
+    printf '%s\n' "✗ JlCxx CMake config not found" >&2
     exit 1
   fi
   # End CMake config verification (if-else self-contained)
 fi
 # End CxxWrap installation (if block self-contained)
 debug_glibc "After CxxWrap source build"
-echo "CxxWrap source build ready for OpenCV"
+printf '%s\n' "CxxWrap source build ready for OpenCV"
 
 
 #===============================================================================
@@ -11360,7 +11698,7 @@ echo "CxxWrap source build ready for OpenCV"
 #--- Sub-block 19.2: Initialize NVIDIA SDK installation ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Installing NVIDIA Video Codec SDK from cache..."
+printf '%s\n' "==> Installing NVIDIA Video Codec SDK from cache..."
 
 # Using NVIDIA Video Codec SDK version from config.sh
 SDK_VERSION="${NVIDIA_VIDEO_SDK_VERSION}"
@@ -11373,39 +11711,49 @@ SDK_ZIP_CACHE_PATH="${CONTAINER_BIN_CACHE}/${SDK_ZIP_FILENAME}"
 # Outputs: Environment variables, configuration
 NVIDIA_VIDEO_SDK_INSTALLED=false
 if [ -f "${SDK_ZIP_CACHE_PATH}" ]; then
-  echo "--> Found cached NVIDIA Video Codec SDK. Using it."
+  printf '%s\n' "--> Found cached NVIDIA Video Codec SDK. Using it."
   NVIDIA_VIDEO_SDK_INSTALLED=true
   cp "${SDK_ZIP_CACHE_PATH}" "/tmp/${SDK_ZIP_FILENAME}"
 else
-  echo ""
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "  WARNING: NVIDIA Video Codec SDK not found in cache (OPTIONAL)"
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "  File name: ${SDK_ZIP_FILENAME}"
-  echo "  Expected location: ${SDK_ZIP_CACHE_PATH}"
-  echo "  Download URL: https://developer.nvidia.com/nvidia-video-codec-sdk/download"
-  echo ""
-  echo "  This is an OPTIONAL component. The build will continue without it."
-  echo "  If you need the SDK, manually download '${SDK_ZIP_FILENAME}' from the URL above"
-  echo "  and place it at:"
-  echo "    ${SDK_ZIP_CACHE_PATH}"
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "  → Skipping NVIDIA Video Codec SDK installation (optional component)"
+  printf '%s\n' ""
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "  WARNING: NVIDIA Video Codec SDK not found in cache (OPTIONAL)"
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "  File name: ${SDK_ZIP_FILENAME}"
+  printf '%s\n' "  Expected location: ${SDK_ZIP_CACHE_PATH}"
+  printf '%s\n' "  Download URL: https://developer.nvidia.com/nvidia-video-codec-sdk/download"
+  printf '%s\n' ""
+  printf '%s\n' "  This is an OPTIONAL component. The build will continue without it."
+  printf '%s\n' "  If you need the SDK, manually download '${SDK_ZIP_FILENAME}' from the URL above"
+  printf '%s\n' "  and place it at:"
+  printf '%s\n' "    ${SDK_ZIP_CACHE_PATH}"
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "  → Skipping NVIDIA Video Codec SDK installation (optional component)"
   NVIDIA_VIDEO_SDK_INSTALLED=false
 fi
 # End SDK cache check (if-else self-contained)
 
 # Only proceed with SDK installation if it was found
 if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
-  echo "  → Proceeding with NVIDIA Video Codec SDK installation"
+  printf '%s\n' "  → Proceeding with NVIDIA Video Codec SDK installation"
   
   #--- Sub-block 19.4: Extract NVIDIA SDK ---
   # Purpose: Unzip SDK to /tmp
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
-  cd /tmp || { echo "ERROR: Failed to access /tmp directory"; exit 1; }
+  # J1: Validate /tmp directory exists
+  if [ ! -d "/tmp" ]; then
+    printf '%s\n' "ERROR: /tmp directory does not exist" >&2
+    exit 1
+  fi
+  cd /tmp || { printf '%s\n' "ERROR: Failed to access /tmp directory" >&2; exit 1; }
+  # J1: Validate source file exists before extracting
+  if [ ! -f "/tmp/${SDK_ZIP_FILENAME}" ]; then
+    printf '%s\n' "ERROR: SDK zip file not found: /tmp/${SDK_ZIP_FILENAME}" >&2
+    exit 1
+  fi
   if ! unzip -q "${SDK_ZIP_FILENAME}"; then
-    echo "ERROR: Failed to extract NVIDIA Video Codec SDK"
+    printf '%s\n' "ERROR: Failed to extract NVIDIA Video Codec SDK" >&2
     exit 1
   fi
 
@@ -11414,41 +11762,71 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
   SDK_FOLDER="Video_Codec_SDK_${SDK_VERSION}"
-  echo "Moving ${SDK_FOLDER} to /opt/${SDK_FOLDER}"
+  printf '%s\n' "Moving ${SDK_FOLDER} to /opt/${SDK_FOLDER}"
+  # J1: Validate source folder exists before moving
+  if [ ! -d "/tmp/${SDK_FOLDER}" ]; then
+    printf '%s\n' "ERROR: Extracted SDK folder not found: /tmp/${SDK_FOLDER}" >&2
+    exit 1
+  fi
   if [ "$(id -u)" -eq 0 ]; then
     # Running as root, no sudo needed
-    mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
-    mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+    mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { printf '%s\n' "ERROR: Failed to move SDK folder" >&2; exit 1; }
+    mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { printf '%s\n' "ERROR: Failed to rename SDK folder" >&2; exit 1; }
   else
     # Not root, use sudo if available
-    sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { echo "ERROR: Failed to move SDK folder"; exit 1; }
-    sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to rename SDK folder"; exit 1; }
+    sudo mv "/tmp/${SDK_FOLDER}" "/opt/${SDK_FOLDER}" || { printf '%s\n' "ERROR: Failed to move SDK folder" >&2; exit 1; }
+    sudo mv "/opt/${SDK_FOLDER}" "/opt/Video_Codec_SDK" || { printf '%s\n' "ERROR: Failed to rename SDK folder" >&2; exit 1; }
   fi
 
   #--- Sub-block 19.6: Set SDK ownership and permissions ---
   # Purpose: Ensure SDK is accessible without sudo
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
+  # J1: Validate target directory exists before chown
+  if [ ! -d "/opt/Video_Codec_SDK" ]; then
+    printf '%s\n' "ERROR: SDK directory not found: /opt/Video_Codec_SDK" >&2
+    exit 1
+  fi
   if [ "$(id -u)" -eq 0 ]; then
     # Running as root, set ownership to root or preserve current
     CURRENT_USER="${SUDO_USER:-root}"
     CURRENT_GROUP="${SUDO_GID:-0}"
-    chown -R "${CURRENT_USER}:${CURRENT_GROUP}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+    chown -R "${CURRENT_USER}:${CURRENT_GROUP}" "/opt/Video_Codec_SDK" || { printf '%s\n' "ERROR: Failed to set SDK ownership" >&2; exit 1; }
   else
     # Not root, use sudo if available
-    sudo chown -R "${USER}:${USER}" "/opt/Video_Codec_SDK" || { echo "ERROR: Failed to set SDK ownership"; exit 1; }
+    sudo chown -R "${USER}:${USER}" "/opt/Video_Codec_SDK" || { printf '%s\n' "ERROR: Failed to set SDK ownership" >&2; exit 1; }
   fi
-  echo "SDK successfully moved to /opt/Video_Codec_SDK"
+  printf '%s\n' "SDK successfully moved to /opt/Video_Codec_SDK"
 
   #--- Sub-block 19.7: Copy SDK headers to system locations ---
   # Critical: Make headers available for FFmpeg/OpenCV compilation
   # Dependencies: Block 6.13 (NVIDIA CUDA)
   # Outputs: GPU libraries, CUDA toolkit
-  if ! cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include 2>/dev/null; then
-    echo "WARNING: Failed to copy SDK headers to /usr/local/include (may not exist)"
+  # H4: Validate failures explicitly instead of masking with 2>/dev/null
+  SDK_HEADER_COUNT=0
+  if [ -d "/opt/Video_Codec_SDK/Interface" ]; then
+    SDK_HEADER_COUNT=$(find "/opt/Video_Codec_SDK/Interface" -maxdepth 1 -name "*.h" -type f 2>/dev/null | wc -l || echo "0")
   fi
-  if ! cp "/opt/Video_Codec_SDK/Interface/"*.h "/usr/local/cuda-${CUDA_VERSION}/include" 2>/dev/null; then
-    echo "WARNING: Failed to copy SDK headers to CUDA include directory"
+  if [ "${SDK_HEADER_COUNT}" -gt 0 ]; then
+    # J1: Validate target directory exists before copying
+    if [ -d "/usr/local/include" ]; then
+      if ! cp "/opt/Video_Codec_SDK/Interface/"*.h /usr/local/include 2>/dev/null; then
+        printf '%s\n' "[WARNING] Failed to copy SDK headers to /usr/local/include" >&2
+      fi
+    else
+      printf '%s\n' "[WARNING] Target directory /usr/local/include does not exist" >&2
+    fi
+    # J1: Validate CUDA include directory exists before copying
+    CUDA_INCLUDE_DIR="/usr/local/cuda-${CUDA_VERSION}/include"
+    if [ -d "${CUDA_INCLUDE_DIR}" ]; then
+      if ! cp "/opt/Video_Codec_SDK/Interface/"*.h "${CUDA_INCLUDE_DIR}" 2>/dev/null; then
+        printf '%s\n' "[WARNING] Failed to copy SDK headers to CUDA include directory: ${CUDA_INCLUDE_DIR}" >&2
+      fi
+    else
+      printf '%s\n' "[WARNING] CUDA include directory does not exist: ${CUDA_INCLUDE_DIR}" >&2
+    fi
+  else
+    printf '%s\n' "[WARNING] No SDK header files found in /opt/Video_Codec_SDK/Interface" >&2
   fi
 
   #--- Sub-block 19.8: Verify SDK header installation ---
@@ -11456,11 +11834,11 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
   if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
-    echo "✓ Video Codec SDK headers verified at /usr/local/include/"
+    printf '%s\n' "✓ Video Codec SDK headers verified at /usr/local/include/"
     find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null || true
   else
-    echo "Δ Video Codec SDK headers may be incomplete"
-    find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null || echo "No NVIDIA headers found"
+    printf '%s\n' "Δ Video Codec SDK headers may be incomplete"
+    find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null || printf '%s\n' "No NVIDIA headers found"
   fi
   # End SDK header verification (if-else self-contained)
 
@@ -11471,10 +11849,10 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   rm -rf "/tmp/${SDK_FOLDER}" "${SDK_ZIP_FILENAME}"
   cd /
 
-  echo "✓ NVIDIA Video Codec SDK headers installed successfully."
+  printf '%s\n' "✓ NVIDIA Video Codec SDK headers installed successfully."
 else
-  echo "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
-  echo "  → Continuing build; OpenCV configuration will auto-detect any pre-existing SDK headers/libraries"
+  printf '%s\n' "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
+  printf '%s\n' "  → Continuing build; OpenCV configuration will auto-detect any pre-existing SDK headers/libraries"
 fi
 # End NVIDIA Video SDK installation (conditional based on file presence)
 
@@ -11492,7 +11870,8 @@ fi
 # Purpose: Initialize OpenCV build environment
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 4: Compiling OpenCV from source ###${NC}"
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '\n%s\n' "${BLUE}### PHASE 4: Compiling OpenCV from source ###${NC}"
 
 #--- Sub-block 20.2: Cleanup previous build attempts ---
 # Purpose: Ensure clean build environment
@@ -11510,17 +11889,17 @@ rm -rf /tmp/opencv /tmp/opencv_contrib
 INSTALL_PREFIX="/usr/local"
 CUDA_ARCH="8.6"
 
-echo "========================================="
-echo "OpenCV ${OPENCV_VERSION} Build Automation"
-echo "========================================="
+printf '%s\n' "========================================="
+printf '%s\n' "OpenCV ${OPENCV_VERSION} Build Automation"
+printf '%s\n' "========================================="
 
 #--- Sub-block 20.4: Install OpenCV build dependencies ---
 # Critical: Install all required libraries for OpenCV compilation
 # Dependencies: Block 6 (APT configuration), PHASE 1 (Build tools), PHASE 1 (Compilers)
 # Outputs: Installed packages
-echo "Installing dependencies..."
+printf '%s\n' "Installing dependencies..."
 if ! apt-get update; then
-  echo "ERROR: Failed to update package lists"
+  printf '%s\n' "ERROR: Failed to update package lists" >&2
   exit 1
 fi
 
@@ -11559,24 +11938,27 @@ OPENCV_OPTIONAL_PACKAGES=(
 
 # Validate arrays are not empty (defensive check)
 if [ ${#OPENCV_CORE_PACKAGES[@]} -eq 0 ]; then
-  echo "ERROR: OPENCV_CORE_PACKAGES array is empty"
+  printf '%s\n' "ERROR: OPENCV_CORE_PACKAGES array is empty" >&2
   exit 1
 fi
 
 # Install core packages (required)
-echo "Installing core OpenCV build dependencies..."
+printf '%s\n' "Installing core OpenCV build dependencies..."
 if ! install_packages_resilient "OpenCV build dependencies" "${OPENCV_CORE_PACKAGES[@]}"; then
-  echo "ERROR: Failed to install critical OpenCV build dependencies"
+  printf '%s\n' "ERROR: Failed to install critical OpenCV build dependencies" >&2
   exit 1
 fi
 
 # Install optional packages (non-critical, may not exist)
 # Only attempt if array is not empty
+# H4: Validate result after masked failure
 if [ ${#OPENCV_OPTIONAL_PACKAGES[@]} -gt 0 ]; then
-  echo "Installing optional OpenCV build dependencies (if available)..."
-  install_packages_resilient "OpenCV optional dependencies-optional" "${OPENCV_OPTIONAL_PACKAGES[@]}" || true
+  printf '%s\n' "Installing optional OpenCV build dependencies (if available)..."
+  if ! install_packages_resilient "OpenCV optional dependencies-optional" "${OPENCV_OPTIONAL_PACKAGES[@]}"; then
+    printf '%s\n' "[WARN] Some optional OpenCV packages may not be available (non-critical)" >&2
+  fi
 else
-  echo "No optional OpenCV packages to install"
+  printf '%s\n' "No optional OpenCV packages to install"
 fi
 
 #--- Sub-block 20.5: Download OpenCV source code ---
@@ -11586,13 +11968,13 @@ fi
 
 # Clone OpenCV core
 if ! clone_with_retry "https://github.com/opencv/opencv.git" "/tmp/opencv" "${OPENCV_VERSION}"; then
-    echo "ERROR: Failed to clone OpenCV core after all retry attempts"
+    printf '%s\n' "ERROR: Failed to clone OpenCV core after all retry attempts" >&2
     exit 1
 fi
 
 # Clone OpenCV contrib
 if ! clone_with_retry "https://github.com/opencv/opencv_contrib.git" "/tmp/opencv_contrib" "${OPENCV_VERSION}"; then
-    echo "ERROR: Failed to clone OpenCV contrib after all retry attempts"
+    printf '%s\n' "ERROR: Failed to clone OpenCV contrib after all retry attempts" >&2
     exit 1
 fi
 
@@ -11600,11 +11982,16 @@ fi
 # Purpose: Prepare build directory for CMake
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cd /tmp/opencv || { echo "ERROR: Failed to access opencv directory"; exit 1; }
+# J1: Validate directory exists before cd
+if [ ! -d "/tmp/opencv" ]; then
+  printf '%s\n' "ERROR: OpenCV source directory not found: /tmp/opencv" >&2
+  exit 1
+fi
+cd /tmp/opencv || { printf '%s\n' "ERROR: Failed to access opencv directory" >&2; exit 1; }
 # Remove existing build directory if it exists (critical for Singularity rebuilds)
 rm -rf build
 mkdir -p build
-cd build || { echo "ERROR: Failed to access build directory"; exit 1; }
+cd build || { printf '%s\n' "ERROR: Failed to access build directory" >&2; exit 1; }
 
 #--- Sub-block 20.7: Configure build environment variables ---
 # Critical: Set PKG_CONFIG_PATH and LIBRARY_PATH for dependencies
@@ -11636,7 +12023,8 @@ export LIBRARY_PATH="${LIBRARY_PATH}:/usr/lib/x86_64-linux-gnu"
 #     * This uses libgomp (GNU OpenMP), avoiding conflicts with Intel OpenMP (libiomp5)
 # - They work together but are linked separately; MKL uses GNU OpenMP threading layer
 # - CRITICAL: OpenCV MUST use MKL (not OpenBLAS) for optimal performance and compatibility
-echo -e "${YELLOW}[Phase 4 | OpenCV] Configuring with Cmake...${NC}"
+# A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+printf '%s\n' "${YELLOW}[Phase 4 | OpenCV] Configuring with Cmake...${NC}"
 
 #===============================================================================
 # CUDA Compiler Compatibility Workarounds for OpenCV
@@ -11658,12 +12046,13 @@ fi
 if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
     # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
     GCC_MAJOR_FOR_OPENCV=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_OPENCV}")
-    echo "  Detected GCC version for OpenCV: ${GCC_VERSION_FOR_OPENCV}"
+    printf '%s\n' "  Detected GCC version for OpenCV: ${GCC_VERSION_FOR_OPENCV}"
     
     # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
     # Error: parameter packs not expanded with '...' in std_function.h
     if [ "${GCC_MAJOR_FOR_OPENCV}" = "11" ]; then
-        echo -e "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
+        # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
         OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
         OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
     elif [ "${GCC_MAJOR_FOR_OPENCV}" -gt "11" ]; then
@@ -11780,6 +12169,8 @@ OPENCV_CMAKE_ARGS=(
   "-DPYTHON3_LIBRARY=/usr/lib/x86_64-linux-gnu/libpython${SYSTEM_PYTHON_VER}.so"
   "-DPYTHON3_NUMPY_INCLUDE_DIRS=/usr/lib/python3/dist-packages/numpy/core/include"
   # TBB Configuration: System TBB (not MKL TBB)
+  # NOTE: These are DEFAULT values that will be REPLACED by comprehensive system discovery below
+  # The dynamic discovery (Phase 7) will query the system and set all TBB paths explicitly
   # OpenCV's OpenCVDetectTBB.cmake searches for TBB via find_package(TBB) or environment
   # Required headers: tbb/tbb.h (legacy) or oneapi/tbb/version.h (oneTBB 2021+)
   # Version requirement: TBB_INTERFACE_VERSION >= 6000 (TBB 4.0+)
@@ -11793,6 +12184,7 @@ OPENCV_CMAKE_ARGS=(
   "-DTBB_LIBRARIES=/usr/lib/x86_64-linux-gnu/libtbb.so"
   # TBB_INCLUDE_DIR and TBB_INCLUDE_DIRS: Path to TBB headers
   # Ubuntu 24.04 provides both legacy (/usr/include/tbb/tbb.h) and oneTBB (/usr/include/oneapi/tbb/version.h)
+  # NOTE: TBB_INCLUDE_DIRS should be base directory (/usr/include) not tbb subdirectory
   "-DTBB_INCLUDE_DIR=/usr/include"
   "-DTBB_INCLUDE_DIRS=/usr/include"
   "-DCMAKE_INSTALL_RPATH=/usr/local/lib"
@@ -11846,6 +12238,403 @@ fi
 # This path helps CMake find libraries even if CMAKE_PREFIX_PATH is not sufficient
 # Note: CMAKE_INCLUDE_PATH is already set in the array above (line ~8801)
 OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu:/usr/lib:${MKLROOT:-}/lib/intel64")
+
+# CRITICAL: Verify MKL headers exist before CMake configuration
+# OpenCV's OpenCVFindLAPACK.cmake requires mkl_cblas.h and mkl_lapack.h for LAPACK detection
+# This verification prevents silent failures and provides clear error messages
+echo "Verifying MKL installation for OpenCV LAPACK detection..."
+MKL_HEADERS_OK=true
+if [ -z "${MKLROOT:-}" ]; then
+  echo -e "  ${RED}✗ ERROR: MKLROOT is not set${NC}"
+  MKL_HEADERS_OK=false
+else
+  MKL_INCLUDE_DIR="${MKLROOT}/include"
+  if [ ! -d "${MKL_INCLUDE_DIR}" ]; then
+    echo -e "  ${RED}✗ ERROR: MKL include directory not found: ${MKL_INCLUDE_DIR}${NC}"
+    MKL_HEADERS_OK=false
+  else
+    # Verify required LAPACK headers exist
+    if [ ! -f "${MKL_INCLUDE_DIR}/mkl_cblas.h" ]; then
+      echo -e "  ${RED}✗ ERROR: MKL CBLAS header not found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
+      MKL_HEADERS_OK=false
+    else
+      echo -e "  ${GREEN}✓ MKL CBLAS header found: ${MKL_INCLUDE_DIR}/mkl_cblas.h${NC}"
+    fi
+    if [ ! -f "${MKL_INCLUDE_DIR}/mkl_lapack.h" ]; then
+      echo -e "  ${RED}✗ ERROR: MKL LAPACK header not found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
+      MKL_HEADERS_OK=false
+    else
+      echo -e "  ${GREEN}✓ MKL LAPACK header found: ${MKL_INCLUDE_DIR}/mkl_lapack.h${NC}"
+    fi
+    # Verify MKL libraries exist
+    MKL_LIB_DIR="${MKLROOT}/lib/intel64"
+    if [ ! -d "${MKL_LIB_DIR}" ]; then
+      echo -e "  ${RED}✗ ERROR: MKL library directory not found: ${MKL_LIB_DIR}${NC}"
+      MKL_HEADERS_OK=false
+    else
+      # Check for either libmkl_rt.so or component libraries
+      if [ -f "${MKL_LIB_DIR}/libmkl_rt.so" ]; then
+        echo -e "  ${GREEN}✓ MKL runtime library found: ${MKL_LIB_DIR}/libmkl_rt.so${NC}"
+      elif [ -f "${MKL_LIB_DIR}/libmkl_intel_lp64.so" ] && [ -f "${MKL_LIB_DIR}/libmkl_core.so" ] && [ -f "${MKL_LIB_DIR}/libmkl_gnu_thread.so" ]; then
+        echo -e "  ${GREEN}✓ MKL component libraries found (libmkl_intel_lp64.so, libmkl_core.so, libmkl_gnu_thread.so)${NC}"
+      else
+        echo -e "  ${RED}✗ ERROR: MKL libraries not found in ${MKL_LIB_DIR}${NC}"
+        MKL_HEADERS_OK=false
+      fi
+    fi
+  fi
+fi
+
+# CRITICAL: Comprehensive TBB detection and verification for OpenCV
+# OpenCV's OpenCVDetectTBB.cmake searches for TBB via find_package(TBB) or environment
+# This verification queries the local system to find all TBB components and sets all paths explicitly
+# Strategy: Multi-phase discovery (CMake config → library → headers → version headers) with system query
+echo "Verifying TBB installation for OpenCV TBB detection (comprehensive system query)..."
+TBB_OK=true
+
+# Phase 1: Discover TBB CMake config directory (preferred method for modern TBB)
+# Query system for all possible TBB CMake config locations
+TBB_CMAKE_DIR=""
+TBB_CMAKE_CANDIDATES=(
+  "/usr/lib/x86_64-linux-gnu/cmake/TBB"
+  "/usr/lib/cmake/TBB"
+  "/usr/local/lib/cmake/TBB"
+  "/usr/local/lib/x86_64-linux-gnu/cmake/TBB"
+)
+
+echo "  Phase 1: Searching for TBB CMake config directory..."
+for candidate_dir in "${TBB_CMAKE_CANDIDATES[@]}"; do
+  if [ -d "${candidate_dir}" ] && { [ -f "${candidate_dir}/TBBConfig.cmake" ] || [ -f "${candidate_dir}/tbb-config.cmake" ] || [ -f "${candidate_dir}/TBBConfigVersion.cmake" ]; }; then
+    TBB_CMAKE_DIR="${candidate_dir}"
+    echo -e "  ${GREEN}✓ TBB CMake config found at: ${TBB_CMAKE_DIR}${NC}"
+    break
+  fi
+done
+
+# Fallback: Search entire /usr tree for TBB CMake config (comprehensive system query)
+if [ -z "${TBB_CMAKE_DIR}" ]; then
+  echo "  Searching entire /usr tree for TBB CMake config..."
+  tbb_found_dir=""
+  while IFS= read -r -d '' found_path && [ -z "${tbb_found_dir:-}" ]; do
+    if [ -n "${found_path:-}" ] && [ -d "${found_path}" ]; then
+      # Verify it contains TBB CMake config files
+      if [ -f "${found_path}/TBBConfig.cmake" ] || [ -f "${found_path}/tbb-config.cmake" ] || [ -f "${found_path}/TBBConfigVersion.cmake" ]; then
+        tbb_found_dir="${found_path}"
+      fi
+    fi
+  done < <(find /usr -type d -path "*/cmake/TBB" -print0 2>/dev/null || true)
+  
+  if [ -n "${tbb_found_dir:-}" ] && [ -d "${tbb_found_dir}" ]; then
+    TBB_CMAKE_DIR="${tbb_found_dir}"
+    echo -e "  ${GREEN}✓ TBB CMake config found via system search: ${TBB_CMAKE_DIR}${NC}"
+  else
+    echo -e "  ${YELLOW}⚠ TBB CMake config directory not found (will use explicit TBB_LIBRARIES and TBB_INCLUDE_DIR)${NC}"
+  fi
+fi
+
+# Phase 2: Discover TBB library (query system for all possible locations)
+TBB_LIB_PATH=""
+TBB_LIB_CANDIDATES=(
+  "/usr/lib/x86_64-linux-gnu/libtbb.so"
+  "/usr/lib/libtbb.so"
+  "/usr/lib64/libtbb.so"
+  "/usr/local/lib/libtbb.so"
+  "/usr/local/lib/x86_64-linux-gnu/libtbb.so"
+)
+
+echo "  Phase 2: Searching for TBB library..."
+for candidate_lib in "${TBB_LIB_CANDIDATES[@]}"; do
+  if [ -f "${candidate_lib}" ]; then
+    TBB_LIB_PATH="${candidate_lib}"
+    echo -e "  ${GREEN}✓ TBB library found at: ${TBB_LIB_PATH}${NC}"
+    break
+  fi
+done
+
+# Fallback: Search entire /usr tree for libtbb.so (comprehensive system query)
+if [ -z "${TBB_LIB_PATH}" ]; then
+  echo "  Searching entire /usr tree for libtbb.so..."
+  tbb_lib_found=$(find /usr/lib* /usr/local/lib* -name "libtbb.so" -type f 2>/dev/null | head -1 || echo "")
+  if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
+    TBB_LIB_PATH="${tbb_lib_found}"
+    echo -e "  ${GREEN}✓ TBB library found via system search: ${TBB_LIB_PATH}${NC}"
+  else
+    echo -e "  ${RED}✗ ERROR: TBB library not found${NC}"
+    TBB_OK=false
+  fi
+fi
+
+# Phase 3: Discover TBB include directory (query system for all possible locations)
+TBB_INCLUDE_PATH=""
+TBB_INCLUDE_CANDIDATES=(
+  "/usr/include/tbb"
+  "/usr/local/include/tbb"
+  "/usr/include/x86_64-linux-gnu/tbb"
+)
+
+echo "  Phase 3: Searching for TBB include directory..."
+for candidate_include in "${TBB_INCLUDE_CANDIDATES[@]}"; do
+  if [ -d "${candidate_include}" ]; then
+    TBB_INCLUDE_PATH="${candidate_include}"
+    echo -e "  ${GREEN}✓ TBB include directory found at: ${TBB_INCLUDE_PATH}${NC}"
+    break
+  fi
+done
+
+# Fallback: Search entire /usr tree for tbb include directory
+if [ -z "${TBB_INCLUDE_PATH}" ]; then
+  echo "  Searching entire /usr tree for tbb include directory..."
+  tbb_include_found=$(find /usr/include /usr/local/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
+  if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
+    TBB_INCLUDE_PATH="${tbb_include_found}"
+    echo -e "  ${GREEN}✓ TBB include directory found via system search: ${TBB_INCLUDE_PATH}${NC}"
+  else
+    echo -e "  ${RED}✗ ERROR: TBB include directory not found${NC}"
+    TBB_OK=false
+  fi
+fi
+
+# Phase 4: Verify TBB headers exist (legacy and oneAPI)
+TBB_HEADERS_OK=false
+TBB_INCLUDE_LEGACY=""
+TBB_INCLUDE_ONEAPI=""
+TBB_VERSION_HEADER_FOUND=false
+TBB_VERSION_HEADER_PATH=""
+
+if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
+  echo "  Phase 4: Verifying TBB headers..."
+  
+  # Check for legacy header (tbb/tbb.h)
+  TBB_INCLUDE_LEGACY="${TBB_INCLUDE_PATH}/tbb.h"
+  if [ -f "${TBB_INCLUDE_LEGACY}" ]; then
+    echo -e "  ${GREEN}✓ TBB legacy header found: ${TBB_INCLUDE_LEGACY}${NC}"
+    TBB_HEADERS_OK=true
+  fi
+  
+  # Check for oneAPI header (oneapi/tbb/version.h)
+  TBB_INCLUDE_ONEAPI="/usr/include/oneapi/tbb/version.h"
+  if [ -f "${TBB_INCLUDE_ONEAPI}" ]; then
+    echo -e "  ${GREEN}✓ TBB oneAPI header found: ${TBB_INCLUDE_ONEAPI}${NC}"
+    TBB_HEADERS_OK=true
+  fi
+  
+  # Check for version header (required by OpenCV's OpenCVDetectTBB.cmake)
+  # OpenCV checks for TBB_INTERFACE_VERSION >= 6000 (TBB 4.0+)
+  VERSION_HEADER_CANDIDATES=(
+    "${TBB_INCLUDE_PATH}/version.h"
+    "${TBB_INCLUDE_PATH}/tbb_version.h"
+    "/usr/include/oneapi/tbb/version.h"
+  )
+  
+  for version_header in "${VERSION_HEADER_CANDIDATES[@]}"; do
+    if [ -f "${version_header}" ]; then
+      TBB_VERSION_HEADER_PATH="${version_header}"
+      TBB_VERSION_HEADER_FOUND=true
+      echo -e "  ${GREEN}✓ TBB version header found: ${TBB_VERSION_HEADER_PATH}${NC}"
+      break
+    fi
+  done
+  
+  if [ "${TBB_VERSION_HEADER_FOUND}" != true ]; then
+    echo -e "  ${YELLOW}⚠ TBB version header not found (OpenCV may still work if other headers exist)${NC}"
+  fi
+  
+  if [ "${TBB_HEADERS_OK}" != true ]; then
+    echo -e "  ${RED}✗ ERROR: No TBB headers found (checked ${TBB_INCLUDE_LEGACY} and ${TBB_INCLUDE_ONEAPI})${NC}"
+    TBB_OK=false
+  fi
+fi
+
+# Phase 5: Determine TBB base include directory (for TBB_INCLUDE_DIRS)
+# OpenCV's OpenCVDetectTBB.cmake expects TBB_INCLUDE_DIRS to be the base directory
+# (e.g., /usr/include) not the tbb subdirectory (e.g., /usr/include/tbb)
+TBB_BASE_INCLUDE_DIR=""
+if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
+  TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}")
+  # Validate base directory exists
+  if [ -z "${TBB_BASE_INCLUDE_DIR}" ] || [ ! -d "${TBB_BASE_INCLUDE_DIR}" ]; then
+    echo -e "  ${YELLOW}⚠ Failed to extract base include directory, using tbb subdirectory${NC}"
+    TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
+  else
+    # Verify base directory contains both tbb and oneapi/tbb subdirectories (Ubuntu 24.04 structure)
+    if [ -d "${TBB_BASE_INCLUDE_DIR}/tbb" ] && [ -d "${TBB_BASE_INCLUDE_DIR}/oneapi/tbb" ]; then
+      echo -e "  ${GREEN}✓ TBB base include directory verified: ${TBB_BASE_INCLUDE_DIR}${NC}"
+      echo -e "    Contains: ${TBB_BASE_INCLUDE_DIR}/tbb and ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb"
+    else
+      echo -e "  ${YELLOW}⚠ TBB base directory structure unexpected, using tbb subdirectory${NC}"
+      TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
+    fi
+  fi
+fi
+
+# Phase 6: Determine TBB root directory (for TBB_ROOT_DIR)
+# TBB_ROOT_DIR should point to the base installation directory (e.g., /usr)
+TBB_ROOT_DIR=""
+if [ -n "${TBB_LIB_PATH}" ]; then
+  # Extract root from library path (e.g., /usr/lib/x86_64-linux-gnu/libtbb.so -> /usr)
+  TBB_ROOT_DIR=$(dirname "$(dirname "${TBB_LIB_PATH}")")
+  # Validate root directory
+  if [ -z "${TBB_ROOT_DIR}" ] || [ ! -d "${TBB_ROOT_DIR}" ]; then
+    TBB_ROOT_DIR="/usr"
+  fi
+  echo -e "  ${GREEN}✓ TBB root directory: ${TBB_ROOT_DIR}${NC}"
+else
+  TBB_ROOT_DIR="/usr"
+fi
+
+# Phase 7: Update OPENCV_CMAKE_ARGS with all discovered TBB paths (explicit and robust)
+# CRITICAL: Remove old TBB variables and add new ones with discovered paths
+# This ensures all TBB paths are explicitly set, making detection more reliable
+echo "  Phase 7: Setting explicit TBB CMake variables with discovered paths..."
+
+# Remove existing TBB variables from OPENCV_CMAKE_ARGS
+NEW_OPENCV_CMAKE_ARGS=()
+for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  if [[ ! "${arg}" =~ ^-D(TBB_DIR|TBB_ROOT_DIR|TBB_LIBRARIES|TBB_INCLUDE_DIR|TBB_INCLUDE_DIRS)= ]]; then
+    NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+  fi
+done
+OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
+
+# Add all discovered TBB paths explicitly
+if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DTBB_DIR=${TBB_CMAKE_DIR}")
+  echo -e "  ${GREEN}✓ Setting TBB_DIR=${TBB_CMAKE_DIR}${NC}"
+fi
+
+if [ -n "${TBB_ROOT_DIR}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DTBB_ROOT_DIR=${TBB_ROOT_DIR}")
+  echo -e "  ${GREEN}✓ Setting TBB_ROOT_DIR=${TBB_ROOT_DIR}${NC}"
+fi
+
+if [ -n "${TBB_LIB_PATH}" ] && [ -f "${TBB_LIB_PATH}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DTBB_LIBRARIES=${TBB_LIB_PATH}")
+  echo -e "  ${GREEN}✓ Setting TBB_LIBRARIES=${TBB_LIB_PATH}${NC}"
+fi
+
+# CRITICAL: Set TBB_INCLUDE_DIRS to base directory (not tbb subdirectory)
+# OpenCV's OpenCVDetectTBB.cmake constructs paths like ${TBB_INCLUDE_DIRS}/tbb/tbb.h
+if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [ -d "${TBB_BASE_INCLUDE_DIR}" ]; then
+  OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIR=${TBB_BASE_INCLUDE_DIR}")
+  OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR}")
+  echo -e "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory)${NC}"
+  echo -e "    This allows OpenCV to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
+  echo -e "    and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
+elif [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
+  # Fallback: use tbb subdirectory if base directory extraction failed
+  OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
+  OPENCV_CMAKE_ARGS+=("-DTBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
+  echo -e "  ${GREEN}✓ Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - tbb subdirectory)${NC}"
+fi
+
+# Phase 8: Add discovered TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUDE_PATH
+# This ensures CMake can find TBB even if explicit variables are ignored
+echo "  Phase 8: Adding TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUDE_PATH..."
+
+# Update CMAKE_PREFIX_PATH to include TBB root directory
+# Find CMAKE_PREFIX_PATH in OPENCV_CMAKE_ARGS and update it
+CMAKE_PREFIX_PATH_UPDATED=false
+NEW_OPENCV_CMAKE_ARGS=()
+for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  if [[ "${arg}" =~ ^-DCMAKE_PREFIX_PATH= ]]; then
+    # Extract existing CMAKE_PREFIX_PATH value
+    EXISTING_PREFIX_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_PREFIX_PATH=//')
+    # Add TBB_ROOT_DIR if not already present
+    if [ -n "${TBB_ROOT_DIR}" ] && [[ ! "${EXISTING_PREFIX_PATH}" =~ ${TBB_ROOT_DIR} ]]; then
+      UPDATED_PREFIX_PATH="${TBB_ROOT_DIR}:${EXISTING_PREFIX_PATH}"
+      NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${UPDATED_PREFIX_PATH}")
+      echo -e "  ${GREEN}✓ Added TBB_ROOT_DIR to CMAKE_PREFIX_PATH: ${TBB_ROOT_DIR}${NC}"
+      CMAKE_PREFIX_PATH_UPDATED=true
+    else
+      NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+    fi
+  else
+    NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+  fi
+done
+OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
+
+# Update CMAKE_INCLUDE_PATH to include TBB base include directory
+# Find CMAKE_INCLUDE_PATH in OPENCV_CMAKE_ARGS and update it
+CMAKE_INCLUDE_PATH_UPDATED=false
+NEW_OPENCV_CMAKE_ARGS=()
+for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  if [[ "${arg}" =~ ^-DCMAKE_INCLUDE_PATH= ]]; then
+    # Extract existing CMAKE_INCLUDE_PATH value
+    EXISTING_INCLUDE_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_INCLUDE_PATH=//')
+    # Add TBB_BASE_INCLUDE_DIR if not already present
+    if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [[ ! "${EXISTING_INCLUDE_PATH}" =~ ${TBB_BASE_INCLUDE_DIR} ]]; then
+      UPDATED_INCLUDE_PATH="${TBB_BASE_INCLUDE_DIR}:${EXISTING_INCLUDE_PATH}"
+      NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_INCLUDE_PATH=${UPDATED_INCLUDE_PATH}")
+      echo -e "  ${GREEN}✓ Added TBB_BASE_INCLUDE_DIR to CMAKE_INCLUDE_PATH: ${TBB_BASE_INCLUDE_DIR}${NC}"
+      CMAKE_INCLUDE_PATH_UPDATED=true
+    else
+      NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+    fi
+  else
+    NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+  fi
+done
+OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
+
+# Update CMAKE_LIBRARY_PATH to include TBB library directory
+# Find CMAKE_LIBRARY_PATH in OPENCV_CMAKE_ARGS and update it
+if [ -n "${TBB_LIB_PATH}" ]; then
+  TBB_LIB_DIR=$(dirname "${TBB_LIB_PATH}")
+  CMAKE_LIBRARY_PATH_UPDATED=false
+  NEW_OPENCV_CMAKE_ARGS=()
+  for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+    if [[ "${arg}" =~ ^-DCMAKE_LIBRARY_PATH= ]]; then
+      # Extract existing CMAKE_LIBRARY_PATH value
+      EXISTING_LIBRARY_PATH=$(echo "${arg}" | sed 's/^-DCMAKE_LIBRARY_PATH=//')
+      # Add TBB_LIB_DIR if not already present
+      if [ -n "${TBB_LIB_DIR}" ] && [[ ! "${EXISTING_LIBRARY_PATH}" =~ ${TBB_LIB_DIR} ]]; then
+        UPDATED_LIBRARY_PATH="${TBB_LIB_DIR}:${EXISTING_LIBRARY_PATH}"
+        NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=${UPDATED_LIBRARY_PATH}")
+        echo -e "  ${GREEN}✓ Added TBB_LIB_DIR to CMAKE_LIBRARY_PATH: ${TBB_LIB_DIR}${NC}"
+        CMAKE_LIBRARY_PATH_UPDATED=true
+      else
+        NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+      fi
+    else
+      NEW_OPENCV_CMAKE_ARGS+=("${arg}")
+    fi
+  done
+  OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
+fi
+
+echo -e "  ${GREEN}✓ All TBB paths configured explicitly${NC}"
+
+# Abort if critical dependencies are missing
+if [ "${MKL_HEADERS_OK}" != "true" ] || [ "${TBB_OK}" != "true" ]; then
+  echo -e "${RED}ERROR: Critical dependencies missing for OpenCV configuration.${NC}"
+  if [ "${MKL_HEADERS_OK}" != "true" ]; then
+    echo -e "${RED}  → MKL headers or libraries not found${NC}"
+    echo -e "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKLROOT:-<unset>}/include${NC}"
+    echo -e "${YELLOW}  Required: MKL libraries in ${MKLROOT:-<unset>}/lib/intel64${NC}"
+  fi
+  if [ "${TBB_OK}" != "true" ]; then
+    echo -e "${RED}  → TBB library or headers not found${NC}"
+    echo -e "${YELLOW}  Required: libtbb-dev package installed${NC}"
+    if [ -n "${TBB_LIB_PATH}" ]; then
+      echo -e "${YELLOW}  Expected: TBB library at ${TBB_LIB_PATH}${NC}"
+    else
+      echo -e "${YELLOW}  Expected: TBB library at /usr/lib/x86_64-linux-gnu/libtbb.so${NC}"
+    fi
+    if [ -n "${TBB_INCLUDE_PATH}" ]; then
+      echo -e "${YELLOW}  Expected: TBB headers in ${TBB_INCLUDE_PATH}${NC}"
+    else
+      echo -e "${YELLOW}  Expected: TBB headers at /usr/include/tbb/tbb.h or /usr/include/oneapi/tbb/version.h${NC}"
+    fi
+  fi
+  exit 1
+fi
+
+# Additional CMake variables for LAPACK detection
+# These help OpenCV's OpenCVFindLAPACK.cmake locate MKL headers more reliably
+OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIR=${MKLROOT}/include")
+OPENCV_CMAKE_ARGS+=("-DBLAS_INCLUDE_DIRS=${MKLROOT}/include")
+
 # Evaluate NVIDIA Video Codec SDK availability (NVDEC/NVENC encode/decode)
 # Strategy: 3-phase detection for maximum compatibility across deployment scenarios
 # Phase 1: Check if SDK was explicitly installed to /opt/Video_Codec_SDK

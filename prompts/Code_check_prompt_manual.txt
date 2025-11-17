@@ -20,7 +20,7 @@ When this master entry point is referenced, you MUST:
 5. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
 6. **SHELLCHECK VALIDATION AFTER PART 2**: After all PART 2 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 3.
 7. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
-8. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14) from PART 3
+8. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14) from PART 3
 9. **SHELLCHECK VALIDATION AFTER PART 3**: After all PART 3 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 4.
 10. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
 11. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
@@ -278,7 +278,7 @@ After processing all parts, confirm:
 - ✅ PART 1 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 2 checklist items processed (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial)
 - ✅ PART 2 ShellCheck validation passed (zero errors, zero warnings)
-- ✅ PART 3 checklist items processed (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14)
+- ✅ PART 3 checklist items processed (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14)
 - ✅ PART 3 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 4 checklist items processed (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
 - ✅ PART 4 ShellCheck validation passed (zero errors, zero warnings)

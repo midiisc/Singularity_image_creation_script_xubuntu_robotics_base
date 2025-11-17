@@ -427,6 +427,70 @@ K. Security Posture
     - **DETECTION**: `grep -nE '\bexec\s' script.sh` → Verify all are intentional and safe
     - **AUTO-FIX**: Add validation, quote variables, document intent
   - **CROSS-REFERENCE**: See K1 (injection prevention), D3d (command substitution), D3e (word splitting)
+- K1b. **COMMAND ARGUMENT MISINTERPRETATION**: Prevention of command option misinterpretation when patterns start with `-`:
+  - **CRITICAL ISSUE**: Commands like `grep`, `sed`, `awk`, `find`, etc. interpret arguments starting with `-` as options, causing errors or unexpected behavior
+  - **FORBIDDEN PATTERNS** (HIGH RISK):
+    - `grep -Fq "-lm" <<< "${VAR}"` → `-lm` interpreted as options, causes "option requires an argument" error
+    - `grep -E "-pattern" file` → `-pattern` interpreted as options
+    - `sed -i "s/-old/-new/" file` → `-old` and `-new` interpreted as options (if not properly quoted)
+    - `find . -name "-file"` → `-file` interpreted as options
+    - `awk '/-pattern/' file` → May cause issues depending on awk version
+  - **SAFE ALTERNATIVES** (MANDATORY):
+    - **Use `--` to mark end of options**: `grep -Fq -- "-lm" <<< "${VAR}"` → `--` tells command that everything after is a pattern, not an option
+    - **Quote patterns properly**: `grep -Fq "-lm" <<< "${VAR}"` → Still unsafe, must use `--`
+    - **Use `--` for all commands that accept it**: `grep`, `sed`, `awk`, `find`, `sort`, `cut`, `head`, `tail`, etc.
+    - **Pattern**: `command [options] -- pattern` → Always use `--` when pattern might start with `-`
+  - **REQUIRED FIXES**:
+    - **BEFORE** (WRONG - causes error):
+      ```bash
+      if grep -Fq "-lm" <<< "${LINKER_FLAGS}"; then
+        echo "Found -lm"
+      fi
+      # Error: grep: option requires an argument -- 'm'
+      ```
+    - **AFTER** (CORRECT - uses --):
+      ```bash
+      if grep -Fq -- "-lm" <<< "${LINKER_FLAGS}"; then
+        echo "Found -lm"
+      fi
+      # Works correctly: -- marks end of options, "-lm" is treated as pattern
+      ```
+  - **VALIDATION METHODS**:
+    - Find all `grep` commands with patterns that might start with `-`: `grep -nE 'grep.*-[A-Za-z]' script.sh | grep -v '--'`
+    - Find `grep` patterns starting with `-`: `grep -nE 'grep.*["\047]-[^"]' script.sh` (looks for quoted patterns starting with `-`)
+    - Find `sed` patterns starting with `-`: `grep -nE 'sed.*["\047]-[^"]' script.sh`
+    - Find `find` patterns starting with `-`: `grep -nE 'find.*-name.*["\047]-[^"]' script.sh`
+    - Check for missing `--` before patterns: `grep -nE '(grep|sed|awk|find|sort|cut|head|tail)\s+[^-]*["\047]-[^"]' script.sh`
+  - **DETECTION PATTERNS**:
+    - **Common problematic patterns**:
+      - Linker flags: `-lm`, `-lpthread`, `-fopenmp`, `-O2`, `-O3`
+      - Compiler flags: `-Wall`, `-Wextra`, `-Werror`, `-std=c++11`
+      - File names: `-file.txt`, `-config.conf`
+      - Version strings: `-1.0`, `-2.3.4`
+      - Any variable that might contain values starting with `-`
+    - **Commands that require `--`**:
+      - `grep`, `egrep`, `fgrep` → Use `grep -- pattern`
+      - `sed` → Use `sed -- expression` (though `sed` is less strict, `--` is still recommended)
+      - `awk` → Use `awk -- pattern` (though `awk` is less strict, `--` is still recommended)
+      - `find` → Use `find . -- -name "-pattern"` (though `find` uses `--` differently, use `-name` with quotes)
+      - `sort`, `cut`, `head`, `tail` → Use `command -- pattern` or `command -- -option`
+  - **AUTO-FIX STRATEGY**:
+    1. Identify all commands with patterns that might start with `-`
+    2. Add `--` before the pattern: `command [options] -- pattern`
+    3. Verify pattern is properly quoted (if needed)
+    4. Test that command works correctly with `--`
+    5. Document why `--` is needed in comments
+  - **EXAMPLES OF FIXES**:
+    - **grep**: `grep -Fq "-lm"` → `grep -Fq -- "-lm"`
+    - **grep with variable**: `grep -E "${PATTERN}"` → If PATTERN might start with `-`, use `grep -E -- "${PATTERN}"`
+    - **sed**: `sed "s/-old/-new/"` → `sed -- "s/-old/-new/"` (though `sed` is less strict, `--` is safer)
+    - **find**: `find . -name "-file"` → `find . -name -- "-file"` or better: `find . -name '-file'` (quotes help but `--` is safer)
+  - **EDGE CASES**:
+    - **Variable patterns**: If a variable might contain a pattern starting with `-`, always use `--`: `grep -Fq -- "${PATTERN}"`
+    - **Command substitution**: `grep -Fq "$(get_pattern)"` → If `get_pattern` might return `-something`, use `grep -Fq -- "$(get_pattern)"`
+    - **Here-strings/here-docs**: `grep -Fq "-lm" <<< "${VAR}"` → Use `grep -Fq -- "-lm" <<< "${VAR}"`
+    - **Pipelines**: `echo "${VAR}" | grep -Fq "-lm"` → Use `echo "${VAR}" | grep -Fq -- "-lm"`
+  - **CROSS-REFERENCE**: See K1 (injection prevention), D3c (grep unsafe patterns), K1 (regex injection)
 - K2. Safe path handling, avoidance of world-writable directories, deliberate permission settings:
   - **PATH VALIDATION**:
     - Validate paths don't contain `..` or absolute paths when relative expected (see K1 - path injection)
