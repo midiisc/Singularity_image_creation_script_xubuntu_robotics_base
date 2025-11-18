@@ -11955,6 +11955,19 @@ if ! apt-get update; then
   exit 1
 fi
 
+detect_system_gcc_major_version() {
+  local detected_major=""
+  if command -v gcc >/dev/null 2>&1; then
+    detected_major=$(gcc -dumpversion 2>/dev/null | cut -d. -f1 | head -1 || echo "")
+  fi
+  if [ -z "${detected_major}" ] || ! [[ "${detected_major}" =~ ^[0-9]+$ ]]; then
+    detected_major="13"
+  fi
+  printf '%s\n' "${detected_major}"
+}
+
+SYSTEM_GCC_MAJOR_VERSION="$(detect_system_gcc_major_version)"
+
 # Core required packages (most should already be installed from Phase 1)
 OPENCV_CORE_PACKAGES=(
   build-essential
@@ -11981,6 +11994,15 @@ OPENCV_CORE_PACKAGES=(
   libtesseract-dev
 )
 
+CRITICAL_TOOLCHAIN_PACKAGES=(
+  "libstdc++-${SYSTEM_GCC_MAJOR_VERSION}-dev"
+  "libgcc-${SYSTEM_GCC_MAJOR_VERSION}-dev"
+  zlib1g-dev
+  libbz2-dev
+  libssl-dev
+  libffi-dev
+)
+
 # Optional packages (may not be available in all Ubuntu versions)
 OPENCV_OPTIONAL_PACKAGES=(
   libstdc++-11-dev
@@ -11998,6 +12020,12 @@ fi
 printf '%s\n' "Installing core OpenCV build dependencies..."
 if ! install_packages_resilient "OpenCV build dependencies" "${OPENCV_CORE_PACKAGES[@]}"; then
   printf '%s\n' "ERROR: Failed to install critical OpenCV build dependencies" >&2
+  exit 1
+fi
+
+printf '%s\n' "Ensuring extended toolchain headers are installed..."
+if ! install_packages_resilient "Critical toolchain headers" "${CRITICAL_TOOLCHAIN_PACKAGES[@]}"; then
+  printf '%s\n' "ERROR: Failed to install critical toolchain header packages" >&2
   exit 1
 fi
 
@@ -12042,8 +12070,21 @@ else
   printf '%s\n' "  ${GREEN}✓ Standard headers verified${NC}"
 fi
 
-# Mark glibc development packages as manual to prevent future autoremove
-if apt-mark manual libc6-dev linux-libc-dev build-essential gcc g++ >/dev/null 2>&1; then
+# Mark glibc and toolchain development packages as manual to prevent future autoremove
+APT_MANUAL_PROTECT_PACKAGES=(
+  libc6-dev
+  linux-libc-dev
+  build-essential
+  gcc
+  g++
+  "libstdc++-${SYSTEM_GCC_MAJOR_VERSION}-dev"
+  "libgcc-${SYSTEM_GCC_MAJOR_VERSION}-dev"
+  zlib1g-dev
+  libbz2-dev
+  libssl-dev
+  libffi-dev
+)
+if apt-mark manual "${APT_MANUAL_PROTECT_PACKAGES[@]}" >/dev/null 2>&1; then
   printf '%s\n' "  ${GREEN}✓ Marked libc6-dev toolchain packages as manual (protected from autoremove)${NC}"
 else
   printf '%s\n' "  ${YELLOW}⚠ apt-mark manual failed (continuing; packages may be auto-removed)${NC}"
