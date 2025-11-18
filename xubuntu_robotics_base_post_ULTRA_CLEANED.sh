@@ -12416,7 +12416,8 @@ OPENCV_CMAKE_ARGS=(
   "-DCMAKE_CUDA_STANDARD_REQUIRED=ON"
   # CMAKE_INCLUDE_PATH: Help CMake find headers for TBB and MKL
   # Includes /usr/include for system TBB headers and MKLROOT/include for MKL headers
-    "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include:${MKL_INCLUDE_DIR}"
+  # CRITICAL: Must be semicolon-separated for CMake (not colon-separated)
+    "-DCMAKE_INCLUDE_PATH=/usr/include/x86_64-linux-gnu;/usr/include;${MKL_INCLUDE_DIR}"
   "-DCMAKE_CXX_FLAGS=-Wno-deprecated -fpermissive -march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_C_FLAGS=-march=x86-64-v3 -O3 -mavx2 -mfma -msse4.2 -funroll-loops -fopenmp"
   "-DCMAKE_EXE_LINKER_FLAGS=-flto -fopenmp"
@@ -13545,6 +13546,126 @@ printf '%s\n' "Building OpenCV with ${BUILD_JOBS} parallel jobs..."
 mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "  System: $(nproc) cores, ${mem_info} RAM"
+printf '%s\n' ""
+
+#--- Sub-block 20.10a: Re-sanitize compiler environment before ninja build ---
+# CRITICAL: Ensure compiler include paths are set for gcc/g++ during compilation
+# CMake configuration may have modified environment; restore standard paths
+# Dependencies: Function sanitize_standard_include_env (defined at line 12011)
+# Rationale: Headers found during CMake config but not during ninja build indicates
+#            compiler environment variables were cleared or not properly maintained
+printf '%s\n' "${YELLOW}Re-sanitizing compiler include environment before ninja build...${NC}"
+
+# CRITICAL: Unset any OpenBLAS-specific environment variables that might interfere
+# OpenBLAS may have set CFLAGS, CXXFLAGS, or other compiler flags that conflict
+# Rationale: User reported this worked before OpenBLAS was added to the script
+if [ -n "${OPENBLAS_NUM_THREADS:-}" ]; then
+  unset OPENBLAS_NUM_THREADS
+  printf '%s\n' "  ${GREEN}✓ Cleared OPENBLAS_NUM_THREADS${NC}"
+fi
+if [ -n "${OPENBLAS_MAIN_FREE:-}" ]; then
+  unset OPENBLAS_MAIN_FREE
+  printf '%s\n' "  ${GREEN}✓ Cleared OPENBLAS_MAIN_FREE${NC}"
+fi
+
+# Call sanitize function to ensure CPATH, C_INCLUDE_PATH, CPLUS_INCLUDE_PATH are set
+sanitize_standard_include_env
+
+# CRITICAL: Add MKL include paths to compiler environment (not just CMake)
+# gcc/g++ need these environment variables to find system and MKL headers during compilation
+if [ -n "${MKL_INCLUDE_DIR:-}" ] && [ -d "${MKL_INCLUDE_DIR}" ]; then
+  ensure_env_contains_dir "CPATH" "${MKL_INCLUDE_DIR}"
+  ensure_env_contains_dir "C_INCLUDE_PATH" "${MKL_INCLUDE_DIR}"
+  ensure_env_contains_dir "CPLUS_INCLUDE_PATH" "${MKL_INCLUDE_DIR}"
+  printf '%s\n' "  ${GREEN}✓ Added MKL include directory to compiler environment: ${MKL_INCLUDE_DIR}${NC}"
+fi
+
+# CRITICAL: Add CUDA include paths to compiler environment
+# OpenCV CUDA modules need access to CUDA headers during compilation
+# C6: Reuse existing CUDA_INCLUDE_DIR if already set (avoid variable duplication)
+# CUDA_INCLUDE_DIR is initially set at line 7035 and may be reassigned at lines 10535-10538, 11872
+if [ -z "${CUDA_INCLUDE_DIR:-}" ]; then
+  CUDA_INCLUDE_DIR="/usr/local/cuda-${CUDA_VERSION}/include"
+fi
+if [ -d "${CUDA_INCLUDE_DIR}" ]; then
+  ensure_env_contains_dir "CPATH" "${CUDA_INCLUDE_DIR}"
+  ensure_env_contains_dir "C_INCLUDE_PATH" "${CUDA_INCLUDE_DIR}"
+  ensure_env_contains_dir "CPLUS_INCLUDE_PATH" "${CUDA_INCLUDE_DIR}"
+  printf '%s\n' "  ${GREEN}✓ Added CUDA include directory to compiler environment: ${CUDA_INCLUDE_DIR}${NC}"
+fi
+
+# Verify critical environment variables are set
+printf '%s\n' "${YELLOW}Verifying compiler environment variables before ninja build...${NC}"
+printf '%s\n' "  CPATH=${CPATH:-<NOT SET - ERROR>}"
+printf '%s\n' "  C_INCLUDE_PATH=${C_INCLUDE_PATH:-<NOT SET - ERROR>}"
+printf '%s\n' "  CPLUS_INCLUDE_PATH=${CPLUS_INCLUDE_PATH:-<NOT SET - ERROR>}"
+printf '%s\n' "  LIBRARY_PATH=${LIBRARY_PATH:-<NOT SET - ERROR>}"
+
+# Sanity check: Ensure critical paths are present
+CRITICAL_INCLUDE_PATHS_MISSING=false
+# A5: POSIX compliance - use [ instead of [[ for string matching
+# D1: Proper quoting for all variables
+if [ -z "${CPATH:-}" ] || ! printf '%s' "${CPATH}" | grep -qF "/usr/include"; then
+  printf '%s\n' "${RED}  ✗ ERROR: CPATH missing /usr/include${NC}"
+  CRITICAL_INCLUDE_PATHS_MISSING=true
+fi
+if [ -z "${C_INCLUDE_PATH:-}" ] || ! printf '%s' "${C_INCLUDE_PATH}" | grep -qF "/usr/include"; then
+  printf '%s\n' "${RED}  ✗ ERROR: C_INCLUDE_PATH missing /usr/include${NC}"
+  CRITICAL_INCLUDE_PATHS_MISSING=true
+fi
+if [ -z "${CPLUS_INCLUDE_PATH:-}" ] || ! printf '%s' "${CPLUS_INCLUDE_PATH}" | grep -qF "/usr/include"; then
+  printf '%s\n' "${RED}  ✗ ERROR: CPLUS_INCLUDE_PATH missing /usr/include${NC}"
+  CRITICAL_INCLUDE_PATHS_MISSING=true
+fi
+
+if [ "${CRITICAL_INCLUDE_PATHS_MISSING}" = "true" ]; then
+  printf '%s\n' "${RED}ERROR: Critical compiler include paths not set properly${NC}"
+  printf '%s\n' "${RED}This will cause 'stdlib.h: No such file or directory' errors during compilation${NC}"
+  exit 1
+fi
+
+printf '%s\n' "${GREEN}✓ Compiler environment verified - all critical paths present${NC}"
+printf '%s\n' ""
+
+# CRITICAL: Test gcc/g++ can actually find stdlib.h before building
+# This catches environment issues before wasting time on a failed build
+printf '%s\n' "${YELLOW}Testing compiler header access before build...${NC}"
+TEST_COMPILE_SUCCESS=false
+if command -v g++-12 >/dev/null 2>&1; then
+  if printf '#include <stdlib.h>\nint main() { return 0; }\n' | g++-12 -x c++ -fsyntax-only - 2>/dev/null; then
+    TEST_COMPILE_SUCCESS=true
+    printf '%s\n' "  ${GREEN}✓ g++-12 can find stdlib.h${NC}"
+  else
+    printf '%s\n' "  ${RED}✗ g++-12 CANNOT find stdlib.h${NC}"
+    printf '%s\n' "  ${YELLOW}Testing with explicit diagnostics:${NC}"
+    # D3e: Add || true for SIGPIPE safety in diagnostic pipeline
+    # H4: Non-critical diagnostic output, safe to mask failures
+    printf '#include <stdlib.h>\nint main() { return 0; }\n' | g++-12 -x c++ -fsyntax-only -v - 2>&1 | tail -20 || true
+  fi
+elif command -v g++ >/dev/null 2>&1; then
+  if printf '#include <stdlib.h>\nint main() { return 0; }\n' | g++ -x c++ -fsyntax-only - 2>/dev/null; then
+    TEST_COMPILE_SUCCESS=true
+    printf '%s\n' "  ${GREEN}✓ g++ can find stdlib.h${NC}"
+  else
+    printf '%s\n' "  ${RED}✗ g++ CANNOT find stdlib.h${NC}"
+    printf '%s\n' "  ${YELLOW}Testing with explicit diagnostics:${NC}"
+    # D3e: Add || true for SIGPIPE safety in diagnostic pipeline
+    # H4: Non-critical diagnostic output, safe to mask failures
+    printf '#include <stdlib.h>\nint main() { return 0; }\n' | g++ -x c++ -fsyntax-only -v - 2>&1 | tail -20 || true
+  fi
+fi
+
+if [ "${TEST_COMPILE_SUCCESS}" = "false" ]; then
+  printf '%s\n' "${RED}ERROR: Compiler cannot find standard headers (stdlib.h)${NC}"
+  printf '%s\n' "${RED}This will cause compilation failures. Aborting build.${NC}"
+  printf '%s\n' "${YELLOW}Debug information:${NC}"
+  printf '%s\n' "  CPATH=${CPATH:-<unset>}"
+  printf '%s\n' "  C_INCLUDE_PATH=${C_INCLUDE_PATH:-<unset>}"
+  printf '%s\n' "  CPLUS_INCLUDE_PATH=${CPLUS_INCLUDE_PATH:-<unset>}"
+  exit 1
+fi
+
+printf '%s\n' "${GREEN}✓ Compiler header access verified - ready to build${NC}"
 printf '%s\n' ""
 
 # Build with fallback to single-threaded on failure
