@@ -11955,6 +11955,42 @@ if ! apt-get update; then
   exit 1
 fi
 
+log_header_diagnostics() {
+  local header_log="/tmp/opencv_header_locations.log"
+  local gcc_include_log="/tmp/opencv_gcc_include_search.log"
+  {
+    printf 'Header diagnostics timestamp: %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+    printf 'Searching for stdlib.h / stdio.h under /usr/include (depth<=3)\n'
+    find /usr/include -maxdepth 3 \( -name 'stdlib.h' -o -name 'stdio.h' \) -print 2>/dev/null || true
+    printf 'Checking libstdc++ wrappers:\n'
+    ls -l /usr/include/c++/*/cstdlib 2>/dev/null || true
+    printf 'Environment variables impacting include paths:\n'
+    printf '  CPATH=%s\n' "${CPATH:-<unset>}"
+    printf '  C_INCLUDE_PATH=%s\n' "${C_INCLUDE_PATH:-<unset>}"
+    printf '  CPLUS_INCLUDE_PATH=%s\n' "${CPLUS_INCLUDE_PATH:-<unset>}"
+    printf '  LIBRARY_PATH=%s\n' "${LIBRARY_PATH:-<unset>}"
+    printf '  COMPILER_PATH=%s\n' "${COMPILER_PATH:-<unset>}"
+  } > "${header_log}"
+
+  local gcc_bin="g++-12"
+  if ! command -v "${gcc_bin}" >/dev/null 2>&1; then
+    gcc_bin="g++"
+  fi
+  if command -v "${gcc_bin}" >/dev/null 2>&1; then
+    {
+      printf '=== %s include search order (g++ -E -v) ===\n' "${gcc_bin}"
+      "${gcc_bin}" -xc++ -E -v - <<'EOF'
+#include <stdlib.h>
+EOF
+    } > "${gcc_include_log}" 2>&1 || true
+  fi
+
+  printf '%s\n' "  ${GREEN}↪ Header diagnostics written to ${header_log}${NC}"
+  if [ -f "${gcc_include_log}" ]; then
+    printf '%s\n' "  ${GREEN}↪ GCC include search order logged at ${gcc_include_log}${NC}"
+  fi
+}
+
 detect_system_gcc_major_version() {
   local detected_major=""
   if command -v gcc >/dev/null 2>&1; then
@@ -12069,6 +12105,8 @@ EOF
 else
   printf '%s\n' "  ${GREEN}✓ Standard headers verified${NC}"
 fi
+
+log_header_diagnostics
 
 # Mark glibc and toolchain development packages as manual to prevent future autoremove
 APT_MANUAL_PROTECT_PACKAGES=(
