@@ -664,25 +664,8 @@ O. Testing, Validation & Graceful Degradation
 
 ---
 
-**SHELLCHECK VALIDATION (MANDATORY AFTER PART 3 CORRECTIONS)**:
-- **CRITICAL REQUIREMENT**: After completing all PART 3 checklist items (continues H, I1-I4, J1-J3, K1-K3, L1-L6, M1-M14) and applying all corrections, you MUST run ShellCheck validation before proceeding to PART 4.
-- **VALIDATION WORKFLOW** (see O5 above for detailed requirements):
-  1. Run ShellCheck on the corrected chunk(s): `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
-  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155, SC2164, SC2207)
-  3. Fix ALL ShellCheck issues found (zero tolerance policy)
-  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
-  5. Repeat until ShellCheck reports zero errors and zero warnings
-  6. Document all ShellCheck fixes with error codes in corrections summary
-- **COMMON SHELLCHECK ISSUES IN PART 3 SCOPE**:
-  - SC2164: Use `cd ... || exit` or `cd ... || return` (I1, N1) → Fix: `cd "${DIR}" || return 1`
-  - SC2207: Prefer `mapfile` or `read -a` (I1) → Fix: Use `mapfile -t array < <(command)` instead of `array=($(command))`
-  - SC2001: Use `${var//search/replace}` instead of `sed` (I1) → Fix: Use parameter expansion when possible
-  - SC2154: Variable referenced but not assigned (J1, K1) → Fix: Check for typos, ensure variable is set
-  - SC1090/SC1091: Can't follow sourced file (L1) → Fix: Add `# shellcheck source=path` directive
-  - SC2145: Argument mixes string and array (M1) → Fix: Use `"${array[@]}"` or `"${array[*]}"` consistently
-- **INTEGRATION**: All corrections applied during PART 3 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
-- **BLOCKING**: Do NOT proceed to PART 4 until PART 3 corrections are complete AND ShellCheck validation passes with zero errors/warnings.
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 3 of 4. After completing all checklist items in this part (continues H, covers I-J-K-L-M-O partial), continue with PART 4: `Code_check_prompt_manual-PART4.txt` (continues O, covers P, Steps 3-4, Protocols).
 
-**SEQUENTIAL CHECKING ENFORCED**: This is PART 3 of 4. After completing all checklist items in this part (continues H, covers I-J-K-L-M-O partial) AND ShellCheck validation passes, continue with PART 4: `Code_check_prompt_manual-PART4.txt` (continues O, covers P, Steps 3-4, Protocols).
+**NOTE**: ShellCheck validation runs ONCE at the END of ALL parts (PART 1-4) in PART 4. Do NOT run ShellCheck after PART 3 - proceed directly to PART 4 after completing all PART 3 checklist items.
 
 **DO NOT SKIP**: All checklist items must be checked sequentially. Complete PART 3 (including ShellCheck validation) before proceeding to PART 4.

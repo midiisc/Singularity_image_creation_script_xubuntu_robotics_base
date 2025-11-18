@@ -15,17 +15,14 @@ When this master entry point is referenced, you MUST:
 
 1. **LOAD PART 1 FIRST**: Read `prompts/Code_check_prompt_manual-PART1.txt` completely
 2. **PROCESS ALL CHECKLIST ITEMS IN PART 1**: Execute all checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) from PART 1
-3. **SHELLCHECK VALIDATION AFTER PART 1**: After all PART 1 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 2.
-4. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
-5. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
-6. **SHELLCHECK VALIDATION AFTER PART 2**: After all PART 2 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 3.
-7. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
-8. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14) from PART 3
-9. **SHELLCHECK VALIDATION AFTER PART 3**: After all PART 3 corrections are complete, run ShellCheck validation on the corrected chunk(s). Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings. Only then proceed to PART 4.
-10. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
-11. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
-12. **SHELLCHECK VALIDATION AFTER PART 4**: After all PART 4 corrections are complete, run final ShellCheck validation on the entire corrected script. Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings.
-13. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts AND ShellCheck validation passes with zero errors/warnings
+3. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
+4. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
+5. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
+6. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14) from PART 3
+7. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
+8. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
+9. **FINAL SHELLCHECK VALIDATION AFTER ALL PARTS**: After ALL parts (PART 1-4) are complete and all corrections applied, run final ShellCheck validation on the ENTIRE corrected script. Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings.
+10. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts AND final ShellCheck validation passes with zero errors/warnings
 
 **HARD ENFORCEMENT – SINGLE-PART MEMORY PROTOCOL**:
 - Exactly one part (PART 1, 2, 3, or 4) may be resident in working memory at any time.
@@ -138,14 +135,15 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 - Suppress redundant status. Only report: action taken → result → next chunk/part in progress.
 - If a chunk requires no corrections, proceed immediately to the next chunk and state so in one line.
 
-**SHELLCHECK COMPLIANCE REQUIREMENTS (MANDATORY)**:
+**SHELLCHECK COMPLIANCE REQUIREMENTS (MANDATORY - FINAL VALIDATION ONLY)**:
 - **INDUSTRY BEST PRACTICE**: ShellCheck is the industry-standard static analysis tool for shell scripts. All corrections MUST be ShellCheck compliant.
 - **ZERO TOLERANCE POLICY**: Scripts MUST pass ShellCheck with zero errors and zero warnings before audit completion.
-- **PART-LEVEL VALIDATION**: ShellCheck validation runs at the END of each part's processing, AFTER all other corrections are applied:
-  - After PART 1 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 2
-  - After PART 2 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 3
-  - After PART 3 corrections complete → Run ShellCheck → Fix all issues → Re-validate → Proceed to PART 4
-  - After PART 4 corrections complete → Run final ShellCheck → Fix all issues → Re-validate → Complete audit
+- **FINAL VALIDATION ONLY**: ShellCheck validation runs ONCE at the END of ALL parts (PART 1-4), AFTER all corrections are applied:
+  - Process PART 1 → Apply all corrections → Continue to PART 2 (NO ShellCheck yet)
+  - Process PART 2 → Apply all corrections → Continue to PART 3 (NO ShellCheck yet)
+  - Process PART 3 → Apply all corrections → Continue to PART 4 (NO ShellCheck yet)
+  - Process PART 4 → Apply all corrections → Run FINAL ShellCheck on ENTIRE script → Fix all issues → Re-validate → Complete audit
+- **RATIONALE**: Running ShellCheck only at the end ensures all corrections are complete before validation, avoids redundant checks, and provides a single comprehensive validation pass
 - **SHELLCHECK COMMAND OPTIONS**:
   - For standalone scripts: `shellcheck script.sh` or `shellcheck -s bash script.sh` (if Bash-specific)
   - For sourced scripts: `shellcheck -x script.sh` (allows external sourcing)
@@ -275,14 +273,10 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 **VERIFICATION**:
 After processing all parts, confirm:
 - ✅ PART 1 checklist items processed (A1-A6, B1-B3, C1-C6, D1-D4 partial)
-- ✅ PART 1 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 2 checklist items processed (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial)
-- ✅ PART 2 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 3 checklist items processed (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14)
-- ✅ PART 3 ShellCheck validation passed (zero errors, zero warnings)
 - ✅ PART 4 checklist items processed (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
-- ✅ PART 4 ShellCheck validation passed (zero errors, zero warnings)
-- ✅ Final ShellCheck validation passed on entire script (zero errors, zero warnings)
+- ✅ Final ShellCheck validation passed on ENTIRE script (zero errors, zero warnings) - runs ONCE after all parts complete
 - ✅ All checklist items A1 through P5 checked sequentially without skipping any
 
 ---

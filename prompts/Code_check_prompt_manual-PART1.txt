@@ -512,11 +512,15 @@ C. Variables & Defaults
 D. Quoting & Expansion Safety
 - D1. Proper quoting/escaping for variables, command substitutions, arithmetic, glob patterns, and path generation.
 - D2. Verification of `read` usage (`read -r`, IFS settings) and word-splitting safeguards.
-- D3. **PIPE PATTERN SAFETY**: Avoid unsafe `echo | grep` patterns; prefer here-strings or direct grep on variables:
+- D3. **PIPE PATTERN SAFETY - CRITICAL**: Avoid unsafe `echo | grep` patterns; prefer here-strings or direct grep on variables:
+  - **DANGEROUS PATTERN**: `echo "${VARIABLE}" | grep` creates unnecessary subshell, potential echo flag interpretation, and performance overhead
+  - **MANDATORY REPLACEMENT**: ALL `echo "${VAR}" | grep` patterns MUST be replaced with here-string: `grep <<< "${VAR}"`
   - UNSAFE: `if echo "${VARIABLE}" | grep -q "pattern"; then` (creates unnecessary subshell, potential echo flag interpretation)
-  - SAFE: `if grep -q "pattern" <<< "${VARIABLE}"; then` (here-string, no subshell, explicit quoting)
-  - SAFE: `if [[ "${VARIABLE}" =~ pattern ]]; then` (Bash regex, no external command)
-  - Detection: `grep -n 'echo.*|.*grep' script.sh` to find all occurrences
+  - SAFE: `if grep -q "pattern" <<< "${VARIABLE}"; then` (here-string, no subshell, explicit quoting, better performance)
+  - SAFE: `if [[ "${VARIABLE}" =~ pattern ]]; then` (Bash regex, no external command, best performance)
+  - **AUTO-FIX STRATEGY**: Automatically replace all `echo "${VAR}" | grep` with `grep <<< "${VAR}"` (preserve all flags and options)
+  - **DETECTION COMMAND**: `grep -nE 'echo\s+[^|]*\|\s*grep' script.sh` to find all occurrences
+  - **VALIDATION**: After replacement, verify no `echo.*|.*grep` patterns remain in the codebase
 - D3a. **COMPREHENSIVE UNSAFE PIPE PATTERNS**: Check for ALL unsafe pipe patterns beyond `echo | grep`:
   - **UNSAFE PATTERNS**:
     - `echo "${VAR}" | grep` → Use here-string or Bash regex (see D3)
@@ -591,27 +595,64 @@ D. Quoting & Expansion Safety
     - `$(eval "command ${VAR}")` → NEVER use `eval` with variables (see K1)
     - `$(exec command)` → Replaces current shell, use only when intentional
   - **ROBUST INPUT HANDLING** (CRITICAL):
+    - Validate input variables before command substitution: `[ -n "${VAR}" ] && result=$(command "${VAR}") || result=""`
+    - Check file existence before reading: `[ -f "${FILE}" ] && result=$(command "${FILE}") || result=""`
+    - Validate command output: `result=$(command) && [ -n "${result}" ] || result="default"`
+    - Use `|| true` for non-critical operations: `result=$(command) || true` (prevents script failure)
+    - Always validate result before use: `if [ -n "${result}" ] && [ "${result}" != "unknown" ]; then ... fi`
+- D3e. **SIGPIPE ERROR HANDLING IN PIPELINES - CRITICAL**: Check for pipelines that may fail with exit code 141 (SIGPIPE) when pipes break:
+  - **PROBLEM**: Exit code 141 (SIGPIPE) occurs when a command in a pipeline receives SIGPIPE signal (e.g., `head -10` closes pipe before `grep` finishes writing)
+  - **UNSAFE PATTERNS**:
+    - `grep pattern file | head -10` → May fail with exit code 141 if pipe breaks
+    - `command1 | command2 | head -n 5` → SIGPIPE risk when head closes early
+    - `grep pattern file | grep -v "^//" | head -10` → Multiple pipes increase SIGPIPE risk
+    - `find ... | grep pattern | head -10` → SIGPIPE risk in long pipelines
+    - Any pipeline ending with `head`, `tail`, or commands that close early → SIGPIPE risk
+  - **SAFE ALTERNATIVES**:
+    - Add file existence check: `[ -f "${FILE}" ] && grep pattern "${FILE}" | head -10 || true`
+    - Redirect stderr to suppress errors: `grep pattern file 2>/dev/null | head -10 || true`
+    - Add `|| true` at end: `grep pattern file | head -10 || true` (prevents script failure)
+    - Use process substitution when possible: `head -10 < <(grep pattern file) || true`
+    - Wrap in conditional: `if [ -f file ]; then grep pattern file | head -10 || true; fi`
+    - For critical operations: `{ grep pattern file 2>/dev/null || true; } | { head -10 2>/dev/null || true; } || true`
+  - **MANDATORY FIXES**:
+    - **ALWAYS** check file existence before reading: `[ -f "${FILE}" ] && command || true`
+    - **ALWAYS** redirect stderr: `command 2>/dev/null | ... || true`
+    - **ALWAYS** add `|| true` at pipeline end for non-critical operations
+    - **ALWAYS** validate results after pipeline: `result=$(command | head -10 || true) && [ -n "${result}" ] || result=""`
+  - **DETECTION**: Find all pipelines with `head`/`tail`: `grep -nE '\|\s*(head|tail)\s' script.sh`
+    - Check for missing error handling: `grep -nE '\|\s*(head|tail).*[^|]true' script.sh` (should have `|| true`)
+    - Check for missing file checks: `grep -nE '(grep|find|cat).*\|.*(head|tail)' script.sh` (should check file existence)
+  - **VALIDATION RULES**:
+    - If pipeline ends with `head`/`tail` → Must have `|| true` or proper error handling
+    - If pipeline reads from file → Must check file existence first
+    - If pipeline is non-critical → Must have `|| true` to prevent script failure
+    - If pipeline is critical → Must have proper error handling and validation
+  - **AUTO-FIX STRATEGY**:
+    1. Find all pipelines ending with `head`/`tail` without `|| true`
+    2. Add file existence check if reading from file
+    3. Add stderr redirection (`2>/dev/null`) to all commands in pipeline
+    4. Add `|| true` at end of pipeline
+    5. Wrap in conditional if file check needed: `if [ -f file ]; then ... || true; fi`
+  - **EXAMPLE - UNSAFE**:
+    ```bash
+    grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
+    # Problem: No error handling, may fail with exit code 141 (SIGPIPE)
+    ```
+  - **EXAMPLE - SAFE**:
+    ```bash
+    if [ -f CMakeCache.txt ]; then
+      grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt 2>/dev/null | grep -v "^//" 2>/dev/null | head -10 2>/dev/null || true
+    else
+      printf '%s\n' "  ${YELLOW}⚠ CMakeCache.txt not found${NC}"
+    fi
+    # Safe: File check, stderr redirection, error handling with || true
+    ```
 
 ---
 
-**SHELLCHECK VALIDATION (MANDATORY AFTER PART 1 CORRECTIONS)**:
-- **CRITICAL REQUIREMENT**: After completing all PART 1 checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) and applying all corrections, you MUST run ShellCheck validation before proceeding to PART 2.
-- **VALIDATION WORKFLOW**:
-  1. Run ShellCheck on the corrected chunk(s): `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
-  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155)
-  3. Fix ALL ShellCheck issues found (zero tolerance policy)
-  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
-  5. Repeat until ShellCheck reports zero errors and zero warnings
-  6. Document all ShellCheck fixes with error codes in corrections summary
-- **COMMON SHELLCHECK ISSUES IN PART 1 SCOPE**:
-  - SC2086: Unquoted variables (A5, D1) → Fix by quoting: `"${VAR}"`
-  - SC2155: Declare and assign separately (C1) → Fix: `local result; result=$(command)`
-  - SC2006: Backticks instead of `$()` (A3) → Fix: Replace `` `command` `` with `$(command)`
-  - SC2034: Variable appears unused (C6) → Verify or remove unused variables
-  - SC1090/SC1091: Can't follow sourced file → Add `# shellcheck source=path` directive
-- **INTEGRATION**: All corrections applied during PART 1 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
-- **BLOCKING**: Do NOT proceed to PART 2 until PART 1 corrections are complete AND ShellCheck validation passes with zero errors/warnings.
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 1 of 4. After completing all checklist items in this part (A-B-C-D partial), continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H).
 
-**SEQUENTIAL CHECKING ENFORCED**: This is PART 1 of 4. After completing all checklist items in this part (A-B-C-D partial) AND ShellCheck validation passes, continue with PART 2: `Code_check_prompt_manual-PART2.txt` (continues section D, covers E-F-G-H).
+**NOTE**: ShellCheck validation runs ONCE at the END of ALL parts (PART 1-4) in PART 4. Do NOT run ShellCheck after PART 1 - proceed directly to PART 2 after completing all PART 1 checklist items.
 
-**DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts. Complete PART 1 (including ShellCheck validation) before proceeding to PART 2.
+**DO NOT SKIP**: All checklist items A1 through P5 MUST be checked sequentially across all parts. Complete PART 1 before proceeding to PART 2.

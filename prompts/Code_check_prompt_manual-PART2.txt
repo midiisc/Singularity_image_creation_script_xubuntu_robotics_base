@@ -528,25 +528,8 @@ H. Error Handling & Observability
 
 ---
 
-**SHELLCHECK VALIDATION (MANDATORY AFTER PART 2 CORRECTIONS)**:
-- **CRITICAL REQUIREMENT**: After completing all PART 2 checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) and applying all corrections, you MUST run ShellCheck validation before proceeding to PART 3.
-- **VALIDATION WORKFLOW**:
-  1. Run ShellCheck on the corrected chunk(s): `shellcheck script.sh` or `shellcheck -x script.sh` (if script uses `source`)
-  2. Capture all errors and warnings with error codes (e.g., SC2086, SC2155, SC2181)
-  3. Fix ALL ShellCheck issues found (zero tolerance policy)
-  4. Re-run ShellCheck to verify fixes: `shellcheck script.sh`
-  5. Repeat until ShellCheck reports zero errors and zero warnings
-  6. Document all ShellCheck fixes with error codes in corrections summary
-- **COMMON SHELLCHECK ISSUES IN PART 2 SCOPE**:
-  - SC2181: Check exit code directly (H1) → Fix: Use `if command; then` instead of `command; if [ $? -eq 0 ]; then`
-  - SC2046: Quote to prevent word splitting (E1, F1) → Fix: Quote command substitutions: `"$(command)"`
-  - SC2068: Double quote array expansions (E1) → Fix: Use `"${array[@]}"` instead of `${array[@]}`
-  - SC2119: Use `"$@"` for function parameters (G1) → Fix: Use `"$@"` instead of `$@`
-  - SC2120: Function doesn't end with return (G1) → Fix: Add explicit `return 0` or `return` at function end
-  - SC2086: Unquoted variables in command substitutions (F2) → Fix: Quote all variables: `"${VAR}"`
-- **INTEGRATION**: All corrections applied during PART 2 MUST be ShellCheck compliant. If a correction introduces a ShellCheck issue, fix it immediately.
-- **BLOCKING**: Do NOT proceed to PART 3 until PART 2 corrections are complete AND ShellCheck validation passes with zero errors/warnings.
+**SEQUENTIAL CHECKING ENFORCED**: This is PART 2 of 4. After completing all checklist items in this part (continues D, covers E-F-G-H), continue with PART 3: `Code_check_prompt_manual-PART3.txt` (continues H, covers I-J-K-L-M-O partial).
 
-**SEQUENTIAL CHECKING ENFORCED**: This is PART 2 of 4. After completing all checklist items in this part (continues D, covers E-F-G-H) AND ShellCheck validation passes, continue with PART 3: `Code_check_prompt_manual-PART3.txt` (continues H, covers I-J-K-L-M-O partial).
+**NOTE**: ShellCheck validation runs ONCE at the END of ALL parts (PART 1-4) in PART 4. Do NOT run ShellCheck after PART 2 - proceed directly to PART 3 after completing all PART 2 checklist items.
 
 **DO NOT SKIP**: All checklist items must be checked sequentially. Complete PART 2 (including ShellCheck validation) before proceeding to PART 3.

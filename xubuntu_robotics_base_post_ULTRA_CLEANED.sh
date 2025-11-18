@@ -12997,53 +12997,53 @@ vtk_detected_output=false
 if [ -n "${CMAKE_TAIL_OUTPUT}" ]; then
   # Check for LAPACK detection in CMake output
   # OpenCV prints "LAPACK: YES" or "LAPACK: MKL" or "LAPACK: OpenBLAS" in configuration summary
-  if echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(LAPACK.*:.*YES|LAPACK.*:.*MKL|LAPACK.*:.*OpenBLAS|LAPACK.*found|Found LAPACK|LAPACK_LIBRARIES)"; then
+  if grep -qiE "(LAPACK.*:.*YES|LAPACK.*:.*MKL|LAPACK.*:.*OpenBLAS|LAPACK.*found|Found LAPACK|LAPACK_LIBRARIES)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     lapack_detected_output=true
     # Check if it's MKL (required) or OpenBLAS (error)
-    if echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(LAPACK.*:.*OpenBLAS|OpenBLAS.*LAPACK)"; then
+    if grep -qiE "(LAPACK.*:.*OpenBLAS|OpenBLAS.*LAPACK)" <<< "${CMAKE_TAIL_OUTPUT}"; then
       printf '%s\n' "  ${RED}✗ ERROR: LAPACK detected as OpenBLAS in CMake output (should be MKL)${NC}"
       config_critical_error=true
-    elif echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(LAPACK.*:.*MKL|MKL.*LAPACK)"; then
+    elif grep -qiE "(LAPACK.*:.*MKL|MKL.*LAPACK)" <<< "${CMAKE_TAIL_OUTPUT}"; then
       printf '%s\n' "  ${GREEN}✓ LAPACK: MKL detected in CMake output (correct)${NC}"
     else
       printf '%s\n' "  ${GREEN}✓ LAPACK detected in CMake output${NC}"
     fi
-  elif echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(LAPACK.*:.*NO|LAPACK.*not found|Could not find LAPACK|LAPACK.*missing)"; then
+  elif grep -qiE "(LAPACK.*:.*NO|LAPACK.*not found|Could not find LAPACK|LAPACK.*missing)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     printf '%s\n' "  ${RED}✗ LAPACK not detected in CMake output${NC}"
     config_critical_error=true
   fi
 
   # Check for TBB detection in CMake output
   # OpenCV prints "TBB: YES" or "Intel TBB: YES" in configuration summary
-  if echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(TBB.*:.*YES|Intel TBB.*:.*YES|TBB.*found|Found TBB|TBB_LIBRARIES|TBB_INTERFACE_VERSION)"; then
+  if grep -qiE "(TBB.*:.*YES|Intel TBB.*:.*YES|TBB.*found|Found TBB|TBB_LIBRARIES|TBB_INTERFACE_VERSION)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     tbb_detected_output=true
     # Verify it's system TBB, not MKL TBB
-    if echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(/opt/intel.*TBB|/usr/local/intel.*TBB|MKL.*TBB)"; then
+    if grep -qiE "(/opt/intel.*TBB|/usr/local/intel.*TBB|MKL.*TBB)" <<< "${CMAKE_TAIL_OUTPUT}"; then
       printf '%s\n' "  ${RED}✗ ERROR: TBB detected from MKL path in CMake output (should be system TBB)${NC}"
       config_critical_error=true
-    elif echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(/usr/lib.*TBB|system.*TBB)"; then
+    elif grep -qiE "(/usr/lib.*TBB|system.*TBB)" <<< "${CMAKE_TAIL_OUTPUT}"; then
       printf '%s\n' "  ${GREEN}✓ TBB: System TBB detected in CMake output (correct)${NC}"
     else
       printf '%s\n' "  ${GREEN}✓ TBB detected in CMake output${NC}"
     fi
-  elif echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(TBB.*:.*NO|TBB.*not found|Could not find TBB|TBB.*missing|Intel TBB.*:.*NO)"; then
+  elif grep -qiE "(TBB.*:.*NO|TBB.*not found|Could not find TBB|TBB.*missing|Intel TBB.*:.*NO)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     printf '%s\n' "  ${RED}✗ TBB not detected in CMake output${NC}"
     config_critical_error=true
   fi
 
   # Check for VTK detection in CMake output
   # OpenCV prints "VTK: YES" or "VTK support: YES" in configuration summary
-  if echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(VTK.*:.*YES|VTK support.*:.*YES|VTK.*found|Found VTK|VTK_DIR.*found|VTK_LIBRARIES)"; then
+  if grep -qiE "(VTK.*:.*YES|VTK support.*:.*YES|VTK.*found|Found VTK|VTK_DIR.*found|VTK_LIBRARIES)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     vtk_detected_output=true
     printf '%s\n' "  ${GREEN}✓ VTK detected in CMake output${NC}"
-  elif echo "${CMAKE_TAIL_OUTPUT}" | grep -qiE "(VTK.*:.*NO|VTK support.*:.*NO|VTK.*not found|Could not find VTK|VTK.*missing)"; then
+  elif grep -qiE "(VTK.*:.*NO|VTK support.*:.*NO|VTK.*not found|Could not find VTK|VTK.*missing)" <<< "${CMAKE_TAIL_OUTPUT}"; then
     printf '%s\n' "  ${YELLOW}⚠ VTK not detected in CMake output (may be disabled)${NC}"
   fi
 
   # Display relevant CMake output lines for LAPACK/TBB/VTK
   printf '%s\n' ""
   printf '%s\n' "Relevant CMake configuration output:"
-  echo "${CMAKE_TAIL_OUTPUT}" | grep -iE "(LAPACK|TBB|VTK)" | head -20 || true
+  grep -iE "(LAPACK|TBB|VTK)" <<< "${CMAKE_TAIL_OUTPUT}" | head -20 || true
 fi
 
 # Block build if critical dependencies not detected in CMake output
@@ -13372,7 +13372,13 @@ fi
 
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Configuration summary:"
-grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt | grep -v "^//" | head -10
+# D3: Use proper error handling to prevent SIGPIPE (exit code 141) from broken pipe
+# Exit code 141 occurs when head closes pipe before grep finishes writing
+if [ -f CMakeCache.txt ]; then
+  grep -E "LAPACK|TBB|OPENMP|CUDA" CMakeCache.txt 2>/dev/null | grep -v "^//" 2>/dev/null | head -10 2>/dev/null || true
+else
+  printf '%s\n' "  ${YELLOW}⚠ CMakeCache.txt not found${NC}"
+fi
 
 #--- Sub-block 20.10: Build OpenCV with ninja ---
 # Critical: Compile OpenCV using memory-aware job calculation
@@ -14371,124 +14377,134 @@ COLMAP_CMAKE_ARGS=(
 COLMAP_CMAKE_LOG="/tmp/colmap_cmake.log"
 
 cmake "${COLMAP_CMAKE_ARGS[@]}" .. 2>&1 | tee "${COLMAP_CMAKE_LOG}"
-if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ COLMAP CMake configuration FAILED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "Last 50 lines of CMake log:"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "✗ COLMAP CMake configuration FAILED"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "Last 50 lines of CMake log:"
     tail -50 "${COLMAP_CMAKE_LOG}"
-    echo ""
-    echo "📊 Diagnostic checks:"
-    echo "  glog: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
-    ceres_lib=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || echo 'NOT FOUND')
-    echo "  Ceres: ${ceres_lib}"
-    echo "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo 'NOT AVAILABLE')"
-    echo ""
-    echo "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "📊 Diagnostic checks:"
+    printf '%s\n' "  glog: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
+    ceres_lib=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || printf '%s\n' 'NOT FOUND')
+    printf '%s\n' "  Ceres: ${ceres_lib}"
+    printf '%s\n' "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || printf '%s\n' 'NOT AVAILABLE')"
+    printf '%s\n' ""
+    printf '%s\n' "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 1
 fi
 
 # Verify glog was detected correctly
-echo ""
-echo "🔍 Verifying glog detection in CMake configuration..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "🔍 Verifying glog detection in CMake configuration..."
 if grep -i "glog" "${COLMAP_CMAKE_LOG}" | grep -q "0.6.0\|Found glog"; then
-    echo "✓ CMake successfully detected glog:"
-    grep -i "Found glog\|glog.*version" "${COLMAP_CMAKE_LOG}" | head -3 || echo "  (detection confirmed)"
+    printf '%s\n' "✓ CMake successfully detected glog:"
+    grep -i "Found glog\|glog.*version" "${COLMAP_CMAKE_LOG}" | head -3 || printf '%s\n' "  (detection confirmed)"
 else
-    echo "⚠ WARNING: Could not verify glog version in CMake output"
-    echo "  Build may still succeed if glog is correctly installed"
+    printf '%s\n' "⚠ WARNING: Could not verify glog version in CMake output"
+    printf '%s\n' "  Build may still succeed if glog is correctly installed"
 fi
 
-echo ""
-echo "✓ COLMAP configured successfully with CUDA support"
-echo "  Generator: Ninja"
-echo "  glog: System package (Ubuntu patched 0.6.0)"
-echo "  Additional flags: -fpermissive"
+printf '%s\n' ""
+printf '%s\n' "✓ COLMAP configured successfully with CUDA support"
+printf '%s\n' "  Generator: Ninja"
+printf '%s\n' "  glog: System package (Ubuntu patched 0.6.0)"
+printf '%s\n' "  Additional flags: -fpermissive"
 
 #--- Sub-block 24.6: Build COLMAP ---
 # Critical: Compile with Ninja (faster, better error messages than make)
 # Dependencies: CMake configuration (Ninja generator)
 # Outputs: COLMAP binaries
 # Note: COLMAP builds can be memory-intensive, use reduced parallelism
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Building COLMAP with Ninja (this may take 15-20 minutes)..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Building COLMAP with Ninja (this may take 15-20 minutes)..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Use memory-aware job calculation to prevent memory issues
 BUILD_JOBS=$(calculate_build_jobs)
 # Ensure BUILD_JOBS is set to a valid numeric value
 BUILD_JOBS=${BUILD_JOBS:-1}
-echo "Using ${BUILD_JOBS} parallel jobs for COLMAP build..."
-mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
-echo "  System: $(nproc) cores, ${mem_info} RAM"
-echo ""
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Using ${BUILD_JOBS} parallel jobs for COLMAP build..."
+mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || printf '%s\n' "unknown")
+printf '%s\n' "  System: $(nproc) cores, ${mem_info} RAM"
+printf '%s\n' ""
 
 # Build with Ninja (better error messages than make)
 if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ COLMAP build FAILED with ${BUILD_JOBS} jobs"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "Trying single-threaded build for better error diagnostics..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "✗ COLMAP build FAILED with ${BUILD_JOBS} jobs"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "Trying single-threaded build for better error diagnostics..."
     if ! ninja -j1 2>&1 | tee -a /tmp/colmap_build.log; then
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "✗ COLMAP build FAILED (single-threaded)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "Last 100 lines of build log:"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "✗ COLMAP build FAILED (single-threaded)"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' ""
+        printf '%s\n' "Last 100 lines of build log:"
         tail -100 /tmp/colmap_build.log
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' ""
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         # 1. Check for glog-specific errors
-        echo ""
-        echo "1️⃣ CHECKING FOR GLOG-RELATED ERRORS:"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "1️⃣ CHECKING FOR GLOG-RELATED ERRORS:"
         if grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
-            echo "❌ glog-related errors detected:"
+            printf '%s\n' "❌ glog-related errors detected:"
             grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
-            echo ""
-            echo "📊 Current glog environment:"
-            echo "  glog version: $(pkg-config --modversion libglog 2>/dev/null || echo 'NOT FOUND')"
-            echo "  glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || echo 'NOT FOUND')"
-            echo "  glog libraries found:"
-            timeout 5 ldconfig -p 2>/dev/null | grep glog | sed 's/^/    /' || echo "    (ldconfig check failed)"
-            echo "  glog headers found:"
+            printf '%s\n' ""
+            printf '%s\n' "📊 Current glog environment:"
+            printf '%s\n' "  glog version: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
+            printf '%s\n' "  glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
+            printf '%s\n' "  glog libraries found:"
+            timeout 5 ldconfig -p 2>/dev/null | grep glog | sed 's/^/    /' || printf '%s\n' "    (ldconfig check failed)"
+            printf '%s\n' "  glog headers found:"
             find /usr /usr/local -path "*/include/glog/logging.h" 2>/dev/null | sed 's/^/    /'
         else
-            echo "✓ No glog-specific errors detected"
+            printf '%s\n' "✓ No glog-specific errors detected"
         fi
         
         # 2. Check for Ceres-related errors
-        echo ""
-        echo "2️⃣ CHECKING FOR CERES-RELATED ERRORS:"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "2️⃣ CHECKING FOR CERES-RELATED ERRORS:"
         if grep -i "ceres\|CHECK_OP\|CheckOpString\|MINIGLOG" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
-            echo "❌ Ceres/CHECK macro errors detected:"
+            printf '%s\n' "❌ Ceres/CHECK macro errors detected:"
             grep -i "ceres\|CHECK_OP\|CheckOpString" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
-            echo ""
-            echo "📊 Current Ceres environment:"
-            echo "  Ceres library:"
-            timeout 5 ldconfig -p 2>/dev/null | grep libceres | sed 's/^/    /' || echo "    NOT FOUND"
-            echo "  Ceres → glog linkage:"
-            CERES_LIB=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || echo "")
+            printf '%s\n' ""
+            printf '%s\n' "📊 Current Ceres environment:"
+            printf '%s\n' "  Ceres library:"
+            timeout 5 ldconfig -p 2>/dev/null | grep libceres | sed 's/^/    /' || printf '%s\n' "    NOT FOUND"
+            printf '%s\n' "  Ceres → glog linkage:"
+            CERES_LIB=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || printf '%s\n' "")
             if [ -n "${CERES_LIB:-}" ] && [ -f "${CERES_LIB}" ]; then
-                timeout 10 ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || echo "    No glog linkage"
+                timeout 10 ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || printf '%s\n' "    No glog linkage"
             else
-                echo "    Ceres library path not found or invalid"
+                printf '%s\n' "    Ceres library path not found or invalid"
             fi
-            echo "  System Ceres packages:"
+            printf '%s\n' "  System Ceres packages:"
             ceres_pkg_list=("libceres-dev" "libceres3" "libceres2" "libceres" "ceres-solver")
             ceres_pkg_found="false"
             for ceres_pkg in "${ceres_pkg_list[@]}"; do
+                resolved_pkg=""
                 if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
                     ceres_pkg_found="true"
+                    ceres_pkg_version=""
                     ceres_pkg_version=$(dpkg_get_installed_version "${ceres_pkg}" 2>/dev/null || true)
                     if [ -n "${ceres_pkg_version:-}" ]; then
                         printf '    %s (version: %s)\n' "${resolved_pkg}" "${ceres_pkg_version}"
@@ -14498,16 +14514,19 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
                 fi
             done
             if [ "${ceres_pkg_found}" != "true" ]; then
-                echo "    None (expected)"
+                # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+                printf '%s\n' "    None (expected)"
             fi
             unset ceres_pkg ceres_pkg_found ceres_pkg_list ceres_pkg_version resolved_pkg
         else
-            echo "✓ No Ceres-specific errors detected"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "✓ No Ceres-specific errors detected"
         fi
         
         # 3. Check for general compilation errors
-        echo ""
-        echo "3️⃣ FIRST COMPILATION ERROR (with context):"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "3️⃣ FIRST COMPILATION ERROR (with context):"
         # Find the first actual error (not warning)
         FIRST_ERROR_LINE=$(grep -n "error:" /tmp/colmap_build.log | head -1 | cut -d: -f1)
         if [ -n "${FIRST_ERROR_LINE:-}" ] && [ "${FIRST_ERROR_LINE}" -gt 0 ] 2>/dev/null; then
@@ -14518,73 +14537,87 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
             END_LINE=$((FIRST_ERROR_LINE + 10))
             sed -n "${START_LINE},${END_LINE}p" /tmp/colmap_build.log | sed 's/^/  /'
         else
-            echo "  No 'error:' lines found (may be linker or other failure)"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  No 'error:' lines found (may be linker or other failure)"
         fi
         
         # 4. Check for linking errors
-        echo ""
-        echo "4️⃣ CHECKING FOR LINKING ERRORS:"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "4️⃣ CHECKING FOR LINKING ERRORS:"
         if grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log >/dev/null 2>&1; then
-            echo "❌ Linking errors detected:"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "❌ Linking errors detected:"
             grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log | tail -10 | sed 's/^/  /'
         else
-            echo "✓ No linking errors detected"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "✓ No linking errors detected"
         fi
         
         # 5. Check for memory issues
-        echo ""
-        echo "5️⃣ CHECKING FOR MEMORY ISSUES:"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "5️⃣ CHECKING FOR MEMORY ISSUES:"
         if grep -i "killed\|out of memory\|oom\|c++: fatal error: Killed" /tmp/colmap_build.log >/dev/null 2>&1; then
-            echo "❌ Memory issue detected:"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "❌ Memory issue detected:"
             grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log | tail -5 | sed 's/^/  /'
-            echo ""
-            echo "💡 Solution: Reduce BUILD_JOBS (current: ${BUILD_JOBS})"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' ""
+            printf '%s\n' "💡 Solution: Reduce BUILD_JOBS (current: ${BUILD_JOBS})"
         else
-            echo "✓ No memory issues detected"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "✓ No memory issues detected"
         fi
         
         # 6. Environment summary
-        echo ""
-        echo "6️⃣ ENVIRONMENT SUMMARY AT FAILURE:"
-        echo "  CMake version: $(cmake --version 2>/dev/null | head -1 || echo 'unknown')"
-        echo "  Ninja version: $(ninja --version 2>/dev/null || echo 'unknown')"
-        echo "  GCC version: $(gcc --version 2>/dev/null | head -1 || echo 'unknown')"
-        echo "  ccache status: $(command -v ccache >/dev/null 2>&1 && echo 'available' || echo 'not available')"
-        avail_mem=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo 'unknown')
-        echo "  Available memory: ${avail_mem}"
-        echo "  Build jobs: ${BUILD_JOBS}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "6️⃣ ENVIRONMENT SUMMARY AT FAILURE:"
+        printf '%s\n' "  CMake version: $(cmake --version 2>/dev/null | head -1 || printf '%s\n' 'unknown')"
+        printf '%s\n' "  Ninja version: $(ninja --version 2>/dev/null || printf '%s\n' 'unknown')"
+        printf '%s\n' "  GCC version: $(gcc --version 2>/dev/null | head -1 || printf '%s\n' 'unknown')"
+        printf '%s\n' "  ccache status: $(command -v ccache >/dev/null 2>&1 && printf '%s\n' 'available' || printf '%s\n' 'not available')"
+        avail_mem=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || printf '%s\n' 'unknown')
+        printf '%s\n' "  Available memory: ${avail_mem}"
+        printf '%s\n' "  Build jobs: ${BUILD_JOBS}"
         
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "📋 NEXT STEPS FOR DEBUGGING:"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "1. Check full log: /tmp/colmap_build.log"
-        echo "2. Check CMake log: ${COLMAP_CMAKE_LOG}"
-        echo "3. Verify glog: pkg-config --modversion libglog"
-        echo "4. Verify Ceres: Run 'ldconfig -p' and grep for libceres"
-        echo "5. Check PRE-FLIGHT output (earlier in build log)"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "Full build log saved to: /tmp/colmap_build.log"
-        echo "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "📋 NEXT STEPS FOR DEBUGGING:"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "1. Check full log: /tmp/colmap_build.log"
+        printf '%s\n' "2. Check CMake log: ${COLMAP_CMAKE_LOG}"
+        printf '%s\n' "3. Verify glog: pkg-config --modversion libglog"
+        printf '%s\n' "4. Verify Ceres: Run 'ldconfig -p' and grep for libceres"
+        printf '%s\n' "5. Check PRE-FLIGHT output (earlier in build log)"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' ""
+        printf '%s\n' "Full build log saved to: /tmp/colmap_build.log"
+        printf '%s\n' "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
 fi
 
-echo ""
-echo "✓ COLMAP built successfully with Ninja"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "✓ COLMAP built successfully with Ninja"
 
 #--- Sub-block 24.7: Install COLMAP ---
 # Purpose: Install to system paths
 # Dependencies: Successful build
 # Outputs: COLMAP installed to /usr/local
-echo ""
-echo "Installing COLMAP to /usr/local..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "Installing COLMAP to /usr/local..."
 ninja install 2>&1 | tee /tmp/colmap_install.log
 INSTALL_EXIT=${PIPESTATUS[0]}
 if [ "${INSTALL_EXIT}" -ne 0 ]; then
-    echo "ERROR: Failed to install COLMAP"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "ERROR: Failed to install COLMAP"
     exit 1
 fi
 # Use dynamic directory detection from installation output
@@ -14596,15 +14629,17 @@ run_ldconfig_refresh_from_install_output "/tmp/colmap_install.log" 200
 # Outputs: PyCOLMAP Python package
 # Reference: https://colmap.github.io/pycolmap/index.html
 # Note: Requires COLMAP installed first. PyCeres (optional) enables cost functions feature.
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Installing PyCOLMAP Python bindings for COLMAP..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Installing PyCOLMAP Python bindings for COLMAP..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 COLMAP_SOURCE_DIR=$(cd .. && pwd)  # Save COLMAP source root path
 # Validate COLMAP source directory is set
 if [ -z "${COLMAP_SOURCE_DIR:-}" ]; then
-    echo "ERROR: Failed to determine COLMAP source directory"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "ERROR: Failed to determine COLMAP source directory"
     exit 1
 fi
 BUILD_DIR=$(pwd)  # Current build directory
@@ -14620,36 +14655,44 @@ PYCOLMAP_PATH=""
 if [ -d "${COLMAP_SOURCE_DIR}/pycolmap" ]; then
     PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/pycolmap"
     PYCOLMAP_FOUND=true
-    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Found pycolmap directory at: ${PYCOLMAP_PATH}"
 elif [ -d "${COLMAP_SOURCE_DIR}/python/pycolmap" ]; then
     PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/python/pycolmap"
     PYCOLMAP_FOUND=true
-    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Found pycolmap directory at: ${PYCOLMAP_PATH}"
 elif [ -d "${COLMAP_SOURCE_DIR}/scripts/python/pycolmap" ]; then
     PYCOLMAP_PATH="${COLMAP_SOURCE_DIR}/scripts/python/pycolmap"
     PYCOLMAP_FOUND=true
-    echo "Found pycolmap directory at: ${PYCOLMAP_PATH}"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Found pycolmap directory at: ${PYCOLMAP_PATH}"
 fi
 
 # Build PyCOLMAP from source if found in COLMAP repository
 if [ "${PYCOLMAP_FOUND:-}" = true ] && { [ -f "${PYCOLMAP_PATH}/setup.py" ] || [ -f "${PYCOLMAP_PATH}/pyproject.toml" ]; }; then
-    echo "Building PyCOLMAP from source directory: ${PYCOLMAP_PATH}"
-    echo "  (Linking against compiled COLMAP in /usr/local)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "Building PyCOLMAP from source directory: ${PYCOLMAP_PATH}"
+    printf '%s\n' "  (Linking against compiled COLMAP in /usr/local)"
     cd "${PYCOLMAP_PATH}" || exit 1
     
     # Build from source using official method: python -m pip install .
     # Use --no-deps to avoid overwriting compiled libraries (numpy/scipy/opencv)
     # PyCeres will be detected automatically if installed (for cost functions)
     if python3 -m pip install --no-deps --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee /tmp/pycolmap_install.log; then
-        echo "✓ PyCOLMAP built and installed from source (using compiled COLMAP)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "✓ PyCOLMAP built and installed from source (using compiled COLMAP)"
     else
-        echo "⚠ PyCOLMAP no-deps source build failed, trying with dependencies (protecting OpenCV)..."
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "⚠ PyCOLMAP no-deps source build failed, trying with dependencies (protecting OpenCV)..."
         # Try with dependencies, but prevent opencv binary overwrites
         # Note: numpy/scipy are OK - they use system BLAS which links to our OpenBLAS
         if python3 -m pip install --no-binary opencv-python,opencv-contrib-python . 2>&1 | tee -a /tmp/pycolmap_install.log; then
-            echo "✓ PyCOLMAP installed from source (OpenCV binaries blocked, numpy/scipy allowed)"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "✓ PyCOLMAP installed from source (OpenCV binaries blocked, numpy/scipy allowed)"
         else
-            echo "⚠ PyCOLMAP source installation failed, falling back to PyPI..."
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "⚠ PyCOLMAP source installation failed, falling back to PyPI..."
             PYCOLMAP_FOUND=false
         fi
     fi
@@ -14658,66 +14701,81 @@ fi
 
 # Fallback to PyPI if source not found or source build failed
 if [ "${PYCOLMAP_FOUND:-}" = false ]; then
-    echo "⚠ pycolmap directory not found in COLMAP source (checked common locations)"
-    echo "  Attempted: ${COLMAP_SOURCE_DIR}/pycolmap"
-    echo "  Attempted: ${COLMAP_SOURCE_DIR}/python/pycolmap"
-    echo "  Attempted: ${COLMAP_SOURCE_DIR}/scripts/python/pycolmap"
-    echo ""
-    echo "Installing PyCOLMAP from PyPI with protections..."
-    echo "  (Will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
-    echo "  (PyCeres recommended for cost functions - check if installed)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ pycolmap directory not found in COLMAP source (checked common locations)"
+    printf '%s\n' "  Attempted: ${COLMAP_SOURCE_DIR}/pycolmap"
+    printf '%s\n' "  Attempted: ${COLMAP_SOURCE_DIR}/python/pycolmap"
+    printf '%s\n' "  Attempted: ${COLMAP_SOURCE_DIR}/scripts/python/pycolmap"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' ""
+    printf '%s\n' "Installing PyCOLMAP from PyPI with protections..."
+    printf '%s\n' "  (Will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
+    printf '%s\n' "  (PyCeres recommended for cost functions - check if installed)"
     
     # Install from PyPI but prevent overwriting our compiled libraries
     # The PyPI package will link against our compiled COLMAP if LD_LIBRARY_PATH is set
     # Version pin to match COLMAP version for compatibility
     if python3 -m pip install --no-binary opencv-python,opencv-contrib-python "pycolmap==${COLMAP_VERSION}" 2>&1 | tee /tmp/pycolmap_install.log; then
-        echo "✓ PyCOLMAP installed from PyPI (will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "✓ PyCOLMAP installed from PyPI (will use compiled COLMAP libraries via LD_LIBRARY_PATH)"
     else
         # Try without version pin if exact version not available
-        echo "⚠ Version-pinned install failed, trying latest PyCOLMAP..."
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "⚠ Version-pinned install failed, trying latest PyCOLMAP..."
         if python3 -m pip install --no-binary opencv-python,opencv-contrib-python pycolmap 2>&1 | tee -a /tmp/pycolmap_install.log; then
-            echo "✓ PyCOLMAP installed from PyPI (latest version, using compiled COLMAP libraries)"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "✓ PyCOLMAP installed from PyPI (latest version, using compiled COLMAP libraries)"
         else
-            echo "⚠ PyCOLMAP PyPI installation failed (non-fatal)"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "⚠ PyCOLMAP PyPI installation failed (non-fatal)"
         fi
     fi
 fi
 
 # Verify installation
 if command -v colmap &> /dev/null; then
-    COLMAP_VER=$(colmap -h 2>&1 | grep "COLMAP" | head -1 || echo "")
+    COLMAP_VER=$(colmap -h 2>&1 | grep "COLMAP" | head -1 || printf '%s\n' "")
     if [ -n "${COLMAP_VER}" ]; then
-        echo "✓ COLMAP installed: ${COLMAP_VER}"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "✓ COLMAP installed: ${COLMAP_VER}"
     else
-        echo "✓ COLMAP installed (version check unavailable)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "✓ COLMAP installed (version check unavailable)"
     fi
 else
-    echo "✗ COLMAP installation verification failed"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ COLMAP installation verification failed"
     exit 1
 fi
 
 # Verify Python bindings
-echo ""
-echo "Verifying Python bindings installation..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' ""
+printf '%s\n' "Verifying Python bindings installation..."
 if python3 -c "import pycolmap; print(f'PyCOLMAP version: {pycolmap.__version__}')" 2>/dev/null; then
-    echo "✓ PyCOLMAP Python module verified"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ PyCOLMAP Python module verified"
     
     # Check if PyCeres is available (for cost functions)
     if python3 -c "import pyceres" 2>/dev/null; then
-        echo "✓ PyCeres available (cost functions feature enabled)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "✓ PyCeres available (cost functions feature enabled)"
     else
-        echo "⚠ PyCeres not found (cost functions feature will be unavailable)"
-        echo "  PyCeres can be installed later if needed for cost functions"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "⚠ PyCeres not found (cost functions feature will be unavailable)"
+        printf '%s\n' "  PyCeres can be installed later if needed for cost functions"
     fi
 else
-    echo "⚠ PyCOLMAP Python module not available (non-fatal)"
-    echo "  Installation logs: /tmp/pycolmap_install.log"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ PyCOLMAP Python module not available (non-fatal)"
+    printf '%s\n' "  Installation logs: /tmp/pycolmap_install.log"
 fi
 
 #--- Sub-block 24.9: Protect compiled COLMAP from APT overwrites ---
 # Critical: Prevent APT from installing ANY system COLMAP packages
 # Strategy: Use APT pinning with negative priority (consistent with other compiled libraries)
-echo "Protecting compiled COLMAP from APT overwrites..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Protecting compiled COLMAP from APT overwrites..."
 
 # Create APT preferences directory
 mkdir -p /etc/apt/preferences.d
@@ -14747,25 +14805,30 @@ Pin-Priority: -1
 EOF
 
 if [ -f "/etc/apt/preferences.d/block-system-colmap" ]; then
-    echo "✓ Created APT preferences to block system COLMAP packages"
-    echo "  - Blocks: colmap, colmap-dev, libcolmap, libcolmap-dev"
-    echo "  - Method: APT pinning with Pin-Priority: -1"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ Created APT preferences to block system COLMAP packages"
+    printf '%s\n' "  - Blocks: colmap, colmap-dev, libcolmap, libcolmap-dev"
+    printf '%s\n' "  - Method: APT pinning with Pin-Priority: -1"
 else
-    echo "✗ ERROR: Failed to create COLMAP protection file"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✗ ERROR: Failed to create COLMAP protection file"
     exit 1
 fi
 
-echo "✓ COLMAP protected from APT overwrites (APT pinning method)"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ COLMAP protected from APT overwrites (APT pinning method)"
 
 #--- Sub-block 24.10: Cleanup COLMAP build ---
 # Purpose: Remove build files to save space
 # Dependencies: None (foundational)
 # Outputs: Disk space freed
-echo "Cleaning up COLMAP build files..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Cleaning up COLMAP build files..."
 cd /
 rm -rf /tmp/colmap
 rm -f /tmp/colmap_*.log
-echo "✓ COLMAP build cleaned up"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "✓ COLMAP build cleaned up"
 
 #--- Sub-block 24.11: Install Jupyter/ipywidgets for Open3D Jupyter extension ---
 # Purpose: Install Python packages required for BUILD_JUPYTER_EXTENSION=ON
@@ -14774,40 +14837,45 @@ echo "✓ COLMAP build cleaned up"
 # Note: Open3D Jupyter extension requires jupyter, jupyterlab, and ipywidgets
 # Issue: Debian may have installed traitlets 5.5.0 which cannot be uninstalled via pip
 # Solution: Install newer versions without attempting to uninstall system traitlets
-echo "Installing Jupyter, JupyterLab, and ipywidgets for Open3D Jupyter extension..."
-echo "  Note: Handling Debian-installed traitlets 5.5.0 (will not be uninstalled)"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing Jupyter, JupyterLab, and ipywidgets for Open3D Jupyter extension..."
+printf '%s\n' "  Note: Handling Debian-installed traitlets 5.5.0 (will not be uninstalled)"
 
 # First, try to install without upgrading traitlets if it's already installed
 if python3 -c "import traitlets" 2>/dev/null; then
-  TRAITLETS_VER=$(python3 -c "import traitlets; print(traitlets.__version__)" 2>/dev/null || echo "unknown")
-  echo "  Found existing traitlets: ${TRAITLETS_VER}"
+  TRAITLETS_VER=$(python3 -c "import traitlets; print(traitlets.__version__)" 2>/dev/null || printf '%s\n' "unknown")
+  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+  printf '%s\n' "  Found existing traitlets: ${TRAITLETS_VER}"
   if [ "${TRAITLETS_VER}" = "5.5.0" ]; then
-    echo "  Debian traitlets 5.5.0 detected - installing compatible versions..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  Debian traitlets 5.5.0 detected - installing compatible versions..."
     # Install compatible versions that work with traitlets 5.5.0
     # traitlets 5.5.0 is only compatible with jupyter 1.x, not 6.x
     # Use jupyter<2.0.0 to get the latest 1.x version compatible with traitlets 5.5.0
     python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
       "jupyter>=1.0.0,<2.0.0" "jupyterlab>=3.0.0,<4.0.0" "ipywidgets>=7.0.0,<8.0.0" || \
-      echo "⚠ Jupyter installation with traitlets 5.5.0 failed"
+      printf '%s\n' "⚠ Jupyter installation with traitlets 5.5.0 failed"
   else
     # Upgrade traitlets if it's not the Debian version
     python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
       "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
-      echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
+      printf '%s\n' "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
   fi
 else
   # No traitlets installed, install normally
   python3 -m pip install --no-cache-dir --upgrade-strategy=only-if-needed \
     "jupyter>=6.0.0" "jupyterlab>=4.0.0" "ipywidgets>=8.0.0" || \
-    echo "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
+    printf '%s\n' "⚠ Jupyter/JupyterLab/ipywidgets installation failed"
 fi
 
 # Also install jupyter_packaging which is needed for Open3D's pip package installation
-echo "Installing jupyter_packaging (required for Open3D pip package installation)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing jupyter_packaging (required for Open3D pip package installation)..."
 # Use --break-system-packages flag for externally-managed environments
 JUPYTER_PACKAGING_LOG=$(mktemp -t jupyter_packaging_install.XXXXXX)
 if [ -z "${JUPYTER_PACKAGING_LOG:-}" ]; then
-    echo "  ✗ ERROR: Failed to create temporary log for jupyter_packaging installation"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: Failed to create temporary log for jupyter_packaging installation"
     exit 1
 fi
 
@@ -14819,32 +14887,38 @@ set -e
 if [ "${jupyter_packaging_status}" -eq 0 ]; then
     grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)" "${JUPYTER_PACKAGING_LOG}" || true
 else
-    echo "  ⚠ pip reported an error installing jupyter_packaging (log follows)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ pip reported an error installing jupyter_packaging (log follows)"
     sed 's/^/    /' "${JUPYTER_PACKAGING_LOG}"
 fi
 
 # Installation completed, verify it's importable
 sleep 1  # Give Python a moment to register the new module
 if python3 -c "import jupyter_packaging" 2>/dev/null; then
-    JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-    echo "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
+    JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ jupyter_packaging installed (version: ${JUPYTER_PACKAGING_VER})"
 else
     if [ "${jupyter_packaging_status}" -eq 0 ]; then
-        echo "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
         # Try to refresh Python's import cache
         python3 -c "import sys; sys.path.insert(0, ''); import importlib; importlib.invalidate_caches()" 2>/dev/null || true
         # Retry import after cache refresh
         sleep 1
         if python3 -c "import jupyter_packaging" 2>/dev/null; then
-            JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-            echo "  ✓ jupyter_packaging now importable (version: ${JUPYTER_PACKAGING_VER})"
+            JUPYTER_PACKAGING_VER=$(python3 -c "import jupyter_packaging; print(getattr(jupyter_packaging, '__version__', 'unknown'))" 2>/dev/null || printf '%s\n' "unknown")
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ✓ jupyter_packaging now importable (version: ${JUPYTER_PACKAGING_VER})"
         else
-            echo "  ⚠ jupyter_packaging still not importable (may affect Open3D pip package build)"
-            echo "  Review pip output above for diagnostics"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ⚠ jupyter_packaging still not importable (may affect Open3D pip package build)"
+            printf '%s\n' "  Review pip output above for diagnostics"
         fi
     else
-        echo "  ⚠ jupyter_packaging installation failed or not importable (may affect Open3D pip package build)"
-        echo "  Review pip output above for diagnostics"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ jupyter_packaging installation failed or not importable (may affect Open3D pip package build)"
+        printf '%s\n' "  Review pip output above for diagnostics"
     fi
 fi
 
@@ -14852,44 +14926,54 @@ rm -f "${JUPYTER_PACKAGING_LOG}"
 unset JUPYTER_PACKAGING_LOG jupyter_packaging_status
 
 # Verify Jupyter packages were installed
-echo "Verifying Jupyter packages installation..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying Jupyter packages installation..."
 JUPYTER_OK=true
 
 # Check jupyter (check for jupyter_core module and jupyter command)
 if command -v jupyter >/dev/null 2>&1; then
-    JUPYTER_VER=$(jupyter --version 2>/dev/null | head -n1 2>/dev/null || echo "unknown")
-    echo "  ✓ jupyter installed (version: ${JUPYTER_VER})"
+    JUPYTER_VER=$(jupyter --version 2>/dev/null | head -n1 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ jupyter installed (version: ${JUPYTER_VER})"
 elif python3 -c "import jupyter_core" 2>/dev/null; then
-    JUPYTER_VER=$(python3 -c "import jupyter_core; print(getattr(jupyter_core, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-    echo "  ✓ jupyter_core module found (version: ${JUPYTER_VER})"
+    JUPYTER_VER=$(python3 -c "import jupyter_core; print(getattr(jupyter_core, '__version__', 'unknown'))" 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ jupyter_core module found (version: ${JUPYTER_VER})"
 else
-    echo "  ✗ ERROR: jupyter not found - Jupyter extension may fail"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: jupyter not found - Jupyter extension may fail"
     JUPYTER_OK=false
 fi
 
 # Check jupyterlab
 if python3 -c "import jupyterlab" 2>/dev/null; then
-    JUPYTERLAB_VER=$(python3 -c "import jupyterlab; print(getattr(jupyterlab, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-    echo "  ✓ jupyterlab installed (version: ${JUPYTERLAB_VER})"
+    JUPYTERLAB_VER=$(python3 -c "import jupyterlab; print(getattr(jupyterlab, '__version__', 'unknown'))" 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ jupyterlab installed (version: ${JUPYTERLAB_VER})"
 else
-    echo "  ✗ ERROR: jupyterlab not found - Jupyter extension may fail"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: jupyterlab not found - Jupyter extension may fail"
     JUPYTER_OK=false
 fi
 
 # Check ipywidgets
 if python3 -c "import ipywidgets" 2>/dev/null; then
-    IPYWIDGETS_VER=$(python3 -c "import ipywidgets; print(getattr(ipywidgets, '__version__', 'unknown'))" 2>/dev/null || echo "unknown")
-    echo "  ✓ ipywidgets installed (version: ${IPYWIDGETS_VER})"
+    IPYWIDGETS_VER=$(python3 -c "import ipywidgets; print(getattr(ipywidgets, '__version__', 'unknown'))" 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ ipywidgets installed (version: ${IPYWIDGETS_VER})"
 else
-    echo "  ✗ ERROR: ipywidgets not found - Jupyter extension may fail"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: ipywidgets not found - Jupyter extension may fail"
     JUPYTER_OK=false
 fi
 
 if [ "${JUPYTER_OK}" = "true" ]; then
-    echo "✓ Jupyter prerequisites installed and verified"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "✓ Jupyter prerequisites installed and verified"
 else
-    echo "⚠ WARNING: Some Jupyter packages failed to install or verify"
-    echo "  Jupyter extension build may fail"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "⚠ WARNING: Some Jupyter packages failed to install or verify"
+    printf '%s\n' "  Jupyter extension build may fail"
 fi
 
 #===============================================================================
@@ -14901,13 +14985,15 @@ fi
 # Outputs: JAX with CUDA support, verified installation
 #-------------------------------------------------------------------------------
 
-echo "==> Installing JAX CUDA for GPU-Accelerated Reinforcement Learning"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "==> Installing JAX CUDA for GPU-Accelerated Reinforcement Learning"
 
 #--- Sub-block 25.1: Auto-detect CUDA version for JAX ---
 # Purpose: Dynamically detect CUDA version and map to JAX-compatible variant
 # Dependencies: CUDA installation (Block 12 or earlier)
 # Outputs: CUDA_FOR_JAX, CUDA_VERSION, DETECTED_CUDA
-echo "Detecting CUDA version for JAX installation..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Detecting CUDA version for JAX installation..."
 
 detect_cuda_version_for_jax() {
     local cuda_full=""
@@ -14920,7 +15006,8 @@ detect_cuda_version_for_jax() {
         if [ -n "${cuda_full:-}" ]; then
             cuda_major="${cuda_full%%.*}"
             cuda_minor="${cuda_full#*.}"
-            echo "  Detected CUDA via nvcc: ${cuda_full}"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  Detected CUDA via nvcc: ${cuda_full}"
         fi
     fi
     
@@ -14934,7 +15021,8 @@ detect_cuda_version_for_jax() {
             if [ -n "${cuda_full:-}" ]; then
                 cuda_major="${cuda_full%%.*}"
                 cuda_minor="${cuda_full#*.}"
-                echo "  Detected CUDA via library path: ${cuda_full}"
+                # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+                printf '%s\n' "  Detected CUDA via library path: ${cuda_full}"
             fi
         fi
     fi
@@ -14944,12 +15032,14 @@ detect_cuda_version_for_jax() {
         # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
         cuda_full=$(sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p' <<< "${CUDA_HOME}")
         if [ -z "${cuda_full:-}" ] && [ -f "${CUDA_HOME}/version.txt" ]; then
-            cuda_full=$(grep -oP 'CUDA Version \K[0-9]+\.[0-9]+' "${CUDA_HOME}/version.txt" 2>/dev/null || echo "")
+            # D3c: Use POSIX-compliant sed instead of grep -oP (Perl regex not available on all systems)
+            cuda_full=$(sed -n 's/.*CUDA Version \([0-9]\+\.[0-9]\+\).*/\1/p' "${CUDA_HOME}/version.txt" 2>/dev/null || printf '%s\n' "")
         fi
         if [ -n "${cuda_full:-}" ]; then
             cuda_major="${cuda_full%%.*}"
             cuda_minor="${cuda_full#*.}"
-            echo "  Detected CUDA via CUDA_HOME: ${cuda_full}"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  Detected CUDA via CUDA_HOME: ${cuda_full}"
         fi
     fi
     
@@ -14965,7 +15055,8 @@ detect_cuda_version_for_jax() {
         else
             CUDA_VERSION="12"
             CUDA_FOR_JAX="cuda12"
-            echo "  Warning: CUDA ${cuda_full:-unknown} detected, using CUDA 12 variant for JAX"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  Warning: CUDA ${cuda_full:-unknown} detected, using CUDA 12 variant for JAX"
         fi
     else
         CUDA_VERSION="12"
@@ -14973,7 +15064,8 @@ detect_cuda_version_for_jax() {
         cuda_full="unknown"
         cuda_major="12"
         cuda_minor=""
-        echo "  Warning: CUDA not detected, defaulting to CUDA 12"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  Warning: CUDA not detected, defaulting to CUDA 12"
     fi
     
     export DETECTED_CUDA="${cuda_full:-unknown}"
@@ -14983,14 +15075,16 @@ detect_cuda_version_for_jax() {
 
 # Detect CUDA version
 detect_cuda_version_for_jax
-echo "  JAX CUDA variant: ${CUDA_FOR_JAX} (CUDA ${CUDA_VERSION}.x)"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  JAX CUDA variant: ${CUDA_FOR_JAX} (CUDA ${CUDA_VERSION}.x)"
 
 #--- Sub-block 25.2: Install system prerequisites ---
 # Purpose: Install system packages required for JAX CUDA (pre-built wheels)
 # Dependencies: APT repositories configured
 # Outputs: System packages installed
 # Note: Using pre-built wheels, so we don't need Bazel/Java, but still need runtime deps
-echo "Installing system prerequisites for JAX CUDA..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing system prerequisites for JAX CUDA..."
 
 # Update package lists
 apt-get update -o Acquire::Retries=3 -qq
@@ -15007,95 +15101,117 @@ JAX_PREREQ_PACKAGES=(
     "unzip"
 )
 if ! install_packages_resilient "JAX CUDA prerequisites" "${JAX_PREREQ_PACKAGES[@]}"; then
-    echo "[warn] Some JAX CUDA prerequisites failed to install"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "[warn] Some JAX CUDA prerequisites failed to install"
 fi
 
-echo "  ✓ System prerequisites installed"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  ✓ System prerequisites installed"
 
 #--- Sub-block 25.3: Verify prerequisites ---
 # Purpose: Ensure all required packages and libraries are available
 # Dependencies: CUDA, cuDNN, Python, NumPy (installed earlier)
 # Outputs: Prerequisite verification status
-echo "Verifying prerequisites for JAX installation..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Verifying prerequisites for JAX installation..."
 
 # Check Python
 if ! command -v python3 &> /dev/null; then
-    echo "  ✗ ERROR: python3 not found"
-    echo "  JAX installation will be skipped"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: python3 not found"
+    printf '%s\n' "  JAX installation will be skipped"
 else
-    PYTHON_VER=$(python3 --version 2>/dev/null | awk '{print $2}' || echo "unknown")
-    echo "  ✓ Python ${PYTHON_VER} found"
+    PYTHON_VER=$(python3 --version 2>/dev/null | awk '{print $2}' || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ Python ${PYTHON_VER} found"
 fi
 
 # Check pip
 if ! command -v pip3 &> /dev/null && ! python3 -m pip --version &> /dev/null; then
-    echo "  ✗ ERROR: pip not found"
-    echo "  JAX installation will be skipped"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✗ ERROR: pip not found"
+    printf '%s\n' "  JAX installation will be skipped"
 else
-    echo "  ✓ pip found"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ pip found"
 fi
 
 # Check CUDA (already detected, but verify nvcc is accessible)
 if ! command -v nvcc &> /dev/null; then
-    echo "  ⚠ WARNING: nvcc not found - JAX will install but may not have GPU support"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ WARNING: nvcc not found - JAX will install but may not have GPU support"
 else
-    echo "  ✓ CUDA compiler (nvcc) found"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ CUDA compiler (nvcc) found"
 fi
 
 # Check zlib development library
 if ldconfig -p 2>/dev/null | grep -q libz; then
-    echo "  ✓ zlib library found"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ zlib library found"
 else
-    echo "  ⚠ WARNING: zlib library not found - may affect JAX dependencies"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ WARNING: zlib library not found - may affect JAX dependencies"
 fi
 
 # Check NumPy (required dependency for JAX)
 # Note: NumPy should already be installed via system packages (python3-numpy) which use OpenBLAS
 if ! python3 -c "import numpy" 2>/dev/null; then
-    echo "  ⚠ WARNING: NumPy not found - installing via system package (OpenBLAS)..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ WARNING: NumPy not found - installing via system package (OpenBLAS)..."
     if ! install_packages_resilient "JAX NumPy dependency" "python3-numpy"; then
-        echo "  ⚠ NumPy installation failed (non-fatal)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ NumPy installation failed (non-fatal)"
     fi
 else
-    NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || echo "unknown")
-    echo "  ✓ NumPy ${NUMPY_VER} found"
+    NUMPY_VER=$(python3 -c "import numpy; print(numpy.__version__)" 2>/dev/null || printf '%s\n' "unknown")
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ NumPy ${NUMPY_VER} found"
 fi
 
 # Check cuDNN library availability and version
 # JAX supports: CUDA 12.3 with cuDNN 8.9, or CUDA 11.8 with cuDNN 8.6
 if ldconfig -p 2>/dev/null | grep -q libcudnn; then
-    CUDNN_LIB=$(ldconfig -p 2>/dev/null | grep libcudnn | head -1 | awk '{print $4}' || echo "")
+    CUDNN_LIB=$(ldconfig -p 2>/dev/null | grep libcudnn | head -1 | awk '{print $4}' || printf '%s\n' "")
     if [ -n "${CUDNN_LIB:-}" ] && [ -f "${CUDNN_LIB}" ]; then
         # Try to extract cuDNN version from library
-        CUDNN_VERSION=$(strings "${CUDNN_LIB}" 2>/dev/null | grep -i "cudnn" | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1 || echo "unknown")
+        CUDNN_VERSION=$(strings "${CUDNN_LIB}" 2>/dev/null | grep -i "cudnn" | head -1 | grep -oE "[0-9]+\.[0-9]+" | head -1 || printf '%s\n' "unknown")
         if [ "${CUDNN_VERSION}" != "unknown" ]; then
-            echo "  ✓ cuDNN library found (version: ${CUDNN_VERSION})"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ✓ cuDNN library found (version: ${CUDNN_VERSION})"
         else
-            echo "  ✓ cuDNN library found in system"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ✓ cuDNN library found in system"
         fi
     else
-        echo "  ✓ cuDNN library found in system"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ cuDNN library found in system"
     fi
 else
-    echo "  ⚠ WARNING: cuDNN library not found in ldconfig - may affect GPU acceleration"
-    echo "    JAX requires cuDNN 8.6 (for CUDA 11.8) or cuDNN 8.9+ (for CUDA 12.3+)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ WARNING: cuDNN library not found in ldconfig - may affect GPU acceleration"
+    printf '%s\n' "    JAX requires cuDNN 8.6 (for CUDA 11.8) or cuDNN 8.9+ (for CUDA 12.3+)"
 fi
 
 # Check for OpenBLAS (NumPy/SciPy should use it, but verify)
 if ldconfig -p 2>/dev/null | grep -q libopenblas; then
-    echo "  ✓ OpenBLAS library found (for NumPy/SciPy)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ OpenBLAS library found (for NumPy/SciPy)"
 else
-    echo "  ⚠ WARNING: OpenBLAS not found - NumPy may not be optimized"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ WARNING: OpenBLAS not found - NumPy may not be optimized"
 fi
 
-echo "  Prerequisites check complete"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Prerequisites check complete"
 
 #--- Sub-block 25.4: Configure threading for optimal performance ---
 # Purpose: Set up parallel computing environment variables
 # Dependencies: nproc command
 # Outputs: Threading environment variables
-echo "Configuring threading for optimal performance..."
-num_cores=$(nproc 2>/dev/null || echo "1")
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Configuring threading for optimal performance..."
+num_cores=$(nproc 2>/dev/null || printf '%s\n' "1")
 # Validate that num_cores is numeric before arithmetic comparison
 if [ -z "${num_cores:-}" ] || ! expr "${num_cores}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
     num_cores=1
@@ -15108,19 +15224,22 @@ export OMP_NUM_THREADS="${num_cores}"
 export MKL_NUM_THREADS="${num_cores}"
 export NUMEXPR_NUM_THREADS="${num_cores}"
 export OPENBLAS_NUM_THREADS="${num_cores}"
-echo "  Set threading environment: OMP_NUM_THREADS=${num_cores}"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Set threading environment: OMP_NUM_THREADS=${num_cores}"
 
 #--- Sub-block 25.5: Install JAX with CUDA support ---
 # Purpose: Install JAX via pre-built wheels with CUDA support
 # Dependencies: pip, CUDA, cuDNN
 # Outputs: JAX and jaxlib with CUDA support
-echo "Installing JAX with CUDA support (using pre-built wheels)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Installing JAX with CUDA support (using pre-built wheels)..."
 
 # Handle externally-managed Python environments
 # Use --ignore-installed to avoid errors when uninstalling Debian-installed packages (wheel, etc.)
 pip_output=$(python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1) || true
 if grep -q "externally-managed-environment" <<< "${pip_output}"; then
-    echo "  Using --break-system-packages flag (for Singularity/container environments)"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  Using --break-system-packages flag (for Singularity/container environments)"
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
 else
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || \
@@ -15150,9 +15269,10 @@ if [ -n "${pip_flags:-}" ]; then
 fi
 
 # Install JAX with CUDA support
-echo "  Installing JAX[${CUDA_FOR_JAX}_local] from Google releases..."
-echo "  Note: Using --ignore-installed to handle Debian-installed packages (numpy, wheel, etc.)"
-echo "  Note: Dependency conflicts (matplotlib/types-seaborn) are non-fatal and will be resolved post-install"
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Installing JAX[${CUDA_FOR_JAX}_local] from Google releases..."
+printf '%s\n' "  Note: Using --ignore-installed to handle Debian-installed packages (numpy, wheel, etc.)"
+printf '%s\n' "  Note: Dependency conflicts (matplotlib/types-seaborn) are non-fatal and will be resolved post-install"
 
 # Install JAX - capture all output but don't fail on warnings
 pip_cmd=("${pip_cmd_base[@]}")
@@ -15164,35 +15284,41 @@ pip_cmd+=(-f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 
 # Check if installation actually succeeded by trying to import JAX
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
-    echo "  ✓ JAX installed successfully"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ✓ JAX installed successfully"
 else
-    echo "  ⚠ Primary installation method failed, trying alternative..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ Primary installation method failed, trying alternative..."
     pip_cmd=("${pip_cmd_base[@]}")
     pip_cmd+=("jax[${CUDA_FOR_JAX}]")
     "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log || true
     
     # Check again if alternative method worked
     if python3 -c "import jax; import jaxlib" 2>/dev/null; then
-        echo "  ✓ JAX installed via alternative method"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ JAX installed via alternative method"
     else
-        echo "  ⚠ JAX installation failed (non-fatal)"
-        echo "  Installation logs: /tmp/jax_install.log"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ JAX installation failed (non-fatal)"
+        printf '%s\n' "  Installation logs: /tmp/jax_install.log"
     fi
 fi
 
 # Resolve dependency conflicts (non-critical but good to fix)
-echo "  Resolving dependency conflicts (matplotlib/types-seaborn)..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Resolving dependency conflicts (matplotlib/types-seaborn)..."
 if python3 -c "import matplotlib" 2>/dev/null; then
-    MATPLOTLIB_VER=$(python3 -c "import matplotlib; print(matplotlib.__version__)" 2>/dev/null || echo "")
+    MATPLOTLIB_VER=$(python3 -c "import matplotlib; print(matplotlib.__version__)" 2>/dev/null || printf '%s\n' "")
     if [ -n "${MATPLOTLIB_VER}" ]; then
         # Check if matplotlib version is < 3.8 (required by types-seaborn)
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-        MATPLOTLIB_MAJOR=$(cut -d. -f1 <<< "${MATPLOTLIB_VER}" 2>/dev/null || echo "")
-        MATPLOTLIB_MINOR=$(cut -d. -f2 <<< "${MATPLOTLIB_VER}" 2>/dev/null || echo "")
-        # Fix logic: need parentheses for proper evaluation
+        MATPLOTLIB_MAJOR=$(cut -d. -f1 <<< "${MATPLOTLIB_VER}" 2>/dev/null || printf '%s\n' "")
+        MATPLOTLIB_MINOR=$(cut -d. -f2 <<< "${MATPLOTLIB_VER}" 2>/dev/null || printf '%s\n' "")
+        # Fix logic: use compound command groups instead of subshells for proper evaluation
         if [ -n "${MATPLOTLIB_MAJOR}" ] && [ -n "${MATPLOTLIB_MINOR}" ] && \
-           ([ "${MATPLOTLIB_MAJOR}" -lt 3 ] || ([ "${MATPLOTLIB_MAJOR}" -eq 3 ] && [ "${MATPLOTLIB_MINOR}" -lt 8 ])); then
-            echo "    Upgrading matplotlib from ${MATPLOTLIB_VER} to >=3.8..."
+           { [ "${MATPLOTLIB_MAJOR}" -lt 3 ] || { [ "${MATPLOTLIB_MAJOR}" -eq 3 ] && [ "${MATPLOTLIB_MINOR}" -lt 8 ]; }; }; then
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "    Upgrading matplotlib from ${MATPLOTLIB_VER} to >=3.8..."
             pip_cmd_upgrade=("${pip_cmd_base[@]}")
             pip_cmd_upgrade+=("matplotlib>=3.8")
             "${pip_cmd_upgrade[@]}" --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
@@ -15202,7 +15328,8 @@ fi
 
 # Install pandas-stubs if types-seaborn requires it (non-critical, just type stubs)
 if python3 -c "import types_seaborn" 2>/dev/null && ! python3 -c "import pandas_stubs" 2>/dev/null; then
-    echo "    Installing pandas-stubs (required by types-seaborn)..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "    Installing pandas-stubs (required by types-seaborn)..."
     pip_cmd_stubs=("${pip_cmd_base[@]}")
     pip_cmd_stubs+=("pandas-stubs")
     "${pip_cmd_stubs[@]}" --quiet 2>&1 | grep -v "ERROR Cannot uninstall" || true
@@ -15214,18 +15341,21 @@ fi
 sleep 1
 
 # Try importing JAX with better error reporting
-echo "  Verifying JAX installation..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "  Verifying JAX installation..."
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
-    JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || echo "unknown")
-    JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || echo "unknown")
+    JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || printf '%s\n' "unknown")
+    JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || printf '%s\n' "unknown")
     
     # Validate that versions were retrieved successfully
     if [ "${JAX_VER}" = "unknown" ] || [ -z "${JAX_VER}" ]; then
-        echo "  ⚠ WARNING: Could not retrieve JAX version"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ WARNING: Could not retrieve JAX version"
         JAX_VER="unknown"
     fi
     if [ "${JAXLIB_VER}" = "unknown" ] || [ -z "${JAXLIB_VER}" ]; then
-        echo "  ⚠ WARNING: Could not retrieve jaxlib version"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ⚠ WARNING: Could not retrieve jaxlib version"
         JAXLIB_VER="unknown"
     fi
     
@@ -15251,17 +15381,21 @@ PY_LIB
             JAXLIB_BASE_VER="${JAXLIB_VER}"
         fi
 
-        echo "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ JAX ${JAX_VER} and jaxlib ${JAXLIB_VER} installed"
 
         if [ -n "${JAX_BASE_VER}" ] && [ -n "${JAXLIB_BASE_VER}" ]; then
             if [ "${JAX_BASE_VER}" = "${JAXLIB_BASE_VER}" ] || [ "${JAX_VER}" = "${JAXLIB_BASE_VER}" ]; then
-                echo "  ✓ Version alignment verified: jax and jaxlib versions match"
+                # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+                printf '%s\n' "  ✓ Version alignment verified: jax and jaxlib versions match"
             else
-                echo "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
-                echo "    This may cause compatibility issues. Consider reinstalling with matching versions."
+                # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+                printf '%s\n' "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
+                printf '%s\n' "    This may cause compatibility issues. Consider reinstalling with matching versions."
             fi
         else
-            echo "  ⚠ WARNING: Could not extract base versions for comparison"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ⚠ WARNING: Could not extract base versions for comparison"
         fi
 
         CUDA_VARIANT=$(python3 - <<'PY_VARIANT'
@@ -15271,27 +15405,33 @@ print(match.group(0) if match else '')
 PY_VARIANT
 )
         if [ -n "${CUDA_VARIANT}" ]; then
-            echo "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
         else
-            echo "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
+            # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+            printf '%s\n' "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
         fi
     else
-        echo "  ✓ JAX and jaxlib installed (version verification unavailable)"
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        printf '%s\n' "  ✓ JAX and jaxlib installed (version verification unavailable)"
     fi
 else
     # Try to get more information about why import failed
-    echo "  ⚠ JAX installation verification failed (non-fatal)"
-    echo "  Attempting to diagnose import issue..."
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  ⚠ JAX installation verification failed (non-fatal)"
+    printf '%s\n' "  Attempting to diagnose import issue..."
     python3 -c "import jax" 2>&1 | head -3 || true
     python3 -c "import jaxlib" 2>&1 | head -3 || true
-    echo "  Note: JAX may still be functional - comprehensive verification will continue"
+    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+    printf '%s\n' "  Note: JAX may still be functional - comprehensive verification will continue"
 fi
 
 #--- Sub-block 25.6: Comprehensive JAX verification ---
 # Purpose: Test JAX functionality with comprehensive verification (imports, GPU, JIT, threading, performance)
 # Dependencies: JAX installed, CUDA, cuDNN
 # Outputs: Test results (non-fatal)
-echo "Running comprehensive JAX verification..."
+# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+printf '%s\n' "Running comprehensive JAX verification..."
 
 python3 << 'JAX_VERIFY' 2>&1 | tee /tmp/jax_verify.log || true
 import sys
@@ -15579,6 +15719,7 @@ except Exception as e:
 JAX_VERIFY
 
 # Check verification results
+# J1: File existence validation before use
 if [ -f /tmp/jax_verify.log ]; then
     # Use grep with proper escaping for Unicode characters
     # Check for success message (multiple patterns for robustness)
@@ -15593,9 +15734,11 @@ if [ -f /tmp/jax_verify.log ]; then
         echo "⚠ JAX verification had issues (non-fatal)"
         echo "  Check /tmp/jax_verify.log for details"
     fi
+# ENDIF: jax_verify.log existence check
 fi
 
 # Clean up logs
+# Note: Using || true is intentional here for non-critical cleanup operations
 rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
 
 echo "✓ JAX CUDA installation complete"
@@ -15650,26 +15793,35 @@ OPENBLAS_VERIFIED=false
 OPENBLAS_LIB="/usr/local/lib/libopenblas.so"
 
 # Check for OpenBLAS library (our compiled version)
+# J1: File existence validation before use
 if [ -f "/usr/local/lib/libopenblas.so.0" ]; then
     OPENBLAS_LIB="/usr/local/lib/libopenblas.so.0"
     OPENBLAS_VERIFIED=true
 elif [ -f "/usr/local/lib/libopenblas.so" ]; then
     OPENBLAS_LIB="/usr/local/lib/libopenblas.so"
     OPENBLAS_VERIFIED=true
+# ENDIF: OpenBLAS library file existence check
 fi
 
 if [ "${OPENBLAS_VERIFIED}" = true ]; then
     echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
     
     # Verify DYNAMIC_ARCH support
+    # J1: File existence already validated above
     if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qi "DYNAMIC_ARCH\|dynamic_arch\|DYNAMICARCH"; then
         echo -e "  ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+    # ENDIF: DYNAMIC_ARCH support check
     fi
     
     # Check alternatives system
     if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "${OPENBLAS_LIB}"; then
         echo -e "  ${GREEN}✓ OpenBLAS registered with alternatives${NC}"
+        # D3d: Robust command substitution with validation
         CURRENT_BLAS_ALT=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
+        # Validate result is non-empty and not just "unknown"
+        if [ -z "${CURRENT_BLAS_ALT}" ] || [ "${CURRENT_BLAS_ALT}" = "unknown" ]; then
+            CURRENT_BLAS_ALT="unknown"
+        fi
         if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
             if grep -qi "openblas" <<< "${CURRENT_BLAS_ALT}"; then
                 echo -e "  ${GREEN}✓ Default BLAS provider matches DEFAULT_BLAS_PROVIDER (${CURRENT_BLAS_ALT})${NC}"
@@ -15678,15 +15830,19 @@ if [ "${OPENBLAS_VERIFIED}" = true ]; then
             fi
         else
             echo -e "  ${YELLOW}ℹ Default BLAS provider remains ${CURRENT_BLAS_ALT} (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})${NC}"
+        # ENDIF: DEFAULT_BLAS_PROVIDER check
         fi
     else
         echo -e "  ${YELLOW}⚠ OpenBLAS not registered with alternatives (expected fallback unavailable)${NC}"
+    # ENDIF: alternatives system check
     fi
+# ENDIF: OPENBLAS_VERIFIED = true check
 else
     echo -e "  ${RED}✗ ERROR: OpenBLAS not found at /usr/local/lib${NC}"
     echo "  Expected from Block 6.12B: /usr/local/lib/libopenblas.so"
     echo "  Please ensure Block 6.12B completed successfully"
     exit 1
+# ENDIF: OPENBLAS_VERIFIED check
 fi
 echo ""
 
@@ -15698,18 +15854,21 @@ echo -e "${YELLOW}[13C.2] Verifying prerequisites...${NC}"
 MISSING_PREREQS=()
 
 # Check critical prerequisites
+# M1: Validation that required external commands/binaries exist
 for cmd in python3 pip3 cmake ninja git; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
         MISSING_PREREQS+=("${cmd}")
     else
         echo -e "  ${GREEN}✓ ${cmd} found${NC}"
     fi
+# ENDFOR: cmd in prerequisites list
 done
 
 if [ ${#MISSING_PREREQS[@]} -gt 0 ]; then
     echo -e "  ${RED}✗ Missing prerequisites: ${MISSING_PREREQS[*]}${NC}"
     echo "  These should have been installed in Block 6.12B.2"
     exit 1
+# ENDIF: Missing prerequisites check
 fi
 
 # Verify Python version (PyTorch 2.6.0 requires Python 3.8+)
@@ -15721,6 +15880,7 @@ if [ "${PYTHON_MAJOR}" -lt 3 ] || { [ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_M
     echo -e "  ${RED}✗ ERROR: PyTorch 2.6.0 requires Python 3.8 or later${NC}"
     echo "  Current Python version: ${PYTHON_VERSION}"
     exit 1
+# ENDIF: Python version compatibility check
 fi
 echo -e "  ${GREEN}✓ Python ${PYTHON_VERSION} (compatible)${NC}"
 echo ""
@@ -15735,10 +15895,15 @@ echo -e "${YELLOW}[13C.3] Detecting GCC version and configuring for CUDA 12.6...
 GCC_VERSION=""
 GCC_MAJOR=""
 if command -v gcc >/dev/null 2>&1; then
-    GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || true)
+    # D3d: Robust command substitution with validation
+    GCC_VERSION=$(gcc --version 2>/dev/null | head -n 1 | grep -oE '[0-9]+\.[0-9]+' | head -n 1 || echo "")
     if [ -n "${GCC_VERSION}" ]; then
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
+        # D3d: Validate result before use
         GCC_MAJOR=$(cut -d. -f1 <<< "${GCC_VERSION}" || echo "")
+        if [ -z "${GCC_MAJOR}" ] || ! [[ "${GCC_MAJOR}" =~ ^[0-9]+$ ]]; then
+            GCC_MAJOR=""
+        fi
         echo "  Detected GCC version: ${GCC_VERSION}"
     fi
 fi
@@ -15750,12 +15915,18 @@ GCC10_PATH=""
 GXX10_PATH=""
 
 if command -v gcc-10 >/dev/null 2>&1; then
+    # D3d: Robust command substitution with validation
     GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
     GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+    # Validate paths are non-empty and executable
     if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
         GCC10_INSTALLED=true
         USE_GCC10=true
         echo -e "  ${GREEN}✓ GCC 10 detected (recommended for CUDA 12.6)${NC}"
+    else
+        # Reset if validation failed
+        GCC10_PATH=""
+        GXX10_PATH=""
     fi
 fi
 
@@ -15766,12 +15937,19 @@ if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" 
     apt-get update -o Acquire::Retries=3 -qq
     GCC10_PACKAGES=("gcc-10" "g++-10")
     if install_packages_resilient "GCC 10 toolchain" "${GCC10_PACKAGES[@]}" >/dev/null 2>&1; then
+        # D3d: Robust command substitution with validation
         GCC10_PATH=$(command -v gcc-10 2>/dev/null || echo "")
         GXX10_PATH=$(command -v g++-10 2>/dev/null || echo "")
+        # Validate paths are non-empty and executable
         if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
             GCC10_INSTALLED=true
             USE_GCC10=true
             echo -e "  ${GREEN}✓ GCC 10 installed successfully${NC}"
+        else
+            # Reset if validation failed
+            GCC10_PATH=""
+            GXX10_PATH=""
+            echo -e "  ${YELLOW}⚠ GCC 10 installation completed but binaries not found in PATH${NC}"
         fi
     fi
 fi
@@ -15803,23 +15981,53 @@ CUDA_MINOR=""
 CUDA_HOME=""
 
 if command -v nvcc >/dev/null 2>&1; then
+    # D3d: Robust command substitution with validation
     CUDA_VERSION=$(nvcc --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
-    if [ -n "${CUDA_VERSION}" ]; then
+    if [ -n "${CUDA_VERSION}" ] && [[ "${CUDA_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-        CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}")
-        CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}")
-        CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")")
-        echo "  Detected CUDA version: ${CUDA_VERSION}"
-        echo "  CUDA_HOME: ${CUDA_HOME}"
+        # D3d: Validate result before use
+        CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}" || echo "")
+        CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}" || echo "")
+        # Validate major and minor are numeric
+        if [ -z "${CUDA_MAJOR}" ] || ! [[ "${CUDA_MAJOR}" =~ ^[0-9]+$ ]]; then
+            CUDA_MAJOR=""
+        fi
+        if [ -z "${CUDA_MINOR}" ] || ! [[ "${CUDA_MINOR}" =~ ^[0-9]+$ ]]; then
+            CUDA_MINOR=""
+        fi
+        if [ -n "${CUDA_MAJOR}" ] && [ -n "${CUDA_MINOR}" ]; then
+            CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")")
+            echo "  Detected CUDA version: ${CUDA_VERSION}"
+            echo "  CUDA_HOME: ${CUDA_HOME}"
+        else
+            CUDA_VERSION=""
+        fi
+    else
+        CUDA_VERSION=""
     fi
 elif [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
     if [ -f "${CUDA_HOME}/bin/nvcc" ]; then
+        # D3d: Robust command substitution with validation
         CUDA_VERSION=$("${CUDA_HOME}/bin/nvcc" --version 2>/dev/null | grep "release" | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' || echo "")
-        if [ -n "${CUDA_VERSION}" ]; then
+        if [ -n "${CUDA_VERSION}" ] && [[ "${CUDA_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
             # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-            CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}")
-            CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}")
-            echo "  Detected CUDA version: ${CUDA_VERSION}"
+            # D3d: Validate result before use
+            CUDA_MAJOR=$(cut -d. -f1 <<< "${CUDA_VERSION}" || echo "")
+            CUDA_MINOR=$(cut -d. -f2 <<< "${CUDA_VERSION}" || echo "")
+            # Validate major and minor are numeric
+            if [ -z "${CUDA_MAJOR}" ] || ! [[ "${CUDA_MAJOR}" =~ ^[0-9]+$ ]]; then
+                CUDA_MAJOR=""
+            fi
+            if [ -z "${CUDA_MINOR}" ] || ! [[ "${CUDA_MINOR}" =~ ^[0-9]+$ ]]; then
+                CUDA_MINOR=""
+            fi
+            if [ -n "${CUDA_MAJOR}" ] && [ -n "${CUDA_MINOR}" ]; then
+                echo "  Detected CUDA version: ${CUDA_VERSION}"
+            else
+                CUDA_VERSION=""
+            fi
+        else
+            CUDA_VERSION=""
         fi
     fi
 fi
@@ -15830,6 +16038,7 @@ if [ -z "${CUDA_VERSION}" ]; then
 else
     USE_CUDA=1
     echo -e "  ${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}"
+# ENDIF: CUDA_VERSION check
 fi
 
 # Determine CUDA compute architectures based on CUDA version
@@ -15851,6 +16060,7 @@ if [ "${USE_CUDA}" = 1 ] && [ -n "${CUDA_MAJOR}" ]; then
         if [ -n "${CUDA_MINOR}" ] && [ "${CUDA_MINOR}" -ge 4 ] 2>/dev/null; then
             CUDA_ARCH_LIST="${CUDA_ARCH_LIST};9.0"
             CMAKE_CUDA_ARCHITECTURES="${CMAKE_CUDA_ARCHITECTURES};90"
+        # ENDIF: CUDA_MINOR >= 4 check
         fi
         
         echo "  Selected CUDA architectures: ${CUDA_ARCH_LIST}"
@@ -15860,7 +16070,9 @@ if [ "${USE_CUDA}" = 1 ] && [ -n "${CUDA_MAJOR}" ]; then
         CUDA_ARCH_LIST="8.6"
         CMAKE_CUDA_ARCHITECTURES="86"
         echo "  Using default architecture: 8.6"
+    # ENDIF: CUDA_MAJOR = 12 check
     fi
+# ENDIF: USE_CUDA = 1 and CUDA_MAJOR check
 fi
 echo ""
 
