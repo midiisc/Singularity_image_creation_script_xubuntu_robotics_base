@@ -12001,6 +12001,53 @@ if ! install_packages_resilient "OpenCV build dependencies" "${OPENCV_CORE_PACKA
   exit 1
 fi
 
+#--- Sub-block 20.4a: Guard standard C headers from autoremove regressions ---
+# Purpose: Ensure libc6-dev headers remain available throughout OpenCV build
+# Dependencies: OPENCV_CORE_PACKAGES installation above
+# Outputs: Verified stdlib headers and manual apt marks to prevent removal
+printf '%s\n' "Verifying standard C headers (stdlib.h, stdio.h) are present..."
+STD_HEADERS_OK=true
+if [ ! -f "/usr/include/stdlib.h" ] || [ ! -f "/usr/include/stdio.h" ]; then
+  STD_HEADERS_OK=false
+fi
+if ! gcc -xc - -o /tmp/opencv_stdlib_probe >/dev/null 2>&1 <<'EOF'; then
+#include <stdlib.h>
+#include <stdio.h>
+int main(void) { return puts("ok") == EOF; }
+EOF
+  STD_HEADERS_OK=false
+fi
+rm -f /tmp/opencv_stdlib_probe 2>/dev/null || true
+
+if [ "${STD_HEADERS_OK}" = "false" ]; then
+  printf '%s\n' "  ${YELLOW}⚠ Standard headers missing or unusable. Reinstalling libc6-dev packages...${NC}"
+  if ! apt-get install -y --no-install-recommends libc6-dev linux-libc-dev; then
+    printf '%s\n' "ERROR: Failed to reinstall libc6-dev / linux-libc-dev" >&2
+    exit 1
+  fi
+  STD_HEADERS_OK=true
+  if ! gcc -xc - -o /tmp/opencv_stdlib_probe >/dev/null 2>&1 <<'EOF'; then
+#include <stdlib.h>
+#include <stdio.h>
+int main(void) { return puts("ok") == EOF; }
+EOF
+    STD_HEADERS_OK=false
+  fi
+  rm -f /tmp/opencv_stdlib_probe 2>/dev/null || true
+  if [ "${STD_HEADERS_OK}" = "false" ]; then
+    printf '%s\n' "ERROR: Standard headers remain unavailable after reinstall" >&2
+    exit 1
+  fi
+else
+  printf '%s\n' "  ${GREEN}✓ Standard headers verified${NC}"
+fi
+
+# Mark glibc development packages as manual to prevent future autoremove
+if apt-mark manual libc6-dev linux-libc-dev build-essential gcc g++ >/dev/null 2>&1; then
+  printf '%s\n' "  ${GREEN}✓ Marked libc6-dev toolchain packages as manual (protected from autoremove)${NC}"
+else
+  printf '%s\n' "  ${YELLOW}⚠ apt-mark manual failed (continuing; packages may be auto-removed)${NC}"
+fi
 # Install optional packages (non-critical, may not exist)
 # Only attempt if array is not empty
 # H4: Validate result after masked failure
