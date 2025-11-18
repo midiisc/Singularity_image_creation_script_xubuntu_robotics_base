@@ -11991,6 +11991,34 @@ EOF
   fi
 }
 
+ensure_env_contains_dir() {
+  local var_name="${1:-}"
+  local required_dir="${2:-}"
+  if [ -z "${var_name}" ] || [ -z "${required_dir}" ]; then
+    return 0
+  fi
+  # shellcheck disable=SC1083 # Indirect expansion for dynamic variable
+  local current_value="${!var_name-}"
+  if [ -z "${current_value}" ]; then
+    printf '%s\n' "  ${YELLOW}↪ Adding ${required_dir} to empty ${var_name}${NC}"
+    export "${var_name}=${required_dir}"
+  elif [[ ":${current_value}:" != *":${required_dir}:"* ]]; then
+    printf '%s\n' "  ${YELLOW}↪ Prepending ${required_dir} to ${var_name}${NC}"
+    export "${var_name}=${required_dir}:${current_value}"
+  fi
+}
+
+sanitize_standard_include_env() {
+  ensure_env_contains_dir "CPATH" "/usr/include"
+  ensure_env_contains_dir "CPATH" "/usr/include/x86_64-linux-gnu"
+  ensure_env_contains_dir "C_INCLUDE_PATH" "/usr/include"
+  ensure_env_contains_dir "C_INCLUDE_PATH" "/usr/include/x86_64-linux-gnu"
+  ensure_env_contains_dir "CPLUS_INCLUDE_PATH" "/usr/include"
+  ensure_env_contains_dir "CPLUS_INCLUDE_PATH" "/usr/include/x86_64-linux-gnu"
+  ensure_env_contains_dir "LIBRARY_PATH" "/usr/lib/x86_64-linux-gnu"
+  ensure_env_contains_dir "LIBRARY_PATH" "/usr/lib"
+}
+
 detect_system_gcc_major_version() {
   local detected_major=""
   if command -v gcc >/dev/null 2>&1; then
@@ -12106,6 +12134,7 @@ else
   printf '%s\n' "  ${GREEN}✓ Standard headers verified${NC}"
 fi
 
+sanitize_standard_include_env
 log_header_diagnostics
 
 # Mark glibc and toolchain development packages as manual to prevent future autoremove
