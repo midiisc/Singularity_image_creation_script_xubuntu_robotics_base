@@ -199,13 +199,13 @@ Before completing any work:
 
 ##### 1. check-pipe-patterns
 - **Purpose:** Detect unsafe `echo | grep` patterns
-- **Command:** `grep -n 'echo.*|.*grep' xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- **Command:** `grep -n 'echo.*|.*grep' xubuntu_robotics_base_full.sh`
 - **Failure:** If any patterns found
 - **Output:** Line numbers of violations
 
 ##### 2. validate-cmake-flags
 - **Purpose:** Validate CMake flags against documentation
-- **Command:** `./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --report-only`
+- **Command:** `./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh --report-only`
 - **Failure:** If invalid flags detected
 - **Output:** List of invalid flags and missing documentation
 

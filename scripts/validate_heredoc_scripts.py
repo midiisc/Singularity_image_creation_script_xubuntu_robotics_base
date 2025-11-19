@@ -420,7 +420,7 @@ def main():
     
     # Find files to process
     files_to_check = [
-        project_root / "xubuntu_robotics_base_post_ULTRA_CLEANED.sh",
+        project_root / "xubuntu_robotics_base_full.sh",
         project_root / "build_xubuntu_robotics_base.sh",
     ]
     

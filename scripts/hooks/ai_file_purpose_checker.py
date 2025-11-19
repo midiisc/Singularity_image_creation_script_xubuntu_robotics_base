@@ -122,7 +122,7 @@ def analyze_file_purpose(file_path: Path) -> Dict[str, any]:
         'create_writable_overlay.sh',
         'run_on_best_node.sh',
         'setup_conda_environments.sh',
-        'xubuntu_robotics_base_post_ULTRA_CLEANED.sh',
+        'xubuntu_robotics_base_full.sh',
         'analyze-library.sh',
         'README.md'
     ]

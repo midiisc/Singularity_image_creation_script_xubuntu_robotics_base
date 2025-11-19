@@ -171,7 +171,7 @@ After implementation:
 **Files Created/Modified:**
 - ✅ `container-scripts/shell-scripts/block-12-intel-oneapi-mkl-installation/hpc-mkl-tune.sh` - **CREATED**
 - ✅ `container-scripts/MANIFEST.json` - **UPDATED** (added entry for HPC tuning script)
-- ✅ `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` - **UPDATED** (added comment in Block 12A.4, NO heredoc)
+- ✅ `xubuntu_robotics_base_full.sh` - **UPDATED** (added comment in Block 12A.4, NO heredoc)
 - ✅ Script installs via `install.sh --all` (centralized management, no heredoc)
 
 **Files to Delete (MKL/CUDA Integration Scripts Only):**

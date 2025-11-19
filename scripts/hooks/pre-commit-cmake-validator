@@ -18,7 +18,7 @@ VALIDATOR="${WORKSPACE_ROOT}/scripts/helpers/validate_cmake_flags.sh"
 
 # Build scripts to check
 BUILD_SCRIPTS=(
-  "xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  "xubuntu_robotics_base_full.sh"
   "build_xubuntu_robotics_base.sh"
 )
 

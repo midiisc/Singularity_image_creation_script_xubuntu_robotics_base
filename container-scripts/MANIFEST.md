@@ -125,7 +125,7 @@ The `MANIFEST.json` file is a configuration manifest that maps source files in t
 #### `file_path` (optional)
 - **Type:** `string | null`
 - **Description:** Absolute path to source script file containing this file's content. Use `null` for standalone files not extracted from source script
-- **Example:** `"/home/user/project/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"` or `null`
+- **Example:** `"/home/user/project/xubuntu_robotics_base_full.sh"` or `null`
 
 ## Usage
 
@@ -403,7 +403,7 @@ ajv validate -s MANIFEST.schema.json -d MANIFEST.json
   "line_start": 2235,
   "line_end": 2365,
   "delimiter": "EOF",
-  "file_path": "/home/user/project/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  "file_path": "/home/user/project/xubuntu_robotics_base_full.sh"
 }
 ```
 
@@ -421,7 +421,7 @@ ajv validate -s MANIFEST.schema.json -d MANIFEST.json
   "line_start": 4046,
   "line_end": 4049,
   "delimiter": "EOF",
-  "file_path": "/home/user/project/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  "file_path": "/home/user/project/xubuntu_robotics_base_full.sh"
 }
 ```
 

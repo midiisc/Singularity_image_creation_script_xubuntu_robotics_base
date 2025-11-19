@@ -2,10 +2,10 @@
 
 ## Status Snapshot (2025-11-09)
 
-- ✅ SuiteSparse v7.12.1 (MKL + CUDA) builds in the `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` orchestrator have completed locally; HPC execution is pending.
+- ✅ SuiteSparse v7.12.1 (MKL + CUDA) builds in the `xubuntu_robotics_base_full.sh` orchestrator have completed locally; HPC execution is pending.
 - ✅ OpenBLAS v0.3.30 rebuilt locally with the documented high-performance flags (dynamic arch, OpenMP, GEMM 3M) and installed at `~/.local/openblas`; dynamic kernels and DYNAMIC_ARCH strings verified.
 - ✅ Block 13 now detects pre-existing CUDA/cuDNN stacks and skips redundant `apt-get install` runs while still refreshing environment hooks; the immediate cache sync (Block 13.7) only executes when new packages are downloaded.
-- ✅ Ceres, g2o, GTSAM, OpenCV, Open3D, and COLMAP now pass explicit Intel MKL BLAS/LAPACK flags in `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`; end-to-end HPC validation is pending.
+- ✅ Ceres, g2o, GTSAM, OpenCV, Open3D, and COLMAP now pass explicit Intel MKL BLAS/LAPACK flags in `xubuntu_robotics_base_full.sh`; end-to-end HPC validation is pending.
 - 🔄 Follow-up: remove the legacy NVIDIA cache sync path from `build_xubuntu_robotics_base.sh` and document the idempotent CUDA install flow in `docs/planning/CUDA_BUILD_CHECKLIST.md`.
 - ✅ **COMPLETE** - All MKL/CUDA flags are in the orchestrator script. Standalone rebuild scripts are not needed (no standalone builds).
 
@@ -30,7 +30,7 @@ Keep Ubuntu’s OpenCV packages installed for ROS compatibility. The custom MKL 
 - Runtime validation with `nvidia-smi` will happen later on the HPC node; the local build only verifies headers/libs resolve.
 
 **1.2 CUDA Companion Libraries for SuiteSparse (✔ integrated in orchestrator)**  
-`xubuntu_robotics_base_post_ULTRA_CLEANED.sh` now provisions the CUDA/cuDNN stack in Block 13 before GPU-enabled builds run. Keep `scripts/install-suitesparse-cuda-deps.sh` as a standalone fallback, but the orchestrator flow is the canonical path and will simply reuse an existing toolkit when present.
+`xubuntu_robotics_base_full.sh` now provisions the CUDA/cuDNN stack in Block 13 before GPU-enabled builds run. Keep `scripts/install-suitesparse-cuda-deps.sh` as a standalone fallback, but the orchestrator flow is the canonical path and will simply reuse an existing toolkit when present.
 
 **1.3 Compilers & Build Utilities**  
 Install GCC/G++/GFortran 14, Clang 18 (for OpenMP offload experiments), CMake ≥3.27, Ninja, ccache, and `pkg-config`. Confirm `gfortran` so SuiteSparse Fortran entry points align with MKL.
@@ -90,13 +90,13 @@ Block 13.7 now performs the cache copy + `sync` immediately after a successful C
 
 ## Phase 3 – SuiteSparse Foundation (MKL + CUDA) ✅
 
-> ✅ **COMPLETE** - SuiteSparse v7.12.1 (MKL + CUDA) builds successfully in the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`). The orchestrator short-circuits Block 13 when CUDA/cuDNN are pre-installed, so reruns simply refresh environment hooks before kicking off SuiteSparse. Proceed to HPC runtime checks next.
+> ✅ **COMPLETE** - SuiteSparse v7.12.1 (MKL + CUDA) builds successfully in the orchestrator script (`xubuntu_robotics_base_full.sh`). The orchestrator short-circuits Block 13 when CUDA/cuDNN are pre-installed, so reruns simply refresh environment hooks before kicking off SuiteSparse. Proceed to HPC runtime checks next.
 
 **3.1 Fetch Latest Stable Release**  
 Implemented: the current scripts pin SuiteSparse `v7.12.1` from the official repository; confirm the tag whenever bumping dependencies.
 
 **3.2 Configure for MKL & CUDA**  
-See `docs/flags/SUITESPARSE_BUILD_OPTIONS.md`. SuiteSparse is built in the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`) with MKL+CUDA support. Key flags:
+See `docs/flags/SUITESPARSE_BUILD_OPTIONS.md`. SuiteSparse is built in the orchestrator script (`xubuntu_robotics_base_full.sh`) with MKL+CUDA support. Key flags:
 ```
 -DSUITESPARSE_USE_OPENMP=ON
 -DSUITESPARSE_USE_CUDA=ON
@@ -196,7 +196,7 @@ Inspect via `apt-cache policy libceres-dev` to ensure negative priority remains 
 `pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu126`.
 
 **6.2 Validate MKL + CUDA**  
-`xubuntu_robotics_base_post_ULTRA_CLEANED.sh` Block 26B prints PyTorch config, confirms “MKL” and “CUDA 12.6”, and exercises CPU matmul paths.
+`xubuntu_robotics_base_full.sh` Block 26B prints PyTorch config, confirms “MKL” and “CUDA 12.6”, and exercises CPU matmul paths.
 
 **6.3 Keep Source Build Optional**  
 Legacy Block 26A (OpenBLAS source build) stays behind `ENABLE_PYTORCH_BUILD=false` for advanced extensions only.
@@ -206,7 +206,7 @@ Legacy Block 26A (OpenBLAS source build) stays behind `ENABLE_PYTORCH_BUILD=fals
 ## Phase 7 – Documentation & Automation
 
 **7.1 Update Build Orchestration**  
-Ensure `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` sequences Phases 0–6, installing CUDA/MKL before any source builds. With the new idempotent Block 13 path, reruns will only refresh env hooks, so downstream blocks must not attempt to reinstall CUDA. Keep the immediate NVIDIA cache sync (Block 13.7 or `scripts/sync-nvidia-cache.sh`) immediately after the CUDA/cuDNN install and strip any duplicate sync hooks from `build_xubuntu_robotics_base.sh`. Remove legacy OpenBLAS logic or guard it behind benchmarking toggles.
+Ensure `xubuntu_robotics_base_full.sh` sequences Phases 0–6, installing CUDA/MKL before any source builds. With the new idempotent Block 13 path, reruns will only refresh env hooks, so downstream blocks must not attempt to reinstall CUDA. Keep the immediate NVIDIA cache sync (Block 13.7 or `scripts/sync-nvidia-cache.sh`) immediately after the CUDA/cuDNN install and strip any duplicate sync hooks from `build_xubuntu_robotics_base.sh`. Remove legacy OpenBLAS logic or guard it behind benchmarking toggles.
 
 **7.2 Maintain Docs**  
 - `docs/MKL_MIGRATION_GUIDE.md`: high-level overview.  

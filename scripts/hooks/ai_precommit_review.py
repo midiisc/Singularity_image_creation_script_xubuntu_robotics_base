@@ -147,7 +147,7 @@ def is_non_functional_file(path: str) -> bool:
         "create_writable_overlay.sh",
         "run_on_best_node.sh",
         "setup_conda_environments.sh",
-        "xubuntu_robotics_base_post_ULTRA_CLEANED.sh",
+        "xubuntu_robotics_base_full.sh",
         "README.md",
     ]
     # SECONDARY CORE FILES (from AGENT-BEHAVIOR.mdc)

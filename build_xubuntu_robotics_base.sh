@@ -134,8 +134,8 @@ echo "✓ Configuration loaded from ${CONFIG_FILE}"
 # Dependencies: CONTAINER_POST_SCRIPT_MODE from config.sh
 # Outputs: SELECTED_POST_SCRIPT_PATH, SELECTED_POST_SCRIPT_MODE, user-facing summary
 #-------------------------------------------------------------------------------
-POST_SCRIPT_DEBUG="${SCRIPT_DIR}/xubuntu_robotics_base_pre_opencv_debug.sh"
-POST_SCRIPT_FULL="${SCRIPT_DIR}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+POST_SCRIPT_DEBUG="${SCRIPT_DIR}/xubuntu_robotics_base_debug.sh"
+POST_SCRIPT_FULL="${SCRIPT_DIR}/xubuntu_robotics_base_full.sh"
 POST_SCRIPT_MODE_REQUESTED="${CONTAINER_POST_SCRIPT_MODE:-debug}"
 POST_SCRIPT_MODE_NORMALIZED="$(printf '%s' "${POST_SCRIPT_MODE_REQUESTED}" | tr '[:upper:]' '[:lower:]')"
 SELECTED_POST_SCRIPT_MODE=""
@@ -2654,7 +2654,7 @@ fi
 #===============================================================================
 # Purpose: Generate the complete Singularity definition file (.def)
 # Self-contained: Yes (complete heredoc)
-# Dependencies: All cached artifacts, xubuntu_robotics_base_pre_opencv_debug.sh
+# Dependencies: All cached artifacts, xubuntu_robotics_base_debug.sh
 # Outputs: Configured system components
 # NOTE: This is a large heredoc containing the entire container definition
 #-------------------------------------------------------------------------------

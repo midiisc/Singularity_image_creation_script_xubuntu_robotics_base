@@ -48,7 +48,7 @@ Quick reference for enabling CUDA across the MKL-enabled robotics stack.
 - **HPC node:** Run sample CUDA binaries (`deviceQuery`, `bandwidthTest`) and execute GPU smoke tests for each package (OpenCV CUDA modules, Ceres CUDA solver, Open3D GPU pipelines).
 - Run `scripts/verify-cuda-mkl-linkage.sh` to confirm MKL/CUDA/OpenMP linkage before copying artefacts to the HPC node.
 - Run `scripts/verify-mkl-env.sh` locally to compile and execute a `cblas_dgemm` probe against MKL and verify GNU OpenMP linkage.
-- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` Block 26B now installs PyTorch CUDA 12.6 wheels and verifies MKL availability (`torch.backends.mkl.is_available()`).
+- `xubuntu_robotics_base_full.sh` Block 26B now installs PyTorch CUDA 12.6 wheels and verifies MKL availability (`torch.backends.mkl.is_available()`).
 - Container builds now install CUDA/cuDNN (Block 13) before compiling GPU-aware libraries (SuiteSparse, Ceres, OpenCV, etc.), so no additional manual step is required inside the image.
 
 ## 5. Troubleshooting Notes

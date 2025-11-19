@@ -14,7 +14,7 @@
       "line_start": 646,
       "line_end": 650,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-11-apt-aria-wrapper/apt-wrapper-aria2c-accelerated-downloads.sh",
@@ -28,7 +28,7 @@
       "line_start": 2235,
       "line_end": 2365,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-11-apt-aria-wrapper/intel-mkl-environment-setup.sh",
@@ -42,7 +42,7 @@
       "line_start": 2461,
       "line_end": 2492,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/environment-config/block-12-openblas/environment.txt",
@@ -56,7 +56,7 @@
       "line_start": 2961,
       "line_end": 2964,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-12-openblas/openblas-protect.pref",
@@ -70,7 +70,7 @@
       "line_start": 2988,
       "line_end": 2994,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-13-nvidia-cuda/cuda.sh",
@@ -84,7 +84,7 @@
       "line_start": 3336,
       "line_end": 3341,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-config/block-13-nvidia-cuda/01-nodoc.conf",
@@ -98,7 +98,7 @@
       "line_start": 3683,
       "line_end": 3693,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-config/block-13-nvidia-cuda/80-retries.conf",
@@ -112,7 +112,7 @@
       "line_start": 3825,
       "line_end": 3830,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-13-nvidia-cuda/suitesparse-protect.pref",
@@ -126,7 +126,7 @@
       "line_start": 3999,
       "line_end": 4004,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-13-nvidia-cuda/suitesparse-library-path-configuration.sh",
@@ -140,7 +140,7 @@
       "line_start": 4014,
       "line_end": 4017,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-14-drake/99-drake-insecure.conf",
@@ -154,7 +154,7 @@
       "line_start": 4053,
       "line_end": 4056,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-14-drake/drake.sh",
@@ -168,7 +168,7 @@
       "line_start": 4140,
       "line_end": 4161,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-15-firefox/mozillateam.pref",
@@ -182,7 +182,7 @@
       "line_start": 4190,
       "line_end": 4194,
       "delimiter": "PREF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-16-foundational-libs/block-system-ceres.pref",
@@ -196,7 +196,7 @@
       "line_start": 4610,
       "line_end": 4630,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-16-foundational-libs/tmux.conf",
@@ -210,7 +210,7 @@
       "line_start": 4650,
       "line_end": 4672,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-16-foundational-libs/ros-multiterminal-launcher.sh",
@@ -224,7 +224,7 @@
       "line_start": 4675,
       "line_end": 4728,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-17-high-level-deps/block-system-g2o.pref",
@@ -238,7 +238,7 @@
       "line_start": 5328,
       "line_end": 5344,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-17-high-level-deps/block-system-gtsam.pref",
@@ -252,7 +252,7 @@
       "line_start": 5452,
       "line_end": 5468,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-20-opencv/block-system-opencv.pref",
@@ -266,7 +266,7 @@
       "line_start": 6296,
       "line_end": 6316,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "other/block-21-julia/Overrides.toml",
@@ -280,7 +280,7 @@
       "line_start": 6405,
       "line_end": 6409,
       "delimiter": "OVERRIDE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-21-julia/precompile-julia-cuda.sh",
@@ -294,7 +294,7 @@
       "line_start": 6452,
       "line_end": 6487,
       "delimiter": "EOS",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-24-3d-nerf/pip.conf",
@@ -308,7 +308,7 @@
       "line_start": 6745,
       "line_end": 6754,
       "delimiter": "PIPCONF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-24-3d-nerf/compiled-libs.sh",
@@ -322,7 +322,7 @@
       "line_start": 6762,
       "line_end": 6767,
       "delimiter": "ENVSCRIPT",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-24-3d-nerf/block-system-colmap.pref",
@@ -336,7 +336,7 @@
       "line_start": 7437,
       "line_end": 7458,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/apt-preferences/block-25-jax-cuda/pytorch-protect.pref",
@@ -350,7 +350,7 @@
       "line_start": 8950,
       "line_end": 8957,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-25-jax-cuda/3d-recon-info.sh",
@@ -364,7 +364,7 @@
       "line_start": 11454,
       "line_end": 11497,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-27-x11-tools/start-x11vnc.sh",
@@ -378,7 +378,7 @@
       "line_start": 11581,
       "line_end": 11637,
       "delimiter": "X11VNC",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-27-x11-tools/vnc-clipboard-sync.sh",
@@ -392,7 +392,7 @@
       "line_start": 11665,
       "line_end": 11680,
       "delimiter": "CLIPBD",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-28-desktop-part1/network.conf",
@@ -406,7 +406,7 @@
       "line_start": 11756,
       "line_end": 11760,
       "delimiter": "PANETWORK",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/start-pulseaudio.sh",
@@ -420,7 +420,7 @@
       "line_start": 11766,
       "line_end": 11781,
       "delimiter": "PASTART",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/turbovnc.sh",
@@ -434,7 +434,7 @@
       "line_start": 11928,
       "line_end": 11933,
       "delimiter": "TVNC_PROFILE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/virtualgl.sh",
@@ -448,7 +448,7 @@
       "line_start": 11991,
       "line_end": 12061,
       "delimiter": "VGL_PROFILE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/configure-vglserver.sh",
@@ -462,7 +462,7 @@
       "line_start": 12079,
       "line_end": 12098,
       "delimiter": "VGLSCONF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/test-virtualgl.sh",
@@ -476,7 +476,7 @@
       "line_start": 12122,
       "line_end": 12211,
       "delimiter": "VGLTEST",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/system-benchmarking-suite.sh",
@@ -490,7 +490,7 @@
       "line_start": 12231,
       "line_end": 12321,
       "delimiter": "VGLBENCH",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/vgl-info.sh",
@@ -504,7 +504,7 @@
       "line_start": 12328,
       "line_end": 12407,
       "delimiter": "VGLINFO",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/vgl-launch.sh",
@@ -518,7 +518,7 @@
       "line_start": 12414,
       "line_end": 12459,
       "delimiter": "VGLLAUNCH",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/bash.sh",
@@ -532,7 +532,7 @@
       "line_start": 12477,
       "line_end": 12567,
       "delimiter": "VGLALIAS",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-28-desktop-part1/vglrun-fast.conf",
@@ -546,7 +546,7 @@
       "line_start": 12584,
       "line_end": 12596,
       "delimiter": "VGLFAST",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-28-desktop-part1/vglrun-balanced.conf",
@@ -560,7 +560,7 @@
       "line_start": 12599,
       "line_end": 12607,
       "delimiter": "VGLBAL",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-28-desktop-part1/vglrun-lowbw.conf",
@@ -574,7 +574,7 @@
       "line_start": 12610,
       "line_end": 12618,
       "delimiter": "VGLLOWBW",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/vglrun-fast.sh",
@@ -588,7 +588,7 @@
       "line_start": 12623,
       "line_end": 12644,
       "delimiter": "VGLFAST",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/vglrun-balanced.sh",
@@ -602,7 +602,7 @@
       "line_start": 12646,
       "line_end": 12667,
       "delimiter": "VGLBAL",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/vglrun-lowbw.sh",
@@ -616,7 +616,7 @@
       "line_start": 12669,
       "line_end": 12690,
       "delimiter": "VGLLOWBW",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-28-desktop-part1/performance.conf",
@@ -630,7 +630,7 @@
       "line_start": 12707,
       "line_end": 12748,
       "delimiter": "TVNCPERF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/xstartup.turbovnc.sh",
@@ -644,7 +644,7 @@
       "line_start": 12755,
       "line_end": 12800,
       "delimiter": "XSTARTOPT",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-28-desktop-part1/turbovnc-tune.sh",
@@ -658,7 +658,7 @@
       "line_start": 12805,
       "line_end": 12858,
       "delimiter": "TVNCTUNE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-29-conda/conda-profile-path-configuration.sh",
@@ -672,7 +672,7 @@
       "line_start": 13333,
       "line_end": 13336,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-29-conda/conda-activation-hook-pythonpath-management.sh",
@@ -686,7 +686,7 @@
       "line_start": 13362,
       "line_end": 13378,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-29-conda/conda-deactivation-hook-pythonpath-restore.sh",
@@ -700,7 +700,7 @@
       "line_start": 13386,
       "line_end": 13397,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "other/block-31-cad-3d/freecad.desktop",
@@ -714,7 +714,7 @@
       "line_start": 13800,
       "line_end": 13810,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "other/block-31-cad-3d/orcaslicer.desktop",
@@ -728,7 +728,7 @@
       "line_start": 13836,
       "line_end": 13845,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "other/block-33-vnc-part2/xfwm4.xml",
@@ -742,7 +742,7 @@
       "line_start": 13906,
       "line_end": 13916,
       "delimiter": "XFM",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-33-vnc-part2/start-vnc-xfce.sh",
@@ -756,7 +756,7 @@
       "line_start": 13945,
       "line_end": 14850,
       "delimiter": "VNCLAUNCHER",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-33-vnc-part2/vnc-ssl-tunnel.sh",
@@ -770,7 +770,7 @@
       "line_start": 14862,
       "line_end": 15121,
       "delimiter": "SSLTUNNEL",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-33-vnc-part2/start-vnc-ultimate.sh",
@@ -784,7 +784,7 @@
       "line_start": 15131,
       "line_end": 15453,
       "delimiter": "ULTIMATE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-33-vnc-part2/start-novnc-advanced.sh",
@@ -798,7 +798,7 @@
       "line_start": 15460,
       "line_end": 15518,
       "delimiter": "NOVNCADV",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-33-vnc-part2/test-virtualgl.sh",
@@ -812,7 +812,7 @@
       "line_start": 15524,
       "line_end": 15635,
       "delimiter": "VGLTEST",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-34-vnc-part3/start-kasmvnc.sh",
@@ -826,7 +826,7 @@
       "line_start": 15688,
       "line_end": 15727,
       "delimiter": "KASMSTART",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-34-vnc-part3/test-vulkan.sh",
@@ -840,7 +840,7 @@
       "line_start": 15745,
       "line_end": 15776,
       "delimiter": "VULKAN",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-34-vnc-part3/start-xpra.sh",
@@ -854,7 +854,7 @@
       "line_start": 16243,
       "line_end": 16302,
       "delimiter": "XPRA",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-34-vnc-part3/xpra-seamless.sh",
@@ -868,7 +868,7 @@
       "line_start": 16306,
       "line_end": 16342,
       "delimiter": "XPRA_SEAMLESS",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-34-vnc-part3/start-x11vnc.sh",
@@ -882,7 +882,7 @@
       "line_start": 16367,
       "line_end": 16417,
       "delimiter": "X11VNC",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-35-multimedia/record-screen.sh",
@@ -896,7 +896,7 @@
       "line_start": 16446,
       "line_end": 16474,
       "delimiter": "RECORD",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-35-multimedia/gpu-monitor.sh",
@@ -910,7 +910,7 @@
       "line_start": 16519,
       "line_end": 16534,
       "delimiter": "GPUMON",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-35-multimedia/vnc-monitor.sh",
@@ -924,7 +924,7 @@
       "line_start": 16547,
       "line_end": 16625,
       "delimiter": "VNCMON",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "other/block-36-rust-cli/DEFAULT-FASTRTPS-PROFILES.xml",
@@ -938,7 +938,7 @@
       "line_start": 16826,
       "line_end": 16863,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/rust.sh",
@@ -952,7 +952,7 @@
       "line_start": 17403,
       "line_end": 17408,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/bash.sh",
@@ -966,7 +966,7 @@
       "line_start": 17466,
       "line_end": 17496,
       "delimiter": "RUSTALIASES",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/zoxide-path.sh",
@@ -980,7 +980,7 @@
       "line_start": 17508,
       "line_end": 17521,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-37-rust/config.kdl",
@@ -994,7 +994,7 @@
       "line_start": 17527,
       "line_end": 17559,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "config-files/block-37-rust/config.ron",
@@ -1008,7 +1008,7 @@
       "line_start": 17567,
       "line_end": 17588,
       "delimiter": "EOX",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/ros-multiterminal-zellij-launcher.sh",
@@ -1022,7 +1022,7 @@
       "line_start": 17596,
       "line_end": 17700,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/ros-multiterminal-tmux-launcher.sh",
@@ -1036,7 +1036,7 @@
       "line_start": 17708,
       "line_end": 17760,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-37-rust/ros-multiterminal-launcher.sh",
@@ -1050,7 +1050,7 @@
       "line_start": 17768,
       "line_end": 17780,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "json-configs/block-38-zenoh/zenoh-router.json5",
@@ -1064,7 +1064,7 @@
       "line_start": 18001,
       "line_end": 18053,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "json-configs/block-38-zenoh/zenoh-bridge-humble.json5",
@@ -1078,7 +1078,7 @@
       "line_start": 18071,
       "line_end": 18101,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "json-configs/block-38-zenoh/zenoh-bridge-jazzy.json5",
@@ -1092,7 +1092,7 @@
       "line_start": 18108,
       "line_end": 18130,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-startup.sh",
@@ -1106,7 +1106,7 @@
       "line_start": 18155,
       "line_end": 18256,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-shutdown.sh",
@@ -1120,7 +1120,7 @@
       "line_start": 18264,
       "line_end": 18289,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-38-zenoh/zenoh-router-bridge-status-check.sh",
@@ -1134,7 +1134,7 @@
       "line_start": 18297,
       "line_end": 18333,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "python-scripts/block-38-zenoh/zenoh-topic-bridge.py",
@@ -1148,7 +1148,7 @@
       "line_start": 18342,
       "line_end": 18408,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-38-zenoh/ros-multiterminal-zellij-launcher.sh",
@@ -1162,7 +1162,7 @@
       "line_start": 18418,
       "line_end": 18515,
       "delimiter": "EOF",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-39-verification/vnc-server-selection-utility.sh",
@@ -1176,7 +1176,7 @@
       "line_start": 18767,
       "line_end": 18870,
       "delimiter": "VNCSELECT",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-39-verification/network-optimization-tuning.sh",
@@ -1190,7 +1190,7 @@
       "line_start": 18886,
       "line_end": 18922,
       "delimiter": "NETOPT",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-39-verification/remote-desktop-launcher-menu.sh",
@@ -1204,7 +1204,7 @@
       "line_start": 18942,
       "line_end": 19119,
       "delimiter": "RDLAUNCH",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-39-verification/system-benchmarking-suite.sh",
@@ -1218,7 +1218,7 @@
       "line_start": 19138,
       "line_end": 19334,
       "delimiter": "BENCH",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "docs/block-40-docs/virtualgl-guide.txt",
@@ -1232,7 +1232,7 @@
       "line_start": 19357,
       "line_end": 19446,
       "delimiter": "GUIDE",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
     },
     {
       "source": "shell-scripts/block-19-cache-pruning-scripts-generation/apt-cache-pruning-cleanup.sh",

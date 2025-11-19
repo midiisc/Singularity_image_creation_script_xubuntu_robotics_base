@@ -25,7 +25,7 @@ readonly NC='\033[0m'
 
 # Build scripts to check
 BUILD_SCRIPTS=(
-  "xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  "xubuntu_robotics_base_full.sh"
   "build_xubuntu_robotics_base.sh"
 )
 
@@ -312,7 +312,7 @@ check_tbb_verification() {
   
   echo -e "${BLUE}[CHECK]${NC} TBB verification blocks..."
   
-  local main_script="${REPO_ROOT}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  local main_script="${REPO_ROOT}/xubuntu_robotics_base_full.sh"
   
   if [ ! -f "$main_script" ]; then
     echo -e "${YELLOW}[⚠]${NC} Main script not found, skipping..."

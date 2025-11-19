@@ -81,7 +81,7 @@ OPTIONS:
   --help           Show this help message
 
 EXAMPLES:
-  ${0##*/} xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+  ${0##*/} xubuntu_robotics_base_full.sh
   ${0##*/} build_script.sh --strict
   ${0##*/} test.sh --report-only
 

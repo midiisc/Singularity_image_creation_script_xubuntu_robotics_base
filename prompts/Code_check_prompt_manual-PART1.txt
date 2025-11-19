@@ -200,7 +200,7 @@ B. Shell Options & Execution Controls
     - Verify at least one helper exists and implements: enabling `-e`, `-u`, best-effort `pipefail`, and an ERR trap (for bash)
     - Verify presence in BOTH core scripts:
       - `build_xubuntu_robotics_base.sh`
-      - `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+      - `xubuntu_robotics_base_full.sh`
     - Verify these variables are not clobbered later (no duplicate re-declarations without intent)
   - DETECTION:
     - `grep -nE 'DETECTED_SHELL_PATH|DETECTED_SHELL_NAME|DETECTED_BASH_VERSION|IS_BASH|SUPPORTS_PIPEFAIL|SUPPORTS_ERRTRACE'`

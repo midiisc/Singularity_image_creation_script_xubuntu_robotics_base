@@ -11,7 +11,7 @@ on:
     branches: [main, beta]
     paths:
       - '**.sh'
-      - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
+      - 'xubuntu_robotics_base_full.sh'
       - 'build_xubuntu_robotics_base.sh'
       - 'prompts/**'
       - 'scripts/**'
@@ -19,7 +19,7 @@ on:
     branches: [main, beta]
     paths:
       - '**.sh'
-      - 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'
+      - 'xubuntu_robotics_base_full.sh'
       - 'build_xubuntu_robotics_base.sh'
       - 'prompts/**'
       - 'scripts/**'
@@ -42,7 +42,7 @@ jobs:
           FOUND_ERRORS=false
           
           # Check each file and output detailed errors with GitHub Actions annotations
-          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+          for file in xubuntu_robotics_base_full.sh build_xubuntu_robotics_base.sh; do
             if [ ! -f "$file" ]; then
               continue
             fi
@@ -88,7 +88,7 @@ jobs:
           GITHUB_ACTIONS: true
         run: |
           echo "Validating CMake flags..."
-          if ./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --strict; then
+          if ./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh --strict; then
             echo "✅ CMake flags validation passed"
           else
             echo "❌ CMake flags validation failed"
@@ -110,10 +110,10 @@ jobs:
           echo "Checking for complex logic blocks without phase markers..."
           
           # Count blocks with multiple related conditionals
-          COMPLEX_BLOCKS=$(grep -c "for candidate in" xubuntu_robotics_base_post_ULTRA_CLEANED.sh || true)
+          COMPLEX_BLOCKS=$(grep -c "for candidate in" xubuntu_robotics_base_full.sh || true)
           
           # Count phase markers
-          PHASE_MARKERS=$(grep -c "# Phase [0-9]:" xubuntu_robotics_base_post_ULTRA_CLEANED.sh || true)
+          PHASE_MARKERS=$(grep -c "# Phase [0-9]:" xubuntu_robotics_base_full.sh || true)
           
           echo "Found $COMPLEX_BLOCKS potential multi-phase blocks"
           echo "Found $PHASE_MARKERS phase markers"
@@ -140,60 +140,60 @@ jobs:
           MISSING_VERIFICATIONS=()
           
           # Check for TBB verification in Ceres
-          if ! grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+          if ! grep -q "Verifying TBB configuration for Ceres" xubuntu_robotics_base_full.sh; then
             MISSING_VERIFICATIONS+=("Ceres")
             # Find where Ceres is configured to suggest where to add verification
             # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
             CERES_LINE="unknown"
             ceres_match=""
             # Combine patterns to avoid pipe chain: search for lines with both CERES/Ceres AND cmake/build/install
-            ceres_match=$(grep -nE "(CERES|Ceres).*(cmake|build|install)|(cmake|build|install).*(CERES|Ceres)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            ceres_match=$(grep -nE "(CERES|Ceres).*(cmake|build|install)|(cmake|build|install).*(CERES|Ceres)" xubuntu_robotics_base_full.sh | head -1 || echo "")
             if [ -n "${ceres_match}" ]; then
               CERES_LINE=""
               CERES_LINE=$(cut -d: -f1 <<< "${ceres_match}" || echo "unknown")
             fi
             if [ -n "${CERES_LINE}" ] && [ "${CERES_LINE}" != "unknown" ]; then
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$CERES_LINE::Missing TBB verification block for Ceres. Add verification after Ceres installation."
+              echo "::error file=xubuntu_robotics_base_full.sh,line=$CERES_LINE::Missing TBB verification block for Ceres. Add verification after Ceres installation."
             else
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for Ceres"
+              echo "::error file=xubuntu_robotics_base_full.sh::Missing TBB verification block for Ceres"
             fi
           fi
           
           # Check for TBB verification in g2o
-          if ! grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+          if ! grep -q "Verifying TBB configuration for g2o" xubuntu_robotics_base_full.sh; then
             MISSING_VERIFICATIONS+=("g2o")
             # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
             G2O_LINE="unknown"
             g2o_match=""
             # Combine patterns to avoid pipe chain: search for lines with both g2o/G2O AND cmake/build/install
-            g2o_match=$(grep -nE "(g2o|G2O).*(cmake|build|install)|(cmake|build|install).*(g2o|G2O)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            g2o_match=$(grep -nE "(g2o|G2O).*(cmake|build|install)|(cmake|build|install).*(g2o|G2O)" xubuntu_robotics_base_full.sh | head -1 || echo "")
             if [ -n "${g2o_match}" ]; then
               G2O_LINE=""
               G2O_LINE=$(cut -d: -f1 <<< "${g2o_match}" || echo "unknown")
             fi
             if [ -n "${G2O_LINE}" ] && [ "${G2O_LINE}" != "unknown" ]; then
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$G2O_LINE::Missing TBB verification block for g2o. Add verification after g2o installation."
+              echo "::error file=xubuntu_robotics_base_full.sh,line=$G2O_LINE::Missing TBB verification block for g2o. Add verification after g2o installation."
             else
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for g2o"
+              echo "::error file=xubuntu_robotics_base_full.sh::Missing TBB verification block for g2o"
             fi
           fi
           
           # Check for TBB verification in GTSAM
-          if ! grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_post_ULTRA_CLEANED.sh; then
+          if ! grep -q "Verifying TBB configuration for GTSAM" xubuntu_robotics_base_full.sh; then
             MISSING_VERIFICATIONS+=("GTSAM")
             # D3: PIPE PATTERN SAFETY - Use single grep with combined pattern instead of pipe chain
             GTSAM_LINE="unknown"
             gtsam_match=""
             # Combine patterns to avoid pipe chain: search for lines with both GTSAM/gtsam AND cmake/build/install
-            gtsam_match=$(grep -nE "(GTSAM|gtsam).*(cmake|build|install)|(cmake|build|install).*(GTSAM|gtsam)" xubuntu_robotics_base_post_ULTRA_CLEANED.sh | head -1 || echo "")
+            gtsam_match=$(grep -nE "(GTSAM|gtsam).*(cmake|build|install)|(cmake|build|install).*(GTSAM|gtsam)" xubuntu_robotics_base_full.sh | head -1 || echo "")
             if [ -n "${gtsam_match}" ]; then
               GTSAM_LINE=""
               GTSAM_LINE=$(cut -d: -f1 <<< "${gtsam_match}" || echo "unknown")
             fi
             if [ -n "${GTSAM_LINE}" ] && [ "${GTSAM_LINE}" != "unknown" ]; then
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh,line=$GTSAM_LINE::Missing TBB verification block for GTSAM. Add verification after GTSAM installation."
+              echo "::error file=xubuntu_robotics_base_full.sh,line=$GTSAM_LINE::Missing TBB verification block for GTSAM. Add verification after GTSAM installation."
             else
-              echo "::error file=xubuntu_robotics_base_post_ULTRA_CLEANED.sh::Missing TBB verification block for GTSAM"
+              echo "::error file=xubuntu_robotics_base_full.sh::Missing TBB verification block for GTSAM"
             fi
           fi
           
@@ -223,7 +223,7 @@ jobs:
           FOUND_WARNINGS=false
           
           # Check each file for unquoted EOF delimiters
-          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+          for file in xubuntu_robotics_base_full.sh build_xubuntu_robotics_base.sh; do
             if [ ! -f "$file" ]; then
               continue
             fi
@@ -272,7 +272,7 @@ jobs:
           FOUND_ERRORS=false
           
           # Check for uppercase conversion (\${var^^})
-          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+          for file in xubuntu_robotics_base_full.sh build_xubuntu_robotics_base.sh; do
             if [ ! -f "$file" ]; then
               continue
             fi
@@ -293,7 +293,7 @@ jobs:
           done
           
           # Check for lowercase conversion (\${var,,})
-          for file in xubuntu_robotics_base_post_ULTRA_CLEANED.sh build_xubuntu_robotics_base.sh; do
+          for file in xubuntu_robotics_base_full.sh build_xubuntu_robotics_base.sh; do
             if [ ! -f "$file" ]; then
               continue
             fi

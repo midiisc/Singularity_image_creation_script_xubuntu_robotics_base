@@ -57,7 +57,7 @@ def extract_heredoc_content(file_path: Path, line_start: int, line_end: int, del
 def verify_extraction():
     """Verify all extracted files match originals."""
     project_root = Path(__file__).parent.parent
-    post_script = project_root / "xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+    post_script = project_root / "xubuntu_robotics_base_full.sh"
     build_script = project_root / "build_xubuntu_robotics_base.sh"
     container_scripts_dir = project_root / "container-scripts"
     manifest_path = container_scripts_dir / "MANIFEST.json"

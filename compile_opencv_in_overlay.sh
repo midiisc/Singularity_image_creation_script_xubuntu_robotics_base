@@ -9,7 +9,7 @@
 #          Singularity> ./compile_opencv_in_overlay.sh
 #
 # Prerequisites:
-#   - Container built with xubuntu_robotics_base_pre_opencv_debug.sh
+#   - Container built with xubuntu_robotics_base_debug.sh
 #   - Writable overlay mounted: --overlay overlay.img:rw
 #   - All dependencies installed (CUDA, TBB, MKL, etc.)
 #===============================================================================

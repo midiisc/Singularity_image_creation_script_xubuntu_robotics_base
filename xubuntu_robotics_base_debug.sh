@@ -81,7 +81,7 @@ echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
 echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
 echo "------------------------------------------"
 
-SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_pre_opencv_debug.sh")"
+SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_debug.sh")"
 
 #===============================================================================
 # CRITICAL: Source centralized configuration
@@ -11955,7 +11955,7 @@ printf '%s\n' "  2. Test OpenCV compilation interactively"
 printf '%s\n' "  3. Debug compilation issues without rebuilding from scratch"
 printf '%s\n' ""
 printf '%s\n' "To continue with OpenCV compilation, use the original script:"
-printf '%s\n' "  xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+printf '%s\n' "  xubuntu_robotics_base_full.sh"
 printf '%s\n' ""
 printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 

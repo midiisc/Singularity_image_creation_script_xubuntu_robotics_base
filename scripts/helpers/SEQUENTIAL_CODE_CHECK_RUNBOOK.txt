@@ -52,7 +52,7 @@ Description:
 Command example:
 
   /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/helpers/run_sequential_chunked_review.sh \
-    --file /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh \
+    --file /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh \
     --window 500 \
     --overlap 50 \
     --continue-on-error

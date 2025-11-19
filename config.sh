@@ -341,8 +341,8 @@ export DEF_NAME="${DEF_NAME:-}"
 
 # Container post-script mode
 # Controls which %post script the host build injects into the container.
-#   debug → use xubuntu_robotics_base_pre_opencv_debug.sh (stops before OpenCV)
-#   full  → use xubuntu_robotics_base_post_ULTRA_CLEANED.sh (complete image build)
+#   debug → use xubuntu_robotics_base_debug.sh (stops before OpenCV)
+#   full  → use xubuntu_robotics_base_full.sh (complete image build)
 # Default favors the debug/incremental flow for faster iteration.
 export CONTAINER_POST_SCRIPT_MODE="${CONTAINER_POST_SCRIPT_MODE:-debug}"
 

@@ -2,7 +2,7 @@
 
 **Generated:** 2025-01-XX  
 **Reference:** `docs/planning/MKL_MIGRATION_PLAN.md`  
-**Script Analyzed:** `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+**Script Analyzed:** `xubuntu_robotics_base_full.sh`
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Overall Completion: ~85%**
 
-The MKL integration is substantially complete in the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`). All core robotics libraries (Ceres, GTSAM, g2o, OpenCV, Open3D, COLMAP, SuiteSparse) are configured with MKL flags. PyTorch uses official wheels with MKL support. The main gaps are in standalone build scripts and some optional components.
+The MKL integration is substantially complete in the orchestrator script (`xubuntu_robotics_base_full.sh`). All core robotics libraries (Ceres, GTSAM, g2o, OpenCV, Open3D, COLMAP, SuiteSparse) are configured with MKL flags. PyTorch uses official wheels with MKL support. The main gaps are in standalone build scripts and some optional components.
 
 ---
 
@@ -143,7 +143,7 @@ BLAS_LIBS="${MKLROOT}/lib/intel64/libmkl_intel_lp64.so;${MKLROOT}/lib/intel64/li
 **Note on Standalone Scripts:**
 - Standalone build scripts (`scripts/build-ceres-cuda.sh`, `scripts/build-opencv.sh`, etc.) are **not needed** for integrated image builds
 - These would only be useful for rebuilding individual libraries outside the orchestrator
-- For HPC deployment, the orchestrator script (`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`) is sufficient
+- For HPC deployment, the orchestrator script (`xubuntu_robotics_base_full.sh`) is sufficient
 
 ---
 
@@ -192,7 +192,7 @@ if not torch.backends.mkl.is_available() and "MKL" not in config_output:
 
 **Location:**
 - Documentation: `docs/planning/MKL_MIGRATION_PLAN.md`, `docs/planning/CUDA_BUILD_CHECKLIST.md`
-- Orchestrator: `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- Orchestrator: `xubuntu_robotics_base_full.sh`
 
 ---
 

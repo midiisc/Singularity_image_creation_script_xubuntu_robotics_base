@@ -328,7 +328,7 @@ For each library:
 
 ```
 /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/
-├── xubuntu_robotics_base_post_ULTRA_CLEANED.sh (main script)
+├── xubuntu_robotics_base_full.sh (main script)
 └── RL_LIBRARIES_IMPLEMENTATION_PLAN.md (this file - remove when complete)
 ```
 

@@ -119,7 +119,7 @@
           "type": ["string", "null"],
           "description": "Absolute path to source script file containing this file's content. Use null for standalone files not extracted from source script",
           "examples": [
-            "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_post_ULTRA_CLEANED.sh",
+            "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh",
             "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/build_xubuntu_robotics_base.sh",
             null
           ]

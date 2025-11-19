@@ -81,7 +81,7 @@ echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
 echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
 echo "------------------------------------------"
 
-SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_post_ULTRA_CLEANED.sh")"
+SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_full.sh")"
 
 #===============================================================================
 # CRITICAL: Source centralized configuration

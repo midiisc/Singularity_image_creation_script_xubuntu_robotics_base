@@ -48,7 +48,7 @@ class ComprehensiveHeredocExtractor:
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.container_scripts_dir = project_root / "container-scripts"
-        self.post_script = project_root / "xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+        self.post_script = project_root / "xubuntu_robotics_base_full.sh"
         self.build_script = project_root / "build_xubuntu_robotics_base.sh"
         self.blocks: Dict[int, str] = {}
         self.files: List[HeredocFile] = []
@@ -412,7 +412,7 @@ class ComprehensiveHeredocExtractor:
                 file_type = self._detect_file_type(display_path, content)
                 
                 # Get block info (only for post script)
-                if 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh' in str(file_path):
+                if 'xubuntu_robotics_base_full.sh' in str(file_path):
                     block, block_name = self.get_block_for_line(line_num)
                 else:
                     # For build script, try to find block

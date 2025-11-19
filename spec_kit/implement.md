@@ -11,7 +11,7 @@
 - Creates apt preferences for additional protection
 - Cleans up existing conflicting entries
 - Verifies dpkg database integrity
-**Location**: `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` lines 3075-3144
+**Location**: `xubuntu_robotics_base_full.sh` lines 3075-3144
 
 #### 2. Dpkg Status Cleanup
 **Implementation**: Automatic cleanup of conflicting package entries
@@ -19,7 +19,7 @@
 - Removes existing OpenCV package entries before protection
 - Prevents duplicate entries in dpkg status
 - Handles package conflicts gracefully
-**Location**: `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` lines 3079-3097
+**Location**: `xubuntu_robotics_base_full.sh` lines 3079-3097
 
 #### 3. Centralized Rules System with Strict Enforcement
 **Implementation**: Comprehensive rules system with automatic enforcement and mandatory verification
@@ -72,7 +72,7 @@
 ### Implementation Details
 
 #### Core Files Modified
-1. **`xubuntu_robotics_base_post_ULTRA_CLEANED.sh`**
+1. **`xubuntu_robotics_base_full.sh`**
    - OpenCV protection mechanism (lines 3075-3144)
    - Dpkg status cleanup (lines 3079-3097)
    - Error handling improvements throughout

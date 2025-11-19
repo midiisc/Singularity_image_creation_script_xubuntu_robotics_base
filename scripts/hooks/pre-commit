@@ -32,7 +32,7 @@ CI_CHECKS_RUNNER="${WORKSPACE_ROOT}/scripts/hooks/run_all_ci_checks.sh"
 
 # Build scripts to check
 BUILD_SCRIPTS=(
-  "xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+  "xubuntu_robotics_base_full.sh"
   "build_xubuntu_robotics_base.sh"
   "config.sh"
 )
@@ -90,7 +90,7 @@ check_non_functional_files() {
        [[ "$file" == "create_writable_overlay.sh" ]] || \
        [[ "$file" == "run_on_best_node.sh" ]] || \
        [[ "$file" == "setup_conda_environments.sh" ]] || \
-       [[ "$file" == "xubuntu_robotics_base_post_ULTRA_CLEANED.sh" ]] || \
+       [[ "$file" == "xubuntu_robotics_base_full.sh" ]] || \
        [[ "$file" == "analyze-library.sh" ]] || \
        [[ "$file" == "README.md" ]]; then
       continue

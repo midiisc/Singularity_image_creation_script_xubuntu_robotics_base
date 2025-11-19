@@ -156,10 +156,10 @@ git commit --no-verify
 Test validators on any script:
 ```bash
 # Test sed validator
-./scripts/helpers/validate_sed_patterns.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --strict
+./scripts/helpers/validate_sed_patterns.sh xubuntu_robotics_base_full.sh --strict
 
 # Test cmake validator
-./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --strict
+./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh --strict
 ```
 
 ## Troubleshooting

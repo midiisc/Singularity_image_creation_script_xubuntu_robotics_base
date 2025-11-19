@@ -15,7 +15,7 @@ This document lists all files and folders that must be present in the same root 
 - **Required**: Yes (script exits if not found)
 - **Checked**: At startup (Block 2.2)
 
-### 3. `xubuntu_robotics_base_post_ULTRA_CLEANED.sh` (Post Script)
+### 3. `xubuntu_robotics_base_full.sh` (Post Script)
 - **Location**: Root directory
 - **Purpose**: Container post-installation script (executed inside container)
 - **Required**: Yes (copied to container in %files section)
@@ -63,7 +63,7 @@ This document lists all files and folders that must be present in the same root 
 .
 ├── build_xubuntu_robotics_base.sh    # REQUIRED - Build script
 ├── config.sh                          # REQUIRED - Configuration file
-├── xubuntu_robotics_base_post_ULTRA_CLEANED.sh  # REQUIRED - Post script
+├── xubuntu_robotics_base_full.sh  # REQUIRED - Post script
 ├── container-scripts/                 # REQUIRED - Container scripts directory
 │   ├── install.sh
 │   ├── MANIFEST.json
@@ -94,7 +94,7 @@ Files copied to container (from %files section):
 - `${CONFIG_FILE}` → `/etc/config.sh`
 - `${SCRIPT_DIR}/container_cache/binaries` → `/container_cache/binaries`
 - `${SCRIPT_DIR}/container_cache/debs` → `/container_cache/debs`
-- `${SCRIPT_DIR}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh` → `/container_post_script.sh`
+- `${SCRIPT_DIR}/xubuntu_robotics_base_full.sh` → `/container_post_script.sh`
 - `${SCRIPT_DIR}/config.sh` → `/container_config.sh`
 - `${SCRIPT_DIR}/container-scripts` → `/container-scripts`
 
@@ -118,7 +118,7 @@ Before running the build script, verify:
 # Check required files exist
 test -f build_xubuntu_robotics_base.sh && echo "✓ Build script found" || echo "✗ Build script missing"
 test -f config.sh && echo "✓ Config file found" || echo "✗ Config file missing"
-test -f xubuntu_robotics_base_post_ULTRA_CLEANED.sh && echo "✓ Post script found" || echo "✗ Post script missing"
+test -f xubuntu_robotics_base_full.sh && echo "✓ Post script found" || echo "✗ Post script missing"
 test -d container-scripts && echo "✓ Container scripts directory found" || echo "✗ Container scripts directory missing"
 
 # Check container-scripts has required files
@@ -151,7 +151,7 @@ If required files are missing, you'll see:
 **Required Files:**
 - `build_xubuntu_robotics_base.sh`
 - `config.sh`
-- `xubuntu_robotics_base_post_ULTRA_CLEANED.sh`
+- `xubuntu_robotics_base_full.sh`
 
 **Required Directories:**
 - `container-scripts/` (with `install.sh` and `MANIFEST.json`)

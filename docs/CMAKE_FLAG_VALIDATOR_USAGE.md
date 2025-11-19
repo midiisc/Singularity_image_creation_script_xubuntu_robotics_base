@@ -36,13 +36,13 @@ chmod +x .git/hooks/pre-commit
 ### Basic Validation
 
 ```bash
-./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh
 ```
 
 ### Strict Mode (Exit on Errors)
 
 ```bash
-./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --strict
+./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh --strict
 ```
 
 **Use strict mode for:**
@@ -53,7 +53,7 @@ chmod +x .git/hooks/pre-commit
 ### Report-Only Mode
 
 ```bash
-./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh --report-only
+./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh --report-only
 ```
 
 Shows extracted CMake commands without validation.
@@ -107,7 +107,7 @@ Library: CERES (line 6537)
          CMAKE FLAG VALIDATION REPORT
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Script Analyzed: xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+Script Analyzed: xubuntu_robotics_base_full.sh
 Validation Date: 2025-11-12 04:00:00
 
 STATISTICS:
@@ -136,7 +136,7 @@ SUCCESS RATE: 98%
 - name: Validate CMake Flags
   run: |
     ./scripts/helpers/validate_cmake_flags.sh \
-      xubuntu_robotics_base_post_ULTRA_CLEANED.sh \
+      xubuntu_robotics_base_full.sh \
       --strict
 ```
 
@@ -201,7 +201,7 @@ cmake .. \
 ### 3. **Run Validator Before Committing**
 ```bash
 # Manual validation
-./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+./scripts/helpers/validate_cmake_flags.sh xubuntu_robotics_base_full.sh
 
 # Or use pre-commit hook (automatic)
 ```
