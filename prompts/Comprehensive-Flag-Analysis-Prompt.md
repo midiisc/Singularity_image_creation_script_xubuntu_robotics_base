@@ -1,6 +1,25 @@
 # Comprehensive Build Flags Analysis Prompt
 ## 5-Phase Architecture with Mixture of Reasoning Experts
 
+**🚨 MANDATORY PRE-ANALYSIS TASK COMPLETION CHECK (BEFORE STARTING ANALYSIS)**:
+- **BEFORE STARTING PHASE 1**: You MUST check for any earlier pending tasks from previous sessions, conversations, or incomplete work.
+- **PENDING TASK HANDLING**: 
+  - If any pending tasks are found, you MUST either:
+    1. Complete them immediately before starting the analysis, OR
+    2. Add them to the comprehensive todo list that will be created for this analysis
+  - Do NOT start the analysis process until all earlier pending tasks are either completed or integrated into the current todo list.
+- **TASK SOURCES TO CHECK**:
+  - Previous conversation history and incomplete todos
+  - Any uncommitted changes that need review or completion
+  - Any pending file modifications or corrections
+  - Any incomplete validation or testing tasks
+  - Any pending documentation or cleanup tasks
+- **VERIFICATION REQUIRED**: Before proceeding to Phase 1, verify that:
+  - All earlier pending tasks are identified
+  - All identified tasks are either completed or added to the comprehensive todo list
+  - No tasks are left unaccounted for
+- **ONLY AFTER VERIFICATION**: Proceed to create the comprehensive todo list and begin Phase 1 analysis.
+
 HARD ENFORCEMENT – SINGLE-PART MEMORY & 500-LINE CHUNKING
 - If this prompt analyzes any code/scripts, follow the master manual’s chunking: max 500 lines (target 450–500) with 20–40 line overlap. Process chunks in order.
 - Only the currently active section/part should be resident in memory; unload others. Retain only a ≤ 2KB capsule (status map, symbol names, chunk cursor).
@@ -311,6 +330,33 @@ This prompt enhances:
 1. Run `analyze-library.sh` → Generates preprocessing data
 2. Feed preprocessing data + this prompt → Generates comprehensive documentation
 3. Validate against `Code_check_prompt_manual.txt` → Ensures quality
+
+**🚨 MANDATORY POST-ANALYSIS TODO COMPLETION CHECK (BEFORE FINALIZING)**:
+- **AFTER ALL PHASES COMPLETE**: You MUST perform a final comprehensive check of ALL todos before finalizing the analysis.
+- **TODO VERIFICATION REQUIRED**:
+  - Review the comprehensive todo list created at the beginning
+  - Verify that EVERY single todo item is marked as "completed"
+  - Check for any todos that may have been marked as "pending", "in_progress", or "cancelled"
+  - Identify any todos that were added during the analysis process but not yet completed
+- **INCOMPLETE TODO HANDLING**:
+  - If ANY todo remains incomplete, pending, or in progress:
+    1. **STOP finalization immediately**
+    2. **Complete ALL incomplete todos** before proceeding
+    3. **Re-verify** that all todos are marked as completed
+    4. **Only then** proceed to final confirmation
+  - Do NOT finalize the analysis if any todos are incomplete
+  - Do NOT leave any todos for "later" or "future" completion
+- **FINAL TODO CHECKLIST**:
+  - ✅ All Phase 1 tasks (Discovery) - todos completed
+  - ✅ All Phase 2 tasks (Preprocessing) - todos completed
+  - ✅ All Phase 3 tasks (Deep Analysis) - todos completed
+  - ✅ All Phase 4 tasks (Multi-Pass Validation) - todos completed
+  - ✅ All Phase 5 tasks (Documentation Generation) - todos completed
+  - ✅ Final confirmation task - todo completed
+  - ✅ Any earlier pending tasks (from pre-analysis check) - todos completed
+  - ✅ Any tasks added during analysis process - todos completed
+- **ZERO TOLERANCE**: If even ONE todo is incomplete, the analysis is NOT complete. Continue working until ALL todos are fully completed.
+- **ONLY AFTER ALL TODOS COMPLETE**: Proceed to final confirmation and mark the analysis as complete.
 
 ---
 

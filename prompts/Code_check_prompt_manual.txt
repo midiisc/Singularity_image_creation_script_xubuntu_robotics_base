@@ -2,6 +2,25 @@
 
 **AUTHORITATIVE SOURCE**: This file (`Code_check_prompt_manual.txt`) is the **master entry point** for the comprehensive code checking manual in this repository. It orchestrates sequential checking across all parts while maintaining 500-line context limits.
 
+**🚨 MANDATORY PRE-REVIEW TASK COMPLETION CHECK (BEFORE STARTING REVIEW)**:
+- **BEFORE LOADING PART 1**: You MUST check for any earlier pending tasks from previous sessions, conversations, or incomplete work.
+- **PENDING TASK HANDLING**: 
+  - If any pending tasks are found, you MUST either:
+    1. Complete them immediately before starting the review, OR
+    2. Add them to the comprehensive todo list that will be created for this review (see "COMPREHENSIVE TODO LIST REQUIRED" section)
+  - Do NOT start the review process until all earlier pending tasks are either completed or integrated into the current todo list.
+- **TASK SOURCES TO CHECK**:
+  - Previous conversation history and incomplete todos
+  - Any uncommitted changes that need review or completion
+  - Any pending file modifications or corrections
+  - Any incomplete validation or testing tasks
+  - Any pending documentation or cleanup tasks
+- **VERIFICATION REQUIRED**: Before proceeding to "MANDATORY EXECUTION PROTOCOL", verify that:
+  - All earlier pending tasks are identified
+  - All identified tasks are either completed or added to the comprehensive todo list
+  - No tasks are left unaccounted for
+- **ONLY AFTER VERIFICATION**: Proceed to create the comprehensive todo list and begin PART 1 review.
+
 **SEQUENTIAL PROCESSING ARCHITECTURE**:
 This manual is split into 4 parts (each under 500 lines) to maintain full context throughout the review process. When this file is referenced, ALL parts MUST be processed sequentially:
 
@@ -13,6 +32,7 @@ This manual is split into 4 parts (each under 500 lines) to maintain full contex
 **MANDATORY EXECUTION PROTOCOL FOR AI AGENTS**:
 When this master entry point is referenced, you MUST:
 
+0. **PRE-REVIEW TASK CHECK (MANDATORY FIRST STEP)**: Before starting the review, check for any earlier pending tasks (see "🚨 MANDATORY PRE-REVIEW TASK COMPLETION CHECK" section above). Complete them or add them to the comprehensive todo list. Only proceed after all earlier pending tasks are accounted for.
 1. **LOAD PART 1 FIRST**: Read `prompts/Code_check_prompt_manual-PART1.txt` completely
 2. **PROCESS ALL CHECKLIST ITEMS IN PART 1**: Execute all checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) from PART 1
 3. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
@@ -22,7 +42,24 @@ When this master entry point is referenced, you MUST:
 7. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
 8. **PROCESS ALL CHECKLIST ITEMS IN PART 4**: Execute all checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) from PART 4
 9. **FINAL SHELLCHECK VALIDATION AFTER ALL PARTS**: After ALL parts (PART 1-4) are complete and all corrections applied, run final ShellCheck validation on the ENTIRE corrected script. Fix all ShellCheck errors and warnings. Re-run ShellCheck until zero errors and zero warnings.
-10. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts AND final ShellCheck validation passes with zero errors/warnings
+10. **POST-REVIEW TODO COMPLETION CHECK (MANDATORY)**: Perform final comprehensive check of ALL todos (see "🚨 MANDATORY POST-REVIEW TODO COMPLETION CHECK" section below). Complete any incomplete todos. Only proceed after ALL todos are marked as completed.
+11. **FINAL CONFIRMATION**: Verify all checklist items A1 through P5 have been checked across all parts AND final ShellCheck validation passes with zero errors/warnings AND all todos are completed
+
+**🚨 CRITICAL: CONTINUOUS EXECUTION WITHOUT BREAKS (MANDATORY)**:
+- **ALL 4 PARTS MUST BE COMPLETED IN ONE CONTINUOUS STRETCH**: The entire review process (PART 1 → PART 2 → PART 3 → PART 4 → ShellCheck → Final Confirmation) MUST be executed without any breaks, pauses, or interruptions.
+- **NO MANUAL CONFIRMATION REQUESTS**: Do NOT ask for user confirmation, approval, or permission at any point during the review process. Execute all parts autonomously and continuously.
+- **NO PARTIAL COMPLETION**: Do NOT stop after completing PART 1, PART 2, or PART 3. Continue immediately to the next part without any delay or confirmation request.
+- **NO PENDING TODOS**: All todos MUST be completed fully before stopping. Do NOT leave any todos pending for later confirmation or steps. Every single todo item must be marked as completed before the review process ends.
+- **COMPREHENSIVE TODO LIST REQUIRED**: Before starting PART 1, create a comprehensive todo list that includes:
+  - Every single checklist item from PART 1 (A1-A6, B1-B3, C1-C6, D1-D4 partial)
+  - Every single checklist item from PART 2 (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial)
+  - Every single checklist item from PART 3 (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14)
+  - Every single checklist item from PART 4 (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
+  - ShellCheck validation task
+  - Spellcheck validation task (if applicable)
+  - Final confirmation task
+- **TODO EXECUTION PROTOCOL**: Execute todos strictly in order, one at a time, marking each as completed before starting the next. Continue until ALL todos are completed. Do NOT stop until every single todo is marked as completed.
+- **ZERO TOLERANCE FOR INCOMPLETE WORK**: If any todo remains pending or incomplete, the review process is considered incomplete. Continue working until ALL todos are fully completed.
 
 **HARD ENFORCEMENT – SINGLE-PART MEMORY PROTOCOL**:
 - Exactly one part (PART 1, 2, 3, or 4) may be resident in working memory at any time.
@@ -80,14 +117,24 @@ When this master entry point is referenced, you MUST:
 - No parallel chunk co-loading; chunks must be processed strictly one-at-a-time.
 - No cross-part shortcuts; all cross-part context must flow through the capsule, not retained code.
 
-**BATCHED TODO GENERATION & EXECUTION (20-ITEM STRICT SEQUENCE)**:
-- Always operate via strict, sequential todo batches:
-  1) Generate the next 20 atomic todos from the current plan and review state,
-  2) Execute them strictly in order (1→20), one at a time, no interleaving, no skipping,
-  3) Mark each item completed before starting the next,
-  4) Only after all 20 are completed, generate the next batch of 20 and continue,
-  5) Repeat until the entire review/file is fully processed across PART1→PART4.
-- The batching protocol is mandatory and layered on top of single-part memory and 500-line chunking. Do not advance parts or chunks while a 20-item batch is incomplete.
+**BATCHED TODO GENERATION & EXECUTION (COMPREHENSIVE TODO LIST - MANDATORY)**:
+- **INITIAL COMPREHENSIVE TODO LIST (MANDATORY)**: Before starting PART 1, create a COMPLETE comprehensive todo list that includes:
+  - **ALL checklist items from PART 1**: A1-A6, B1-B3, C1-C6, D1-D4 (partial)
+  - **ALL checklist items from PART 2**: continues D, E1-E9, F1-F3, G1-G5, H1-H4 (partial)
+  - **ALL checklist items from PART 3**: continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14
+  - **ALL checklist items from PART 4**: N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols
+  - **ShellCheck validation**: Final ShellCheck validation on entire script
+  - **Spellcheck validation**: Spellcheck validation (if applicable)
+  - **Final confirmation**: Verify all checklist items completed and ShellCheck passed
+- **EXECUTION PROTOCOL**: Execute todos strictly in order, one at a time, marking each as completed before starting the next.
+- **BATCHED EXECUTION (OPTIONAL FOR LARGE LISTS)**: For very large todo lists, you may process in batches of 20:
+  1) Execute first 20 todos strictly in order (1→20), one at a time, no interleaving, no skipping,
+  2) Mark each item completed before starting the next,
+  3) Only after all 20 are completed, proceed to next 20 and continue,
+  4) Repeat until ALL todos in the comprehensive list are completed.
+- **MANDATORY COMPLETION**: Do NOT stop until ALL todos are marked as completed. Do NOT leave any todos pending for later confirmation or steps. Every single todo must be completed before the review process ends.
+- **ZERO TOLERANCE**: If any todo remains pending or incomplete, the review process is considered incomplete. Continue working until ALL todos are fully completed.
+- The batching protocol is mandatory and layered on top of single-part memory and 500-line chunking. Do not advance parts or chunks while a batch is incomplete.
 
 ONE-PART-AT-A-TIME ENFORCEMENT:
 - STRICT: Process exactly one part at a time. Do not interleave items from different parts.
@@ -121,19 +168,24 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 - All checklist items A1 through P5 MUST be checked sequentially across all parts - do not skip any items
 - Pattern learning updates MUST be added to the appropriate PART file FIRST before being referenced elsewhere
 
-**NON-INTERACTIVE AUTONOMY (NO APPROVAL PROMPTS)**:
-- Agents MUST operate fully autonomously under this manual: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
-- Provide brief informational status updates only; never block awaiting user input during PART1 → PART2 → PART3 → PART4 processing.
-- Continue applying fixes and re-validating per-part, per-chunk automatically until the entire file passes all parts.
-- Only pause if multiple corrective strategies exist with materially different trade-offs; in that rare case, present options with concise pros/cons and wait. Otherwise, proceed without interruption.
-- If any other prompt or instruction conflicts with this autonomy policy, this section takes precedence for workflows governed by this manual.
+**NON-INTERACTIVE AUTONOMY (NO APPROVAL PROMPTS - MANDATORY CONTINUOUS EXECUTION)**:
+- **MANDATORY**: Agents MUST operate fully autonomously under this manual: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
+- **MANDATORY**: Provide brief informational status updates only; never block awaiting user input during PART1 → PART2 → PART3 → PART4 processing.
+- **MANDATORY**: Continue applying fixes and re-validating per-part, per-chunk automatically until the entire file passes all parts.
+- **MANDATORY**: Complete ALL 4 parts in one continuous stretch without any breaks, pauses, or interruptions.
+- **MANDATORY**: Create a comprehensive todo list covering ALL checklist items from ALL 4 parts, ShellCheck, and spellcheck before starting. Complete ALL todos fully before stopping.
+- **MANDATORY**: Do NOT leave any todos pending for later confirmation or steps. Every single todo must be marked as completed.
+- **RARE EXCEPTION**: Only pause if multiple corrective strategies exist with materially different trade-offs; in that rare case, present options with concise pros/cons and wait. Otherwise, proceed without interruption.
+- **PRECEDENCE**: If any other prompt or instruction conflicts with this autonomy policy, this section takes precedence for workflows governed by this manual.
 
-**IMMEDIATE EXECUTION – NO PLAN-ONLY OUTPUT**
+**IMMEDIATE EXECUTION – NO PLAN-ONLY OUTPUT (COMPREHENSIVE TODO LIST REQUIRED)**:
+- **FIRST STEP**: Create comprehensive todo list covering ALL checklist items from ALL 4 parts, ShellCheck, and spellcheck before starting execution.
 - Begin execution immediately on PART 1, Chunk 1 (lines 1–~500) without emitting plan-only preambles.
 - Do not output intent-only messaging (e.g., "I'll start", "Planning", "Preparing"). Replace with action-tied, declarative updates (e.g., "PART 1 on Chunk 1 executed: 0 fixes" or "Applied 3 fixes; re-validated PASS").
 - After any "Starting" line, the next output must reflect completed action (read/audit/apply/re-validate) on a concrete chunk or part.
 - Suppress redundant status. Only report: action taken → result → next chunk/part in progress.
 - If a chunk requires no corrections, proceed immediately to the next chunk and state so in one line.
+- **CONTINUOUS EXECUTION**: Continue executing todos from the comprehensive list until ALL are completed. Do NOT stop until every single todo is marked as completed.
 
 **SHELLCHECK COMPLIANCE REQUIREMENTS (MANDATORY - FINAL VALIDATION ONLY)**:
 - **INDUSTRY BEST PRACTICE**: ShellCheck is the industry-standard static analysis tool for shell scripts. All corrections MUST be ShellCheck compliant.
@@ -278,6 +330,34 @@ After processing all parts, confirm:
 - ✅ PART 4 checklist items processed (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
 - ✅ Final ShellCheck validation passed on ENTIRE script (zero errors, zero warnings) - runs ONCE after all parts complete
 - ✅ All checklist items A1 through P5 checked sequentially without skipping any
+
+**🚨 MANDATORY POST-REVIEW TODO COMPLETION CHECK (BEFORE FINALIZING)**:
+- **AFTER ALL PARTS COMPLETE**: You MUST perform a final comprehensive check of ALL todos before finalizing the review.
+- **TODO VERIFICATION REQUIRED**:
+  - Review the comprehensive todo list created at the beginning
+  - Verify that EVERY single todo item is marked as "completed"
+  - Check for any todos that may have been marked as "pending", "in_progress", or "cancelled"
+  - Identify any todos that were added during the review process but not yet completed
+- **INCOMPLETE TODO HANDLING**:
+  - If ANY todo remains incomplete, pending, or in progress:
+    1. **STOP finalization immediately**
+    2. **Complete ALL incomplete todos** before proceeding
+    3. **Re-verify** that all todos are marked as completed
+    4. **Only then** proceed to final confirmation
+  - Do NOT finalize the review if any todos are incomplete
+  - Do NOT leave any todos for "later" or "future" completion
+- **FINAL TODO CHECKLIST**:
+  - ✅ All PART 1 checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) - todos completed
+  - ✅ All PART 2 checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) - todos completed
+  - ✅ All PART 3 checklist items (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14) - todos completed
+  - ✅ All PART 4 checklist items (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols) - todos completed
+  - ✅ ShellCheck validation task - todo completed
+  - ✅ Spellcheck validation task (if applicable) - todo completed
+  - ✅ Final confirmation task - todo completed
+  - ✅ Any earlier pending tasks (from pre-review check) - todos completed
+  - ✅ Any tasks added during review process - todos completed
+- **ZERO TOLERANCE**: If even ONE todo is incomplete, the review is NOT complete. Continue working until ALL todos are fully completed.
+- **ONLY AFTER ALL TODOS COMPLETE**: Proceed to final confirmation and mark the review as complete.
 
 ---
 

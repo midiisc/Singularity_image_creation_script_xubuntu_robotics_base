@@ -2,6 +2,25 @@
 
 **AUTHORITATIVE SOURCE**: This file (`Advanced-CoT-Multi-Agent-Prompt.md`) is the **master entry point** for the Advanced CoT Multi-Agent code review framework. It orchestrates sequential checking across all parts while maintaining 500-line context limits.
 
+**🚨 MANDATORY PRE-REVIEW TASK COMPLETION CHECK (BEFORE STARTING REVIEW)**:
+- **BEFORE LOADING PART 1**: You MUST check for any earlier pending tasks from previous sessions, conversations, or incomplete work.
+- **PENDING TASK HANDLING**: 
+  - If any pending tasks are found, you MUST either:
+    1. Complete them immediately before starting the review, OR
+    2. Add them to the comprehensive todo list that will be created for this review
+  - Do NOT start the review process until all earlier pending tasks are either completed or integrated into the current todo list.
+- **TASK SOURCES TO CHECK**:
+  - Previous conversation history and incomplete todos
+  - Any uncommitted changes that need review or completion
+  - Any pending file modifications or corrections
+  - Any incomplete validation or testing tasks
+  - Any pending documentation or cleanup tasks
+- **VERIFICATION REQUIRED**: Before proceeding to "MANDATORY EXECUTION PROTOCOL", verify that:
+  - All earlier pending tasks are identified
+  - All identified tasks are either completed or added to the comprehensive todo list
+  - No tasks are left unaccounted for
+- **ONLY AFTER VERIFICATION**: Proceed to create the comprehensive todo list and begin PART 1 review.
+
 **SEQUENTIAL PROCESSING ARCHITECTURE**:
 This prompt is split into multiple parts (each under 500 lines) to maintain full context throughout the review process. When this file is referenced, ALL parts MUST be processed sequentially:
 
@@ -13,6 +32,7 @@ This prompt is split into multiple parts (each under 500 lines) to maintain full
 **MANDATORY EXECUTION PROTOCOL FOR AI AGENTS**:
 When this master entry point is referenced, you MUST:
 
+0. **PRE-REVIEW TASK CHECK (MANDATORY FIRST STEP)**: Before starting the review, check for any earlier pending tasks (see "🚨 MANDATORY PRE-REVIEW TASK COMPLETION CHECK" section above). Complete them or add them to the comprehensive todo list. Only proceed after all earlier pending tasks are accounted for.
 1. **LOAD PART 1 FIRST**: Read `prompts/Advanced-CoT-Multi-Agent-Prompt-PART1.md` completely
 2. **PROCESS ALL TASKS IN PART 1**: Execute all CoT framework tasks, structured reasoning, and sections 0-2 from PART 1
 3. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Advanced-CoT-Multi-Agent-Prompt-PART2A.md`
@@ -21,7 +41,8 @@ When this master entry point is referenced, you MUST:
 6. **PROCESS ALL TASKS IN PART 2B**: Execute all self-correction tasks and section 5 from PART 2B
 7. **ONLY AFTER PART 2B COMPLETE**: Load `prompts/Advanced-CoT-Multi-Agent-Prompt-PART3.md`
 8. **PROCESS ALL TASKS IN PART 3**: Execute all implementation, metrics, and final template tasks (sections 6-8) from PART 3
-9. **FINAL CONFIRMATION**: Verify all phases and sections have been processed across all parts
+9. **POST-REVIEW TODO COMPLETION CHECK (MANDATORY)**: Perform final comprehensive check of ALL todos (see "🚨 MANDATORY POST-REVIEW TODO COMPLETION CHECK" section below). Complete any incomplete todos. Only proceed after ALL todos are marked as completed.
+10. **FINAL CONFIRMATION**: Verify all phases and sections have been processed across all parts AND all todos are completed
 
 **NON-INTERACTIVE AUTONOMY (NO APPROVAL PROMPTS)**:
 - Operate fully autonomously under this prompt: do not stop to ask the user for approval, confirmation, or to proceed between chunks or parts.
@@ -91,6 +112,32 @@ After processing all parts, confirm:
 - ✅ PART 2B processed (Self-Correction, Section 5)
 - ✅ PART 3 processed (Implementation, Metrics, Final Template, Sections 6-8)
 - ✅ All phases and sections checked sequentially without skipping any
+
+**🚨 MANDATORY POST-REVIEW TODO COMPLETION CHECK (BEFORE FINALIZING)**:
+- **AFTER ALL PARTS COMPLETE**: You MUST perform a final comprehensive check of ALL todos before finalizing the review.
+- **TODO VERIFICATION REQUIRED**:
+  - Review the comprehensive todo list created at the beginning
+  - Verify that EVERY single todo item is marked as "completed"
+  - Check for any todos that may have been marked as "pending", "in_progress", or "cancelled"
+  - Identify any todos that were added during the review process but not yet completed
+- **INCOMPLETE TODO HANDLING**:
+  - If ANY todo remains incomplete, pending, or in progress:
+    1. **STOP finalization immediately**
+    2. **Complete ALL incomplete todos** before proceeding
+    3. **Re-verify** that all todos are marked as completed
+    4. **Only then** proceed to final confirmation
+  - Do NOT finalize the review if any todos are incomplete
+  - Do NOT leave any todos for "later" or "future" completion
+- **FINAL TODO CHECKLIST**:
+  - ✅ All PART 1 tasks (CoT Framework, Structured Reasoning, Sections 0-2) - todos completed
+  - ✅ All PART 2A tasks (Verification Chain, Sections 3-4) - todos completed
+  - ✅ All PART 2B tasks (Self-Correction, Section 5) - todos completed
+  - ✅ All PART 3 tasks (Implementation, Metrics, Final Template, Sections 6-8) - todos completed
+  - ✅ Final confirmation task - todo completed
+  - ✅ Any earlier pending tasks (from pre-review check) - todos completed
+  - ✅ Any tasks added during review process - todos completed
+- **ZERO TOLERANCE**: If even ONE todo is incomplete, the review is NOT complete. Continue working until ALL todos are fully completed.
+- **ONLY AFTER ALL TODOS COMPLETE**: Proceed to final confirmation and mark the review as complete.
 
 ---
 
