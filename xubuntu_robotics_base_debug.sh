@@ -58,6 +58,49 @@ strict_off() {
 STRICT_HELPERS_AVAILABLE=1
 export STRICT_HELPERS_AVAILABLE
 
+purge_container_install_artifacts() {
+    local cache_root="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    printf '\n%s\n' "==> Final cleanup: removing cached installers and temporary build artifacts"
+
+    if [ -d "${cache_root}" ] && [ "${cache_root}" != "/" ]; then
+        find "${cache_root}" -mindepth 1 -maxdepth 1 -print -exec rm -rf {} + 2>/dev/null || true
+        printf '  • Cleared container cache root: %s\n' "${cache_root}"
+    else
+        printf '  • Container cache root not found or invalid (%s)\n' "${cache_root}"
+    fi
+
+    local tmp_dirs=(
+        "${CONTAINER_APT_CACHE:-/container_cache/apt}"
+        "${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}"
+        "${CONTAINER_WHEELS_CACHE:-/container_cache/wheels}"
+        "${CONTAINER_JULIA_CACHE:-/container_cache/julia_pkgs}"
+    )
+    for dir in "${tmp_dirs[@]}"; do
+        if [ -n "${dir}" ] && [ -d "${dir}" ] && [ "${dir}" != "/" ]; then
+            rm -rf "${dir}" 2>/dev/null || true
+            printf '  • Removed cache directory: %s\n' "${dir}"
+        fi
+    done
+
+    if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ] && [ -d "${CONTAINER_BUILD_TMPDIR}" ]; then
+        rm -rf "${CONTAINER_BUILD_TMPDIR}" 2>/dev/null || true
+        printf '  • Removed build temp directory: %s\n' "${CONTAINER_BUILD_TMPDIR}"
+    fi
+
+    if [ -n "${TMPDIR:-}" ] && [[ "${TMPDIR}" == /tmp/* ]] && [ -d "${TMPDIR}" ]; then
+        rm -rf "${TMPDIR}" 2>/dev/null || true
+        printf '  • Removed TMPDIR artifacts: %s\n' "${TMPDIR}"
+    fi
+
+    # Recreate empty cache root so future overlay runs have a mount point
+    if [ -n "${cache_root}" ] && [ "${cache_root}" != "/" ]; then
+        mkdir -p "${cache_root}" 2>/dev/null || true
+        chmod 755 "${cache_root}" 2>/dev/null || true
+    fi
+
+    printf '%s\n' "==> Installer cache cleanup complete"
+}
+
 #===============================================================================
 # STRICT MODE - Controlled error handling
 #===============================================================================
@@ -11942,6 +11985,8 @@ fi
 # Outputs: System ready for OpenCV compilation testing
 # NOTE: This is a debug version - original script continues with OpenCV
 #-------------------------------------------------------------------------------
+
+purge_container_install_artifacts
 
 printf '\n%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 printf '%s\n' "${GREEN}✓ DEBUG SCRIPT COMPLETE - STOPPING BEFORE OPENCV COMPILATION${NC}"
