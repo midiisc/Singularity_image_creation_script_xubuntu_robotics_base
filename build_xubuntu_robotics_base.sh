@@ -2587,7 +2587,7 @@ fi
 #===============================================================================
 # Purpose: Generate the complete Singularity definition file (.def)
 # Self-contained: Yes (complete heredoc)
-# Dependencies: All cached artifacts, xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+# Dependencies: All cached artifacts, xubuntu_robotics_base_pre_opencv_debug.sh
 # Outputs: Configured system components
 # NOTE: This is a large heredoc containing the entire container definition
 #-------------------------------------------------------------------------------
@@ -2606,7 +2606,7 @@ From: ${BASE_IMAGE}
     ${CONFIG_FILE} /etc/config.sh
     ${SCRIPT_DIR}/container_cache/binaries /container_cache/binaries
     ${SCRIPT_DIR}/container_cache/debs /container_cache/debs
-    ${SCRIPT_DIR}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh /container_post_script.sh
+    ${SCRIPT_DIR}/xubuntu_robotics_base_pre_opencv_debug.sh /container_post_script.sh
     ${SCRIPT_DIR}/config.sh /container_config.sh
     # Copy entire container-scripts directory for installation via install.sh
     ${SCRIPT_DIR}/${CONTAINER_SCRIPTS_DIR} ${CONTAINER_SCRIPTS_INSTALL_PATH}
@@ -2674,8 +2674,8 @@ From: ${BASE_IMAGE}
 # === %setup Section ===
 %setup -c /bin/bash
     # Check if the build process can see the post script on the host
-    /bin/echo "--- [DEBUG] Running 'ls -l' on host for xubuntu_robotics_base_post_ULTRA_CLEANED.sh:"
-    /bin/ls -l xubuntu_robotics_base_post_ULTRA_CLEANED.sh
+    /bin/echo "--- [DEBUG] Running 'ls -l' on host for xubuntu_robotics_base_pre_opencv_debug.sh:"
+    /bin/ls -l xubuntu_robotics_base_pre_opencv_debug.sh
     
     # Enable strict mode (portable across /bin/sh and /bin/bash)
     if [ -n "${BASH_VERSION:-}" ]; then
@@ -4167,7 +4167,7 @@ echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> Check the host driver's max supported CUDA version with: nvidia-smi${NC}"
 echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> If your target cluster has a different CUDA version (e.g., 11.x),${NC}"
-echo -e "${YELLOW}> you must modify the package names in 'xubuntu_robotics_base_post_ULTRA_CLEANED.sh'${NC}"
+echo -e "${YELLOW}> you must modify the package names in 'xubuntu_robotics_base_pre_opencv_debug.sh'${NC}"
 echo -e "${YELLOW}> and rebuild the container.${NC}"
 echo -e "${YELLOW}======================================================================${NC}"
 

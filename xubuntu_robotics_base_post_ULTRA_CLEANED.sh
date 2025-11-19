@@ -10128,18 +10128,12 @@ if command -v nproc >/dev/null 2>&1 && command -v free >/dev/null 2>&1; then
 fi
 printf "\n"
 
-# Build with fallback to single-threaded on failure
+# Build with multithreaded compilation
 # H1: Exit status check for build command
 if ! ninja -j"${BUILD_JOBS}"; then
-    printf "\n"
     # A5a: Use printf instead of echo for robustness
-    printf "⚠️  Parallel build failed, retrying single-threaded...\n"
-    # H1: Exit status check for fallback build
-    if ! ninja -j1; then
-        # A5a: Use printf instead of echo for robustness
-        printf "[ERROR] Failed to build Ceres even with single-threaded compilation\n" >&2
-        exit 1
-    fi
+    printf "[ERROR] Failed to build Ceres with multithreaded compilation\n" >&2
+    exit 1
 fi
 
 # Install Ceres and capture output for directory detection
@@ -12272,10 +12266,12 @@ if [ -n "${GCC_VERSION_FOR_OPENCV}" ]; then
         printf '%s\n' "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
         OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
         OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
-    elif [ "${GCC_MAJOR_FOR_OPENCV}" -gt "11" ]; then
-        # GCC 12+ generally works better, but keep basic compatibility flags
-        OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-allow-unsupported-compiler;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
-        OPENCV_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler=-Wno-deprecated-declarations"
+    elif [ "${GCC_MAJOR_FOR_OPENCV}" -ge "12" ]; then
+        # GCC 12+ has better NVCC compatibility - use standard flags without -allow-unsupported-compiler
+        # This avoids potential issues with unsupported compiler warnings
+        printf '%s\n' "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
+        OPENCV_CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda;-Xcompiler=-fPIC;-Xcompiler=-Wno-deprecated-declarations;-x=cu;-std=c++17"
+        OPENCV_CUDA_FLAGS="-Xcompiler=-Wno-deprecated-declarations"
     # ENDIF: GCC_MAJOR_FOR_OPENCV version check
     fi
 # ENDIF: GCC_VERSION_FOR_OPENCV check
@@ -13682,16 +13678,11 @@ fi
 printf '%s\n' "${GREEN}✓ Compiler header access verified - ready to build${NC}"
 printf '%s\n' ""
 
-# Build with fallback to single-threaded on failure
+# Build with multithreaded compilation
 if ! ninja -j"${BUILD_JOBS}"; then
-    printf '%s\n' ""
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-    printf '%s\n' "⚠️  Parallel build failed, retrying single-threaded..."
-    if ! ninja -j1; then
-        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-        printf '%s\n' "ERROR: Failed to build OpenCV even with single-threaded compilation"
-        exit 1
-    fi
+    printf '%s\n' "ERROR: Failed to build OpenCV with multithreaded compilation"
+    exit 1
 fi
 
 #--- Sub-block 20.11: Install OpenCV ---
@@ -14604,9 +14595,10 @@ if command -v gcc &>/dev/null; then
             # D3b: Replace echo -e with printf for POSIX compliance and to avoid variable flag interpretation
             printf '%s\n' "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
             COLMAP_CUDA_FLAGS="-allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
-        elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -gt "11" ] 2>/dev/null; then
-            # GCC 12+ generally works better, but keep basic compatibility flags
-            COLMAP_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
+        elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -ge "12" ] 2>/dev/null; then
+            # GCC 12+ has better NVCC compatibility - use standard flags without -allow-unsupported-compiler
+            printf '%s\n' "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
+            COLMAP_CUDA_FLAGS="-Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
         fi
     fi
 fi
@@ -14735,20 +14727,12 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
     printf '%s\n' "✗ COLMAP build FAILED with ${BUILD_JOBS} jobs"
     printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     printf '%s\n' ""
-    printf '%s\n' "Trying single-threaded build for better error diagnostics..."
-    if ! ninja -j1 2>&1 | tee -a /tmp/colmap_build.log; then
-        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-        printf '%s\n' ""
-        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        printf '%s\n' "✗ COLMAP build FAILED (single-threaded)"
-        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        printf '%s\n' ""
-        printf '%s\n' "Last 100 lines of build log:"
-        tail -100 /tmp/colmap_build.log
-        printf '%s\n' ""
-        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        printf '%s\n' "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
-        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "Last 100 lines of build log:"
+    tail -100 /tmp/colmap_build.log
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         # 1. Check for glog-specific errors
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -14890,7 +14874,6 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         exit 1
     fi
-fi
 
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' ""
@@ -18240,9 +18223,10 @@ if command -v gcc &>/dev/null; then
             echo -e "  ${YELLOW}⚠ GCC 11 detected - ensuring compatibility workarounds for NVCC${NC}"
             # Flags already include --allow-unsupported-compiler, but ensure they're set correctly
             OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
-        elif [ "${GCC_MAJOR_FOR_OPEN3D}" -gt "11" ]; then
-            # GCC 12+ generally works better, but keep compatibility flags
-            OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
+        elif [ "${GCC_MAJOR_FOR_OPEN3D}" -ge "12" ]; then
+            # GCC 12+ has better NVCC compatibility - use standard flags without -allow-unsupported-compiler
+            echo -e "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
+            OPEN3D_CUDA_FLAGS_VALUE="--expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
         fi
     fi
 fi
@@ -18529,42 +18513,17 @@ mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
 echo "  System: $(nproc) cores, ${mem_info} RAM"
 echo ""
 
-# Build with fallback to single-threaded on failure
+# Build with multithreaded compilation
 # Note: Must check PIPESTATUS[0] to get ninja exit status, not tee exit status
-BUILD_SUCCESS=false
 ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log
 NINJA_EXIT=${PIPESTATUS[0]}
-if [ "${NINJA_EXIT}" -eq 0 ]; then
-    BUILD_SUCCESS=true
-else
-    echo ""
-    echo "⚠️  Parallel build failed (exit code: ${NINJA_EXIT}), retrying single-threaded..."
-    ninja -j1 2>&1 | tee -a /tmp/open3d_build.log
-    SINGLE_EXIT=${PIPESTATUS[0]}
-    if [ "${SINGLE_EXIT}" -eq 0 ]; then
-        BUILD_SUCCESS=true
-    else
-        echo ""
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "✗ Open3D build FAILED"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo ""
-        echo "Parallel build exit code: ${NINJA_EXIT}"
-        echo "Single-threaded build exit code: ${SINGLE_EXIT}"
-        echo ""
-        echo "Last 100 lines of build log:"
-        tail -100 /tmp/open3d_build.log
-        echo ""
-        echo "Full build log saved to: /tmp/open3d_build.log"
-        exit 1
-    fi
-fi
-
-if [ "$BUILD_SUCCESS" = false ]; then
+if [ "${NINJA_EXIT}" -ne 0 ]; then
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "✗ Open3D build FAILED"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    echo "Build exit code: ${NINJA_EXIT}"
     echo ""
     echo "Last 100 lines of build log:"
     tail -100 /tmp/open3d_build.log
