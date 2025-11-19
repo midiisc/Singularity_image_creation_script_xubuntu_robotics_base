@@ -3044,14 +3044,25 @@ log "Singularity definition file generated successfully."
 log_with_timestamp "Building SIF: ${OUT_DIR}/${SIF_NAME}"
 
 # Critical: Try apptainer first (preferred), fallback to singularity
+HOST_CACHE_BIND_SRC="${SCRIPT_DIR}/container_cache"
+if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
+    log_error "Failed to ensure host cache directory exists: ${HOST_CACHE_BIND_SRC}"
+    exit 1
+fi
+HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/host_cache"
+
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."
 	# High-signal debug context
 	log "Apptainer version: $(/usr/bin/apptainer --version 2>/dev/null || echo unknown)"
 	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
 	log "Apptainer env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
+    APPTAINER_BINDPATH_NEW="${HOST_CACHE_BIND_SPEC}"
+    if [ -n "${APPTAINER_BINDPATH:-}" ]; then
+        APPTAINER_BINDPATH_NEW="${APPTAINER_BINDPATH_NEW},${APPTAINER_BINDPATH}"
+    fi
 	# Echo full command before execution for easy tracing in logs
-	APPTAINER_CMD=(sudo /usr/bin/apptainer build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
+	APPTAINER_CMD=(sudo env "APPTAINER_BINDPATH=${APPTAINER_BINDPATH_NEW}" /usr/bin/apptainer build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
 	log "Executing: ${APPTAINER_CMD[*]}"
 	# Prefer --debug if supported (non-fatal if not)
 	if /usr/bin/apptainer build --help 2>&1 | grep -q -- '--debug'; then
@@ -3066,7 +3077,11 @@ elif [ -x /usr/bin/singularity ]; then
 	log "Singularity version: $(/usr/bin/singularity --version 2>/dev/null || echo unknown)"
 	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
 	log "Singularity env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
-	SINGULARITY_CMD=(sudo /usr/bin/singularity build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
+    SINGULARITY_BINDPATH_NEW="${HOST_CACHE_BIND_SPEC}"
+    if [ -n "${SINGULARITY_BINDPATH:-}" ]; then
+        SINGULARITY_BINDPATH_NEW="${SINGULARITY_BINDPATH_NEW},${SINGULARITY_BINDPATH}"
+    fi
+	SINGULARITY_CMD=(sudo env "SINGULARITY_BINDPATH=${SINGULARITY_BINDPATH_NEW}" /usr/bin/singularity build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
 	log "Executing: ${SINGULARITY_CMD[*]}"
 	if /usr/bin/singularity build --help 2>&1 | grep -q -- '--debug'; then
 		SINGULARITY_CMD+=(--debug)

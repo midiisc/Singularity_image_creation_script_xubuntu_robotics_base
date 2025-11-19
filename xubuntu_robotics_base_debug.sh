@@ -58,6 +58,28 @@ strict_off() {
 STRICT_HELPERS_AVAILABLE=1
 export STRICT_HELPERS_AVAILABLE
 
+harvest_container_cache_to_host() {
+    if [ ! -d /host_cache ]; then
+        printf '\n%s\n' "==> Host cache mount (/host_cache) not available; skipping host harvest"
+        return
+    fi
+
+    printf '\n%s\n' "==> Syncing container cache to host mirror before cleanup"
+    mkdir -p /host_cache 2>/dev/null || true
+    if command -v rsync >/dev/null 2>&1; then
+        if rsync -a --delete "/container_cache/" "/host_cache/" 2>/dev/null; then
+            printf '  • Host cache updated via rsync\n'
+        else
+            printf '  • rsync failed; attempting fallback copy\n'
+            cp -a "/container_cache/." "/host_cache/" 2>/dev/null || true
+        fi
+    else
+        cp -a "/container_cache/." "/host_cache/" 2>/dev/null || true
+    fi
+    sync "/host_cache" 2>/dev/null || sync
+    printf '  • Host cache sync complete (%s)\n' "$(date +%Y-%m-%d\ %H:%M:%S)"
+}
+
 purge_container_install_artifacts() {
     local cache_root="${CONTAINER_CACHE_ROOT:-/container_cache}"
     printf '\n%s\n' "==> Final cleanup: removing cached installers and temporary build artifacts"
@@ -11986,6 +12008,7 @@ fi
 # NOTE: This is a debug version - original script continues with OpenCV
 #-------------------------------------------------------------------------------
 
+harvest_container_cache_to_host
 purge_container_install_artifacts
 
 printf '\n%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
