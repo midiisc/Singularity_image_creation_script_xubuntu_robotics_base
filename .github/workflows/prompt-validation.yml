@@ -1,5 +1,11 @@
 name: Prompt Validation Checks
 
+# Prevent concurrent runs from cancelling each other - use cancel-in-progress: false
+# This ensures each commit gets its own complete validation run
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 on:
   pull_request:
     branches: [main, beta]
@@ -319,23 +325,48 @@ jobs:
   shellcheck:
     name: ShellCheck Linting
     runs-on: ubuntu-latest
+    # Prevent cancellation on concurrent runs - allow this job to complete even if new commits are pushed
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
       - name: Run ShellCheck
-        uses: ludeeus/action-shellcheck@master
         env:
           SHELLCHECK_OPTS: -e SC2034 -e SC1090 -e SC2154
-        with:
-          severity: error
-          ignore_paths: |
-            container-scripts
-            analysis
-            .github/workflows
-            **/*.yml
-            **/*.yaml
-          check_together: 'yes'
+        run: |
+          echo "Running ShellCheck on shell scripts..."
+          FOUND_ERRORS=false
+          
+          # Find all shell scripts excluding ignored paths
+          while IFS= read -r file; do
+            if [ -f "$file" ]; then
+              echo "Checking $file..."
+              if shellcheck $SHELLCHECK_OPTS "$file"; then
+                echo "✅ $file passed ShellCheck"
+              else
+                echo "❌ $file failed ShellCheck"
+                FOUND_ERRORS=true
+              fi
+            fi
+          done < <(find . -type f -name "*.sh" \
+            ! -path "./container-scripts/*" \
+            ! -path "./analysis/*" \
+            ! -path "./.github/workflows/*" \
+            ! -path "*/node_modules/*" \
+            ! -path "*/.git/*" 2>/dev/null || true)
+          
+          if [ "$FOUND_ERRORS" = true ]; then
+            echo "::error::ShellCheck found errors. Review the output above."
+            exit 1
+          else
+            echo "✅ All shell scripts passed ShellCheck"
+          fi
 
   ai-code-review:
     name: AI Code Review (Claude)
@@ -465,7 +496,7 @@ jobs:
   summary:
     name: Validation Summary
     runs-on: ubuntu-latest
-    needs: [check-pipe-patterns, validate-cmake-flags, check-multi-phase-docs, check-tbb-verification, check-heredoc-syntax, check-bash-compatibility, ai-code-review]
+    needs: [check-pipe-patterns, validate-cmake-flags, check-multi-phase-docs, check-tbb-verification, check-heredoc-syntax, check-bash-compatibility, shellcheck, ai-code-review]
     if: always()
     steps:
       - name: Summary
@@ -481,4 +512,5 @@ jobs:
           echo "4. Ensure TBB verification exists for HPC libraries"
           echo "5. Quote heredoc delimiters for literal content"
           echo "6. Avoid Bash 4+ features or add version checks"
-          echo "7. Review AI code review findings (if any)"
+          echo "7. Fix ShellCheck errors (if any)"
+          echo "8. Review AI code review findings (if any)"
