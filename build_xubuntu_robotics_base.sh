@@ -127,6 +127,67 @@ source "${CONFIG_FILE}"
 
 echo "✓ Configuration loaded from ${CONFIG_FILE}"
 
+#===============================================================================
+# BLOCK 2.5: CONTAINER POST SCRIPT SELECTION
+#===============================================================================
+# Purpose: Choose which container %post script to embed (debug vs full)
+# Dependencies: CONTAINER_POST_SCRIPT_MODE from config.sh
+# Outputs: SELECTED_POST_SCRIPT_PATH, SELECTED_POST_SCRIPT_MODE, user-facing summary
+#-------------------------------------------------------------------------------
+POST_SCRIPT_DEBUG="${SCRIPT_DIR}/xubuntu_robotics_base_pre_opencv_debug.sh"
+POST_SCRIPT_FULL="${SCRIPT_DIR}/xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+POST_SCRIPT_MODE_REQUESTED="${CONTAINER_POST_SCRIPT_MODE:-debug}"
+POST_SCRIPT_MODE_NORMALIZED="$(printf '%s' "${POST_SCRIPT_MODE_REQUESTED}" | tr '[:upper:]' '[:lower:]')"
+SELECTED_POST_SCRIPT_MODE=""
+SELECTED_POST_SCRIPT_PATH=""
+POST_SCRIPT_FALLBACK_REASON=""
+
+case "${POST_SCRIPT_MODE_NORMALIZED}" in
+    debug)
+        SELECTED_POST_SCRIPT_MODE="debug"
+        SELECTED_POST_SCRIPT_PATH="${POST_SCRIPT_DEBUG}"
+        if [ ! -f "${SELECTED_POST_SCRIPT_PATH}" ]; then
+            POST_SCRIPT_FALLBACK_REASON="Debug script missing; falling back to full build script."
+            SELECTED_POST_SCRIPT_MODE="full"
+            SELECTED_POST_SCRIPT_PATH="${POST_SCRIPT_FULL}"
+        fi
+        ;;
+    full)
+        SELECTED_POST_SCRIPT_MODE="full"
+        SELECTED_POST_SCRIPT_PATH="${POST_SCRIPT_FULL}"
+        ;;
+    *)
+        POST_SCRIPT_FALLBACK_REASON="Unknown mode '${POST_SCRIPT_MODE_REQUESTED}'; falling back to full build script."
+        SELECTED_POST_SCRIPT_MODE="full"
+        SELECTED_POST_SCRIPT_PATH="${POST_SCRIPT_FULL}"
+        ;;
+esac
+
+if [ ! -f "${SELECTED_POST_SCRIPT_PATH}" ]; then
+    echo "ERROR: Selected container post script not found: ${SELECTED_POST_SCRIPT_PATH}"
+    exit 1
+fi
+
+SELECTED_POST_SCRIPT_BASENAME="$(basename "${SELECTED_POST_SCRIPT_PATH}")"
+export SELECTED_POST_SCRIPT_MODE SELECTED_POST_SCRIPT_PATH SELECTED_POST_SCRIPT_BASENAME
+
+echo ""
+echo "══════════════════════════════════════════════════════════════════════"
+echo "  Container Post Script Mode Selection"
+printf '  Requested Mode : %s\n' "$(printf '%s' "${POST_SCRIPT_MODE_NORMALIZED}" | tr '[:lower:]' '[:upper:]')"
+printf '  Active Mode    : %s\n' "$(printf '%s' "${SELECTED_POST_SCRIPT_MODE}" | tr '[:lower:]' '[:upper:]')"
+printf '  Script Path    : %s\n' "${SELECTED_POST_SCRIPT_PATH}"
+if [ "${SELECTED_POST_SCRIPT_MODE}" = "debug" ]; then
+    printf '  Behavior       : Stops before OpenCV compilation for overlay debugging.\n'
+else
+    printf '  Behavior       : Runs full image build including OpenCV compilation.\n'
+fi
+if [ -n "${POST_SCRIPT_FALLBACK_REASON}" ]; then
+    printf '  Note           : %s\n' "${POST_SCRIPT_FALLBACK_REASON}"
+fi
+echo "══════════════════════════════════════════════════════════════════════"
+echo ""
+
 # Consolidate build flag defaults for MKL migration artifacts
 DEFAULT_OPENBLAS_BUILD_FLAGS="DYNAMIC_ARCH=1 DYNAMIC_OLDER=1 TARGET=GENERIC USE_OPENMP=1 USE_TLS=1 NO_AFFINITY=1 NUM_THREADS=64 GEMM_MULTITHREAD_THRESHOLD=50 BUILD_LAPACK_DEPRECATED=1 NO_WARMUP=1 BINARY=64 CC=gcc FC=gfortran HOSTCC=gcc"
 OPENBLAS_BUILD_FLAGS="${OPENBLAS_BUILD_FLAGS:-${DEFAULT_OPENBLAS_BUILD_FLAGS}}"
@@ -2612,7 +2673,7 @@ From: ${BASE_IMAGE}
     ${CONFIG_FILE} /etc/config.sh
     ${SCRIPT_DIR}/container_cache/binaries /container_cache/binaries
     ${SCRIPT_DIR}/container_cache/debs /container_cache/debs
-    ${SCRIPT_DIR}/xubuntu_robotics_base_pre_opencv_debug.sh /container_post_script.sh
+    ${SELECTED_POST_SCRIPT_PATH} /container_post_script.sh
     ${SCRIPT_DIR}/config.sh /container_config.sh
     # Copy entire container-scripts directory for installation via install.sh
     ${SCRIPT_DIR}/${CONTAINER_SCRIPTS_DIR} ${CONTAINER_SCRIPTS_INSTALL_PATH}
@@ -2680,8 +2741,8 @@ From: ${BASE_IMAGE}
 # === %setup Section ===
 %setup -c /bin/bash
     # Check if the build process can see the post script on the host
-    /bin/echo "--- [DEBUG] Running 'ls -l' on host for xubuntu_robotics_base_pre_opencv_debug.sh:"
-    /bin/ls -l xubuntu_robotics_base_pre_opencv_debug.sh
+    /bin/echo "--- [DEBUG] Running 'ls -l' on host for ${SELECTED_POST_SCRIPT_BASENAME}:"
+    /bin/ls -l "${SELECTED_POST_SCRIPT_PATH}"
     
     # Enable strict mode (portable across /bin/sh and /bin/bash)
     if [ -n "${BASH_VERSION:-}" ]; then
@@ -4173,7 +4234,7 @@ echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> Check the host driver's max supported CUDA version with: nvidia-smi${NC}"
 echo -e "${YELLOW}>${NC}"
 echo -e "${YELLOW}> If your target cluster has a different CUDA version (e.g., 11.x),${NC}"
-echo -e "${YELLOW}> you must modify the package names in 'xubuntu_robotics_base_pre_opencv_debug.sh'${NC}"
+echo -e "${YELLOW}> you must modify the package names in '${SELECTED_POST_SCRIPT_BASENAME}'${NC}"
 echo -e "${YELLOW}> and rebuild the container.${NC}"
 echo -e "${YELLOW}======================================================================${NC}"
 

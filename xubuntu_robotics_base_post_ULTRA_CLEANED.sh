@@ -81,6 +81,8 @@ echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
 echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
 echo "------------------------------------------"
 
+SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_post_ULTRA_CLEANED.sh")"
+
 #===============================================================================
 # CRITICAL: Source centralized configuration
 #===============================================================================
@@ -434,7 +436,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Record build start in log
     printf '%s\n' "═══════════════════════════════════════════════════════════════"
     printf '%s\n' "  BUILD LOG START: $(date)"
-    printf '%s\n' "  Script: xubuntu_robotics_base_post_ULTRA_CLEANED.sh"
+    printf '%s\n' "  Script: ${SCRIPT_BASENAME}"
     printf '%s\n' "  Log file: ${BUILD_LOG_FILE}"
     printf '%s\n' "  Timestamp: ${BUILD_TIMESTAMP}"
     printf '%s\n' "  PID: $$"

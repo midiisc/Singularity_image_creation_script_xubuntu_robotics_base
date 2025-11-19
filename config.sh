@@ -339,6 +339,13 @@ export SIF_NAME="${SIF_NAME:-}"
 # If not set, will be generated from SIF_NAME (replace .sif with .def)
 export DEF_NAME="${DEF_NAME:-}"
 
+# Container post-script mode
+# Controls which %post script the host build injects into the container.
+#   debug → use xubuntu_robotics_base_pre_opencv_debug.sh (stops before OpenCV)
+#   full  → use xubuntu_robotics_base_post_ULTRA_CLEANED.sh (complete image build)
+# Default favors the debug/incremental flow for faster iteration.
+export CONTAINER_POST_SCRIPT_MODE="${CONTAINER_POST_SCRIPT_MODE:-debug}"
+
 # Build log extraction toggle
 # Set to 1 to enable regex-based error/warning extraction + analysis.
 # Default is 0 (disabled) to avoid the heavy grep-based pipeline when not needed.
