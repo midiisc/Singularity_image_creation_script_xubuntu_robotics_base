@@ -339,6 +339,11 @@ export SIF_NAME="${SIF_NAME:-}"
 # If not set, will be generated from SIF_NAME (replace .sif with .def)
 export DEF_NAME="${DEF_NAME:-}"
 
+# Build log extraction toggle
+# Set to 1 to enable regex-based error/warning extraction + analysis.
+# Default is 0 (disabled) to avoid the heavy grep-based pipeline when not needed.
+export ENABLE_LOG_ERROR_EXTRACTION="${ENABLE_LOG_ERROR_EXTRACTION:-0}"
+
 #===============================================================================
 # UNIFIED LOG ANALYSIS FUNCTION
 #===============================================================================
@@ -349,6 +354,11 @@ export DEF_NAME="${DEF_NAME:-}"
 #===============================================================================
 
 analyze_build_log() {
+    # Respect global toggle to avoid expensive parsing when disabled
+    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" != "1" ]; then
+        return 0
+    fi
+    
     # Determine log and error log file based on context
     local log_file="${1:-${LOG_FILE:-${BUILD_LOG_FILE:-}}}"
     local error_log="${2:-${ERROR_LOG:-${BUILD_ERROR_LOG:-}}}"

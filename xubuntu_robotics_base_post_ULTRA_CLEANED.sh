@@ -241,27 +241,37 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Create timestamp: YYYYMMDD_Day_HHMM_AMPM
     BUILD_TIMESTAMP=$(date +"%Y%m%d" 2>/dev/null || echo "19700101")_"${DAY_NAME}"_"${HOUR_12}""${MINUTE}"_"${AMPM}"
     BUILD_LOG_FILE="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}.log"
-    BUILD_ERROR_LOG="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}_errors.log"
+    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+        BUILD_ERROR_LOG="${BUILD_LOG_DIR}/${BUILD_LOG_PREFIX}_${BUILD_TIMESTAMP}_errors.log"
+    else
+        BUILD_ERROR_LOG=""
+    fi
 
     # Start logging to file while preserving terminal output
     # This creates a background process that tees output to both terminal and log file
     printf '%s\n' "✓ Build logging enabled: ${BUILD_LOG_FILE}"
-    printf '%s\n' "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
+    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+        printf '%s\n' "✓ Error logging enabled: ${BUILD_ERROR_LOG}"
+    else
+        printf '%s\n' "○ Error/warning extraction disabled (set ENABLE_LOG_ERROR_EXTRACTION=1 to enable)"
+    fi
     printf '%s\n' "  Log directory: ${BUILD_LOG_DIR}"
     printf '%s\n' "  Timestamp format: YYYYMMDD_Day_HHMM_AMPM"
     printf '%s\n' "  Keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent logs"
     printf '%s\n' "  Auto-sync interval: ${BUILD_LOG_SYNC_INTERVAL:-60} seconds"
     printf '%s\n' ""
     
-    # Initialize error log with header
-    if [ -z "${BUILD_ERROR_LOG}" ] || [ ! -f "${BUILD_ERROR_LOG}" ]; then
-        touch "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    # ENDIF: BUILD_ERROR_LOG initialization check
+    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+        # Initialize error log with header
+        if [ -z "${BUILD_ERROR_LOG}" ] || [ ! -f "${BUILD_ERROR_LOG}" ]; then
+            touch "${BUILD_ERROR_LOG}" 2>/dev/null || true
+        # ENDIF: BUILD_ERROR_LOG initialization check
+        fi
+        printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+        printf '%s\n' "Error Log Started: $(date)" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+        printf '%s\n' "Build Log: ${BUILD_LOG_FILE}" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
+        printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
     fi
-    printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    printf '%s\n' "Error Log Started: $(date)" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    printf '%s\n' "Build Log: ${BUILD_LOG_FILE}" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
-    printf '%s\n' "========================================" >> "${BUILD_ERROR_LOG}" 2>/dev/null || true
     
     # Error/Warning Filter Function for container builds
     # This function filters error and warning messages and writes them to error log
@@ -313,11 +323,19 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     # Error filtering is applied to stderr to capture errors/warnings
     # Gracefully degrade if stdbuf is not available (minimal containers)
     if command -v stdbuf >/dev/null 2>&1 && command -v tee >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
-        # Full featured: line buffered with error filtering
-        exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2> >(stdbuf -oL tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
+        # Full featured: optional line buffered filtering
+        if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+            exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2> >(stdbuf -oL tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
+        else
+            exec > >(stdbuf -oL tee -a "${BUILD_LOG_FILE}") 2>&1
+        fi
     elif command -v tee >/dev/null 2>&1 && command -v grep >/dev/null 2>&1; then
-        # Fallback: tee with error filtering (no line buffering but still works)
-        exec > >(tee -a "${BUILD_LOG_FILE}") 2> >(tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
+        # Fallback: tee with optional error filtering (no line buffering but still works)
+        if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+            exec > >(tee -a "${BUILD_LOG_FILE}") 2> >(tee -a "${BUILD_LOG_FILE}" >&2 | filter_errors_warnings)
+        else
+            exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
+        fi
     elif command -v tee >/dev/null 2>&1; then
         # Fallback: tee without error filtering
         exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
@@ -344,7 +362,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 if [ -f "${BUILD_LOG_FILE}" ]; then
                     sync "${BUILD_LOG_FILE}" 2>/dev/null || sync
                 fi
-                if [ -f "${BUILD_ERROR_LOG}" ]; then
+                if [ -n "${BUILD_ERROR_LOG:-}" ] && [ -f "${BUILD_ERROR_LOG}" ]; then
                     sync "${BUILD_ERROR_LOG}" 2>/dev/null || sync
                 fi
             done
@@ -381,19 +399,21 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             
             # Analyze build log for errors/warnings with context
             # Ensure analyze_build_log function is available (re-source config.sh if needed)
-            if ! type analyze_build_log >/dev/null 2>&1; then
-                if [ -f /etc/config.sh ]; then
-                    # shellcheck source=/etc/config.sh
-                    source /etc/config.sh
+            if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+                if ! type analyze_build_log >/dev/null 2>&1; then
+                    if [ -f /etc/config.sh ]; then
+                        # shellcheck source=/etc/config.sh
+                        source /etc/config.sh
+                    fi
                 fi
-            fi
-            # Only call if function exists
-            # Note: Using || true is intentional - log analysis is non-critical
-            if type analyze_build_log >/dev/null 2>&1; then
-                analyze_build_log || true
-            else
-                printf '%s\n' "⚠ Warning: analyze_build_log function not available, skipping log analysis"
-            # ENDIF: analyze_build_log function availability check
+                # Only call if function exists
+                # Note: Using || true is intentional - log analysis is non-critical
+                if type analyze_build_log >/dev/null 2>&1; then
+                    analyze_build_log || true
+                else
+                    printf '%s\n' "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+                # ENDIF: analyze_build_log function availability check
+                fi
             fi
             
             printf '%s\n' ""

@@ -1344,7 +1344,7 @@ log "✓ Comprehensive cleanup verified successful"
 # Note: Configuration is already loaded in BLOCK 2 (line 76)
 # This block verifies that config.sh functions (like analyze_build_log) are available
 # If config.sh was not sourced earlier, this will fail
-if ! type analyze_build_log >/dev/null 2>&1; then
+if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ] && ! type analyze_build_log >/dev/null 2>&1; then
     log_error "analyze_build_log function not found. config.sh may not have been loaded properly."
     # Try to source config.sh again as fallback
     # shellcheck disable=SC1090
@@ -1382,25 +1382,27 @@ cleanup_on_exit() {
     echo "POST-BUILD CLEANUP (exit code: ${exit_code})"
     echo "=========================================="
     
-    # Analyze build log for errors/warnings with context before cleanup
-    # Ensure analyze_build_log function is available (re-source config.sh if needed)
-    # shellcheck disable=SC1090
-    if ! type analyze_build_log >/dev/null 2>&1; then
+    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+        # Analyze build log for errors/warnings with context before cleanup
+        # Ensure analyze_build_log function is available (re-source config.sh if needed)
         # shellcheck disable=SC1090
-        if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+        if ! type analyze_build_log >/dev/null 2>&1; then
             # shellcheck disable=SC1090
-            source "${SCRIPT_DIR}/config.sh"
-        elif [ -f /etc/config.sh ]; then
-            # shellcheck disable=SC1091
-            source /etc/config.sh
+            if [ -f "${SCRIPT_DIR}/config.sh" ]; then
+                # shellcheck disable=SC1090
+                source "${SCRIPT_DIR}/config.sh"
+            elif [ -f /etc/config.sh ]; then
+                # shellcheck disable=SC1091
+                source /etc/config.sh
+            fi
         fi
-    fi
-    # Only call if function exists
-    if type analyze_build_log >/dev/null 2>&1; then
-        # shellcheck disable=SC2119
-        analyze_build_log || true
-    else
-        echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+        # Only call if function exists
+        if type analyze_build_log >/dev/null 2>&1; then
+            # shellcheck disable=SC2119
+            analyze_build_log || true
+        else
+            echo "⚠ Warning: analyze_build_log function not available, skipping log analysis"
+        fi
     fi
     
     comprehensive_cleanup || true  # Run cleanup, ignore failures at exit
@@ -1484,7 +1486,11 @@ touch "${LOG_FILE}" 2>/dev/null || {
 
 # Set up output redirection with process substitution
 # Note: Guard the pipelines so non-zero statuses don't trip set -e
-exec > >(tee -a "${LOG_FILE}" || true) 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings || true)
+if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
+    exec > >(tee -a "${LOG_FILE}" || true) 2> >(tee -a "${LOG_FILE}" >&2 | filter_errors_and_warnings || true)
+else
+    exec > >(tee -a "${LOG_FILE}" || true) 2>&1
+fi
 
 # Log script start with detailed information
 echo "=============================================================================="
