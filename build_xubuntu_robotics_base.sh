@@ -169,6 +169,16 @@ if [ ! -f "${SELECTED_POST_SCRIPT_PATH}" ]; then
 fi
 
 SELECTED_POST_SCRIPT_BASENAME="$(basename "${SELECTED_POST_SCRIPT_PATH}")"
+
+POST_SCRIPT_CHANGE_SUMMARY=""
+if command -v git >/dev/null 2>&1; then
+    POST_SCRIPT_CHANGE_SUMMARY="$(cd "${SCRIPT_DIR}" && git log -1 --pretty=format:'%h - %s (%cd)' --date=short -- "${SELECTED_POST_SCRIPT_BASENAME}" 2>/dev/null || true)"
+fi
+if [ -z "${POST_SCRIPT_CHANGE_SUMMARY}" ]; then
+    POST_SCRIPT_CHANGE_SUMMARY="No recorded changes detected for ${SELECTED_POST_SCRIPT_BASENAME}"
+fi
+printf -v POST_SCRIPT_CHANGE_SUMMARY_ESCAPED '%q' "${POST_SCRIPT_CHANGE_SUMMARY}"
+
 export SELECTED_POST_SCRIPT_MODE SELECTED_POST_SCRIPT_PATH SELECTED_POST_SCRIPT_BASENAME
 
 echo ""
@@ -177,6 +187,7 @@ echo "  Container Post Script Mode Selection"
 printf '  Requested Mode : %s\n' "$(printf '%s' "${POST_SCRIPT_MODE_NORMALIZED}" | tr '[:lower:]' '[:upper:]')"
 printf '  Active Mode    : %s\n' "$(printf '%s' "${SELECTED_POST_SCRIPT_MODE}" | tr '[:lower:]' '[:upper:]')"
 printf '  Script Path    : %s\n' "${SELECTED_POST_SCRIPT_PATH}"
+printf '  Latest Change  : %s\n' "${POST_SCRIPT_CHANGE_SUMMARY}"
 if [ "${SELECTED_POST_SCRIPT_MODE}" = "debug" ]; then
     printf '  Behavior       : Stops before OpenCV compilation for overlay debugging.\n'
 else
