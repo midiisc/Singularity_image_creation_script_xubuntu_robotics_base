@@ -73,6 +73,12 @@ globs:
    - Plans should be presented in chat conversation
    - Only create plan files if user says "save this plan to a file" or similar
 
+#### Debug Script Behavior Banner (Auto-Update Requirement)
+- Whenever `xubuntu_robotics_base_debug.sh` is modified, the agent **must also update** the banner text in `build_xubuntu_robotics_base.sh` (the "Container Post Script Mode Selection" block) to describe the new stopping point/behavior.
+- Include a concise note (e.g. “Stops after Phase 3 asset prep”) if the scope changed, so every debug run clearly states what the script does.
+- Treat this as a coupled change: edits to the debug script are incomplete until the banner accurately reflects the latest behavior.
+- This rule ensures reviewers and operators always know how far the debug run proceeds without reading the entire script diff.
+
 ---
 
 ## CODE REVIEW PROTOCOL
