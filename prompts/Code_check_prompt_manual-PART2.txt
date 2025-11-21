@@ -396,16 +396,63 @@ E. Here-docs & Here-strings
     fi
     ```
   - **VALIDATION**: Verify indentation is intentional and tabs are correct (not spaces mixed with tabs)
-- E6. **HEREDOC SYNTAX CORRECTNESS**: Validate heredoc syntax and structure:
-  - **REQUIRED**: Delimiter on same line as `<<` (or `<<-`): `cat > file <<EOF`
-  - **REQUIRED**: Closing delimiter must match opening delimiter exactly (case-sensitive): `<<EOF` → `EOF` (not `eof` or `Eof`)
-  - **REQUIRED**: Closing delimiter must be on line by itself (no trailing spaces or characters)
-  - **REQUIRED**: No variable expansion in delimiter name (delimiter is literal token)
-  - **VALIDATION PATTERNS**:
-    - **WRONG**: `cat > file <<EOF\n  EOF` (spaces before delimiter)
-    - **WRONG**: `cat > file <<EOF\nEof` (case mismatch)
-    - **CORRECT**: `cat > file <<EOF\nEOF` (exact match, no spaces)
-  - **DETECTION**: Check for mismatched delimiters, trailing spaces on delimiter lines, case mismatches
+- E6. **HEREDOC SYNTAX CORRECTNESS AND TERMINATION VERIFICATION**: Validate heredoc syntax, structure, and proper termination:
+  - **MANDATORY FIRST CHECK IN EACH CHUNK**: Before processing any other checklist items, scan the entire chunk for ALL heredoc patterns and verify each is properly terminated
+  - **TERMINATION VERIFICATION** (CRITICAL - RUN FIRST):
+    - **REQUIRED**: For each heredoc start pattern found (`cat >`, `cat >>`, `if ! cat <<`, `python3 <<`), locate the corresponding closing delimiter
+    - **REQUIRED**: Verify closing delimiter exists within the chunk (or in overlap region for cross-chunk heredocs)
+    - **REQUIRED**: Verify closing delimiter matches opening delimiter exactly (case-sensitive, no whitespace)
+    - **REQUIRED**: Verify closing delimiter is on a line by itself (no trailing content except optional comment)
+    - **DETECTION METHOD**: Use project's heredoc extraction tools to verify termination:
+      - `scripts/extract_all_heredocs.py` - Extracts and validates all heredocs
+      - `scripts/verify_and_replace_heredocs.py` - Verifies heredoc termination
+      - Pattern matching: Find `<<DELIMITER` then search forward for `DELIMITER` on its own line
+    - **VALIDATION PATTERNS**:
+      - **WRONG** (missing delimiter):
+        ```bash
+        cat > /tmp/file.sh <<'EOF'
+        # content here
+        # Missing EOF delimiter
+        ```
+      - **WRONG** (mismatched delimiter):
+        ```bash
+        cat > /tmp/file.sh <<'EOF'
+        # content
+        EOL  # Wrong delimiter name
+        ```
+      - **WRONG** (delimiter with trailing content):
+        ```bash
+        cat > /tmp/file.sh <<'EOF'
+        # content
+        EOF some text  # Trailing content
+        ```
+      - **CORRECT** (properly terminated):
+        ```bash
+        cat > /tmp/file.sh <<'EOF'
+        # content
+        EOF
+        ```
+    - **CROSS-CHUNK HEREDOCS**: For heredocs spanning multiple chunks:
+      - Check overlap region (20-40 lines) for continuation
+      - Verify delimiter is found in subsequent chunk if not in current chunk
+      - Track heredoc state in capsule for next chunk processing
+  - **SYNTAX CORRECTNESS** (after termination verified):
+    - **REQUIRED**: Delimiter on same line as `<<` (or `<<-`): `cat > file <<EOF`
+    - **REQUIRED**: Closing delimiter must match opening delimiter exactly (case-sensitive): `<<EOF` → `EOF` (not `eof` or `Eof`)
+    - **REQUIRED**: Closing delimiter must be on line by itself (no trailing spaces or characters)
+    - **REQUIRED**: No variable expansion in delimiter name (delimiter is literal token)
+    - **VALIDATION PATTERNS**:
+      - **WRONG**: `cat > file <<EOF\n  EOF` (spaces before delimiter)
+      - **WRONG**: `cat > file <<EOF\nEof` (case mismatch)
+      - **CORRECT**: `cat > file <<EOF\nEOF` (exact match, no spaces)
+  - **DETECTION**: Check for mismatched delimiters, trailing spaces on delimiter lines, case mismatches, missing terminators
+  - **AUTO-FIX STRATEGY**:
+    1. Identify all heredoc starts in chunk
+    2. For each heredoc, locate closing delimiter
+    3. If delimiter missing or mismatched, report error with line numbers
+    4. If delimiter has trailing content, remove trailing content
+    5. If case mismatch, fix case to match opening delimiter
+    6. Re-verify termination after fixes
 - E7. **HEREDOC CONTENT VALIDATION**: Validate heredoc content for correctness:
   - **SHELL SCRIPTS IN HEREDOC**: If heredoc creates shell script, validate script syntax:
     - Run `bash -n` on extracted content (dry-run syntax check)
@@ -436,13 +483,112 @@ E. Here-docs & Here-strings
     chmod 0755 /usr/local/bin/script.sh  # Set executable permission
     ```
   - **VALIDATION**: For each heredoc that creates executable file, verify permissions are set explicitly
-- E9. **HEREDOC MAINTAINABILITY**: Ensure heredocs are maintainable:
-  - **LENGTH LIMIT**: If heredoc exceeds 50 lines, consider extracting to `container-scripts/` (see E1)
-  - **COMMENTS**: Add comments above heredoc explaining purpose, variables used, target file
-  - **ORGANIZATION**: Group related heredocs together, separate with blank lines
-  - **VERSION TRACKING**: If heredoc content changes frequently, extract to external file for better git history
-  - **TESTING**: Complex heredoc content should be testable - extract to external file if testing is needed
-  - **DOCUMENTATION**: Document heredoc purpose in surrounding code comments
+- E9. **HEREDOC MAINTAINABILITY AND EXTRACTION**: Ensure heredocs are maintainable and extract heredoc-like chunks to container-scripts:
+  - **HEREDOC-LIKE CHUNK DETECTION**: Identify code blocks that can be converted to heredocs and extracted to `container-scripts/`:
+    - **DETECTION PATTERNS**:
+      - Large inline script blocks (50+ lines) that create files
+      - Repeated code patterns that could be script files
+      - Complex configuration blocks that would benefit from external files
+      - Python inline scripts (`python3 << 'DELIMITER'`) that exceed 20 lines
+      - Shell script blocks embedded in conditionals that could be standalone scripts
+    - **EXTRACTION CRITERIA**:
+      - **MANDATORY EXTRACTION**: Heredoc or inline script exceeds 50 lines
+      - **RECOMMENDED EXTRACTION**: Heredoc contains reusable logic (functions, utilities)
+      - **RECOMMENDED EXTRACTION**: Heredoc content is complex (multiple functions, error handling)
+      - **RECOMMENDED EXTRACTION**: Heredoc content is tested independently
+      - **RECOMMENDED EXTRACTION**: Heredoc content changes frequently (better git history as separate file)
+    - **EXTRACTION PROCESS**:
+      1. Identify heredoc-like chunks using detection patterns
+      2. Extract content to appropriate `container-scripts/` subdirectory:
+         - Shell scripts → `container-scripts/shell-scripts/block-{N}-{name}/`
+         - Python scripts → `container-scripts/python-scripts/block-{N}-{name}/`
+         - Config files → `container-scripts/config-files/block-{N}-{name}/`
+         - JSON configs → `container-scripts/json-configs/block-{N}-{name}/`
+      3. Generate descriptive filename based on content and block context
+      4. Replace original heredoc with call to `install.sh` or direct file reference
+      5. Update `MANIFEST.json` with new file entry
+      6. Run `scripts/extract_all_heredocs.py` to validate extraction
+    - **INTEGRATION WITH EXTRACTION TOOLS**:
+      - Use `scripts/extract_all_heredocs.py` to detect and extract heredocs
+      - Use `scripts/verify_and_replace_heredocs.py` to verify extracted files match originals
+      - Ensure extraction tools detect all heredoc patterns (see E6 for pattern list)
+  - **MAINTAINABILITY** (existing requirements):
+    - **LENGTH LIMIT**: If heredoc exceeds 50 lines, consider extracting to `container-scripts/` (see above)
+    - **COMMENTS**: Add comments above heredoc explaining purpose, variables used, target file
+    - **ORGANIZATION**: Group related heredocs together, separate with blank lines
+    - **VERSION TRACKING**: If heredoc content changes frequently, extract to external file for better git history
+    - **TESTING**: Complex heredoc content should be testable - extract to external file if testing is needed
+    - **DOCUMENTATION**: Document heredoc purpose in surrounding code comments
+- E10. **COMMENT CLEANUP AND RELEVANCE**: Remove unwanted comments and keep only relevant comments:
+  - **MANDATORY COMMENT AUDIT**: Review all comments in each chunk and remove/update as needed
+  - **UNWANTED COMMENT PATTERNS** (REMOVE):
+    - **Temporary/debugging comments**: `# DEBUG`, `# TEST`, `# TODO: remove this`, `# FIXME: temporary`
+    - **Commented-out code blocks**: Entire blocks of commented code that are no longer needed
+    - **Duplicate comments**: Multiple comments saying the same thing
+    - **Obsolete comments**: Comments describing code that no longer exists or has changed
+    - **Reference-only comments**: Comments created for reference that don't explain active code
+    - **Noise comments**: Comments that add no value (`# This is a function`, `# Set variable`)
+    - **Stale comments**: Comments that don't match current code behavior
+  - **RELEVANT COMMENT PATTERNS** (KEEP):
+    - **Purpose comments**: Comments explaining WHY code exists, not WHAT it does
+    - **Context comments**: Comments providing background or linking to related code
+    - **Warning comments**: Comments about edge cases, gotchas, or important behavior
+    - **Documentation comments**: Function/block headers explaining parameters, return values, side effects
+    - **Rationale comments**: Comments explaining design decisions or trade-offs
+    - **Cross-reference comments**: Comments linking to related functions, blocks, or external documentation
+  - **COMMENT QUALITY CRITERIA**:
+    - **REQUIRED**: Comments explain WHY, not WHAT (code should be self-documenting)
+    - **REQUIRED**: Comments are up-to-date and match current code behavior
+    - **REQUIRED**: Comments add value beyond what code already shows
+    - **REQUIRED**: Comments are concise and clear (avoid verbose explanations)
+    - **REQUIRED**: Comments are placed near relevant code (not orphaned)
+  - **VALIDATION PATTERNS**:
+    - **WRONG** (unwanted comment):
+      ```bash
+      # This is a function that does something
+      function do_something() {
+        # Set variable to value
+        VAR="value"
+        # Return result
+        return 0
+      }
+      ```
+    - **WRONG** (commented-out code):
+      ```bash
+      # Old implementation - no longer needed
+      # function old_way() {
+      #   echo "deprecated"
+      # }
+      ```
+    - **WRONG** (stale comment):
+      ```bash
+      # This function returns 0 on success
+      function check_status() {
+        return 1  # Comment says 0, but code returns 1
+      }
+      ```
+    - **CORRECT** (relevant comments only):
+      ```bash
+      # Purpose: Validate input and return status
+      # Parameters: $1 = input value to validate
+      # Returns: 0 if valid, 1 if invalid
+      # Note: This validation is critical for security (see CVE-2023-XXXX)
+      function validate_input() {
+        local input="${1:?Input required}"
+        # Use strict pattern matching to prevent injection
+        [[ "${input}" =~ ^[a-zA-Z0-9_.-]+$ ]] || return 1
+        return 0
+      }
+      ```
+  - **AUTO-FIX STRATEGY**:
+    1. Scan all comments in chunk
+    2. Identify unwanted comments using patterns above
+    3. Remove unwanted comments (temporary, duplicate, obsolete, commented-out code)
+    4. Update stale comments to match current code
+    5. Preserve relevant comments (purpose, context, warnings, documentation)
+    6. Ensure remaining comments follow quality criteria
+    7. Verify comment density is appropriate (not too sparse, not too verbose)
+  - **INTEGRATION**: This check runs alongside code review to ensure comments are helpful and current
 
 F. Logic & Flow Control
 - F1. Correct conditional expressions (`[[` vs `[`], `(( ))`), loops, and arithmetic.

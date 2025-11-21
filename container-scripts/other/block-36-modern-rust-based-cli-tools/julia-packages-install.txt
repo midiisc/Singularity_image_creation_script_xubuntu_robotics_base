@@ -1,0 +1,35 @@
+# Purpose: Install Julia packages for Python bridge, image processing, IPC, and GPU support
+# This script is executed by the main build script after Julia-Python bridge pip packages are installed
+
+using Pkg
+
+# Python bridge packages (these use pip internally)
+Pkg.add(["PythonCall", "CondaPkg"])
+
+# Configure to use system Python
+ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
+ENV["PYTHON"] = "/usr/bin/python3"
+
+# Build with system Python (now pip works)
+try
+  Pkg.build("PythonCall")
+catch e
+  @warn "PythonCall build failed" exception=e
+end
+
+# Image processing packages
+Pkg.add([
+  "Images",
+  "ImageFiltering",
+  "ImageFeatures",
+  "VideoIO"
+])
+
+# IPC packages
+Pkg.add(["ZMQ", "MsgPack", "JSON3"])
+
+# GPU packages
+Pkg.add(["CUDA"])
+
+# Precompile
+Pkg.precompile()

@@ -79,6 +79,8 @@ enable_strict_mode_safely() {
             set -E -o errtrace || true
         fi
         # Attach a compact diagnostic handler; avoid referencing unset vars
+        # SC2154: ec is assigned in trap command itself, false positive
+        # shellcheck disable=SC2154
         trap 'ec=$?; printf "[ERROR] Command failed (exit=%s) at %s:%s: %s\n" "${ec}" "${BASH_SOURCE[0]-?}" "${LINENO-?}" "${BASH_COMMAND-?}" >&2; exit "${ec}"' ERR
     else
         # Non-bash shells: best-effort strictness without bash-only flags
@@ -127,6 +129,21 @@ source "${CONFIG_FILE}"
 
 echo "✓ Configuration loaded from ${CONFIG_FILE}"
 
+#--- Sub-block 2.4: Load common functions ---
+# Critical: Source common functions for shared functionality
+# Dependencies: config.sh (for SCRIPT_DIR)
+# Outputs: Common functions available
+COMMON_FUNCTIONS="${SCRIPT_DIR}/scripts/common_functions.sh"
+if [ -f "${COMMON_FUNCTIONS}" ]; then
+    # shellcheck disable=SC1090
+    source "${COMMON_FUNCTIONS}"
+    echo "✓ Common functions loaded from ${COMMON_FUNCTIONS}"
+else
+    echo "⚠ Warning: Common functions file not found: ${COMMON_FUNCTIONS}"
+    echo "  Continuing without common functions (may cause errors if functions are called)"
+fi
+# ENDIF: common_functions.sh exists
+
 #===============================================================================
 # BLOCK 2.5: CONTAINER POST SCRIPT SELECTION
 #===============================================================================
@@ -172,11 +189,17 @@ SELECTED_POST_SCRIPT_BASENAME="$(basename "${SELECTED_POST_SCRIPT_PATH}")"
 
 POST_SCRIPT_CHANGE_SUMMARY=""
 if command -v git >/dev/null 2>&1; then
+    # SC2015: Intentional - we want || true to handle both cd failure and git log failure
+    # shellcheck disable=SC2015
     POST_SCRIPT_CHANGE_SUMMARY="$(cd "${SCRIPT_DIR}" && git log -1 --pretty=format:'%h - %s (%cd)' --date=short -- "${SELECTED_POST_SCRIPT_BASENAME}" 2>/dev/null || true)"
 fi
+# ENDIF: git command availability check
 if [ -z "${POST_SCRIPT_CHANGE_SUMMARY}" ]; then
     POST_SCRIPT_CHANGE_SUMMARY="No recorded changes detected for ${SELECTED_POST_SCRIPT_BASENAME}"
 fi
+# ENDIF: POST_SCRIPT_CHANGE_SUMMARY empty check
+# SC2034: Variable kept for potential future use in heredoc or command substitution
+# shellcheck disable=SC2034
 printf -v POST_SCRIPT_CHANGE_SUMMARY_ESCAPED '%q' "${POST_SCRIPT_CHANGE_SUMMARY}"
 
 export SELECTED_POST_SCRIPT_MODE SELECTED_POST_SCRIPT_PATH SELECTED_POST_SCRIPT_BASENAME
@@ -1738,7 +1761,8 @@ OUT_DIR="${OUT_DIR:-${PWD}}"
 # Use SIF_NAME from config.sh if set, otherwise generate from version numbers
 if [ -z "${SIF_NAME:-}" ]; then
     if [ -n "${ROS_DISTRO:-}" ]; then
-        ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
+        # D3: Use here-string instead of echo | awk for better performance and safety
+        ROS_DISTRO_CAPITALIZED=$(awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}' <<< "${ROS_DISTRO}")
     else
         ROS_DISTRO_CAPITALIZED="Unknown"
         log_warning "ROS_DISTRO not set, using 'Unknown' in image name"
@@ -2686,6 +2710,8 @@ From: ${BASE_IMAGE}
     ${SCRIPT_DIR}/container_cache/debs /container_cache/debs
     ${SELECTED_POST_SCRIPT_PATH} /container_post_script.sh
     ${SCRIPT_DIR}/config.sh /container_config.sh
+    # Copy common functions file for shared functionality
+    ${SCRIPT_DIR}/scripts/common_functions.sh /scripts/common_functions.sh
     # Copy entire container-scripts directory for installation via install.sh
     ${SCRIPT_DIR}/${CONTAINER_SCRIPTS_DIR} ${CONTAINER_SCRIPTS_INSTALL_PATH}
 
@@ -2804,8 +2830,9 @@ From: ${BASE_IMAGE}
     # Set proper permissions for cache directories
     chmod -R 755 "\${ROOTFS}/container_cache" 2>/dev/null || true
 
-    # Copy (no overwrite) any preseeded cache into the image build root
-    rsync -a --ignore-existing "\${PWD}/container_cache/" "\${ROOTFS}/container_cache" 2>/dev/null || true
+    # Note: Cache is now bind-mounted directly to /container_cache during build
+    # No need to copy - bind mount provides direct access to host cache
+    # This eliminates the time-consuming rsync copy step
 
 
 #--- Sub-block: Code section 1694 ---
@@ -2958,26 +2985,8 @@ From: ${BASE_IMAGE}
     chmod +x /container_post_script.sh
     /container_post_script.sh
     
-    # Install all container scripts from container-scripts/ directory using install.sh
-    # This installs all extracted files (shell scripts, configs, verification tools, etc.) to their target locations
-    # Source config.sh to get container scripts configuration variables
-    if [ -f /etc/config.sh ]; then
-        source /etc/config.sh
-    fi
-    
-    # Use variables from config.sh (with defaults if not set)
-    CONTAINER_SCRIPTS_PATH="\${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
-    INSTALLER_SCRIPT="\${CONTAINER_SCRIPTS_PATH}/\${CONTAINER_SCRIPTS_INSTALLER:-install.sh}"
-    MANIFEST_FILE="\${CONTAINER_SCRIPTS_PATH}/\${CONTAINER_SCRIPTS_MANIFEST:-MANIFEST.json}"
-    
-    if [ -f "\${INSTALLER_SCRIPT}" ] && [ -f "\${MANIFEST_FILE}" ]; then
-        chmod +x "\${INSTALLER_SCRIPT}"
-        "\${INSTALLER_SCRIPT}" --all || {
-            echo "WARNING: Failed to install some container scripts. Continuing build..."
-        }
-    else
-        echo "WARNING: Container scripts installation files not found at \${CONTAINER_SCRIPTS_PATH}. Some scripts may not be available."
-    fi
+    # Note: Container scripts are now installed early in the post script (Block 0)
+    # before any scripts are needed, so no need to install them here at the end
 
 # === %test Section ===
 %test
@@ -3049,7 +3058,7 @@ if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
     log_error "Failed to ensure host cache directory exists: ${HOST_CACHE_BIND_SRC}"
     exit 1
 fi
-HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/host_cache"
+HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache"
 
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."
@@ -4122,24 +4131,21 @@ if [ -x /usr/bin/apptainer ]; then
     # Validate SIF_PATH exists before attempting harvest
     if [ ! -f "${SIF_PATH}" ]; then
         log_error "SIF file not found for cache harvest: ${SIF_PATH}"
-    elif /usr/bin/apptainer exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/' 2>/dev/null; then
-        log_success "Cache harvest completed successfully"
     else
-        log_warning "Cache harvest failed, but continuing..."
+        # Note: Cache was bind-mounted to /container_cache during build, so files
+        # are already directly accessible on the host at ${HOST_CACHE}
+        # The consolidate_cache_packages() function ensures all downloaded packages
+        # from /var/cache/apt/archives/ are moved to /container_cache/ during build
+        log_success "Cache is available on host at ${HOST_CACHE} (bind-mounted during build)"
     fi
 
 elif [ -x /usr/bin/singularity ]; then
-    log_with_timestamp "Using Singularity for cache harvest..."
-    # Validate SIF_PATH exists before attempting harvest
-    if [ ! -f "${SIF_PATH}" ]; then
-        log_error "SIF file not found for cache harvest: ${SIF_PATH}"
-    elif /usr/bin/singularity exec --bind "${HOST_CACHE}:/host_cache" "${SIF_PATH}" \
-        bash -c 'rsync -a --no-p -o --no-g /container_cache/ /host_cache/' 2>/dev/null; then
-        log_success "Cache harvest completed successfully"
-    else
-        log_warning "Cache harvest failed, but continuing..."
-    fi
+    log_with_timestamp "Cache already on host via bind mount (no harvest needed)..."
+    # Note: Cache was bind-mounted to /container_cache during build, so files
+    # are already directly accessible on the host at ${HOST_CACHE}
+    # The consolidate_cache_packages() function ensures all downloaded packages
+    # from /var/cache/apt/archives/ are moved to /container_cache/ during build
+    log_success "Cache is available on host at ${HOST_CACHE} (bind-mounted during build)"
 
 else
     log_warning "Neither apptainer nor singularity found, skipping cache harvest."

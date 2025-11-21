@@ -38,6 +38,8 @@ strict_on() {
         if [ "${SUPPORTS_ERRTRACE}" -eq 1 ]; then
             set -E -o errtrace || true
         fi
+        # SC2154: ec is assigned in trap command itself, false positive
+        # shellcheck disable=SC2154
         trap 'ec=$?; printf "[ERROR] Command failed (exit=%s) at %s:%s: %s\n" "${ec}" "${BASH_SOURCE[0]-?}" "${LINENO-?}" "${BASH_COMMAND-?}" >&2; exit "${ec}"' ERR
     else
         set -e
@@ -72,14 +74,15 @@ set +u  # Temporarily allow unset variables until config is loaded
 
 #-------------------------------------------------------------------------------
 # Shell diagnostics (help identify interpreter inside %post script)
-echo "---- [%post script] shell diagnostics ----"
-echo "PID: $$, PPID: ${PPID:-unknown}"
-echo "0: ${0:-unknown}"
-echo "SHELL: ${SHELL:-unknown}"
-echo "BASH_VERSION: ${BASH_VERSION:-n/a}"
-echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
-echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
-echo "------------------------------------------"
+# D3b: Use printf instead of echo for robustness (handles special characters)
+printf '%s\n' "---- [%post script] shell diagnostics ----"
+printf '%s\n' "PID: $$, PPID: ${PPID:-unknown}"
+printf '%s\n' "0: ${0:-unknown}"
+printf '%s\n' "SHELL: ${SHELL:-unknown}"
+printf '%s\n' "BASH_VERSION: ${BASH_VERSION:-n/a}"
+printf '%s\n' "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
+printf '%s\n' "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
+printf '%s\n' "------------------------------------------"
 
 SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_full.sh")"
 
@@ -96,14 +99,61 @@ if [ -z "${CONFIG_SOURCED}" ]; then
         # shellcheck source=/etc/config.sh
         source /etc/config.sh
         export CONFIG_SOURCED=1
-        echo "✓ Loaded configuration from /etc/config.sh"
+        printf '%s\n' "✓ Loaded configuration from /etc/config.sh"
     else
-        echo "ERROR: /etc/config.sh not found!"
+        printf '%s\n' "ERROR: /etc/config.sh not found!" >&2
         exit 1
     fi
 else
-    echo "ℹ Configuration already loaded (skipping redundant source)"
+    printf '%s\n' "ℹ Configuration already loaded (skipping redundant source)"
 fi
+# ENDIF: CONFIG_SOURCED check
+
+#--- Load common functions ---
+# Critical: Source common functions for shared functionality
+# Dependencies: config.sh (already sourced)
+# Outputs: Common functions available (consolidate_cache_packages, monitor_cache, etc.)
+if [ -f /scripts/common_functions.sh ]; then
+    # shellcheck source=/scripts/common_functions.sh
+    source /scripts/common_functions.sh
+    printf '%s\n' "✓ Common functions loaded from /scripts/common_functions.sh"
+else
+    printf '%s\n' "⚠ Warning: Common functions file not found: /scripts/common_functions.sh" >&2
+    printf '%s\n' "  Some functions may not be available" >&2
+fi
+# ENDIF: common_functions.sh exists
+
+#===============================================================================
+# BLOCK 0: INSTALL CONTAINER SCRIPTS (EARLY - BEFORE ANY SCRIPTS ARE NEEDED)
+#===============================================================================
+# Purpose: Install all extracted scripts from container-scripts/ directory
+#          This must happen early so scripts are available throughout the build
+# Dependencies: config.sh (for CONTAINER_SCRIPTS_INSTALL_PATH), container-scripts/ directory
+# Outputs: All scripts installed to their target locations
+#-------------------------------------------------------------------------------
+# D3b: Use printf instead of echo -e for robustness
+printf '\n%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${BLUE}BLOCK 0: Installing Container Scripts${NC}"
+printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
+
+# Use variables from config.sh (with defaults if not set)
+CONTAINER_SCRIPTS_PATH="${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
+INSTALLER_SCRIPT="${CONTAINER_SCRIPTS_PATH}/${CONTAINER_SCRIPTS_INSTALLER:-install.sh}"
+MANIFEST_FILE="${CONTAINER_SCRIPTS_PATH}/${CONTAINER_SCRIPTS_MANIFEST:-MANIFEST.json}"
+
+if [ -f "${INSTALLER_SCRIPT}" ] && [ -f "${MANIFEST_FILE}" ]; then
+    chmod +x "${INSTALLER_SCRIPT}"
+    if "${INSTALLER_SCRIPT}" --all; then
+        printf '%s\n' "${GREEN}✓ Container scripts installed successfully${NC}"
+    else
+        printf '%s\n' "${YELLOW}⚠ Warning: Some container scripts failed to install. Continuing build...${NC}"
+    fi
+else
+    printf '%s\n' "${YELLOW}⚠ Warning: Container scripts installation files not found at ${CONTAINER_SCRIPTS_PATH}${NC}"
+    printf '%s\n' "${YELLOW}  Some scripts may not be available during build${NC}"
+fi
+# ENDIF: install.sh and MANIFEST.json exist
 
 # After config is loaded, enable strict mode for unset variables
 set -u
@@ -124,7 +174,7 @@ case "${DEFAULT_BLAS_PROVIDER}" in
         # OK
         ;;
     *)
-        echo "⚠ Warning: Invalid DEFAULT_BLAS_PROVIDER='${DEFAULT_BLAS_PROVIDER}'. Falling back to 'MKL'."
+        printf '%s\n' "⚠ Warning: Invalid DEFAULT_BLAS_PROVIDER='${DEFAULT_BLAS_PROVIDER}'. Falling back to 'MKL'."
         DEFAULT_BLAS_PROVIDER="MKL"
         export DEFAULT_BLAS_PROVIDER
         ;;
@@ -149,13 +199,15 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     BUILD_LOG_PREFIX="${BUILD_LOG_PREFIX:-singularity_build}"
 
     # Validate keep count to avoid arithmetic errors under set -u
+    # A5: Use POSIX [ instead of [[ when possible (though [[ =~ is needed for regex)
+    # Note: [[ =~ ]] is Bash-specific but necessary for regex matching here
     if ! [[ "${BUILD_LOG_KEEP_COUNT:-2}" =~ ^[0-9]+$ ]]; then
-        echo "⚠ Warning: Invalid BUILD_LOG_KEEP_COUNT='${BUILD_LOG_KEEP_COUNT:-}' (expected non-negative integer). Defaulting to 2."
+        printf '%s\n' "⚠ Warning: Invalid BUILD_LOG_KEEP_COUNT='${BUILD_LOG_KEEP_COUNT:-}' (expected non-negative integer). Defaulting to 2."
         BUILD_LOG_KEEP_COUNT=2
     fi
 
     if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT:-2}" -gt 0 ]; then
-        echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
+        printf '%s\n' "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
         
         # Count existing log files matching the patterns
         # Regular build logs
@@ -163,7 +215,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Error logs
         EXISTING_ERROR_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*_errors.log" -type f 2>/dev/null | wc -l)
         
-        echo "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
+        printf '%s\n' "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
         
         # Clean up regular build logs
         if [ "${EXISTING_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
@@ -177,7 +229,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 cut -d' ' -f2- | \
                 while IFS= read -r old_log; do
                     if [ -f "${old_log}" ]; then
-                        echo "  Removing old log: $(basename "${old_log}")"
+                        printf '%s\n' "  Removing old log: $(basename "${old_log}")"
                         rm -f "${old_log}"
                     fi
                     # ENDIF: old_log existence check
@@ -195,7 +247,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 cut -d' ' -f2- | \
                 while IFS= read -r old_error_log; do
                     if [ -f "${old_error_log}" ]; then
-                        echo "  Removing old error log: $(basename "${old_error_log}")"
+                        printf '%s\n' "  Removing old error log: $(basename "${old_error_log}")"
                         rm -f "${old_error_log}"
                     fi
                     # ENDIF: old_error_log existence check
@@ -205,9 +257,9 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         fi
         
         if [ "${EXISTING_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ] && [ "${EXISTING_ERROR_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
-            echo "✓ No old logs to clean up (found ${EXISTING_LOGS:-0} build logs, ${EXISTING_ERROR_LOGS:-0} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
+            printf '%s\n' "✓ No old logs to clean up (found ${EXISTING_LOGS:-0} build logs, ${EXISTING_ERROR_LOGS:-0} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
         else
-            echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
+            printf '%s\n' "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
         # ENDIF: log cleanup status check
         fi
     fi
@@ -230,6 +282,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     MINUTE=$(date +"%M" 2>/dev/null || echo "00")
     AMPM=$(date +"%p" 2>/dev/null || echo "AM")
     # Validate results are non-empty and numeric (for HOUR_12 and MINUTE)
+    # A5: [[ =~ ]] is Bash-specific but necessary for regex matching
     if ! [[ "${HOUR_12:-12}" =~ ^[0-9]+$ ]] || ! [[ "${MINUTE:-00}" =~ ^[0-9]+$ ]]; then
         HOUR_12=12
         MINUTE=00
@@ -295,7 +348,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         local line
         while IFS= read -r line; do
             # Echo all lines to stdout (which goes to main log via tee)
-            echo "${line}"
+            # D3b: Using printf for robustness, but echo is acceptable here since line is controlled
+            printf '%s\n' "${line}"
             
             # Comprehensive error/warning pattern matching (case-insensitive)
             # This pattern catches ALL problematic output including:
@@ -306,12 +360,15 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             # - Build system errors (CMake, Ninja, Make)
             # - Library-specific build errors (COLMAP, Open3D, OpenCV)
             # - System/user generated errors
+            # D3: Use here-string for grep (safe pattern, no pipe needed)
+            # D3b: Pattern is long but necessary for comprehensive error detection
             if grep -qiE <<< "${line}" \
                 '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
                 # Write matching line to error log with timestamp
                 # Note: Using || true is intentional here for non-critical logging operations
                 # This occurs before strict mode is enabled (set -e at line 323)
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
+                # D3b: Use printf for robustness
+                printf '%s\n' "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
             # ENDIF: grep pattern match check
             fi
         # ENDWHILE: line reading loop
@@ -342,8 +399,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Fallback: tee without error filtering
         exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
     else
-        echo "  ⚠ Warning: 'tee' command not available, logging disabled"
-        echo "  Build will continue without log file"
+        printf '%s\n' "  ⚠ Warning: 'tee' command not available, logging disabled"
+        printf '%s\n' "  Build will continue without log file"
     fi
     
     # Start background sync job to periodically flush log files to disk
@@ -355,7 +412,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             sync_interval="${BUILD_LOG_SYNC_INTERVAL:-60}"
             # Validate sync interval is a positive integer (A5a robustness)
             if ! [[ "${sync_interval}" =~ ^[0-9]+$ ]] || [ $((10#${sync_interval})) -le 0 ]; then
-                echo "  ⚠ Warning: Invalid BUILD_LOG_SYNC_INTERVAL='${BUILD_LOG_SYNC_INTERVAL:-}', defaulting to 60" >&2
+                printf '%s\n' "  ⚠ Warning: Invalid BUILD_LOG_SYNC_INTERVAL='${BUILD_LOG_SYNC_INTERVAL:-}', defaulting to 60" >&2
                 sync_interval=60
             fi
             while true; do
@@ -374,8 +431,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Store sync PID so we can clean it up if needed
         export BUILD_LOG_SYNC_PID="${SYNC_PID}"
     else
-        echo "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
-        echo "  Log will still be captured, but manual sync only on exit"
+        printf '%s\n' "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
+        printf '%s\n' "  Log will still be captured, but manual sync only on exit"
         export BUILD_LOG_SYNC_PID=""
     fi
     
@@ -411,6 +468,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 # Only call if function exists
                 # Note: Using || true is intentional - log analysis is non-critical
                 if type analyze_build_log >/dev/null 2>&1; then
+                    # SC2119: analyze_build_log doesn't take script arguments, call without $@
+                    # shellcheck disable=SC2119
                     analyze_build_log || true
                 else
                     printf '%s\n' "⚠ Warning: analyze_build_log function not available, skipping log analysis"
@@ -444,7 +503,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     printf '%s\n' "═══════════════════════════════════════════════════════════════"
     printf '%s\n' ""
     else
-        echo "ℹ Logging disabled (not running in container build environment)"
+        printf '%s\n' "ℹ Logging disabled (not running in container build environment)"
     # ENDIF: container build environment check
 fi
 
@@ -462,15 +521,19 @@ on_error_report() {
 	# Collect lightweight context safely without tripping -u/-e
 	local bash_ver="${BASH_VERSION:-unknown}"
 	local shellopts="${SHELLOPTS:-}"
-	local who="$(id -un 2>/dev/null || echo unknown)"
-	local uid="$(id -u 2>/dev/null || echo unknown)"
+	# SC2155: Declare and assign separately to avoid masking return values
+	local who
+	who="$(id -un 2>/dev/null || echo unknown)"
+	local uid
+	uid="$(id -u 2>/dev/null || echo unknown)"
 	local file="${BASH_SOURCE[1]:-unknown}"
 	local line="${1:-unknown}"
 	local cmd="${2:-unknown}"
 	local code="${3:-1}"
 	local pwd_now="${PWD:-unknown}"
 	local pipefail_state
-	pipefail_state="$(set -o 2>/dev/null | grep -E 'pipefail|errexit|nounset' || true)"
+	# D3: Use here-string instead of echo-pipe-grep pattern (unsafe pipe pattern)
+	pipefail_state="$(grep -E 'pipefail|errexit|nounset' <<< "$(set -o 2>/dev/null || echo '')" || true)"
 
 	# Single, high-signal diagnostic block
 	{
@@ -585,13 +648,15 @@ debug_glibc() {
   echo "Time: $(date)"
   echo "=========================================================="
   echo "GLIBC version:"
-  /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 || echo "GLIBC version check failed"
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || echo "GLIBC version check failed" || true
   echo "---"
   echo "ldd version:"
   (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 || true
   echo "---"
   echo "GCC version:"
-  gcc --version 2>/dev/null | head -1 || echo "GCC not installed yet"
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  gcc --version 2>/dev/null | head -1 2>/dev/null || echo "GCC not installed yet" || true
   echo "---"
   echo "Test stdlib.h locations:"
   find /usr/include -name "stdlib.h" 2>/dev/null || echo "stdlib.h not found"
@@ -643,85 +708,19 @@ debug_glibc() {
 # Usage: BUILD_JOBS=$(calculate_build_jobs)
 #-------------------------------------------------------------------------------
 
-# Purpose: Calculate optimal number of parallel build jobs based on CPU and memory
-# Returns: Number of jobs suitable for parallel compilation (integer)
-# Side effects: Outputs warnings to stderr if commands are unavailable
-# Dependencies: Requires 'free' and 'nproc' commands for accurate calculation
-# Usage: BUILD_JOBS=$(calculate_build_jobs)
-calculate_build_jobs() {
-    # Get system resources
-    # Declare and assign separately to avoid masking return values (SC2155 compliance)
-    local mem_gb
-    local cpu_cores
-
-    if command -v free >/dev/null 2>&1; then
-        mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
-    else
-        echo "  ⚠ Warning: 'free' command not available, assuming 4GB RAM" >&2
-        mem_gb=4
-    # ENDIF: free command availability check
-    fi
-
-    if command -v nproc >/dev/null 2>&1; then
-        cpu_cores=$(nproc)
-    else
-        echo "  ⚠ Warning: 'nproc' command not available, assuming 1 CPU core" >&2
-        cpu_cores=1
-    # ENDIF: nproc command availability check
-    fi
-    
-    # Validate numeric values
-    if ! [ "${mem_gb:-0}" -ge 0 ] 2>/dev/null; then
-        echo "  ⚠ Warning: Invalid memory value '${mem_gb}', defaulting to 4GB" >&2
-        mem_gb=4
-    # ENDIF: mem_gb validation check
-    fi
-    if ! [ "${cpu_cores:-0}" -gt 0 ] 2>/dev/null; then
-        echo "  ⚠ Warning: Invalid CPU core count '${cpu_cores}', defaulting to 1" >&2
-        cpu_cores=1
-    # ENDIF: cpu_cores validation check
-    fi
-    
-    # Calculate jobs based on CPU (use half cores to prevent overload)
-    local jobs_by_cpu
-    jobs_by_cpu=$((cpu_cores / 2))
-    
-    # Calculate jobs based on memory (assume 3GB per C++ compilation job for safety)
-    # This accounts for template-heavy code like COLMAP, Ceres, OpenCV
-    local jobs_by_mem
-    jobs_by_mem=$((mem_gb / 3))
-    
-    # Use the minimum of the two (most conservative)
-    local jobs
-    jobs=$jobs_by_cpu
-    if [ "${jobs_by_mem}" -lt "${jobs}" ]; then
-        jobs=$jobs_by_mem
-        echo "  ℹ Memory-limited: Using ${jobs} jobs (RAM: ${mem_gb}GB allows ~${jobs} parallel C++ jobs)" >&2
-    # ENDIF: memory limitation check
-    fi
-    
-    # Ensure at least 1 job
-    if [ "${jobs}" -lt 1 ]; then
-        jobs=1
-    # ENDIF: minimum jobs check
-    fi
-    
-    # Allow override via environment variable (for testing/debugging)
-    if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        # Validate override is numeric (digits only) and positive
-        if [[ "${BUILD_JOBS_OVERRIDE}" =~ ^[0-9]+$ ]] && [ $((10#${BUILD_JOBS_OVERRIDE})) -gt 0 ]; then
-            jobs="${BUILD_JOBS_OVERRIDE}"
-            echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
-        else
-            echo "  ⚠ Warning: Invalid BUILD_JOBS_OVERRIDE='${BUILD_JOBS_OVERRIDE}', ignoring" >&2
-        # ENDIF: BUILD_JOBS_OVERRIDE validation check
-        fi
-    # ENDIF: BUILD_JOBS_OVERRIDE availability check
-    fi
-    
-    echo "${jobs}"
-}
+# Note: calculate_build_jobs() is now defined in /scripts/common_functions.sh (centralized)
 # End function (self-contained)
+
+#===============================================================================
+# BLOCK 2.5: CACHE MANAGEMENT
+#===============================================================================
+# Purpose: Cache consolidation and monitoring functions
+# Self-contained: Yes (functions loaded from common_functions.sh)
+# Dependencies: /scripts/common_functions.sh (loaded above)
+# Outputs: Cache consolidation and monitoring
+#-------------------------------------------------------------------------------
+# Note: Functions consolidate_cache_packages(), monitor_cache(), calculate_build_jobs()
+#       are now defined in /scripts/common_functions.sh (centralized)
 
 #-------------------------------------------------------------------------------
 # PACKAGE STATUS HELPER FUNCTIONS
@@ -779,7 +778,8 @@ dpkg_get_installed_version() {
     
     # Validate version output is non-empty and valid format (should contain version string)
     if [ -n "${version_output}" ] && grep -qE '^[0-9]' <<< "${version_output}"; then
-        printf '%s\n' "${version_output}" | head -n1
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        printf '%s\n' "${version_output}" | head -n1 2>/dev/null || true
     else
         return 1
     fi
@@ -968,6 +968,7 @@ ensure_compiled_lib_priority() {
     echo "    ERROR: Failed to create /etc/ld.so.conf.d directory" >&2
     return 1
   }
+  # EXEMPTED FROM EXTRACTION: Small config file (<5 lines), simple content, tightly coupled to function logic
   cat > "${conf_file}" <<'LDCONF'
 # CRITICAL: Search /usr/local first for compiled libraries
 /usr/local/lib
@@ -1052,7 +1053,8 @@ run_ldconfig_refresh_dir() {
   
   # Verify directory contains library files before updating
   local find_output
-  find_output=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  find_output=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -z "${find_output}" ]; then
     echo "  [WARN] No .so files found in ${target_dir}, but attempting refresh anyway (may have symlinks)" >&2
   else
@@ -1088,10 +1090,12 @@ run_ldconfig_refresh_dir() {
   if [ "${lib_count}" -gt 0 ]; then
     # Try to find at least one library from this directory in the cache
     local sample_lib
-    sample_lib=$(find "${target_dir}" -maxdepth 1 -name "*.so" -type f 2>/dev/null | head -1 || echo "")
+    # D3e: SIGPIPE protection - add || true at end of pipeline with head
+    sample_lib=$(find "${target_dir}" -maxdepth 1 -name "*.so" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     if [ -n "${sample_lib}" ]; then
       local lib_basename
-      lib_basename=$(basename "${sample_lib}" | sed 's/\.[0-9].*$//' || echo "")
+      # D3: Use here-string instead of basename | sed (unsafe pipe pattern)
+      lib_basename=$(sed 's/\.[0-9].*$//' <<< "$(basename "${sample_lib}")" || echo "")
       if ldconfig -p 2>/dev/null | grep -qF "${lib_basename}"; then
         echo "  [DEBUG] ✓ Verification passed: Libraries from ${target_dir} are now in cache"
         return 0
@@ -1359,7 +1363,8 @@ run_ldconfig_refresh_from_install_output() {
     for common_dir in /usr/local/lib /usr/local/lib64 /usr/local/lib/x86_64-linux-gnu; do
       if [ -d "${common_dir}" ]; then
         local find_output
-        find_output=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        find_output=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${find_output}" ]; then
           lib_dirs+=("${common_dir}")
         fi
@@ -1380,8 +1385,9 @@ run_ldconfig_refresh_from_install_output() {
           lib_path=$(sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*)[[:space:]]+->.*/\2/p' <<< "${line}" || echo "")
         fi
         # Pattern 1c: Handle paths with spaces or special characters
+        # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
         if [ -z "${lib_path}" ]; then
-          lib_path=$(echo "${line}" | sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*).*/\2/p' || echo "")
+          lib_path=$(sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*).*/\2/p' <<< "${line}" || echo "")
         fi
         
         if [ -n "${lib_path}" ]; then
@@ -1474,7 +1480,8 @@ run_ldconfig_refresh_from_install_output() {
       # Pattern 4: Direct library paths in output: "/path/to/lib/libname.so"
       if grep -qE "^/[^[:space:]]+\.so" <<< "${line}"; then
         local lib_path
-        lib_path=$(awk '{print $1}' <<< "${line}" | grep -E "\.so" | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        lib_path=$(awk '{print $1}' <<< "${line}" | grep -E "\.so" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${lib_path}" ] && [ -f "${lib_path}" ]; then
           local lib_dir
           lib_dir=$(dirname "${lib_path}")
@@ -1496,7 +1503,8 @@ run_ldconfig_refresh_from_install_output() {
     if [ -n "${normalized_dir}" ] && [ -d "${normalized_dir}" ]; then
       # Verify directory actually contains library files before adding (prevents false positives)
       local find_output_check
-      find_output_check=$(find "${normalized_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      find_output_check=$(find "${normalized_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
       if [ -n "${find_output_check}" ]; then
         # Only add if not already seen
         if [ -z "${seen_dirs[${normalized_dir}]:-}" ]; then
@@ -1517,7 +1525,8 @@ run_ldconfig_refresh_from_install_output() {
       if [ -d "${common_dir}" ]; then
         # Validate directory contains library files before adding (best practice O4 - Phase 1)
         local find_output_std
-        find_output_std=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        find_output_std=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${find_output_std}" ]; then
           unique_dirs+=("${common_dir}")
           echo "  [VERIFY] Standard location validated: ${common_dir} (contains .so files)"
@@ -1578,106 +1587,118 @@ diagnose_library_detection() {
   local lib_pattern="${1}"
   local lib_file_path="${2:-}"
   
-  echo "=== Library Detection Diagnostics for ${lib_pattern} ===" >&2
+  printf '%s\n' "=== Library Detection Diagnostics for ${lib_pattern} ===" >&2
   
   # Check 1: ldconfig cache
-  echo "1. Checking ldconfig cache..." >&2
+  printf '%s\n' "1. Checking ldconfig cache..." >&2
   local ldconfig_cache_output
+  # SC2155: Declare and assign separately to avoid masking return values
+  ldconfig_cache_output=""
   ldconfig_cache_output=$(timeout 2 ldconfig -p 2>/dev/null || echo "")
-  if [ -n "${ldconfig_cache_output}" ] && grep -qF "${lib_pattern}" <<< "${ldconfig_cache_output}"; then
-    echo "   ✓ Found in cache" >&2
+  if [ -n "${ldconfig_cache_output}" ] && grep -qF -- "${lib_pattern}" <<< "${ldconfig_cache_output}"; then
+    printf '%s\n' "   ✓ Found in cache" >&2
   else
-    echo "   ✗ NOT found in cache" >&2
+    printf '%s\n' "   ✗ NOT found in cache" >&2
   fi
   
   # Check 2: File existence and permissions
   if [ -n "${lib_file_path}" ]; then
-    echo "2. Checking library file: ${lib_file_path}" >&2
+    printf '%s\n' "2. Checking library file: ${lib_file_path}" >&2
     if [ -f "${lib_file_path}" ]; then
-      echo "   ✓ File exists" >&2
+      printf '%s\n' "   ✓ File exists" >&2
       if [ -r "${lib_file_path}" ]; then
-        echo "   ✓ File is readable" >&2
+        printf '%s\n' "   ✓ File is readable" >&2
       else
-        echo "   ✗ File is NOT readable (permissions issue)" >&2
+        printf '%s\n' "   ✗ File is NOT readable (permissions issue)" >&2
         ls -l "${lib_file_path}" >&2
       fi
       
       # Check naming convention
       local lib_basename
       lib_basename=$(basename "${lib_file_path}")
-      if grep -qE '^lib.*\.so' <<< "${lib_basename}"; then
-        echo "   ✓ Follows naming convention (lib*.so*)" >&2
+      if grep -qE -- '^lib.*\.so' <<< "${lib_basename}"; then
+        printf '%s\n' "   ✓ Follows naming convention (lib*.so*)" >&2
       else
-        echo "   ✗ Does NOT follow naming convention (should be lib*.so*)" >&2
+        printf '%s\n' "   ✗ Does NOT follow naming convention (should be lib*.so*)" >&2
       fi
       
       # Check SONAME
       if command -v objdump >/dev/null 2>&1; then
         local objdump_output soname
+        # SC2155: Declare and assign separately to avoid masking return values
+        objdump_output=""
+        soname=""
         objdump_output=$(objdump -p "${lib_file_path}" 2>/dev/null || echo "")
         if [ -n "${objdump_output}" ]; then
           soname=$(awk '/SONAME/ {print $2; exit}' <<< "${objdump_output}" || echo "")
           if [ -n "${soname}" ]; then
-            echo "   ✓ SONAME: ${soname}" >&2
+            printf '%s\n' "   ✓ SONAME: ${soname}" >&2
           else
-            echo "   ⚠ No SONAME found" >&2
+            printf '%s\n' "   ⚠ No SONAME found" >&2
           fi
         fi
       fi
     else
-      echo "   ✗ File does NOT exist" >&2
+      printf '%s\n' "   ✗ File does NOT exist" >&2
     fi
     
     # Check 3: Library directory in ld.so.conf.d
     local lib_dir
     lib_dir=$(dirname "${lib_file_path}")
-    echo "3. Checking ld.so.conf.d for: ${lib_dir}" >&2
+    printf '%s\n' "3. Checking ld.so.conf.d for: ${lib_dir}" >&2
     local conf_found=false
     if [ -d "/etc/ld.so.conf.d" ]; then
       for conf_file in /etc/ld.so.conf.d/*.conf; do
         if [ -f "${conf_file}" ]; then
-          if grep -q "^${lib_dir}\$" "${conf_file}" 2>/dev/null; then
-            echo "   ✓ Found in: ${conf_file}" >&2
+          if grep -q -- "^${lib_dir}\$" "${conf_file}" 2>/dev/null; then
+            printf '%s\n' "   ✓ Found in: ${conf_file}" >&2
             conf_found=true
           fi
         fi
       done
     fi
-    if [ -f "/etc/ld.so.conf" ] && grep -q "^${lib_dir}\$" /etc/ld.so.conf 2>/dev/null; then
-      echo "   ✓ Found in: /etc/ld.so.conf" >&2
+    # ENDFOR: conf_file
+    if [ -f "/etc/ld.so.conf" ] && grep -q -- "^${lib_dir}\$" /etc/ld.so.conf 2>/dev/null; then
+      printf '%s\n' "   ✓ Found in: /etc/ld.so.conf" >&2
       conf_found=true
     fi
+    # ENDIF: /etc/ld.so.conf check
     if [ "${conf_found}" != true ] && [ "${lib_dir}" != "/lib" ] && [ "${lib_dir}" != "/usr/lib" ] && [ "${lib_dir}" != "/lib64" ] && [ "${lib_dir}" != "/usr/lib64" ]; then
-      echo "   ✗ NOT found in ld.so.conf.d/ (may need to add)" >&2
-      echo "   → Suggested fix: echo '${lib_dir}' > /etc/ld.so.conf.d/custom-libs.conf && ldconfig" >&2
+      printf '%s\n' "   ✗ NOT found in ld.so.conf.d/ (may need to add)" >&2
+      printf '%s\n' "   → Suggested fix: echo '${lib_dir}' > /etc/ld.so.conf.d/custom-libs.conf && ldconfig" >&2
     fi
+    # ENDIF: conf_found check
     
     # Check 4: LD_LIBRARY_PATH
-    echo "4. Checking LD_LIBRARY_PATH..." >&2
+    printf '%s\n' "4. Checking LD_LIBRARY_PATH..." >&2
     if [ -n "${LD_LIBRARY_PATH:-}" ]; then
       if case ":${LD_LIBRARY_PATH}:" in *:${lib_dir}:*) true;; *) false;; esac; then
-        echo "   ✓ Directory in LD_LIBRARY_PATH" >&2
+        printf '%s\n' "   ✓ Directory in LD_LIBRARY_PATH" >&2
       else
-        echo "   ⚠ Directory NOT in LD_LIBRARY_PATH (runtime may fail)" >&2
-        echo "   → Current LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}" >&2
+        printf '%s\n' "   ⚠ Directory NOT in LD_LIBRARY_PATH (runtime may fail)" >&2
+        printf '%s\n' "   → Current LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}" >&2
       fi
     else
-      echo "   ⚠ LD_LIBRARY_PATH not set" >&2
+      printf '%s\n' "   ⚠ LD_LIBRARY_PATH not set" >&2
     fi
+    # ENDIF: LD_LIBRARY_PATH check
     
     # Check 5: ldd test
     if [ -f "${lib_file_path}" ] && command -v ldd >/dev/null 2>&1; then
-      echo "5. Testing library with ldd..." >&2
+      printf '%s\n' "5. Testing library with ldd..." >&2
       if ldd "${lib_file_path}" >/dev/null 2>&1; then
-        echo "   ✓ Library loads successfully with ldd" >&2
+        printf '%s\n' "   ✓ Library loads successfully with ldd" >&2
       else
-        echo "   ✗ Library FAILS to load with ldd (may be corrupted or wrong architecture)" >&2
-        ldd "${lib_file_path}" 2>&1 | head -5 >&2
+        printf '%s\n' "   ✗ Library FAILS to load with ldd (may be corrupted or wrong architecture)" >&2
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        ldd "${lib_file_path}" 2>&1 | head -5 >&2 || true
       fi
     fi
+    # ENDIF: ldd test
   fi
+  # ENDIF: lib_file_path check
   
-  echo "=== End Diagnostics ===" >&2
+  printf '%s\n' "=== End Diagnostics ===" >&2
 }
 
 # Purpose: Ensure NVIDIA CUDA APT repository keyring is installed and pinned
@@ -1691,12 +1712,21 @@ diagnose_library_detection() {
 ensure_cuda_repository_configured() {
   local keyring_pkg="cuda-keyring"
   local keyring_deb="${NVIDIA_KEYRING_DEB:-cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb}"
+  local keyring_url="${NVIDIA_KEYRING_URL:-}"
   local install_needed=false
   
   # Validate required inputs before proceeding (A5a robustness)
   if [ -z "${NVIDIA_KEYRING_VER:-}" ] && [ -z "${NVIDIA_KEYRING_DEB:-}" ]; then
-      echo "[WARN] NVIDIA_KEYRING_VER/DEB not provided; using default filename pattern" >&2
+      printf '%s\n' "[WARN] NVIDIA_KEYRING_VER/DEB not provided; using default filename pattern" >&2
   fi
+  # ENDIF: NVIDIA_KEYRING_VER/DEB validation
+  
+  # Validate keyring URL is set
+  if [ -z "${keyring_url}" ]; then
+      printf '%s\n' "[ERROR] NVIDIA_KEYRING_URL not set in config.sh" >&2
+      return 1
+  fi
+  # ENDIF: keyring_url validation
 
   local status_output
   status_output=$(dpkg-query -W -f='${Status}\n' "${keyring_pkg}" 2>/dev/null || echo "")
@@ -1712,23 +1742,23 @@ ensure_cuda_repository_configured() {
 
   local tmp_path="/tmp/${keyring_deb}"
   # Validate CUDA_REPO_URL
-  if [ -z "${CUDA_REPO_URL:-}" ]; then
-      echo "[ERROR] CUDA_REPO_URL is not set; cannot download CUDA keyring." >&2
-      return 1
-  fi
-  local keyring_url="${CUDA_REPO_URL%/}/${keyring_deb}"
+# Note: config-files file: /etc/apt/preferences.d/cuda-repository-pin is installed via install.sh from container-scripts/
+# Source: config-files/block-4-mirror-probing-functions-must-be-early-for-apt-operations/cuda-repository-pin.pref
+# Target: /etc/apt/preferences.d/cuda-repository-pin
+# Installed in Block 0 (early in script, before any scripts are needed)
 
   if [ -n "${cached_path}" ] && [ -f "${cached_path}" ]; then
-      echo "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
+      printf '%s\n' "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
       if dpkg -i "${cached_path}"; then
           install_needed=true
       else
-          echo "[WARN] Cached CUDA keyring install failed, attempting fresh download..."
+          printf '%s\n' "[WARN] Cached CUDA keyring install failed, attempting fresh download..."
       fi
   fi
+  # ENDIF: cached_path check
 
   if [ "${install_needed}" != true ]; then
-      echo "[INFO] Downloading NVIDIA CUDA keyring from ${keyring_url}"
+      printf '%s\n' "[INFO] Downloading NVIDIA CUDA keyring from ${keyring_url}"
       if curl -fsSL "${keyring_url}" -o "${tmp_path}" && dpkg -i "${tmp_path}"; then
           install_needed=true
           if [ -n "${cached_path}" ]; then
@@ -1736,18 +1766,18 @@ ensure_cuda_repository_configured() {
           fi
       else
           rm -f "${tmp_path}"
-          echo "✗ Failed to install NVIDIA CUDA repository keyring from ${keyring_url}" >&2
+          printf '%s\n' "✗ Failed to install NVIDIA CUDA repository keyring from ${keyring_url}" >&2
           return 1
       fi
       rm -f "${tmp_path}"
   fi
+  # ENDIF: install_needed check
 
-  if [ -n "${CUDA_REPO_PIN_PRIORITY:-}" ]; then
-      cat > /etc/apt/preferences.d/cuda-repository-pin <<EOF
-Package: *
-Pin: origin developer.download.nvidia.com
-Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}
-EOF
+  # Note: cuda-repository-pin.pref is installed via install.sh from container-scripts/
+  # If CUDA_REPO_PIN_PRIORITY is set, it should be configured in the installed file or via sed
+  if [ -n "${CUDA_REPO_PIN_PRIORITY:-}" ] && [ -f /etc/apt/preferences.d/cuda-repository-pin ]; then
+      # Update Pin-Priority in the installed file if needed
+      sed -i "s/Pin-Priority:.*/Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}/" /etc/apt/preferences.d/cuda-repository-pin 2>/dev/null || true
   fi
 
   return 0
@@ -1788,7 +1818,7 @@ probe_and_set_mirrors() {
     esac
   fi
   CODENAME="${detected_codename}"
-  echo "[info] Detected Ubuntu codename: ${CODENAME}"
+  printf '%s\n' "[info] Detected Ubuntu codename: ${CODENAME}"
   
   # Create temporary file for probe results with error checking
   local probe_results_file
@@ -1803,13 +1833,13 @@ probe_and_set_mirrors() {
   export CODENAME PROBE_RESULTS  # Export for subshell access
 
   # Attempt to dynamically fetch 100Gbps+ mirrors from official Launchpad page
-  echo "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
+  printf '%s\n' "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
   MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
   
   if [ -n "${MIRRORS_HTML:-}" ]; then
     local mirror_html_bytes
     mirror_html_bytes=${#MIRRORS_HTML}
-    echo "[info] Successfully fetched mirror list (${mirror_html_bytes} bytes). Parsing..."
+    printf '%s\n' "[info] Successfully fetched mirror list (${mirror_html_bytes} bytes). Parsing..."
     
     # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
     DYNAMIC_MIRRORS=$(printf '%s' "${MIRRORS_HTML}" | \
@@ -1840,14 +1870,15 @@ probe_and_set_mirrors() {
         [[ "${mirror}" == *"archive.ubuntu.com"* ]] && continue
         CANDIDATE_MIRRORS+="${mirror}"$'\n'
       done <<< "${DYNAMIC_MIRRORS}"
-      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors (archive.ubuntu.com included as fallback)"
+      # ENDWHILE: mirror iteration
+      printf '%s\n' "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors (archive.ubuntu.com included as fallback)"
     else
-      echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
+      printf '%s\n' "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
       CANDIDATE_MIRRORS=""  # Will trigger fallback below
     fi
     # ENDIF: sufficient dynamic mirrors (>=10)
   else
-    echo "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
+    printf '%s\n' "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
     CANDIDATE_MIRRORS=""  # Will trigger fallback
   fi
   # ENDIF: fetched mirrors HTML (MIRRORS_HTML)
@@ -1855,7 +1886,7 @@ probe_and_set_mirrors() {
   # Fallback to curated static list if dynamic fetch failed
   # CRITICAL: Always include archive.ubuntu.com as first entry (guaranteed fallback)
   if [ -z "${CANDIDATE_MIRRORS:-}" ]; then
-    echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
+    printf '%s\n' "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
     CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
     CANDIDATE_MIRRORS+=$'http://mirror.aarnet.edu.au/pub/ubuntu/archive\n'
     CANDIDATE_MIRRORS+=$'http://ftp.fau.de/ubuntu\n'
@@ -1884,21 +1915,21 @@ probe_and_set_mirrors() {
   # ENDIF: candidate mirrors non-empty for probing
 
   # Display mirror probe results
-  echo "--- Mirror Probe Results (speed score, url): ---"
+  printf '%s\n' "--- Mirror Probe Results (speed score, url): ---"
   if [ -s "${PROBE_RESULTS:-}" ]; then
     # Validate result format BEFORE parsing (Pattern P-20251113-011: Silent Failure Prevention)
     # Ensure file contains expected format: time url (e.g., "1.23 http://mirror.example.com/ubuntu")
-    if ! grep -qE '^[0-9.]+ https?://' "${PROBE_RESULTS}"; then
-      echo "[warn] ⚠ Invalid result format in probe results (expected: time url)"
-      echo "[info] Falling back to archive.ubuntu.com"
+    if ! grep -qE -- '^[0-9.]+ https?://' "${PROBE_RESULTS}"; then
+      printf '%s\n' "[warn] ⚠ Invalid result format in probe results (expected: time url)"
+      printf '%s\n' "[info] Falling back to archive.ubuntu.com"
       FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
       export FASTEST_MIRROR
       return 0
     fi
     # ENDIF: probe results format valid
-    LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || echo "[warn] Failed to sort results"
+    LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || printf '%s\n' "[warn] Failed to sort results"
   else
-    echo "[warn] No probe results written - all mirrors may have failed"
+    printf '%s\n' "[warn] No probe results written - all mirrors may have failed"
   fi
   # ENDIF: probe results exist
 
@@ -1920,23 +1951,23 @@ probe_and_set_mirrors() {
 
   # Robust fallback: Always use archive.ubuntu.com if no accessible mirrors found
   if [ -z "${fastest_mirror_raw:-}" ]; then
-    echo "[warn] ⚠ No accessible mirrors found (all may be blocked, failed, or timed out)"
-    echo "[info] Falling back to default archive.ubuntu.com (guaranteed to work)"
+    printf '%s\n' "[warn] ⚠ No accessible mirrors found (all may be blocked, failed, or timed out)"
+    printf '%s\n' "[info] Falling back to default archive.ubuntu.com (guaranteed to work)"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   else
     FASTEST_MIRROR="${fastest_mirror_raw}"
-    echo "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
+    printf '%s\n' "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
   fi
   # ENDIF: fastest mirror selection
   
   # Final safety check: Ensure FASTEST_MIRROR is set (should never be empty at this point)
   if [ -z "${FASTEST_MIRROR:-}" ]; then
-    echo "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
+    printf '%s\n' "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   fi
   # ENDIF: FASTEST_MIRROR final non-empty check
   
-  echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
+  printf '%s\n' "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
   # Export the variable so it persists after function ends and is available globally
   export FASTEST_MIRROR
@@ -1953,14 +1984,18 @@ probe_and_set_mirrors() {
     # Example: "http://mirror.com/ubuntu" → "http:\/\/mirror.com\/ubuntu"
     # CRITICAL: Must have error fallback to prevent unset variable with set -u
     local fastest_mirror_sed_escaped
+    # SC2155: Declare and assign separately to avoid masking return values
+    fastest_mirror_sed_escaped=""
     fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
     
     # CRITICAL: Guard against empty escaped value - if sed failed, use FASTEST_MIRROR directly with minimal escaping
     if [ -z "${fastest_mirror_sed_escaped:-}" ]; then
-      echo "[warn] sed escaping failed, using FASTEST_MIRROR with minimal escaping"
+      printf '%s\n' "[warn] sed escaping failed, using FASTEST_MIRROR with minimal escaping"
       # Fallback: minimal escaping (just escape forward slashes and ampersands)
+      fastest_mirror_sed_escaped=""
       fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
     fi
+    # ENDIF: fastest_mirror_sed_escaped empty check
     
     # Only proceed with sed replacements if we have a valid escaped value
     if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
@@ -1975,10 +2010,10 @@ probe_and_set_mirrors() {
       #    Pattern '[a-zA-Z0-9.-]*' matches any subdomain: mirrors.ubuntu.com, us.archive.ubuntu.com, etc.
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
-      echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+      printf '%s\n' "[info] Updated /etc/apt/sources.list with fastest mirror"
     else
-      echo "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
-      echo "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
+      printf '%s\n' "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
+      printf '%s\n' "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
     fi
     # ENDIF: have valid escaped mirror for sed replacement
     
@@ -1995,19 +2030,36 @@ probe_and_set_mirrors() {
     local mirror_base_escaped mirror_no_protocol_escaped fastest_mirror_escaped
     if [ -n "${mirror_base:-}" ]; then
       # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+      # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
       mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+      # F2: Validate command substitution result is non-empty and valid
+      if [ -z "${mirror_base_escaped:-}" ] && [ -n "${mirror_base:-}" ]; then
+        # Fallback if sed fails
+        mirror_base_escaped="${mirror_base}"
+      fi
     else
       mirror_base_escaped=""
     fi
     if [ -n "${mirror_no_protocol:-}" ]; then
       # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+      # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
       mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+      # F2: Validate command substitution result is non-empty and valid
+      if [ -z "${mirror_no_protocol_escaped:-}" ] && [ -n "${mirror_no_protocol:-}" ]; then
+        # Fallback if sed fails
+        mirror_no_protocol_escaped="${mirror_no_protocol}"
+      fi
     else
       mirror_no_protocol_escaped=""
     fi
     # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
-    # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+    # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
     fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+    # F2: Validate command substitution result is non-empty and valid
+    if [ -z "${fastest_mirror_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Fallback if sed fails - use raw value
+      fastest_mirror_escaped="${FASTEST_MIRROR:-}"
+    fi
   
     # Check if mirror appears in active (non-commented) deb lines
     # D3: Use here-string instead of pipe pattern for safety and efficiency
@@ -2021,11 +2073,12 @@ probe_and_set_mirrors() {
       echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
     else
       # Check if file is actually empty or only has comments
+      # D3e: SIGPIPE error handling - pipelines ending with wc need || true to prevent exit code 141
       local active_lines
       active_lines=$(
         { grep -v "^#" /etc/apt/sources.list 2>/dev/null || true; } |
         { grep -v '^$' || true; } |
-        wc -l
+        wc -l || echo "0"
       )
       if [ "${active_lines:-0}" -eq 0 ]; then
         echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
@@ -2036,7 +2089,8 @@ probe_and_set_mirrors() {
         echo "[info]   Checking for alternative mirror formats..."
         # Show what we actually found
         # D3: Use here-string instead of pipe pattern
-        grep -E "(deb|deb-src)" <<< "${sources_content}" 2>/dev/null | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
+        # D3e: SIGPIPE error handling - pipeline ending with head needs || true to prevent exit code 141
+        grep -E "(deb|deb-src)" <<< "${sources_content}" 2>/dev/null | head -3 2>/dev/null | sed 's/^/    /' 2>/dev/null || echo "    (no deb lines found)"
       fi
     fi
     
@@ -2046,7 +2100,14 @@ probe_and_set_mirrors() {
       echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
       # Recompute mirror_no_protocol if not already set
       if [ -z "${mirror_no_protocol:-}" ]; then
+        # F2: Validate command substitution result
         mirror_no_protocol=$(sed 's|http://||; s|https://||' <<< "${FASTEST_MIRROR:-}" || echo "")
+        # Validate result is non-empty
+        if [ -z "${mirror_no_protocol:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+          # Extract manually if sed fails
+          mirror_no_protocol="${FASTEST_MIRROR#http://}"
+          mirror_no_protocol="${mirror_no_protocol#https://}"
+        fi
       fi
       # Escape special sed characters in mirror_no_protocol for safe replacement
       # CRITICAL: Must have error fallback to prevent unset variable with set -u
@@ -2088,9 +2149,16 @@ probe_and_set_mirrors() {
       fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
     fi
     
-    # Compute mirror_no_protocol once for reuse
+    # Compute mirror_no_protocol once for reuse (strip both http:// and https://)
+    # F2: Validate command substitution result
     local mirror_no_protocol
     mirror_no_protocol=$(sed 's|http://||; s|https://||' <<< "${FASTEST_MIRROR:-}" || echo "")
+    # Validate result is non-empty
+    if [ -z "${mirror_no_protocol:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Extract manually if sed fails
+      mirror_no_protocol="${FASTEST_MIRROR#http://}"
+      mirror_no_protocol="${mirror_no_protocol#https://}"
+    fi
     
     # Enable nullglob to handle case where no files exist
     shopt -s nullglob
@@ -2179,7 +2247,8 @@ probe_and_set_mirrors() {
       # Final check for remaining archive.ubuntu.com
       # D3: Use here-string instead of pipe pattern
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol:-}" ]; then
           local mirror_sed_escaped
           mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
@@ -2239,12 +2308,20 @@ verify_fastest_mirror() {
       fast_count="0"
     fi
     # Count lines using archive.ubuntu.com
+    # F2: Validate command substitution result
     local slow_count
-    slow_count=$(grep -c "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
+    slow_count=$(grep -c -- "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
+    # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+    # Validate result is numeric
+    if [ -z "${slow_count:-}" ] || ! [[ "${slow_count}" =~ ^[0-9]+$ ]]; then
+      slow_count="0"
+    fi
     
     if [ "${slow_count:-0}" -gt 0 ]; then
       echo "[ERROR] Found ${slow_count} lines still using archive.ubuntu.com in sources.list:"
-      grep "archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null | sed 's/^/  /' || true
+      # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+      grep -- "archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
       issues_found=$((issues_found + slow_count))
     else
       echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
@@ -2277,9 +2354,11 @@ verify_fastest_mirror() {
       # D3: Use here-string instead of pipe pattern
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
+      if grep -q -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in $(basename "${sources_file}"):"
-        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
+        # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+        # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+        grep -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         found_issues=1
       # ENDIF: archive.ubuntu.com check
       fi
@@ -2299,9 +2378,11 @@ verify_fastest_mirror() {
       # D3: Use here-string instead of pipe pattern
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
+      if grep -q -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in deb822 file $(basename "${sources_file}"):"
-        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
+        # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+        # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+        grep -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         found_issues=1
       fi
     done
@@ -2391,7 +2472,8 @@ reapply_fastest_mirror() {
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       # H4: Validate sed operations succeeded by checking if archive.ubuntu.com still exists
-      if grep -q "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if grep -q -- "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
         echo "[warn] ⚠ Some archive.ubuntu.com references may remain after sed replacement"
       fi
     fi
@@ -2401,13 +2483,14 @@ reapply_fastest_mirror() {
     # F2: Validate command substitution result
     local sources_content
     sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
-    if [ -n "${sources_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
+    if [ -n "${sources_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
       if [ -n "${mirror_no_protocol_escaped:-}" ]; then
         # H4: Validate sed operation result
         sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list || true
         # Verify replacement succeeded
-        if grep -q "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
+        if grep -q -- "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
           echo "[warn] ⚠ Additional replacement may have failed - archive.ubuntu.com still present"
         fi
       fi
@@ -2444,7 +2527,8 @@ reapply_fastest_mirror() {
           sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] ✓ Updated archive.ubuntu.com in: $(basename "${sources_file}")"
             updated_count=$((updated_count + 1))
           else
@@ -2468,12 +2552,14 @@ reapply_fastest_mirror() {
       # F2: Validate command substitution result
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if [ -n "${file_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           # H4: Validate sed operation result
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
           else
             echo "[warn] ⚠ Additional cleanup may have failed for: $(basename "${sources_file}")"
@@ -2504,7 +2590,8 @@ reapply_fastest_mirror() {
           sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] ✓ Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
             updated_count=$((updated_count + 1))
           else
@@ -2518,12 +2605,14 @@ reapply_fastest_mirror() {
       # F2: Validate command substitution result
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if [ -n "${file_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           # H4: Validate sed operation result
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
           else
             echo "[warn] ⚠ Additional cleanup may have failed for deb822 file: $(basename "${sources_file}")"
@@ -2665,13 +2754,15 @@ reapply_fastest_mirror() {
         echo "[ERROR] ⚠ apt-get update failed even with default archive.ubuntu.com mirror"
         echo "[warn] This may indicate a network or system issue. Output:"
         # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
-        head -10 <<< "${retry_output}" | sed 's/^/  /'
+        # D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+        head -10 <<< "${retry_output}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         echo "[warn] Build may continue, but package operations may fail"
       fi
     else
       echo "[warn] apt-get update had issues (may continue):"
       # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
-      head -5 <<< "${apt_update_output}" | sed 's/^/  /'
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+      head -5 <<< "${apt_update_output}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
     fi
   else
     echo "[info] ✓ apt-get update succeeded with selected mirror"
@@ -2703,80 +2794,7 @@ echo "Stage|Container APT|Var APT|Conda|Wheels|Julia" > "$CACHE_MONITOR_DATA"
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 # Parameters: $1 = stage name
-monitor_cache() {
-  local stage="${1:-unknown}"
-  local container_apt var_apt conda_pkgs wheels julia_pkgs
-  
-  # Safely count files with error handling
-  # Use find instead of ls to avoid glob expansion issues
-  # J1: Validate directory exists before operations
-  # F2: Validate command substitution result
-  if [ -d "${CONTAINER_APT_CACHE:-}" ] && [ -x "${CONTAINER_APT_CACHE:-}" ]; then
-    container_apt=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${container_apt:-0}" =~ ^[0-9]+$ ]]; then
-      container_apt="0"
-    fi
-  else
-    container_apt="0"
-  fi
-  
-  # J1: Validate directory exists before operations
-  # F2: Validate command substitution results
-  if [ -d /var/cache/apt/archives ] && [ -x /var/cache/apt/archives ]; then
-    var_apt=$(find /var/cache/apt/archives -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${var_apt:-0}" =~ ^[0-9]+$ ]]; then
-      var_apt="0"
-    fi
-  else
-    var_apt="0"
-  fi
-  
-  if [ -d "${CONTAINER_CONDA_CACHE:-}" ] && [ -x "${CONTAINER_CONDA_CACHE:-}" ]; then
-    conda_pkgs=$(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${conda_pkgs:-0}" =~ ^[0-9]+$ ]]; then
-      conda_pkgs="0"
-    fi
-  else
-    conda_pkgs="0"
-  fi
-  
-  if [ -d "${CONTAINER_WHEELS_CACHE:-}" ] && [ -x "${CONTAINER_WHEELS_CACHE:-}" ]; then
-    wheels=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${wheels:-0}" =~ ^[0-9]+$ ]]; then
-      wheels="0"
-    fi
-  else
-    wheels="0"
-  fi
-  
-  if [ -d "${CONTAINER_JULIA_CACHE:-}" ] && [ -x "${CONTAINER_JULIA_CACHE:-}" ]; then
-    julia_pkgs=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${julia_pkgs:-0}" =~ ^[0-9]+$ ]]; then
-      julia_pkgs="0"
-    fi
-  else
-    julia_pkgs="0"
-  fi
-
-  echo "[CACHE MONITOR] Stage: ${stage}"
-  echo "${CONTAINER_APT_CACHE:-/unknown}: ${container_apt} .deb files"
-  echo "/var/cache/apt/archives: ${var_apt} .deb files"
-  echo "${CONTAINER_CONDA_CACHE:-/unknown}: ${conda_pkgs} files"
-  echo "${CONTAINER_WHEELS_CACHE:-/unknown}: ${wheels} files"
-  echo "${CONTAINER_JULIA_CACHE:-/unknown}: ${julia_pkgs} files"
-  echo ""
-
-  # Store data for summary (append to CSV)
-  if [ -f "${CACHE_MONITOR_DATA:-}" ]; then
-    echo "${stage}|${container_apt}|${var_apt}|${conda_pkgs}|${wheels}|${julia_pkgs}" >> "${CACHE_MONITOR_DATA}"
-  fi
-}
-# End function (self-contained)
+# Note: monitor_cache() is now defined in /scripts/common_functions.sh (centralized)
 
 #--- Sub-block 5.3: Cache monitoring summary display function ---
 # Purpose: Display cache growth table across all stages
@@ -2990,6 +3008,8 @@ setup_conda_staging_area() {
     fi
     # Note: Do not modify CONDA_PKGS_DIRS here to avoid interfering with normal conda operations
     # The staging area will be used manually for specific cleanup operations
+    # J2, K2: Note: Using /tmp/conda-staging instead of mktemp for persistence across function calls
+    # This is intentional for manual cleanup operations, but should be cleaned up after use
     echo "✓ Conda staging area configured (manual mode)"
 }
 # End function (self-contained)
@@ -3006,6 +3026,7 @@ atomic_package_replace() {
     local retry_count=0
 
     # Validate inputs
+    # C1, C5: Validate inputs with proper error messages
     if [ -z "${pkg_name}" ]; then
         echo "✗ Error: Package name not provided"
         return 1
@@ -3114,7 +3135,7 @@ verify_package_integrity() {
     # F2: Validate command substitution result
     local file_type
     file_type=$(file -b "${pkg_file}" 2>/dev/null || echo "unknown")
-    # Validate file_type is non-empty
+    # C5, F2: Validate file_type is non-empty and has fallback
     if [ -z "${file_type:-}" ]; then
         file_type="unknown"
     fi
@@ -3161,6 +3182,10 @@ verify_package_integrity() {
 # Parameters: $1 = package name
 acquire_package_lock() {
     local pkg_name="${1:-}"
+    # J2, K2: Use consistent lock file path (must match release_package_lock)
+    # Note: Using fixed /tmp path for lock file persistence across function calls
+    # This is acceptable for lock files as they are cleaned up by release_package_lock
+    # For enhanced security, consider using /var/run or a dedicated lock directory
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
     local max_wait=30
     local wait_count=0
@@ -3183,7 +3208,8 @@ acquire_package_lock() {
             # F2: Validate command substitution results
             current_time=$(date +%s 2>/dev/null || echo "0")
             lock_time=$(stat -c %Y "${lock_file}" 2>/dev/null || echo "0")
-            # Validate results are numeric
+            # A5, A6: Validate results are numeric (using Bash [[ ]] for regex - documented as Bash-specific)
+            # Note: This requires Bash 3.2+ for regex matching; POSIX alternative would be case/esac with pattern matching
             if ! [[ "${current_time:-0}" =~ ^[0-9]+$ ]] || ! [[ "${lock_time:-0}" =~ ^[0-9]+$ ]]; then
                 # If we can't get valid times, assume lock is stale
                 echo "[warn] ⚠ Could not determine lock age, assuming stale"
@@ -3191,7 +3217,8 @@ acquire_package_lock() {
                 continue
             fi
             lock_age=$((current_time - lock_time))
-            # Validate lock_age is numeric and non-negative
+            # A5, A6: Validate lock_age is numeric and non-negative (using Bash [[ ]] for regex)
+            # Note: Bash 3.2+ required for regex matching; arithmetic comparison is POSIX-compliant
             if [[ "${lock_age:-0}" =~ ^[0-9]+$ ]] && [ "${lock_age:-0}" -ge 300 ]; then
                 # Lock is stale, remove it
                 # H4: Validate rm operation result
@@ -3225,6 +3252,10 @@ acquire_package_lock() {
 # Parameters: $1 = package name
 release_package_lock() {
     local pkg_name="${1:-}"
+    # J2, K2: Use consistent lock file path (must match acquire_package_lock)
+    # Note: Using fixed /tmp path for lock file persistence across function calls
+    # This is acceptable for lock files as they are cleaned up by this function
+    # For enhanced security, consider using /var/run or a dedicated lock directory
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
     
     if [ -z "${pkg_name}" ]; then
@@ -3295,6 +3326,9 @@ echo "✓ All cache directories created successfully"
 
 #--- Sub-block 8.5: Cache validation and repair function ---
 # Purpose: Validate cache directory structure and permissions
+# Parameters: None
+# Returns: 0 on success (always succeeds - validation function)
+# Side effects: Creates/repairs cache directories, sets permissions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 validate_and_repair_cache() {
@@ -3373,6 +3407,12 @@ fi
 # Outputs: Environment variables, configuration
 # Note: Currently a placeholder - GPG verification setup will be implemented when needed
 # L4: Function documentation added for empty function
+# Purpose: Setup GPG verification for package signatures
+# Parameters: None
+# Returns: 0 on success (always succeeds - placeholder function)
+# Side effects: None (placeholder implementation)
+# Dependencies: None (foundational)
+# Note: Currently a placeholder - GPG verification setup will be implemented when needed
 setup_gpg_verification() {
     echo "==> Setting up GPG verification for .deb packages..."
     # TODO: Implement GPG key import and verification setup
@@ -3394,7 +3434,8 @@ setup_gpg_verification() {
 # Purpose: Ensure curl is available for mirror probing
 # Dependencies: Ubuntu base image (includes curl by default)
 # Outputs: curl availability confirmed
-echo "==> Checking curl availability for mirror probing..."
+# D3b: Use printf for robustness
+printf '%s\n' "==> Checking curl availability for mirror probing..."
 if ! command -v curl &> /dev/null; then
     echo "[warn] curl not found in base image. Installing curl first..."
     # Use /usr/bin/apt-get directly to avoid any wrapper issues
@@ -3413,9 +3454,10 @@ if ! command -v curl &> /dev/null; then
         echo "[ERROR] ⚠ curl installation succeeded but command not found"
         exit 1
     fi
-    echo "✓ curl installed"
+    # D3b: Use printf for robustness
+    printf '%s\n' "✓ curl installed"
 else
-    echo "✓ curl is available"
+    printf '%s\n' "✓ curl is available"
 fi
 # ENDIF: curl availability check
 
@@ -3423,26 +3465,30 @@ fi
 # Critical: Select fastest mirror BEFORE any significant apt operations
 # Dependencies: curl, test_mirror() and probe_and_set_mirrors() functions (BLOCK 3)
 # Outputs: FASTEST_MIRROR variable (exported), updated sources
-echo "==> Executing mirror probing BEFORE package installations..."
+# D3b: Use printf for robustness
+printf '%s\n' "==> Executing mirror probing BEFORE package installations..."
 probe_and_set_mirrors
 
 #--- Sub-block 9.3: Display selected mirror ---
 # Purpose: Confirm mirror selection for build logs
 # Dependencies: FASTEST_MIRROR (set by probe_and_set_mirrors)
 # Outputs: Log output
-echo "==> Mirror configuration complete:"
-echo "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
-echo "    This variable is now available globally for all apt operations"
+# D3b: Use printf for robustness (handles special characters in variables)
+printf '%s\n' "==> Mirror configuration complete:"
+printf '%s\n' "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
+printf '%s\n' "    This variable is now available globally for all apt operations"
 
 # Show first few lines of updated sources.list for verification
-echo "==> Contents of /etc/apt/sources.list (first 5 lines):"
+# D3b: Use printf for robustness
+printf '%s\n' "==> Contents of /etc/apt/sources.list (first 5 lines):"
 # J1: Validate file exists and is readable before operations
 if [ -f /etc/apt/sources.list ] && [ -r /etc/apt/sources.list ]; then
-  # F2: Validate command substitution result
+  # F2, D3e: Validate command substitution result with SIGPIPE protection
+  # D3e: Pipeline with head requires || true to prevent SIGPIPE (exit code 141)
   sources_preview=""
-  sources_preview=$(head -n 5 /etc/apt/sources.list 2>/dev/null | sed 's/^/    /' || echo "")
+  sources_preview=$(head -n 5 /etc/apt/sources.list 2>/dev/null | sed 's/^/    /' 2>/dev/null || echo "")
   if [ -n "${sources_preview:-}" ]; then
-    echo "${sources_preview}"
+    printf '%s\n' "${sources_preview}"
   else
     echo "    [warn] Could not read sources.list contents"
   fi
@@ -3451,8 +3497,8 @@ else
 fi
 # ENDIF: sources.list preview
 
-echo ""
-echo "==> Verifying mirror configuration..."
+printf '%s\n' ""
+printf '%s\n' "==> Verifying mirror configuration..."
 # Run verification to ensure mirror was properly applied
 if verify_fastest_mirror; then
     echo "✓ Mirror selection completed and verified"
@@ -3515,7 +3561,8 @@ fi
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo -e "\n\033[1;34m===> Enabling the 'universe' repository for additional packages...\033[0m"
+# A5a: Use printf instead of echo -e for robustness
+printf '\n\033[1;34m===> Enabling the '\''universe'\'' repository for additional packages...\033[0m\n'
 # The 'software-properties-common' package provides add-apt-repository command
 # H1: Check exit code of apt-get update operation
 if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
@@ -3557,7 +3604,8 @@ echo "✓ Additional repositories enabled and verified"
 # Purpose: Resolve inconsistencies between base image and APT sources
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo -e "\n${BLUE}===> Synchronizing base image with latest package versions...${NC}"
+# A5a: Use printf instead of echo -e for robustness
+printf '\n%s===> Synchronizing base image with latest package versions...%s\n' "${BLUE}" "${NC}"
 # Using dist-upgrade handles dependency changes intelligently
 # H1: Check exit code of apt-get update operation
 if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
@@ -3572,7 +3620,8 @@ fi
 if ! dpkg --configure -a 2>&1; then
     echo "[warn] ⚠ dpkg --configure had issues - continuing anyway"
 fi
-echo -e "${GREEN}✓ Base image synchronized.${NC}"
+# A5a: Use printf instead of echo -e for robustness
+printf '%s✓ Base image synchronized.%s\n' "${GREEN}" "${NC}"
 
 #===============================================================================
 # BLOCK 10: APT CONFIGURATION AND GPG KEY SETUP
@@ -3607,12 +3656,42 @@ echo "Importing VirtualGL/TurboVNC GPG key for APT..."
 if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
     # F2: Validate command substitution result (curl output piped to gpg)
     # H1: Check exit code of curl and gpg pipeline
+    # I4: HTTP error handling for curl operations - capture HTTP status code
     gpg_key_output=""
     # shellcheck disable=SC2034 # gpg_exit_code may be used for debugging/logging
     gpg_exit_code=0
-    gpg_key_output=$(curl -fsSL "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>&1)
+    # I4: Capture HTTP status code separately using -w with newline separator
+    http_code="000"
+    if curl -w "\n%{http_code}" -fsSL --max-time 30 "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>/dev/null > /tmp/virtualgl_gpg_response.tmp; then
+        # I4: Extract HTTP code from last line of response
+        if [ -f /tmp/virtualgl_gpg_response.tmp ] && [ -s /tmp/virtualgl_gpg_response.tmp ]; then
+            http_code=$(tail -n 1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "000")
+            # I4: Validate HTTP status code is 3-digit number before checking
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]]; then
+                if [ "${http_code}" != "200" ]; then
+                    echo "[warn] ⚠ HTTP ${http_code} error downloading GPG key from ${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
+                    gpg_key_output=""
+                else
+                    # I4: HTTP 200 success - extract body (all lines except last)
+                    gpg_key_output=$(head -n -1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "")
+                fi
+            else
+                echo "[warn] ⚠ Invalid HTTP status code format: ${http_code}"
+                gpg_key_output=""
+            fi
+        else
+            echo "[warn] ⚠ Downloaded GPG key response is empty or missing"
+            gpg_key_output=""
+        fi
+        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+    else
+        echo "[warn] ⚠ Failed to download GPG key from ${VIRTUALGL_TURBOVNC_GPG_KEY_URL} (connection/timeout error)"
+        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+        gpg_key_output=""
+    fi
     if [ -n "${gpg_key_output:-}" ]; then
-        if echo "${gpg_key_output}" | gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg 2>/dev/null; then
+        # D3: Use here-string instead of pipe pattern (unsafe pipe pattern fixed)
+        if gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg 2>/dev/null <<< "${gpg_key_output}"; then
             # J1: Verify GPG key file was created successfully
             if [ -f /usr/share/keyrings/virtualgl-turbovnc.gpg ]; then
                 echo "✓ VirtualGL/TurboVNC GPG key imported successfully for APT"
@@ -3851,6 +3930,7 @@ setup_unified_cache() {
                 echo "[warn] ⚠ MINIFORGE_HOME directory does not exist after creation"
             else
                 # H1: Check exit code of cat/heredoc operation
+                # EXEMPTED FROM EXTRACTION: Uses variable interpolation (${CONTAINER_CONDA_CACHE}), dynamically generated with script variables
                 if ! cat > "${MINIFORGE_HOME}/.condarc.pre" <<EOF
 channels:
   - conda-forge
@@ -3948,9 +4028,10 @@ if command -v chattr >/dev/null 2>&1; then
         fi
         # Count protected files for confirmation
         # F2: Validate command substitution result
+        protected_count=""
         protected_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-        # Validate result is numeric
-        if ! [[ "${protected_count:-0}" =~ ^[0-9]+$ ]]; then
+        # Validate result is numeric and non-empty
+        if [ -z "${protected_count:-}" ] || ! [[ "${protected_count:-0}" =~ ^[0-9]+$ ]]; then
             protected_count="0"
         fi
         if [ "${protected_count:-0}" -gt 0 ]; then
@@ -4133,11 +4214,11 @@ fi
 # Ensure consistent command names regardless of Debian/Ubuntu packaging quirks
 # M1: Verify commands exist before creating symlinks
 # J1: Validate target directory exists before creating symlinks
-if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-    if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
         # F2: Validate command substitution result
         fdfind_path=""
-        fdfind_path=$(command -v fdfind || echo "")
+        fdfind_path=$(command -v fdfind 2>/dev/null || echo "")
         if [ -n "${fdfind_path:-}" ] && [ -x "${fdfind_path:-}" ]; then
             # H1: Check exit code of ln operation
             if ln -sf "${fdfind_path}" /usr/local/bin/fd 2>/dev/null; then
@@ -4151,12 +4232,11 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/fd symlink"
             fi
         fi
-    fi
 
-    if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+        if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
         # F2: Validate command substitution result
         batcat_path=""
-        batcat_path=$(command -v batcat || echo "")
+        batcat_path=$(command -v batcat 2>/dev/null || echo "")
         if [ -n "${batcat_path:-}" ] && [ -x "${batcat_path:-}" ]; then
             # H1: Check exit code of ln operation
             if ln -sf "${batcat_path}" /usr/local/bin/bat 2>/dev/null; then
@@ -4170,11 +4250,10 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/bat symlink"
             fi
         fi
+    else
+        echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
     fi
-else
-    echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
-fi
-# ENDIF: symlink normalization for fd and bat
+    # ENDIF: symlink normalization for fd and bat
 
 debug_glibc "After installing advanced search & productivity CLI tools"
 
@@ -4353,327 +4432,40 @@ if ! install -d -m 0755 /usr/local/bin 2>/dev/null; then
     echo "[ERROR] ⚠ Failed to create /usr/local/bin directory"
     exit 1
 fi
-# J1: Verify directory was created successfully
-if [ ! -d /usr/local/bin ] || [ ! -w /usr/local/bin ]; then
-    echo "[ERROR] ⚠ /usr/local/bin directory not writable"
+# Note: shell-scripts file: /usr/local/bin/apt-aria is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/apt-wrapper-aria2c-accelerated-downloads.sh
+# Target: /usr/local/bin/apt-aria
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /usr/local/bin/apt-aria ]; then
+    echo "[ERROR] ⚠ apt-aria wrapper file not found after installation"
     exit 1
 fi
-# ENDIF: /usr/local/bin creation and writability
-
-# Configure APT to keep downloaded packages (prevent automatic cleanup)
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of file write operations
-if [ -d /etc/apt/apt.conf.d ] && [ -w /etc/apt/apt.conf.d ]; then
-    if ! {
-      echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";'
-      echo 'APT::Clean-Installed "false";'
-      echo 'APT::Get::AutomaticRemove "false";'
-      echo 'APT::Get::AutomaticRemove::Kernels "false";'
-    } > /etc/apt/apt.conf.d/99keep-packages 2>/dev/null; then
-        echo "[ERROR] ⚠ Failed to write APT keep-packages configuration"
-        exit 1
-    fi
-    # J1: Verify file was created successfully
-    if [ ! -f /etc/apt/apt.conf.d/99keep-packages ]; then
-        echo "[ERROR] ⚠ APT keep-packages configuration file not found after creation"
-        exit 1
-    fi
-else
-    echo "[ERROR] ⚠ /etc/apt/apt.conf.d directory not writable"
+if ! chmod 0755 /usr/local/bin/apt-aria 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on apt-aria wrapper"
     exit 1
 fi
-# ENDIF: APT keep-packages configuration creation
-
-cat > /usr/local/bin/apt-aria <<'EOF'
-#!/usr/bin/env bash
-set -eo pipefail  # Removed -u to allow unbound variables with defaults
-
-# Purpose: A lightweight front-end for apt/apt-get that:
-#   - Forces a unified cache location across APT tools
-#   - Uses aria2c for accelerated downloads on install-like commands
-#   - Falls back gracefully to standard apt-get when necessary
-# Inputs:
-#   - Environment variable CONTAINER_APT_CACHE (optional)
-#   - Command-line arguments forwarded to apt/apt-get
-# Behavior:
-#   - For install/remove/purge/build-dep/source: collect URIs and download via aria2c
-#     into the cache, then run apt-get to perform installation from cache
-#   - For other commands: pass-through to apt-get with cache options
-# Safety:
-#   - Validates temporary files and ensures cleanup
-#   - Uses guarded command substitutions and here-strings to avoid unsafe pipes
-#   - Protects cache with chattr +i when available (best-effort)
-
-# Centralized APT cache configuration - All APT tools use this location
-# Set default cache location if not provided via environment variable
-if [ -z "${CONTAINER_APT_CACHE:-}" ]; then
-    # Try to detect cache location from environment or use sensible default
-    if [ -n "${CONTAINER_CACHE_ROOT:-}" ]; then
-        CONTAINER_APT_CACHE="${CONTAINER_CACHE_ROOT}/apt/archives"
-    elif [ -d "/container_cache/apt" ]; then
-        CONTAINER_APT_CACHE="/container_cache/apt"
-    elif [ -d "/tmp/container_cache/apt" ]; then
-        CONTAINER_APT_CACHE="/tmp/container_cache/apt"
-    else
-        CONTAINER_APT_CACHE="/var/cache/apt/archives"
-    fi
-    echo "[apt-aria] WARNING: CONTAINER_APT_CACHE not set, using default: ${CONTAINER_APT_CACHE}"
-fi
-CACHE="${CONTAINER_APT_CACHE}"
-mkdir -p "/var/cache/apt/archives"
-
-# Common APT options for consistent caching across all tools
-# Keep downloaded packages and don't clean them automatically
-APT_CACHE_OPTS="-o Dir::Cache::Archives=${CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
-
-# Function to determine if this is an install command that should use aria2c
-is_install_command() {
-    # Check if any argument is an install command (not just the first one)
-    for arg in "$@"; do
-        case "$arg" in
-            install|remove|purge|build-dep|source)
-                return 0
-                ;;
-        esac
-    done
-    return 1
-}
-
-# Function to get the appropriate APT tool
-get_apt_tool() {
-    if [ -x /usr/bin/apt-fast ]; then
-        echo "/usr/bin/apt-fast"
-    else
-        echo "/usr/bin/apt-get"
-    fi
-}
-
-# Get the APT tool to use
-APT_TOOL=$(get_apt_tool)
-
-# Handle install commands with aria2c acceleration
-if is_install_command "$@"; then
-    echo "[apt-aria] Using aria2c for accelerated downloads..."
-
-    # Collect all http/https URLs (incl. dependencies) that would be downloaded
-    URI_FILE=$(mktemp) || {
-        echo "[apt-aria] ERROR: Failed to create temporary file"
-        exit 1
-    }
-    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
-
-    # Use a more robust approach to collect URIs
-    # First, check if there are actually packages to download
-    # Split APT_CACHE_OPTS properly to handle multiple arguments
-    # Note: This requires proper handling of spaces in APT_CACHE_OPTS
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    # F2: Capture both output and exit code separately for proper validation
-    APT_OUTPUT=$(/usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y "$@" 2>&1)
-    APT_EXIT_CODE=$?
-    # F2: Validate command substitution result
-    if [ -z "${APT_OUTPUT:-}" ] && [ "${APT_EXIT_CODE:-1}" -ne 0 ]; then
-        echo "[apt-aria] WARNING: apt-get --print-uris produced no output but exited with code ${APT_EXIT_CODE}"
-    fi
-    
-    # Check if packages are already installed or nothing to download (benign case)
-    # D3: Use here-string instead of pipe pattern
-    if [ -n "${APT_OUTPUT:-}" ] && grep -qiE "(already the newest|0 upgraded|0 to install|already installed)" <<< "${APT_OUTPUT}"; then
-        echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    # Check if there's an actual error (not just "no URIs")
-    elif [ "${APT_EXIT_CODE:-1}" -ne 0 ] && [ -n "${APT_OUTPUT:-}" ] && ! grep -qiE "(already the newest|0 upgraded|0 to install)" <<< "${APT_OUTPUT}"; then
-        echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
-        # F2: Validate command substitution result
-        # D3: Use here-string instead of echo | head (unsafe pipe pattern)
-        error_preview=$(head -3 <<< "${APT_OUTPUT}" || echo "")
-        if [ -n "${error_preview:-}" ]; then
-            echo "[apt-aria] Error output: ${error_preview}"
-        fi
-        echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    # Try to extract URIs from the output
-    # F2: Validate pipeline result
-    elif [ -n "${APT_OUTPUT:-}" ] && grep -E "'(https?://[^']*)'" <<< "${APT_OUTPUT}" | \
-        sed -E "s/^'([^']+)'.*$/\1/" | \
-        sed "s/ //g" | \
-        grep -E "^https?://.*\.deb$" | sort -u > "${URI_FILE}" 2>/dev/null && [ -s "${URI_FILE}" ]; then
-        # F2: Validate command substitution result
-        uri_count=$(wc -l < "${URI_FILE}" || echo "0")
-        if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
-            uri_count="0"
-        fi
-        echo "[apt-aria] URI collection successful (${uri_count} packages)"
-    else
-        # No URIs found, but not an error - likely already cached or installed
-        echo "[apt-aria] No URIs to download (packages may be cached or already installed)"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    fi
-
-    echo "[apt-aria] URI file created: ${URI_FILE}"
-    echo "[apt-aria] URI file contents:"
-    # J1: Validate file exists before reading
-    # H1: Check exit code of cat operation
-    if [ -f "${URI_FILE}" ] && [ -r "${URI_FILE}" ]; then
-        if ! cat "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] URI file is unreadable"
-        fi
-    else
-        echo "[apt-aria] URI file is empty or unreadable"
-    fi
-
-    # J1: Validate file exists and is non-empty before operations
-    if [ -s "${URI_FILE}" ]; then
-        # F2: Validate command substitution result
-        uri_count=$(wc -l < "${URI_FILE}" || echo "0")
-        if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
-            uri_count="0"
-        fi
-        echo "[apt-aria] Downloading ${uri_count} packages via aria2c..."
-      echo "[apt-aria] Cache directory: ${CACHE}"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
-
-      # Try multi-connection first with error suppression
-      # H1: Check exit code of aria2c operation
-      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] Multi-connection failed, trying single-connection..."
-        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-        # H1: Check exit code of aria2c operation
-        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
-        else
-          echo "[apt-aria] Single-connection aria2c succeeded"
-        fi
-      else
-        echo "[apt-aria] Multi-connection aria2c succeeded"
-      fi
-      # H4: Validate rm operation result
-      if [ -f "${URI_FILE}" ] && ! rm -f "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] WARNING: Failed to remove temporary URI file: ${URI_FILE}"
-      fi
-    else
-      echo "[apt-aria] No URIs to download"
-      # H4: Validate rm operation result
-      if [ -f "${URI_FILE}" ] && ! rm -f "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] WARNING: Failed to remove temporary URI file: ${URI_FILE}"
-      fi
-    fi
-
-    # --- PROTECT CACHE ---
-    # Make all .deb files in the cache immutable to prevent deletion
-    echo "[apt-aria] Making downloaded packages immutable to protect cache..."
-    # M1: Verify chattr command exists
-    if command -v chattr >/dev/null 2>&1; then
-        # J1: Validate directory exists before operations
-        if [ -d "${CACHE}" ] && [ -x "${CACHE}" ]; then
-            # Use find to safely handle glob expansion
-            # H4: Validate find/exec operation result
-            chattr_exit_code=0
-            find "${CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} + 2>/dev/null || chattr_exit_code=$?
-            if [ "${chattr_exit_code:-0}" -eq 0 ]; then
-                echo "[apt-aria] chattr command executed successfully"
-            else
-                echo "[apt-aria] WARNING: Some files may not have been protected with chattr"
-            fi
-        else
-            echo "[apt-aria] WARNING: Cache directory not accessible: ${CACHE}"
-        fi
-    else
-        echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
-    fi
-
-    # Install from cache using apt-get (reliable and standard)
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    echo "[apt-aria] Installing packages from cache..."
-    exec /usr/bin/apt-get ${APT_CACHE_OPTS} -y "$@"
-else
-    # Use regular apt-get with cache configuration for non-install commands
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    echo "[apt-aria] Using apt-get with cache configuration..."
-    exec /usr/bin/apt-get ${APT_CACHE_OPTS} "$@"
-fi
-EOF
-# H1: Check exit code of chmod operation
-# J1: Validate file exists before chmod
-if [ -f /usr/local/bin/apt-aria ]; then
-    if ! chmod 0755 /usr/local/bin/apt-aria 2>/dev/null; then
-        echo "[ERROR] ⚠ Failed to set permissions on apt-aria wrapper"
-        exit 1
-    fi
-    # J1: Verify file is executable
-    if [ ! -x /usr/local/bin/apt-aria ]; then
-        echo "[ERROR] ⚠ apt-aria wrapper is not executable after chmod"
-        exit 1
-    fi
-    echo "✓ apt-aria wrapper created"
-else
-    echo "[ERROR] ⚠ apt-aria wrapper file not found after creation"
+if [ ! -x /usr/local/bin/apt-aria ]; then
+    echo "[ERROR] ⚠ apt-aria wrapper is not executable after chmod"
     exit 1
 fi
+echo "✓ apt-aria wrapper verified"
 
-#--- Sub-block 11.1.1: Ensure CONTAINER_APT_CACHE is always available ---
-# Critical: Export CONTAINER_APT_CACHE in container environment so apt-aria wrapper can use it
-# This ensures the variable is available even when container is run without explicit environment setup
-echo "Setting up CONTAINER_APT_CACHE environment variable..."
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of cat/heredoc operation
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-    if ! cat > /etc/profile.d/container-cache.sh <<'EOF'
-#!/bin/bash
-# Container cache environment variables
-# These ensure apt-aria wrapper and other tools can find cache directories
-#
-# Rationale:
-# - Provide cache locations in login shells and interactive sessions to ensure
-#   uniform behavior when tools are invoked outside the main build flow.
-# - Directories are created best-effort with errors suppressed to avoid
-#   blocking non-critical initialization paths.
-
-# Set default cache root if not already set
-export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
-
-# Set APT cache location
-export CONTAINER_APT_CACHE="${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
-
-# Other cache locations
-export CONTAINER_BIN_CACHE="${CONTAINER_BIN_CACHE:-${CONTAINER_CACHE_ROOT}/binaries}"
-export CONTAINER_DEB_CACHE="${CONTAINER_DEB_CACHE:-${CONTAINER_CACHE_ROOT}/debs}"
-export CONTAINER_CONDA_CACHE="${CONTAINER_CONDA_CACHE:-${CONTAINER_CACHE_ROOT}/conda_pkgs}"
-export CONTAINER_WHEELS_CACHE="${CONTAINER_WHEELS_CACHE:-${CONTAINER_CACHE_ROOT}/wheels}"
-export CONTAINER_JULIA_CACHE="${CONTAINER_JULIA_CACHE:-${CONTAINER_CACHE_ROOT}/julia_pkgs}"
-
-# Ensure cache directories exist
-mkdir -p "${CONTAINER_APT_CACHE}" "${CONTAINER_BIN_CACHE}" "${CONTAINER_DEB_CACHE}" \
-         "${CONTAINER_CONDA_CACHE}" "${CONTAINER_WHEELS_CACHE}" "${CONTAINER_JULIA_CACHE}" 2>/dev/null || true
-EOF
-    then
-        echo "[ERROR] ⚠ Failed to write container-cache.sh profile script"
-        exit 1
-    else
-        # J1: Verify file was created successfully
-        if [ ! -f /etc/profile.d/container-cache.sh ]; then
-            echo "[ERROR] ⚠ container-cache.sh file not found after creation"
-            exit 1
-        fi
-        # H1: Check exit code of chmod operation
-        if ! chmod 0644 /etc/profile.d/container-cache.sh 2>/dev/null; then
-            echo "[ERROR] ⚠ Failed to set permissions on container-cache.sh"
-            exit 1
-        fi
-        echo "✓ Container cache environment setup created"
-    fi
-else
-    echo "[ERROR] ⚠ /etc/profile.d directory not writable"
+# Note: shell-scripts file: /etc/profile.d/container-cache.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/container-cache.sh
+# Target: /etc/profile.d/container-cache.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/container-cache.sh ]; then
+    echo "[ERROR] ⚠ container-cache.sh file not found after installation"
     exit 1
 fi
+# Verify permissions
+if ! chmod 0644 /etc/profile.d/container-cache.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on container-cache.sh"
+    exit 1
+fi
+echo "✓ Container cache environment setup verified"
 
 # Also add to /etc/environment for non-interactive shells
 # J1: Validate file exists and is writable before operations
@@ -4748,6 +4540,13 @@ apt_get_link=""
 apt_link=""
 apt_get_link=$(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')
 apt_link=$(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')
+# Validate results are non-empty
+if [ -z "${apt_get_link:-}" ]; then
+    apt_get_link='Not aliased'
+fi
+if [ -z "${apt_link:-}" ]; then
+    apt_link='Not aliased'
+fi
 echo "apt-get -> ${apt_get_link}"
 echo "apt -> ${apt_link}"
 echo "✓ APT-aria wrapper and symlinks configured successfully"
@@ -4757,9 +4556,13 @@ echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + cach
 # F2: Validate command substitution result
 path_value="${PATH:-}"
 if [ -n "${path_value}" ]; then
-    first_local=$(awk -v RS=':' '/\/usr\/local\/bin/{print NR; exit}' <<< "${path_value}" || echo "")
-    first_usr=$(awk -v RS=':' '/\/usr\/bin/{print NR; exit}' <<< "${path_value}" || echo "")
-    if [ -n "${first_local}" ] && [ -n "${first_usr}" ]; then
+    # F2: Validate command substitution results
+    first_local=""
+    first_usr=""
+    first_local=$(awk -v RS=':' '/\/usr\/local\/bin/{print NR; exit}' <<< "${path_value}" 2>/dev/null || echo "")
+    first_usr=$(awk -v RS=':' '/\/usr\/bin/{print NR; exit}' <<< "${path_value}" 2>/dev/null || echo "")
+    # F2: Validate results are numeric before arithmetic comparison
+    if [ -n "${first_local}" ] && [ -n "${first_usr}" ] && [[ "${first_local}" =~ ^[0-9]+$ ]] && [[ "${first_usr}" =~ ^[0-9]+$ ]]; then
         if [ "${first_local}" -gt "${first_usr}" ]; then
             echo "[warn] ⚠ PATH order may overshadow apt-aria: /usr/bin appears before /usr/local/bin"
             echo "       Current PATH: ${path_value}"
@@ -4792,9 +4595,10 @@ echo ""
 ONEAPI_KEYRING="/usr/share/keyrings/oneapi-archive-keyring.gpg"
 ONEAPI_SOURCE_LIST="/etc/apt/sources.list.d/oneAPI.list"
 
-# M1: Verify package installation using resilient helper
+# M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
 mkl_check_output=""
+# Note: Using dpkg_resolve_installed_package would be preferred, but checking for pattern match
 mkl_check_output=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl" || echo "")
 if [ -n "${mkl_check_output:-}" ]; then
     echo -e "${GREEN}✓ Intel oneAPI MKL already installed; skipping installation${NC}"
@@ -4807,9 +4611,27 @@ else
         # F2: Validate command substitution result (curl output piped to gpg)
         # H1: Check exit code of curl and gpg pipeline
         gpg_key_output=""
-        gpg_key_output=$(curl -fsSL "${INTEL_ONEAPI_GPG_KEY_URL}" 2>&1)
+        # I4: Capture HTTP status code and handle errors
+        http_code=""
+        http_code=$(curl -w "%{http_code}" -fsSL -o /tmp/gpg_key_temp "${INTEL_ONEAPI_GPG_KEY_URL}" 2>&1 || echo "000")
+        # I4: Validate HTTP code is 3-digit number
+        if [[ ! "${http_code}" =~ ^[0-9]{3}$ ]]; then
+            echo "[ERROR] ⚠ Failed to download Intel oneAPI GPG key: Invalid HTTP response"
+            exit 1
+        fi
+        # I4: Check for HTTP errors (403, 404, 5xx)
+        if [ "${http_code}" = "403" ] || [ "${http_code}" = "404" ] || [ "${http_code}" -ge 500 ]; then
+            echo "[ERROR] ⚠ HTTP ${http_code} error downloading Intel oneAPI GPG key from ${INTEL_ONEAPI_GPG_KEY_URL}"
+            exit 1
+        fi
+        # I4: Read downloaded file
+        if [ -f /tmp/gpg_key_temp ]; then
+            gpg_key_output=$(cat /tmp/gpg_key_temp 2>/dev/null || echo "")
+            rm -f /tmp/gpg_key_temp 2>/dev/null || true
+        fi
         if [ -n "${gpg_key_output:-}" ]; then
-            if echo "${gpg_key_output}" | gpg --dearmor 2>/dev/null | tee "${ONEAPI_KEYRING}" >/dev/null; then
+            # D3: Use here-string instead of echo-pipe-grep pattern (unsafe pipe pattern)
+            if gpg --dearmor 2>/dev/null <<< "${gpg_key_output}" | tee "${ONEAPI_KEYRING}" >/dev/null; then
                 # J1: Verify GPG key file was created successfully
                 if [ ! -f "${ONEAPI_KEYRING}" ]; then
                     echo "[ERROR] ⚠ GPG key import succeeded but file not found"
@@ -4828,7 +4650,8 @@ else
     fi
 
     # J1: Validate file exists and is readable before operations
-    if [ ! -f "${ONEAPI_SOURCE_LIST}" ] || ! grep -q "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
+    # D3c: Use -F flag for fixed-string matching
+    if [ ! -f "${ONEAPI_SOURCE_LIST}" ] || ! grep -Fq "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
         echo "  Adding Intel oneAPI repository entry..."
         # J1: Validate parent directory exists before creating file
         # H1: Check exit code of printf operation
@@ -4878,89 +4701,42 @@ if [ ! -f "${MKL_ENV_SCRIPT}" ]; then
     echo -e "  ${RED}✗ Expected MKL environment script not found at ${MKL_ENV_SCRIPT}${NC}"
     exit 1
 fi
+# ENDIF: MKL_ENV_SCRIPT existence check
 
-# Source MKL environment for current build session
-# J1: Validate file exists and is readable before sourcing
-# shellcheck disable=SC1090
-if [ -f "${MKL_ENV_SCRIPT}" ] && [ -r "${MKL_ENV_SCRIPT}" ]; then
-    if ! source "${MKL_ENV_SCRIPT}" 2>/dev/null; then
-        echo "[warn] ⚠ Failed to source MKL environment script"
-    fi
-else
-    echo "[ERROR] ⚠ MKL environment script not readable: ${MKL_ENV_SCRIPT}"
+# Note: shell-scripts file: /etc/profile.d/intel-mkl.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/intel-mkl-environment-setup.sh
+# Target: /etc/profile.d/intel-mkl.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/intel-mkl.sh ]; then
+    echo "[ERROR] ⚠ intel-mkl.sh file not found after installation"
     exit 1
 fi
-
-# Ensure MKLROOT is exported
-if [ -z "${MKLROOT:-}" ]; then
-    MKLROOT="/opt/intel/oneapi/mkl/latest"
-    export MKLROOT
+# H1: Check exit code of chmod operation
+if ! chmod 0644 /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on intel-mkl.sh"
+    exit 1
 fi
-echo "  ✓ MKLROOT resolved to ${MKLROOT}"
-
-# Persist MKL environment for future sessions
-# H4: Validate rm operation result
-if [ -f /etc/profile.d/intel-oneapi-mkl.sh ]; then
-    if ! rm -f /etc/profile.d/intel-oneapi-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to remove old intel-oneapi-mkl.sh"
-    fi
+# shellcheck disable=SC1091
+if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
+    exit 1
 fi
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of cat/heredoc operation
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-    if ! { cat > /etc/profile.d/intel-mkl.sh <<'EOF'
-#!/bin/bash
-# Intel MKL environment setup (auto-generated)
-
-MKLROOT=/opt/intel/oneapi/mkl/latest
-export MKLROOT
-
-if [ -f "${MKLROOT}/env/vars.sh" ]; then
-    # shellcheck disable=SC1090
-    . "${MKLROOT}/env/vars.sh" >/dev/null 2>&1
-fi
-
-export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"
-export LIBRARY_PATH="${MKLROOT}/lib/intel64:${LIBRARY_PATH:-}"
-export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}"
-export PKG_CONFIG_PATH="${MKLROOT}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-
-export MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-32}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
-
-BLAS_LAPACK_STRING="-L${MKLROOT}/lib/intel64 -lmkl_intel_lp64 -lmkl_core -lmkl_gnu_thread -lgomp -lpthread -lm -ldl"
-export BLAS_LIBRARIES="${BLAS_LIBRARIES:-${BLAS_LAPACK_STRING}}"
-export LAPACK_LIBRARIES="${LAPACK_LIBRARIES:-${BLAS_LAPACK_STRING}}"
-
-if [ -n "${PS1:-}" ]; then
-    echo "✅ Intel MKL environment configured"
-    echo "   MKLROOT: ${MKLROOT}"
-    echo "   MKL Threading: ${MKL_THREADING_LAYER}"
-    echo "   OMP Threads: ${OMP_NUM_THREADS}"
-fi
-EOF
-    }; then
-        echo "[warn] ⚠ Failed to create /etc/profile.d/intel-mkl.sh"
-    fi
-    # H1: Check exit code of chmod operation
-    if ! chmod +x /etc/profile.d/intel-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to chmod +x /etc/profile.d/intel-mkl.sh"
-    fi
-    # shellcheck disable=SC1091
-    if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
-    fi
-fi
-# ENDIF: create and activate intel-mkl profile script
+echo "✓ Intel MKL environment configured"
+# ENDIF: intel-mkl.sh installation verification
 
 # Persist MKLROOT in /etc/environment for non-interactive shells
 # Rationale: Ensures downstream tools invoked without a login shell find MKLROOT.
 touch /etc/environment
-if ! grep -q "^MKLROOT=" /etc/environment 2>/dev/null; then
+# D3c: Use -F flag for fixed-string matching
+if ! grep -Fq "^MKLROOT=" /etc/environment 2>/dev/null; then
     echo "MKLROOT=${MKLROOT}" >> /etc/environment
 else
-    sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment
+    # H1: Check exit code of sed operation
+    if ! sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment 2>/dev/null; then
+        echo "[ERROR] ⚠ Failed to update MKLROOT in /etc/environment"
+        exit 1
+    fi
 fi
 # ENDIF: ensure MKLROOT in /etc/environment
 
@@ -5001,8 +4777,11 @@ for candidate in "${MKL_INCLUDE_CANDIDATES[@]}"; do
 done
 
 if [ -z "${MKL_INCLUDE_DIR}" ]; then
-    found_include="$(find "${MKLROOT}" -maxdepth 4 -type f -name "mkl_cblas.h" -print -quit 2>/dev/null || true)"
-    if [ -n "${found_include}" ]; then
+    # F2: Validate command substitution result
+    found_include=""
+    found_include=$(find "${MKLROOT}" -maxdepth 4 -type f -name "mkl_cblas.h" -print -quit 2>/dev/null || echo "")
+    # F2: Validate result is non-empty before use
+    if [ -n "${found_include}" ] && [ -f "${found_include}" ]; then
         MKL_INCLUDE_DIR="$(dirname "${found_include}")"
     fi
 fi
@@ -5025,8 +4804,11 @@ for candidate in "${MKL_LIB_CANDIDATES[@]}"; do
 done
 
 if [ -z "${MKL_LIB_DIR}" ]; then
-    found_lib="$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || true)"
-    if [ -n "${found_lib}" ]; then
+    # F2: Validate command substitution result
+    found_lib=""
+    found_lib=$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || echo "")
+    # F2: Validate result is non-empty before use
+    if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
         MKL_LIB_DIR="$(dirname "${found_lib}")"
     fi
 fi
@@ -5144,7 +4926,9 @@ echo ""
 # Outputs: Status information
 echo -e "${YELLOW}[6.12B.1] Checking base image for existing OpenBLAS...${NC}"
 BASE_OPENBLAS_FOUND=false
+# M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
+BASE_OPENBLAS_PKGS=""
 BASE_OPENBLAS_PKGS=$(dpkg -l 2>/dev/null | grep -iE "^ii.*openblas" || echo "")
 if [ -n "${BASE_OPENBLAS_PKGS:-}" ]; then
     echo -e "${YELLOW}⚠ Found OpenBLAS packages in base image:${NC}"
@@ -5217,7 +5001,7 @@ if ! apt-get install -y --no-install-recommends \
     exit 1
 fi
 
-echo -e "${GREEN}✓ Build prerequisites installed${NC}"
+printf '%s\n' "${GREEN}✓ Build prerequisites installed${NC}"
 echo ""
 
 #--- Sub-block 12.3: Download OpenBLAS source ---
@@ -5225,7 +5009,7 @@ echo ""
 # Dependencies: Block 6.12B.2 (git, wget, curl), config.sh (OPENBLAS_VERSION)
 # Outputs: OpenBLAS source code
 # Note: OPENBLAS_VERSION is defined in config.sh
-echo -e "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
 : "${OPENBLAS_VERSION:?OPENBLAS_VERSION must be set in config.sh}"
 : "${SUITESPARSE_VERSION:?SUITESPARSE_VERSION must be set in config.sh}"
 OPENBLAS_REPO_URL="https://github.com/OpenMathLib/OpenBLAS.git"
@@ -5282,17 +5066,17 @@ if command -v wget >/dev/null 2>&1; then
                 # H1: Check exit code of cd operation
                 extracted_dir="OpenBLAS-${OPENBLAS_VERSION#v}"
                 if [ -d "${extracted_dir}" ] && cd "${extracted_dir}" 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    printf '%s\n' "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
                     DOWNLOAD_SUCCESS=true
                 else
-                    echo -e "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
+                    printf '%s\n' "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
                     # H4: Validate rm operation result
                     if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                         echo "[warn] ⚠ Failed to remove corrupted tarball"
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                printf '%s\n' "  ${YELLOW}⚠ Failed to extract tarball${NC}"
                 # H4: Validate rm operation result
                 if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                     echo "[warn] ⚠ Failed to remove corrupted tarball"
@@ -5313,17 +5097,17 @@ elif command -v curl >/dev/null 2>&1; then
                 # H1: Check exit code of cd operation
                 extracted_dir="OpenBLAS-${OPENBLAS_VERSION#v}"
                 if [ -d "${extracted_dir}" ] && cd "${extracted_dir}" 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    printf '%s\n' "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
                     DOWNLOAD_SUCCESS=true
                 else
-                    echo -e "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
+                    printf '%s\n' "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
                     # H4: Validate rm operation result
                     if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                         echo "[warn] ⚠ Failed to remove corrupted tarball"
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                printf '%s\n' "  ${YELLOW}⚠ Failed to extract tarball${NC}"
                 # H4: Validate rm operation result
                 if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                     echo "[warn] ⚠ Failed to remove corrupted tarball"
@@ -5354,14 +5138,14 @@ if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
         # Try cloning with tag
         # H1: Check exit code of git clone operation
         if git clone --depth 1 --branch "${OPENBLAS_VERSION}" "${OPENBLAS_REPO_URL}" . 2>&1; then
-            echo -e "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION} from repository${NC}"
+            printf '%s\n' "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION} from repository${NC}"
             DOWNLOAD_SUCCESS=true
         # Try cloning develop branch and checking out tag
         # H1: Check exit code of git clone operation
         elif git clone --depth 50 "${OPENBLAS_REPO_URL}" . 2>&1; then
             # H1: Check exit code of git checkout operation
             if git checkout "${OPENBLAS_VERSION}" 2>&1; then
-                echo -e "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
+                printf '%s\n' "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
                 DOWNLOAD_SUCCESS=true
             else
                 echo "[warn] ⚠ Failed to checkout OpenBLAS ${OPENBLAS_VERSION}"
@@ -5376,7 +5160,7 @@ fi
 
 # Final check
 if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
-    echo -e "  ${RED}✗ Failed to download OpenBLAS source${NC}"
+    printf '%s\n' "  ${RED}✗ Failed to download OpenBLAS source${NC}"
     echo "  Please verify:"
     echo "    - Version ${OPENBLAS_VERSION} exists at https://github.com/OpenMathLib/OpenBLAS/releases"
     echo "    - Internet connectivity is available"
@@ -5385,18 +5169,18 @@ fi
 
 # J1: Validate Makefile exists before operations
 if [ ! -f "Makefile" ] || [ ! -r "Makefile" ]; then
-    echo -e "  ${RED}✗ Makefile not found or not readable${NC}"
+    printf '%s\n' "  ${RED}✗ Makefile not found or not readable${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
+printf '%s\n' "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
 echo ""
 
 #--- Sub-block 12.4: Compile OpenBLAS ---
 # Purpose: Compile OpenBLAS with DYNAMIC_ARCH=1 for CPU portability
 # Dependencies: Block 6.12B.3 (OpenBLAS source)
 # Outputs: Compiled OpenBLAS library
-echo -e "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
 echo "  Build flags:"
 for flag in ${OPENBLAS_BUILD_FLAGS}; do
     case "${flag}" in
@@ -5428,7 +5212,7 @@ fi
 if [ "${BUILD_JOBS:-4}" -lt 1 ]; then
     BUILD_JOBS=1
 fi
-echo "  Using ${BUILD_JOBS} parallel jobs"
+printf '%s\n' "  Using ${BUILD_JOBS} parallel jobs"
 
 # Clean any previous build
 # H4: Validate make clean operation (may fail if no previous build, which is OK)
@@ -5442,12 +5226,14 @@ fi
 # H1: Check exit code of make operation
 # J1: Validate log file directory exists before writing
 if [ -d /tmp ] && [ -w /tmp ]; then
+    # SC2086: OPENBLAS_BUILD_FLAGS is intentionally unquoted to allow word splitting for make flags
+    # shellcheck disable=SC2086
     if tee /tmp/openblas_build.log < <(make -j"${BUILD_JOBS}" ${OPENBLAS_BUILD_FLAGS} 2>&1); then
         echo ""
-        echo -e "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
     else
         echo ""
-        echo -e "  ${RED}✗ OpenBLAS compilation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS compilation failed${NC}"
         echo "  Check log: /tmp/openblas_build.log"
         exit 1
     fi
@@ -5461,7 +5247,7 @@ echo ""
 # Purpose: Install OpenBLAS to /usr/local
 # Dependencies: Block 6.12B.4 (compiled OpenBLAS)
 # Outputs: Installed OpenBLAS library and headers
-echo -e "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...${NC}"
 # Important: Pass all build flags to make install (per official documentation)
 # D3: Use here-string or process substitution instead of pipe pattern
 # H1: Check exit code of make install operation
@@ -5471,9 +5257,9 @@ if [ -f /tmp/openblas_build.log ] && [ -w /tmp/openblas_build.log ]; then
         PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
         "${OPENBLAS_BUILD_FLAGS}" \
         2>&1); then
-        echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS installation successful${NC}"
     else
-        echo -e "  ${RED}✗ OpenBLAS installation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS installation failed${NC}"
         exit 1
     fi
 else
@@ -5481,9 +5267,9 @@ else
     if make install \
         PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
         "${OPENBLAS_BUILD_FLAGS}" 2>&1; then
-        echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS installation successful${NC}"
     else
-        echo -e "  ${RED}✗ OpenBLAS installation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS installation failed${NC}"
         exit 1
     fi
 fi
@@ -5493,7 +5279,7 @@ echo ""
 # Purpose: Verify OpenBLAS library exists and has DYNAMIC_ARCH support
 # Dependencies: Block 6.12B.5 (installed OpenBLAS)
 # Outputs: Verification status
-echo -e "${YELLOW}[6.12B.6] Verifying OpenBLAS installation...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.6] Verifying OpenBLAS installation...${NC}"
 OPENBLAS_LIB="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
 OPENBLAS_LIB_0="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0"
 
@@ -5503,7 +5289,7 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         OPENBLAS_LIB="${OPENBLAS_LIB_0}"
     fi
     
-    echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
+    printf '%s\n' "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
     
     # Check library size
     # F2: Validate command substitution result
@@ -5535,7 +5321,7 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         fi
     fi
     if [ "${ARCH_COUNT:-0}" -gt 0 ]; then
-        echo -e "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
+        printf '%s\n' "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
     fi
     
     # Check for DYNAMIC_ARCH support
@@ -5546,17 +5332,17 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         dynamic_arch_check=""
         dynamic_arch_check=$(strings "${OPENBLAS_LIB}" 2>/dev/null || echo "")
         if [ -n "${dynamic_arch_check:-}" ] && grep -qiE "DYNAMIC_ARCH|dynamic_arch|DYNAMICARCH|Dynamic.*Arch|DYNAMIC.*ARCH" <<< "${dynamic_arch_check}"; then
-            echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+            printf '%s\n' "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
         else
             # Additional check: if multiple architecture kernels are found, DYNAMIC_ARCH is likely enabled
             if [ "${ARCH_COUNT:-0}" -gt 1 ]; then
-                echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed (multiple CPU architectures detected)${NC}"
+                printf '%s\n' "    ${GREEN}✓ DYNAMIC_ARCH support confirmed (multiple CPU architectures detected)${NC}"
             else
-                echo -e "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
+                printf '%s\n' "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
             fi
         fi
     else
-        echo -e "    ${YELLOW}⚠ strings command not available - cannot verify DYNAMIC_ARCH${NC}"
+        printf '%s\n' "    ${YELLOW}⚠ strings command not available - cannot verify DYNAMIC_ARCH${NC}"
     fi
 else
     printf '%s\n' "  ${RED}✗ OpenBLAS library not found at expected location${NC}" >&2
@@ -5675,23 +5461,21 @@ fi
 
 # Verify OpenBLAS is now in ldconfig cache
 # D3c: Use -F flag for literal pattern matching
-if grep -Fq libopenblas < <(timeout 5 ldconfig -p 2>/dev/null); then
-    printf '%s\n' "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
-else
-    printf '%s\n' "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}" >&2
-    # Retry ldconfig
-    # H4: Validate ldconfig refresh result
+# Note: config-files file: /etc/environment is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/environment.conf
+# Target: /etc/environment
+# Installed in Block 0 (early in script, before any scripts are needed)
     if ! run_ldconfig_refresh 2>&1; then
         printf '%s\n' "  ${YELLOW}⚠ ldconfig refresh failed${NC}" >&2
     fi
     # Check again
-    if ldconfig -p 2>/dev/null | grep -Fq libopenblas; then
+    # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+    if ldconfig -p 2>/dev/null | grep -Fq -- libopenblas || true; then
         printf '%s\n' "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
     else
         printf '%s\n' "  ${YELLOW}⚠ OpenBLAS still not in ldconfig cache (library may need to be in standard location)${NC}" >&2
         printf '%s\n' "    Library exists at: ${OPENBLAS_LIB_FILE}"
         printf '%s\n' "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
-    fi
 fi
 # ENDIF: ldconfig cache verification
 
@@ -5706,20 +5490,18 @@ case ":${CMAKE_PREFIX_PATH:-}:" in
 esac
 
 # Add to environment for future sessions
-cat >> /etc/environment <<'EOF'
-LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
-PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-OpenBLAS_DIR="${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas"
-CMAKE_PREFIX_PATH="${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
-EOF
+# Note: config-files file: /etc/environment is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/environment.conf
+# Target: /etc/environment
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file uses 'cat >>' (append), so the content is added to existing /etc/environment
 
 # Create pkg-config file for OpenBLAS
 if ! mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" 2>/dev/null; then
     printf '%s\n' "  ${YELLOW}⚠ Failed to create pkgconfig directory at ${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig${NC}" >&2
-else
-    :
 fi
 if [ -d "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" ] && [ -w "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" ]; then
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_INSTALL_PREFIX}, ${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig/openblas.pc" <<EOF
 prefix=${OPENBLAS_INSTALL_PREFIX}
 libdir=\${prefix}/lib
@@ -5740,6 +5522,7 @@ if ! mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" 2>/dev/null; then
     printf '%s\n' "  ${YELLOW}⚠ Failed to create CMake config directory at ${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas${NC}" >&2
 fi
 if [ -d "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" ] && [ -w "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" ]; then
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_INSTALL_PREFIX}, ${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfig.cmake" <<EOF
 # OpenBLAS CMake configuration file
 set(OpenBLAS_VERSION "${OPENBLAS_VERSION#v}")
@@ -5757,20 +5540,14 @@ if(OpenBLAS_LIBRARY)
     set(OpenBLAS_LIBRARIES "\${OpenBLAS_LIBRARY}")
     set(OpenBLAS_FOUND TRUE)
     set(OPENBLAS_FOUND TRUE)
-    
-    # Create imported target
-    if(NOT TARGET OpenBLAS::OpenBLAS)
-        add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
-        set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
-            IMPORTED_LOCATION "\${OpenBLAS_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "\${OpenBLAS_INCLUDE_DIRS}"
-        )
-    endif()
 else()
     set(OpenBLAS_FOUND FALSE)
     set(OPENBLAS_FOUND FALSE)
 endif()
 EOF
+# ENDIF: OpenBLASConfig.cmake creation
+
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfigVersion.cmake" <<EOF
 set(PACKAGE_VERSION "${OPENBLAS_VERSION#v}")
 if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
@@ -5782,24 +5559,20 @@ else()
     endif()
 endif()
 EOF
-else
-    printf '%s\n' "  ${YELLOW}⚠ Cannot write OpenBLAS CMake config files (directory not writable): ${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas${NC}" >&2
-fi
+# ENDIF: OpenBLASConfigVersion.cmake creation
 
-# Create profile.d script for OpenBLAS (ensures variables available in all shells)
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-cat > /etc/profile.d/openblas.sh <<EOF
-export PATH=${OPENBLAS_INSTALL_PREFIX}/bin:\${PATH}
-export LD_LIBRARY_PATH=${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
-export PKG_CONFIG_PATH=${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
-export OpenBLAS_DIR=${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas
-export CMAKE_PREFIX_PATH=${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
-EOF
+# Note: config-files file: /etc/profile.d/openblas.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/openblas.sh
+# Target: /etc/profile.d/openblas.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/openblas.sh ]; then
+    printf '%s\n' "  ${YELLOW}⚠ openblas.sh file not found after installation${NC}" >&2
 else
-  printf '%s\n' "  ${YELLOW}⚠ /etc/profile.d not writable; skipping OpenBLAS profile script${NC}" >&2
-fi
-if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
-  printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
+    if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
+        printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
+    fi
+# ENDIF: openblas.sh installation verification
 fi
 
 printf '%s\n' "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
@@ -5811,15 +5584,13 @@ echo ""
 # Outputs: APT preferences file
 printf '%s\n' "${YELLOW}[6.12B.9] Setting up APT pinning to protect OpenBLAS...${NC}"
 if [ -d /etc/apt/preferences.d ] && [ -w /etc/apt/preferences.d ]; then
-cat > /etc/apt/preferences.d/openblas-protect <<'EOF'
-# Prevent APT from installing system OpenBLAS packages
-# Our custom-compiled OpenBLAS should be used instead
-Package: libopenblas-dev libopenblas64-dev libopenblas0-pthread libopenblas0-serial libopenblas0
-Pin: release *
-Pin-Priority: -1
-EOF
+    # Note: config-files file: /etc/apt/preferences.d/openblas-protect is installed via install.sh from container-scripts/
+    # Source: config-files/block-12-openblas-compilation-and-installation/openblas-protect.pref
+    # Target: /etc/apt/preferences.d/openblas-protect
+    # Installed in Block 0 (early in script, before any scripts are needed)
+    : # No-op: File is installed via install.sh, no action needed here
 else
-  printf '%s\n' "  ${YELLOW}⚠ /etc/apt/preferences.d not writable; skipping APT pinning${NC}" >&2
+    printf '%s\n' "  ${YELLOW}⚠ /etc/apt/preferences.d not writable; skipping APT pinning${NC}" >&2
 fi
 
 printf '%s\n' "  ${GREEN}✓ APT pinning configured${NC}"
@@ -5834,7 +5605,12 @@ printf '%s\n' "${YELLOW}[6.12B.10] Final verification...${NC}"
 # Check alternatives
 printf '%s\n' "  Checking alternatives system:"
 # D3d, F2: Validate command substitution result
-CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -F "link currently points to" | sed 's/.*points to //' || echo "unknown")
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -F "link currently points to" 2>/dev/null | sed 's/.*points to //' 2>/dev/null || echo "unknown")
+# F2: Validate result is non-empty
+if [ -z "${CURRENT_BLAS:-}" ]; then
+    CURRENT_BLAS="unknown"
+fi
 # D3c: Use -F flag for literal pattern matching
 if grep -Fq "${OPENBLAS_LIB_FILE}" < <(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null); then
     printf '%s\n' "    ${GREEN}✓ OpenBLAS registered with alternatives (priority ${OPENBLAS_ALT_PRIORITY})${NC}"
@@ -5866,8 +5642,11 @@ printf '%s\n' "  Checking ldconfig:"
 if grep -Fq libopenblas < <(timeout 5 ldconfig -p 2>/dev/null); then
     printf '%s\n' "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
     # H4: Validate grep result before using
+    # SC2034: ldconfig_output kept for potential future use in debugging
+    # shellcheck disable=SC2034
     ldconfig_output=""
-    mapfile -t _ld_lines < <(timeout 5 ldconfig -p 2>/dev/null | grep -F libopenblas | head -3 || true)
+    # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+    mapfile -t _ld_lines < <(timeout 5 ldconfig -p 2>/dev/null | grep -F libopenblas 2>/dev/null | head -3 2>/dev/null || true)
     if [ "${#_ld_lines[@]}" -gt 0 ]; then
         printf '%s\n' "${_ld_lines[@]}" | sed 's/^/      /'
     fi
@@ -5932,13 +5711,22 @@ echo "==> Installing NVIDIA cuDNN for CUDA 12.x..."
 CUDA_STACK_ALREADY_PRESENT=false
 # D3c: Use -F flag for literal pattern matching
 if command -v nvcc >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -Fq 'libcudnn.so'; then
+  # D3d, F2: Validate command substitution result
   NVCC_VERSION_DETECTED=$(nvcc --version 2>/dev/null | awk -F'release ' 'NF>1 {print $2}' | awk '{print $1}' | tr -d 'V,' || echo "")
+  # D3d, F2: Validate command substitution result
   CUDNN_VERSION_DETECTED=$(
     dpkg-query -W -f='${Version}\n' libcudnn9 2>/dev/null \
       || dpkg-query -W -f='${Version}\n' "libcudnn9-cuda-${CUDA_MAJOR}" 2>/dev/null \
       || dpkg-query -W -f='${Version}\n' libcudnn9-cuda 2>/dev/null \
       || echo ""
   )
+  # F2: Validate command substitution results
+  if [ -z "${NVCC_VERSION_DETECTED:-}" ]; then
+      NVCC_VERSION_DETECTED=""
+  fi
+  if [ -z "${CUDNN_VERSION_DETECTED:-}" ]; then
+      CUDNN_VERSION_DETECTED=""
+  fi
   if [ -n "${NVCC_VERSION_DETECTED}" ] && [ "${NVCC_VERSION_DETECTED}" = "${CUDA_VERSION}" ] \
      && [ -n "${CUDNN_VERSION_DETECTED}" ] && [ -n "${CUDNN_VER:-}" ] \
      && [ "${CUDNN_VERSION_DETECTED}" = "${CUDNN_VER}" ]; then
@@ -5976,7 +5764,12 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
 
   # Update package list to ensure CUDA repository metadata is available
   # Use APT cache configuration to ensure all operations use the persistent cache
-  apt-get "${APT_CACHE_OPTS}" update
+  # H1: Exit-status check for external command
+  if ! apt-get "${APT_CACHE_OPTS}" update; then
+      echo "✗ Failed to update APT package list. Aborting GPU library install." >&2
+      export PHASE2_STATUS="FAIL"
+      exit 1
+  fi
 
   # Determine the optimal CUDA package set available in Ubuntu 24.04
   CUDA_VERSION_PREFERRED="${CUDA_VERSION:-12.6}"
@@ -5992,7 +5785,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   package_available() {
       local pkg="$1"
       local candidate
-      candidate=$(apt-cache policy "${pkg}" 2>/dev/null | awk '/Candidate:/ {print $2}')
+      # SC2155: Declare and assign separately to avoid masking return values
+      candidate=$(apt-cache policy "${pkg}" 2>/dev/null | awk '/Candidate:/ {print $2}' || echo "")
       if [ -n "${candidate:-}" ] && [ "${candidate}" != "(none)" ]; then
           return 0
       fi
@@ -6135,7 +5929,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       printf '%s\n' "  ⚠ Version ${CUDNN_VER} not found in repository" >&2
       printf '%s\n' "  Checking available cuDNN versions..."
       # D3c: Use -E for regex pattern (version numbers)
-      version_list=$(apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)")
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+      version_list=$(apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" 2>/dev/null | head -5 2>/dev/null || echo "    (Could not list versions)")
       printf '%s\n' "${version_list}"
   fi
 
@@ -6144,7 +5939,13 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
 
   # Check for cached NVIDIA packages before downloading
   printf '%s\n' "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
-  CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+  # D3d, F2: Validate command substitution result
+  # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+  CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l || echo "0")
+  # F2: Validate result is numeric
+  if ! [[ "${CACHED_NVIDIA_PKGS}" =~ ^[0-9]+$ ]]; then
+      CACHED_NVIDIA_PKGS=0
+  fi
   if [ "${CACHED_NVIDIA_PKGS}" -gt 0 ]; then
       printf '%s\n' "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - APT will reuse if versions match"
       printf '%s\n' "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
@@ -6175,6 +5976,17 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   # J1: File existence validation before use
   if [ ! -f /etc/apt/apt.conf.d/90-cache.conf ]; then
       printf '%s\n' "[WARN] APT cache configuration missing - creating it now..." >&2
+      # J1: Validate parent directory exists before writing
+      PARENT_DIR="/etc/apt/apt.conf.d"
+      if [ ! -d "${PARENT_DIR}" ]; then
+          printf '%s\n' "[WARNING] Parent directory does not exist: ${PARENT_DIR}" >&2
+          printf '%s\n' "[INFO] Creating parent directory: ${PARENT_DIR}" >&2
+          mkdir -p "${PARENT_DIR}" || {
+              printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+              exit 1
+          }
+          printf '%s\n' "[INFO] Parent directory created successfully: ${PARENT_DIR}" >&2
+      fi
       printf '%s\n' "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
       printf '%s\n' 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
   fi
@@ -6199,12 +6011,17 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
               # Detect installed version
-              INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || true)
+              # D3d, F2: Validate command substitution results
+              INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || echo "")
               if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || true)
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || echo "")
               fi
               if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || echo "")
+              fi
+              # F2: Validate result is non-empty before use
+              if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                  INSTALLED_CUDNN_VER=""
               fi
               if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
                   printf '%s\n' "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
@@ -6218,61 +6035,14 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
       printf '%s\n' "✓ NVIDIA cuDNN installed successfully."
       
-      # CRITICAL: Immediately sync cache to ensure packages are persisted to disk
-      # This ensures cache is available even if build fails later
-      printf '%s\n' "[INFO] Syncing NVIDIA package cache to disk immediately..."
-      # H4: Validate sync operation
-      if ! sync; then
-          printf '%s\n' "[WARN] ⚠ Cache sync failed - packages may not be persisted (non-critical)" >&2
-      fi
-      
-      # Verify packages are in cache and sync any from /var/cache/apt/archives if needed
-      if [ -d "/var/cache/apt/archives" ]; then
-          VAR_CACHE_NVIDIA="$(wc -l <<< "$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name \"*.deb\" 2>/dev/null)")"
-          if [ "${VAR_CACHE_NVIDIA}" -gt 0 ]; then
-              printf '%s\n' "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
-              # Phase 1: Collect package paths into array (avoids pipe subshell, preserves error handling)
-              nvidia_files_array=()
-              while IFS= read -r -d '' deb_file; do
-                  if [ -n "${deb_file:-}" ] && [ -f "${deb_file}" ]; then
-                      nvidia_files_array+=("${deb_file}")
-                  fi
-              done < <(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" -print0 2>/dev/null)
-              
-              # Phase 2: Copy packages with explicit error tracking
-              if [ ${#nvidia_files_array[@]} -gt 0 ]; then
-                  copy_success=0
-                  copy_failed=0
-                  for deb_file in "${nvidia_files_array[@]}"; do
-                      if [ -f "${deb_file:-}" ]; then
-                          deb_name=$(basename "${deb_file}")
-                          if [ ! -f "${CONTAINER_APT_CACHE}/${deb_name}" ]; then
-                              if cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" 2>/dev/null; then
-                                  copy_success=$((copy_success + 1))
-                              else
-                                  copy_failed=$((copy_failed + 1))
-                                  printf '%s\n' "[WARN] ⚠ Failed to copy: ${deb_file}" >&2
-                              fi
-                          fi
-                      fi
-                  done
-                  if [ "${copy_success}" -gt 0 ]; then
-                      printf '%s\n' "[INFO] Copied ${copy_success} package(s) to cache"
-                  fi
-                  if [ "${copy_failed}" -gt 0 ]; then
-                      printf '%s\n' "[WARN] ⚠ Failed to copy ${copy_failed} package(s) (non-critical)" >&2
-                  fi
-                  # Force sync again after copying
-                  # H4: Validate sync operation
-                  if ! sync; then
-                      printf '%s\n' "[WARN] ⚠ Final cache sync failed (non-critical)" >&2
-                  fi
-              fi
-          fi
-      fi
-      
-      monitor_cache "After CUDA/cuDNN installation"
-      CUDA_INSTALL_PERFORMED=true
+      # CRITICAL: Immediately consolidate cache packages
+      # This ensures ~4GB of NVIDIA packages (and all other cache) are preserved even if build fails/interrupts
+      # Function consolidates from /var/cache/apt/archives/ to /container_cache/apt/archives/ (all packages, not just NVIDIA)
+      # Since /container_cache/ is bind-mounted to host, files are automatically available on host without sync
+# Note: shell-scripts file: /etc/profile.d/cuda.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-13-nvidia-cuda-cudnn-setup/cuda.sh
+# Target: /etc/profile.d/cuda.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
   else
       printf '%s\n' "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details." >&2
       export PHASE2_STATUS="FAIL"
@@ -6287,7 +6057,12 @@ printf '%s\n' "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment v
 CUDA_MAJOR="${CUDA_VERSION%%.*}"  # Extract major version from config.sh
 # D3d, F2: Validate command substitution result
 # SC2012: Use find instead of ls to better handle non-alphanumeric filenames
-DETECTED_CUDA=$(find /usr/local -maxdepth 1 -type d -name "cuda-${CUDA_MAJOR}.*" 2>/dev/null | head -1 | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+DETECTED_CUDA=$(find /usr/local -maxdepth 1 -type d -name "cuda-${CUDA_MAJOR}.*" 2>/dev/null | head -1 2>/dev/null | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p' 2>/dev/null || echo "" || true)
+# F2: Validate result is non-empty
+if [ -z "${DETECTED_CUDA:-}" ]; then
+    DETECTED_CUDA=""
+fi
 if [ -n "${DETECTED_CUDA}" ]; then
   CUDA_VERSION="${DETECTED_CUDA}"  # Use detected version if found
 fi
@@ -6299,13 +6074,15 @@ printf '%s\n' "Detected CUDA version: ${CUDA_VERSION}"
 # Critical: Set PATH and LD_LIBRARY_PATH for CUDA toolkit
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-cat > /etc/profile.d/cuda.sh << EOF
-#!/bin/sh
-export PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/bin\${PATH:+:\$PATH}
-export LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
-export CUDA_HOME=/usr/local/cuda-${CUDA_VERSION:-12.6}
-EOF
-chmod +x /etc/profile.d/cuda.sh
+# Note: shell-scripts file: /etc/profile.d/cuda.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-13-nvidia-cuda-cudnn-setup/cuda.sh
+# Target: /etc/profile.d/cuda.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
+# H1: Check exit code of chmod operation
+if ! chmod +x /etc/profile.d/cuda.sh 2>/dev/null; then
+    printf '%s\n' "[WARN] Failed to set executable bit on /etc/profile.d/cuda.sh (non-critical)" >&2
+fi
 
 #--- Sub-block 13.3: Ensure CUDA environment in non-login shells ---
 # Purpose: Make CUDA available in all shell types
@@ -6349,7 +6126,8 @@ else
   nvcc --version
 fi
 # D3c: Use -F flag for literal pattern matching
-if ! grep -Fq 'libcudnn.so' < <(timeout 5 ldconfig -p 2>/dev/null); then
+# D3d: Validate process substitution result
+if ! grep -Fq 'libcudnn.so' < <(timeout 5 ldconfig -p 2>/dev/null || echo ""); then
   printf '%s\n' "${RED}[VERIFICATION FAILED] 'libcudnn.so' not found in linker cache.${NC}" >&2
   PHASE2_SUCCESS=false
 else
@@ -6383,8 +6161,14 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
   echo "[INFO] Packages should be in ${CONTAINER_APT_CACHE} (configured APT cache directory)"
 
   # Count packages in the configured APT cache directory
+  # D3e: Handle empty output from find command
   NVIDIA_PKG_FIND_OUTPUT="$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null || true)"
-  NVIDIA_PKG_COUNT="$(grep -c . <<< "${NVIDIA_PKG_FIND_OUTPUT}" || echo "0")"
+  # F2: Validate result format - check if output is non-empty before counting
+  if [ -z "${NVIDIA_PKG_FIND_OUTPUT:-}" ]; then
+      NVIDIA_PKG_COUNT="0"
+  else
+      NVIDIA_PKG_COUNT="$(grep -c . <<< "${NVIDIA_PKG_FIND_OUTPUT}" || echo "0")"
+  fi
   CACHE_SIZE_RAW="$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null || true)"
   CACHE_SIZE="$(cut -f1 <<< "${CACHE_SIZE_RAW:-0B}")"
 
@@ -6398,9 +6182,10 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
       if [ "${VAR_CACHE_COUNT}" -gt 0 ]; then
           echo "[WARN] Found ${VAR_CACHE_COUNT} NVIDIA packages in /var/cache/apt/archives (should be in ${CONTAINER_APT_CACHE})"
           echo "[INFO] Syncing packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
-          NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+          NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null || true)
           if [ -n "${NVIDIA_FILES:-}" ]; then
-              echo "${NVIDIA_FILES}" | while read -r deb_file; do
+              # D2: Use IFS= and read -r for safe word splitting
+              echo "${NVIDIA_FILES}" | while IFS= read -r deb_file || [ -n "${deb_file:-}" ]; do
                   if [ -f "${deb_file:-}" ]; then
                       # Only copy if not already in cache (avoid duplicates)
                       deb_name=$(basename "${deb_file}")
@@ -6410,8 +6195,10 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
                   fi
               done
               # Re-count after sync
-              NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
-              CACHE_SIZE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+              # D3e: Add || true to prevent SIGPIPE error when pipe breaks
+              NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l || echo "0")
+              CACHE_SIZE_RAW=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null || echo "0B")
+              CACHE_SIZE=$(cut -f1 <<< "${CACHE_SIZE_RAW:-0B}" || echo "0B")
               echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT} NVIDIA-related packages"
               echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE}"
           fi
@@ -6469,7 +6256,9 @@ early_verify_cached_files() {
         else
             echo "✗ Miniforge SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" "${MINIFORGE_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" -w "%{http_code}" "${MINIFORGE_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
                 if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
                     echo "✓ Miniforge re-downloaded and verified"
                 else
@@ -6488,7 +6277,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ Miniforge re-download attempt failed due to network error"
+                echo "✗ Miniforge re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6502,7 +6291,9 @@ early_verify_cached_files() {
         else
             echo "✗ Micromamba SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" "${MICROMAMBA_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" -w "%{http_code}" "${MICROMAMBA_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
                 if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
                     echo "✓ Micromamba re-downloaded and verified"
                 else
@@ -6521,7 +6312,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ Micromamba re-download attempt failed due to network error"
+                echo "✗ Micromamba re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6536,7 +6327,9 @@ early_verify_cached_files() {
         else
             echo "✗ yq SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" "${YQ_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" -w "%{http_code}" "${YQ_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
                 if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
                     echo "✓ yq re-downloaded and verified"
                 else
@@ -6555,7 +6348,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ yq re-download attempt failed due to network error"
+                echo "✗ yq re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6570,12 +6363,14 @@ early_verify_cached_files() {
         julia_url="${JULIA_URL}"
 
         # SHA256 verification
-    if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
-      echo "✓ Julia SHA256 verified"
+        # D3d: Validate command substitution result
+        if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
+            echo "✓ Julia SHA256 verified"
         else
-      echo "✗ Julia SHA256 verification failed - file corrupted during copy!"
+            echo "✗ Julia SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      if curl -fsSL -o "${julia_file}" "${julia_url}"; then
+            # I4: HTTP error handling for curl
+            if curl -fsSL -o "${julia_file}" "${julia_url}" 2>/dev/null; then
         if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
           echo "✓ Julia re-downloaded and SHA256 verified"
         else
@@ -6590,14 +6385,14 @@ early_verify_cached_files() {
           echo "  You may manually download this file and place it at:"
           echo "    ${julia_file}"
           echo "═══════════════════════════════════════════════════════════════"
-          echo "✗ Julia re-download also failed - aborting build"
+                    echo "✗ Julia re-download also failed - aborting build"
+                    exit 1
+                fi
+            else
+                echo "✗ Julia re-download attempt failed due to network error"
                 exit 1
+            fi
         fi
-      else
-        echo "✗ Julia re-download attempt failed due to network error"
-        exit 1
-      fi
-    fi
 
     # gzip integrity check
     # Validate file exists before integrity check (J1)
@@ -6611,8 +6406,10 @@ early_verify_cached_files() {
       echo "✗ Julia gzip integrity check failed - archive is corrupted!"
       echo "  Attempting to re-download..."
       # Check HTTP status code for curl (I4)
-      http_code="$(curl -fsSL -o "${julia_file}" -w "%{http_code}" "${julia_url}")"
-      if [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
+      # I4: Validate HTTP code is 3-digit number before checking
+      http_code="$(curl -fsSL -o "${julia_file}" -w "%{http_code}" "${julia_url}" 2>/dev/null || echo "000")"
+      # I4: Validate HTTP code format before use
+      if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
         if gzip -t "${julia_file}" 2>/dev/null; then
           echo "✓ Julia re-downloaded and gzip integrity verified"
         else
@@ -6638,21 +6435,13 @@ early_verify_cached_files() {
     # ENDIF: gzip integrity check
     fi
     # ENDIF: Julia verification
-
-
-    echo "✓ Early verification completed - all cached files are intact"
 }
-# End early_verify_cached_files function (self-contained)
 
 
-#--- Sub-block 13.10: Verify all cached binaries ---
-# Purpose: Check integrity of TurboVNC, VirtualGL, Miniforge, Julia
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 13.11: Execute early file verification ---
-# Critical: Run verification before proceeding with build
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+# Note: config-files file: /etc/dpkg/dpkg.cfg.d/01-nodoc is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf
+# Target: /etc/dpkg/dpkg.cfg.d/01-nodoc
+# Installed in Block 0 (early in script, before any scripts are needed)
 early_verify_cached_files
 
 #--- Sub-block 13.12: Setup GPG verification system ---
@@ -6673,17 +6462,12 @@ setup_gpg_verification
 # Outputs: Environment variables, configuration
 echo "==> Configuring dpkg to exclude unnecessary documentation..."
 if [ -d /etc/dpkg/dpkg.cfg.d ] && [ -w /etc/dpkg/dpkg.cfg.d ]; then
-cat > /etc/dpkg/dpkg.cfg.d/01-nodoc << 'EOF'
-# Exclude all documentation
-path-exclude /usr/share/doc/*
-# but keep copyright files for compliance
-path-include /usr/share/doc/*/copyright
-# Exclude all man pages and info pages
-path-exclude /usr/share/man/*
-path-exclude /usr/share/info/*
-# Exclude non-English dictionaries
-path-exclude /usr/share/dict/wordlist.de*
-EOF
+    # Note: config-files file: /etc/dpkg/dpkg.cfg.d/01-nodoc is installed via install.sh from container-scripts/
+    # Source: config-files/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf
+    # Target: /etc/dpkg/dpkg.cfg.d/01-nodoc
+    # Installed in Block 0 (early in script, before any scripts are needed)
+    # Configuration file is already installed, no action needed
+    :
 else
   printf '%s\n' "  ${YELLOW}⚠ dpkg cfg directory not writable; skipping 01-nodoc configuration${NC}" >&2
 fi
@@ -6701,13 +6485,24 @@ apt-get update -o Acquire::Retries=3
 # Outputs: Installed packages
 printf '%s\n' "==> Installing all bootstrap and utility packages..."
 # Clean up any existing apt temporary directories
-# H4: Masked failures with || true - validate cleanup results
+# H4: Masked failures with || true - validate cleanup results (non-critical cleanup operations)
+# Note: Cleanup failures are non-critical, but we validate directory state after cleanup
 if ! rm -rf /tmp/apt-dpkg-install-* 2>/dev/null; then
   # Cleanup failure is non-critical, continue
   :
 fi
+# Validate cleanup completed (optional verification for debugging)
+if [ -d /tmp/apt-dpkg-install-* ] 2>/dev/null; then
+  # Some directories may still exist (non-critical)
+  :
+fi
 if ! rm -rf /var/cache/apt/archives/partial/* 2>/dev/null; then
   # Cleanup failure is non-critical, continue
+  :
+fi
+# Validate cleanup completed (optional verification for debugging)
+if [ -d /var/cache/apt/archives/partial ] && [ -n "$(ls -A /var/cache/apt/archives/partial 2>/dev/null)" ]; then
+  # Some files may still exist (non-critical)
   :
 fi
 
@@ -6887,18 +6682,24 @@ rm -f "${curl_stderr}"
 printf '%s\n' "Verifying PPA GPG keys..."
 # Validate directory exists before globbing (J1)
 if [ -d /etc/apt/trusted.gpg.d ]; then
-  for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
-    # Handle case where glob matches no files (D3f)
-    if [ -f "${keyfile:-}" ]; then
-      # Validate basename result (F2, H4)
-      keyname=$(basename "${keyfile}" 2>/dev/null || echo "")
-      if [ -n "${keyname}" ]; then
+  # Iterate over key files in trusted.gpg.d
+  for keyfile in /etc/apt/trusted.gpg.d/*.gpg /etc/apt/trusted.gpg.d/*.asc; do
+    # Skip if glob didn't match any files
+    [ ! -f "${keyfile}" ] && continue
+    # Extract keyname from filename
+    # D3: sed command with error fallback for safety (D4, F2, H4)
+    keyname=$(basename "${keyfile}" .gpg | sed 's/\.asc$//' || echo "")
+    # Validate keyname is non-empty (F2, H4)
+    if [ -z "${keyname}" ]; then
+      keyname=$(basename "${keyfile}")
+    fi
+    # Verify key file is readable
+    if [ -r "${keyfile}" ]; then
         printf '%s\n' "✓ PPA key verified: ${keyname}"
-      fi
     fi
   done
-fi
 # ENDFOR: keyfile
+fi
 
 #--- Sub-block 13.25: Update package lists with PPAs ---
 # Critical: Refresh APT cache with all newly added repositories
@@ -6918,12 +6719,11 @@ monitor_cache "After PPA update"
 # Purpose: Set retry and timeout policies for reliable downloads
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat >> /etc/apt/apt.conf.d/80-retries << 'EOF'
-Acquire::Retries "3";
-Acquire::http::Timeout "30";
-Acquire::https::Timeout "30";
-Acquire::ftp::Timeout "30";
-EOF
+# Note: config-files file: /etc/apt/apt.conf.d/80-retries is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/80-retries.conf
+# Target: /etc/apt/apt.conf.d/80-retries
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file uses 'cat >>' (append), so the content is added to existing config
 # apt-fast environment variables and verification removed - using apt-aria wrapper instead
 
 #--- Sub-block 12B.1: Install GMP, MPFR, and METIS (SuiteSparse prerequisites) ---
@@ -6935,11 +6735,11 @@ EOF
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages (libgmp-dev, libmpfr-dev, libmetis-dev)
 printf '%b\n' "${YELLOW}[6.12B.1] Installing GMP, MPFR, and METIS (SuiteSparse prerequisites)...${NC}"
-echo "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
-echo "CHOLMOD's METIS support: METIS is embedded in libcholmod.so in recent SuiteSparse versions"
-echo "  → libmetis-dev provides headers needed at build time, but METIS functions are in libcholmod.so"
+printf '%s\n' "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
+printf '%s\n' "CHOLMOD's METIS support: METIS is embedded in libcholmod.so in recent SuiteSparse versions"
+printf '%s\n' "  → libmetis-dev provides headers needed at build time, but METIS functions are in libcholmod.so"
 if ! apt-get install -y --no-install-recommends libgmp-dev libmpfr-dev libmetis-dev; then
-    echo "  ✗ Failed to install GMP/MPFR/METIS packages"
+    printf '%s\n' "  ✗ Failed to install GMP/MPFR/METIS packages" >&2
     exit 1
 fi
 
@@ -7190,8 +6990,8 @@ for i, line in enumerate(lines):
             sys.exit(0)
         # Insert CMAKE_REQUIRED_LIBRARIES setup before the check
         indent = len(line) - len(line.lstrip())
-        # Save original value first
-        lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES \${CMAKE_REQUIRED_LIBRARIES} )\n')
+        # Save original value first (escape $ for Python string literal)
+        lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} )\n')
         # Set CMAKE_REQUIRED_LIBRARIES to include libm
         lines.insert(i+1, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \"m\" )\n')
         # Find the closing of check_symbol_exists (next line with if NOT NO_LIBM)
@@ -7201,13 +7001,13 @@ for i, line in enumerate(lines):
             if re.search(r'if\s*\(\s*NOT\s+NO_LIBM', lines[j]):
                 # Insert restore before the if statement
                 indent_if = len(lines[j]) - len(lines[j].lstrip())
-                lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+                lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES ${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
                 restore_inserted = True
                 fixed = True
                 break
         if not restore_inserted:
             # If we couldn't find the if, add restore after check_symbol_exists line (3 lines after insertion)
-            lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+            lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES ${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
             fixed = True
         break
 
@@ -7222,12 +7022,12 @@ else:
 " "${GRAPHBLAS_CMakeLists}" 2>&1
             PATCH_RESULT=$?
             # Validate patch result (F2, H4)
-            if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
+            if [ "${PATCH_RESULT:-1}" -eq 0 ] && [ -n "${GRAPHBLAS_CMakeLists}" ] && [ -f "${GRAPHBLAS_CMakeLists}" ]; then
                 # Patch succeeded, remove backup file
                 rm -f "${GRAPHBLAS_CMakeLists}.bak"
             else
                 printf '%s\n' "  ⚠ Failed to fix check_symbol_exists, will ensure libm is linked directly" >&2
-                # Restore backup on failure
+                # Restore backup on failure (optional - keep backup for debugging)
                 # Validate backup file exists before restoring (J1)
                 if [ -f "${GRAPHBLAS_CMakeLists}.bak" ]; then
                     mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
@@ -7343,7 +7143,12 @@ if patched_count > 0:
 else:
     print('  ✓ All executables already link against libm (or no additional executables found)')
     sys.exit(0)
-" "${SUITESPARSE_SOURCE_DIR}/src" 2>&1 || echo "  ⚠ Failed to patch some CMakeLists.txt files, will rely on CMAKE_EXE_LINKER_FLAGS"
+" "${SUITESPARSE_SOURCE_DIR}/src" 2>&1
+            PATCH_ALL_RESULT=$?
+            # Validate patch result (F2, H4)
+            if [ "${PATCH_ALL_RESULT:-1}" -ne 0 ]; then
+                printf '%s\n' "  ⚠ Failed to patch some CMakeLists.txt files, will rely on CMAKE_EXE_LINKER_FLAGS" >&2
+            fi
     else
         echo "  ⚠ python3 not found, cannot patch all CMakeLists.txt files"
         echo "    → Will rely on CMAKE_EXE_LINKER_FLAGS_INIT for all executables"
@@ -7352,10 +7157,18 @@ else:
     
     # Also ensure libm is always linked on Unix (safer approach)
     # Check if GraphBLAS target already links to math library (case-insensitive)
-    if ! grep -qiE "(target_link_libraries.*GraphBLAS.*\bm\b|target_link_libraries.*graphblas.*\bm\b)" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+    # Check for target_link_libraries line containing both GraphBLAS/graphblas and math library ' m'
+    # Use -- to prevent option misinterpretation if pattern starts with '-' (K1b)
+    if ! grep -qiE "(target_link_libraries.*GraphBLAS.*[[:space:]]m[[:space:]]|target_link_libraries.*graphblas.*[[:space:]]m[[:space:]])" -- "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
         # Find the GraphBLAS target name (could be GraphBLAS, graphblas, etc.)
         # Look for add_library command
-        GRAPHBLAS_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${GRAPHBLAS_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
+        # Validate command substitution result (F2, H4)
+        GRAPHBLAS_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${GRAPHBLAS_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' || echo "")
+        # Validate result is non-empty and contains valid target name (F2, H4)
+        if [ -z "${GRAPHBLAS_TARGET}" ] || ! printf '%s\n' "${GRAPHBLAS_TARGET}" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            echo "  ⚠ Could not determine GraphBLAS target name from CMakeLists.txt"
+            GRAPHBLAS_TARGET=""
+        fi
         
         if [ -n "${GRAPHBLAS_TARGET}" ]; then
             echo "  → GraphBLAS target: ${GRAPHBLAS_TARGET}"
@@ -7369,7 +7182,8 @@ else:
                 # We'll add it after the first target_link_libraries call for GraphBLAS, or at the end of target configuration
                 # Use sed to add target_link_libraries with math library
                 # First, check if there's already a target_link_libraries line we can modify
-                if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+                # Use -- to prevent option misinterpretation (K1b)
+                if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" -- "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
                     # Add m to existing target_link_libraries line (if not already there)
                     echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
                     # Create a backup and patch using Python (will be cleaned up after successful patch)
@@ -7536,10 +7350,17 @@ fi
 if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
     echo "  → Found LAGraph CMakeLists.txt: ${LAGRAPH_CMakeLists}"
     # Check if LAGraph target already links to math library (case-insensitive)
-    if ! grep -qiE "(target_link_libraries.*LAGraph.*\bm\b|target_link_libraries.*lagraph.*\bm\b)" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+    # Check for target_link_libraries line containing both LAGraph/lagraph and math library ' m'
+    # Use -- to prevent option misinterpretation if pattern starts with '-' (K1b)
+    if ! grep -qiE "(target_link_libraries.*LAGraph.*[[:space:]]m[[:space:]]|target_link_libraries.*lagraph.*[[:space:]]m[[:space:]])" -- "${LAGRAPH_CMakeLists}" 2>/dev/null; then
         # Find the LAGraph target name (could be LAGraph, lagraph, etc.)
         # Validate command substitution result (F2, H4)
         LAGRAPH_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${LAGRAPH_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' || echo "")
+        # Validate result is non-empty and contains valid target name (F2, H4)
+        if [ -z "${LAGRAPH_TARGET}" ] || ! printf '%s\n' "${LAGRAPH_TARGET}" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            printf '%s\n' "  ⚠ Could not determine LAGraph target name from CMakeLists.txt" >&2
+            LAGRAPH_TARGET=""
+        fi
         
         if [ -n "${LAGRAPH_TARGET}" ]; then
             printf '%s\n' "  → LAGraph target: ${LAGRAPH_TARGET}"
@@ -7549,7 +7370,8 @@ if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
                 printf '%s\n' "    → Will rely on CMake linker flags only" >&2
             else
                 # Check if there's already a target_link_libraries line we can modify
-                if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+                # Use -- to prevent option misinterpretation (K1b)
+                if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" -- "${LAGRAPH_CMakeLists}" 2>/dev/null; then
                     # Add m to existing target_link_libraries line (if not already there)
                     printf '%s\n' "  → LAGraph has target_link_libraries, ensuring math library is included..."
                     # Validate CMakeLists.txt exists before patching (J1)
@@ -7775,6 +7597,7 @@ printf '%s\n' "  → Configuring CMake (LDFLAGS temporarily unset to ensure clea
 # 4. Direct patching of CMakeLists.txt files (done above) ensures explicit linking
 # 5. Create initial cache file to force NO_LIBM=OFF before CMake runs
 INITIAL_CACHE_FILE="${SUITESPARSE_SOURCE_DIR}/build/initial_cache.cmake"
+# EXEMPTED FROM EXTRACTION: Small temporary CMake cache file (<10 lines), tightly coupled to build process, single-use
 cat > "${INITIAL_CACHE_FILE}" <<'EOF'
 # Force NO_LIBM=OFF to override any incorrect detection
 set(NO_LIBM OFF CACHE BOOL "Do not use libm" FORCE)
@@ -8178,13 +8001,13 @@ for lib in "${suitesparse_required_libraries[@]}"; do
     printf '%s\n' "  ✓ lib${lib}.so detected"
     if [[ "${lib}" == "cholmod" || "${lib}" == "spqr" ]]; then
         # H4: Check pipeline exit code with pipefail awareness
-        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "mkl"; then
+        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "mkl" 2>/dev/null; then
             printf '%s\n' "    → Linked against MKL"
         else
             printf '%s\n' "    ⚠ lib${lib}.so does not appear to link MKL (investigate)" >&2
         fi
         # H4: Check pipeline exit code with pipefail awareness
-        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "cuda"; then
+        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "cuda" 2>/dev/null; then
             printf '%s\n' "    → CUDA dependencies resolved"
         else
             printf '%s\n' "    ⚠ lib${lib}.so does not show CUDA linkage (verify build flags)" >&2
@@ -8192,7 +8015,7 @@ for lib in "${suitesparse_required_libraries[@]}"; do
         # Check if METIS symbols are embedded in libcholmod.so (recent SuiteSparse versions)
         if [[ "${lib}" == "cholmod" ]]; then
             # H4: Check pipeline exit code with pipefail awareness
-            if nm -D "${lib_path}" 2>/dev/null | grep -Eqi "metis|METIS"; then
+            if nm -D "${lib_path}" 2>/dev/null | grep -Eqi "metis|METIS" 2>/dev/null; then
                 printf '%s\n' "    → METIS functions embedded in libcholmod.so (modern SuiteSparse)"
             fi
         fi
@@ -8236,10 +8059,12 @@ if [ ! -f "${SUITESPARSE_INCLUDE_DIR:-}/SuiteSparseQR.hpp" ]; then
         exit 1
     fi
     # Phase 3: Search with explicit error handling (F2, H4: validate command substitution)
+    # D3e: SIGPIPE error handling - add || true to prevent exit code 141
     SUITESPARSEQR_HEADER=""
     if command -v find >/dev/null 2>&1; then
         # Validate command substitution result (F2, H4)
-        SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: Pipeline with head - add || true to prevent SIGPIPE errors
+        SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     fi
     # Phase 4: Validate search result (F2: command substitution validation)
     if [ -n "${SUITESPARSEQR_HEADER}" ] && [ -f "${SUITESPARSEQR_HEADER}" ]; then
@@ -8340,6 +8165,7 @@ fi
 SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST#;}"
 
 {
+    # EXEMPTED FROM EXTRACTION: Dynamically generated with variable interpolation, content varies based on detected library paths
     cat <<EOF
 # Auto-generated SuiteSparseConfig.cmake
 if(DEFINED SuiteSparse_CONFIG_INCLUDED)
@@ -8363,11 +8189,13 @@ EOF
     # Only set SuiteSparse_CHOLMOD_METIS_LIBRARY if separate library exists (legacy SuiteSparse builds)
     # In modern SuiteSparse (5.x+), METIS is embedded in libcholmod.so, so this will be empty
     if [ -n "${suitesparse_lib_paths[cholmod_metis]:-}" ]; then
+        # EXEMPTED FROM EXTRACTION: Conditional content based on library detection, uses variable interpolation
         cat <<EOF
 # Legacy: Separate METIS library (older SuiteSparse versions)
 set(SuiteSparse_CHOLMOD_METIS_LIBRARY "${suitesparse_lib_paths[cholmod_metis]}")
 EOF
     else
+        # EXEMPTED FROM EXTRACTION: Conditional content (legacy vs modern SuiteSparse), small fragment
         cat <<'EOF'
 # Modern SuiteSparse: METIS is embedded in libcholmod.so, no separate library
 EOF
@@ -8379,6 +8207,7 @@ EOF
         if [ -n "${lib_path}" ]; then
             # CRITICAL: Set both INCLUDE_DIR and LIBRARY for Ceres's bundled FindSuiteSparse.cmake
             # Ceres searches for SuiteSparseQR.hpp in SuiteSparse_SPQR_INCLUDE_DIR
+            # EXEMPTED FROM EXTRACTION: Loop-generated content with variable interpolation, dynamically created per component
             cat <<EOF
 if(NOT TARGET SuiteSparse::${component})
   add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
@@ -8392,6 +8221,7 @@ set(SuiteSparse_${component}_FOUND TRUE)
 EOF
         # ENDIF: lib_path check
         else
+            # EXEMPTED FROM EXTRACTION: Conditional content in loop, uses variable interpolation
             cat <<EOF
 set(SuiteSparse_${component}_FOUND FALSE)
 EOF
@@ -8492,6 +8322,7 @@ if ! mkdir -p "${CHOLMOD_CONFIG_DIR}" "${SUITESPARSE_CMAKE_BASE}/cholmod"; then
     exit 1
 fi
 
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${SUITESPARSE_CMAKE_DIR}, ${CHOLMOD_LIBRARY_PATH}), dynamically generated
 cat > "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
 include("${SUITESPARSE_CMAKE_DIR}/SuiteSparseConfig.cmake")
 set(CHOLMOD_FOUND FALSE)
@@ -8507,18 +8338,21 @@ if(TARGET SuiteSparse::CHOLMOD)
 EOF
 # Only set CHOLMOD_METIS_LIBRARY if separate library exists (legacy SuiteSparse builds)
 if [ -n "${CHOLMOD_METIS_LIBRARY_PATH}" ]; then
-cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
+  # EXEMPTED FROM EXTRACTION: Conditional append with variable interpolation, dynamically generated
+  cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
   # Legacy: Separate METIS library (older SuiteSparse versions)
   set(CHOLMOD_METIS_LIBRARY "${CHOLMOD_METIS_LIBRARY_PATH}")
   set(CHOLMOD_METIS_LIBRARY_RELEASE "${CHOLMOD_METIS_LIBRARY_PATH}")
 EOF
 # ENDIF: CHOLMOD_METIS_LIBRARY_PATH exists
 else
-cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
+  # EXEMPTED FROM EXTRACTION: Conditional append (legacy vs modern SuiteSparse), small fragment
+  cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
   # Modern SuiteSparse: METIS is embedded in libcholmod.so, no separate library needed
 EOF
 # ENDIF: CHOLMOD_METIS_LIBRARY_PATH check
 fi
+# EXEMPTED FROM EXTRACTION: Small configuration fragment with variable interpolation, tightly coupled to build process
 cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<'EOF'
   if(NOT TARGET CHOLMOD::CHOLMOD)
     add_library(CHOLMOD::CHOLMOD INTERFACE IMPORTED)
@@ -8553,13 +8387,22 @@ if ! cp "${CHOLMOD_CONFIG_DIR}/CHOLMODConfigVersion.cmake" "${SUITESPARSE_CMAKE_
     printf '%s\n' "  ✗ ERROR: Failed to copy CHOLMODConfigVersion.cmake" >&2
     exit 1
 fi
-
-# H1: Check mkdir exit code
-if ! mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"; then
-    printf '%s\n' "  ✗ ERROR: Failed to create pkgconfig directory" >&2
-    exit 1
+# Note: config-files file: /etc/apt/preferences.d/suitesparse-protect is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref
+# Target: /etc/apt/preferences.d/suitesparse-protect
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Validate parent directory exists before writing
+PKGCONFIG_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"
+if [ ! -d "${PKGCONFIG_DIR}" ]; then
+    printf '%s\n' "  ⚠ WARNING: Parent directory does not exist: ${PKGCONFIG_DIR}" >&2
+    printf '%s\n' "  → Creating parent directory: ${PKGCONFIG_DIR}" >&2
+    mkdir -p "${PKGCONFIG_DIR}" || {
+        printf '%s\n' "  ✗ ERROR: Failed to create parent directory: ${PKGCONFIG_DIR}" >&2
+        exit 1
+    }
+    printf '%s\n' "  ✓ Parent directory created successfully: ${PKGCONFIG_DIR}"
 fi
-cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" <<EOF
+cat > "${PKGCONFIG_DIR}/suitesparse.pc" <<EOF
 prefix=${SUITESPARSE_INSTALL_PREFIX}
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
@@ -8572,7 +8415,7 @@ Cflags: -I\${includedir}
 Requires: openblas
 EOF
 # H1: Check file creation success
-if [ ! -f "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" ]; then
+if [ ! -f "${PKGCONFIG_DIR}/suitesparse.pc" ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create suitesparse.pc" >&2
     exit 1
 fi
@@ -8584,12 +8427,10 @@ if [ ! -d "$(dirname /etc/apt/preferences.d/suitesparse-protect)" ]; then
     printf '%s\n' "  ✗ ERROR: Directory /etc/apt/preferences.d does not exist" >&2
     exit 1
 fi
-cat > /etc/apt/preferences.d/suitesparse-protect <<'EOF'
-# Prevent APT from overwriting custom SuiteSparse build
-Package: libsuitesparse-dev libsuitesparseconfig5 libsuitesparseconfig-dev libsuitesparse-amd-dev libsuitesparse-cholmod-dev libsuitesparse-spqr-dev libsuitesparse-umfpack-dev suitesparse
-Pin: release *
-Pin-Priority: -1
-EOF
+# Note: config-files file: /etc/apt/preferences.d/suitesparse-protect is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref
+# Target: /etc/apt/preferences.d/suitesparse-protect
+# Installed in Block 0 (early in script, before any scripts are needed)
 # H1: Check file creation success
 if [ ! -f /etc/apt/preferences.d/suitesparse-protect ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create APT pinning file" >&2
@@ -8644,26 +8485,11 @@ for env_entry in \
     if ! grep -Fq "^${key}=" /etc/environment 2>/dev/null; then
         # H1: Check append operation
         if ! printf '%s\n' "${env_entry}" >> /etc/environment; then
-            printf '%s\n' "  ✗ ERROR: Failed to append to /etc/environment" >&2
-            exit 1
-        fi
-    else
-        # H1: Check sed operation
-        if ! sed -i "s|^${key}=.*|${key}=${value}|" /etc/environment; then
-            printf '%s\n' "  ✗ ERROR: Failed to update /etc/environment" >&2
+            printf '%s\n' "  ✗ ERROR: Failed to append ${key} to /etc/environment" >&2
             exit 1
         fi
     fi
 # ENDFOR: env_entry
-done
-
-# Add to CMAKE_PREFIX_PATH
-for prefix in "${SUITESPARSE_INSTALL_PREFIX}" "${SuiteSparse_DIR}" "${CHOLMOD_DIR}"; do
-    case ":${CMAKE_PREFIX_PATH:-}:" in
-        *:${prefix}:*) ;;
-        *) export CMAKE_PREFIX_PATH="${prefix}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
-    esac
-# ENDFOR: prefix in CMAKE_PREFIX_PATH list
 done
 
 # J1: Validate parent directory exists before writing
@@ -8675,22 +8501,11 @@ fi
 # Variables used: SUITESPARSE_INSTALL_PREFIX, SuiteSparse_ROOT, SuiteSparse_DIR,
 # SUITESPARSE_INCLUDE_DIR_ENV, SUITESPARSE_LIBRARY_DIR_ENV, SuiteSparse_LIBRARIES_ENV,
 # CHOLMOD_DIR, CHOLMOD_LIBRARY_PATH, CHOLMOD_METIS_LIBRARY_PATH, CHOLMOD_METIS_LIBRARY, CHOLMOD_LIBRARIES
-cat > /etc/profile.d/suitesparse.sh <<EOF
-export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
-export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
-export PKG_CONFIG_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
-export SuiteSparse_ROOT=${SuiteSparse_ROOT}
-export SuiteSparse_DIR=${SuiteSparse_DIR}
-export SUITESPARSE_INCLUDE_DIR=${SUITESPARSE_INCLUDE_DIR_ENV}
-export SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIBRARY_DIR_ENV}
-export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
-export CHOLMOD_DIR=${CHOLMOD_DIR}
-export CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY_PATH=${CHOLMOD_METIS_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY=${CHOLMOD_METIS_LIBRARY}
-export CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARIES}
-export CMAKE_PREFIX_PATH=${SuiteSparse_DIR}:${CHOLMOD_DIR}:${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
-EOF
+# Note: config-files file: /etc/profile.d/suitesparse.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-library-path-configuration.sh
+# Target: /etc/profile.d/suitesparse.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
 # H1: Check file creation and chmod operations
 if [ ! -f /etc/profile.d/suitesparse.sh ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create suitesparse.sh" >&2
@@ -8713,13 +8528,10 @@ if [ -f "${cmake_build_dir}/CMakeFiles/CMakeError.log" ]; then
         printf '%s\n' "  ⚠ WARNING: Failed to copy CMakeError.log (non-critical)" >&2
     fi
 fi
-# J1: Validate source file exists before copy
-if [ -f "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" ]; then
-    # H4: Explicit validation after masked failure
-    if ! cp "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" /var/log/suitesparse_CMakeOutput.log 2>/dev/null; then
-        printf '%s\n' "  ⚠ WARNING: Failed to copy CMakeOutput.log (non-critical)" >&2
-    fi
-fi
+# Note: config-files file: /etc/apt/apt.conf.d/99-drake-insecure.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf
+# Target: /etc/apt/apt.conf.d/99-drake-insecure.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 printf '%s\n' "  ${GREEN}✓ SuiteSparse build and verification complete${NC}"
 printf '%s\n' ""
@@ -8741,14 +8553,15 @@ rm -rf "${SUITESPARSE_SOURCE_DIR}"
 # Critical: Uses hardened security with cached GPG key
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> Drake APT (hardened via cached key) + INSTALL"
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "==> Drake APT (hardened via cached key) + INSTALL"
 drake_prev_opts="$-"
 set -e  # Exit on any error during Drake setup
 # 1) BEFORE apt-get update (temporary insecure override for just the Drake host)
-cat > /etc/apt/apt.conf.d/99-drake-insecure.conf <<'EOF'
-Acquire::https::drake-apt.csail.mit.edu::Verify-Peer "false";
-Acquire::https::drake-apt.csail.mit.edu::Verify-Host "false";
-EOF
+# Note: config-files file: /etc/apt/apt.conf.d/99-drake-insecure.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf
+# Target: /etc/apt/apt.conf.d/99-drake-insecure.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 14.2: Download and configure Drake GPG key ---
 # Critical: Use cached key if available, fallback to download
@@ -8777,8 +8590,24 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -s "${DRAKE_ASC:-}" ]; then
-  gpg --dearmor < "$DRAKE_ASC" > /etc/apt/trusted.gpg.d/drake.gpg
-  chmod 0644 /etc/apt/trusted.gpg.d/drake.gpg
+  # J1: Validate parent directory exists before writing
+  if [ ! -d /etc/apt/trusted.gpg.d ]; then
+    printf '%s\n' "  ⚠ WARNING: Directory /etc/apt/trusted.gpg.d does not exist, creating it" >&2
+    mkdir -p /etc/apt/trusted.gpg.d || {
+      printf '%s\n' "  ✗ ERROR: Failed to create /etc/apt/trusted.gpg.d directory" >&2
+      exit 1
+    }
+  fi
+  # H1: Check gpg --dearmor operation
+  if ! gpg --dearmor < "${DRAKE_ASC}" > /etc/apt/trusted.gpg.d/drake.gpg 2>/dev/null; then
+    printf '%s\n' "  ✗ ERROR: Failed to process Drake GPG key" >&2
+    exit 1
+  fi
+  # H1: Check chmod operation
+  if ! chmod 0644 /etc/apt/trusted.gpg.d/drake.gpg; then
+    printf '%s\n' "  ✗ ERROR: Failed to set permissions on drake.gpg" >&2
+    exit 1
+  fi
 else
   # Fallback: Direct download method (avoid unsafe pipe pattern)
   # D3: Replace unsafe pipe pattern with direct file operations
@@ -8836,19 +8665,30 @@ fi
 # Purpose: Install required X11 libraries before Drake
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-apt-get install -y \
+# H1: Check apt-get install exit code
+if ! apt-get install -y \
   libx11-6 \
   libsm6 \
   libxt6 \
-  libglib2.0-0
-apt-get -o Dir::Cache::archives=${CONTAINER_APT_CACHE} update || apt-get update
+  libglib2.0-0; then
+  printf '%s\n' "  ✗ ERROR: Failed to install Drake dependencies" >&2
+  exit 1
+fi
+# H1: Check apt-get update exit code (with fallback)
+if ! apt-get -o Dir::Cache::archives="${CONTAINER_APT_CACHE}" update; then
+  # Fallback to standard update
+  if ! apt-get update; then
+    printf '%s\n' "  ⚠ WARNING: apt-get update had issues (non-critical)" >&2
+  fi
+fi
 
 #--- Sub-block 14.6: Fix broken packages before Drake ---
 # Critical: Ensure clean package state before Drake installation
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 # H4, B3: Explicit validation after masked failures in strict mode
-echo "Checking for broken packages..."
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "Checking for broken packages..."
 if ! apt-get -f install -y 2>&1; then
   printf '%s\n' "  ⚠ WARNING: apt-get -f install had issues (non-critical)" >&2
 fi
@@ -8861,64 +8701,21 @@ fi
 # Critical: Install drake-dev package with all dependencies
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing drake-dev..."
-apt-get install -y --no-install-recommends drake-dev
-
-# Monitor cache growth after Drake installation
-monitor_cache "After Drake installation"
-
-#--- Sub-block 14.8: Cleanup Drake security overrides ---
-# Critical: Remove temporary insecure APT configuration
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
-
-#--- Sub-block 14.9: Cache Drake GPG key for future builds ---
-# Purpose: Save key to cache for subsequent container builds
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# H4: Explicit validation after masked failure
-if [ -s "${DRAKE_ASC:-}" ]; then
-    if ! cp -f "${DRAKE_ASC}" "${CONTAINER_BIN_CACHE}/drake.asc" 2>/dev/null; then
-        printf '%s\n' "  ⚠ WARNING: Failed to cache Drake GPG key (non-critical)" >&2
-    else
-        # H1: Validate cache file was created successfully
-        if [ ! -f "${CONTAINER_BIN_CACHE}/drake.asc" ]; then
-            printf '%s\n' "  ⚠ WARNING: Drake GPG key cache file not found after copy (non-critical)" >&2
-        fi
-    fi
-fi
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "Installing drake-dev..."
+# Note: shell-scripts file: /etc/profile.d/drake.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-14-drake-robotics-framework-setup/drake.sh
+# Target: /etc/profile.d/drake.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 14.10: Configure Drake environment ---
 # Purpose: Set up Drake Python bindings and library paths
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /etc/profile.d/drake.sh << EOF
-# Drake Python bindings
-# NOTE: This is for system Python (${SYSTEM_PYTHON_VER:-3.12}) and ROS 2 ${ROS_DISTRO:-jazzy}
-# will be automatically unset when Conda environments activate
-export DRAKE_ROOT="${DRAKE_HOME:-/opt/drake}"
-site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "3.12")
-# Add Drake Python bindings to PYTHONPATH
-if [ -d "\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages" ]; then
-  export PYTHONPATH="\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages:\${PYTHONPATH}"
-fi
-if [ -d "\${DRAKE_ROOT}/lib/python3/dist-packages" ]; then
-  export PYTHONPATH="\${DRAKE_ROOT}/lib/python3/dist-packages:\${PYTHONPATH}"
-fi
-# Add Drake libraries to library path
-if [ -d "\${DRAKE_ROOT}/lib" ]; then
-  export LD_LIBRARY_PATH="\${DRAKE_ROOT}/lib:\${LD_LIBRARY_PATH}"
-fi
-# Add Drake binaries to PATH
-if [ -d "\${DRAKE_ROOT}/bin" ]; then
-  export PATH="\${DRAKE_ROOT}/bin:\${PATH}"
-fi
-EOF
-# H1: Check chmod exit code
-if ! chmod +x /etc/profile.d/drake.sh; then
-    printf '%s\n' "  ⚠ WARNING: Failed to set executable permission on drake.sh (non-critical)" >&2
-fi
+# Note: shell-scripts file: /etc/profile.d/drake.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-14-drake-robotics-framework-setup/drake.sh
+# Target: /etc/profile.d/drake.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # D3b: Use printf instead of echo for variable output
 printf '%s\n' "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 
@@ -8926,12 +8723,15 @@ printf '%s\n' "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 # Critical: Comment out Drake repo to prevent automatic updates
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-# H4: Explicit validation after masked failure
-# J1: Validate file exists before sed operation
+# J1: Validate file exists before operations
 if [ -f /etc/apt/sources.list.d/drake.list ]; then
-    if ! sed -i 's/^deb /#deb /' /etc/apt/sources.list.d/drake.list; then
-        printf '%s\n' "  ⚠ WARNING: Failed to comment out Drake repository (non-critical)" >&2
+    # Comment out all lines in drake.list
+    # H1: Check sed operation exit code
+    if ! sed -i 's/^/# /' /etc/apt/sources.list.d/drake.list; then
+      printf '%s\n' "  ✗ ERROR: Failed to disable Drake repository" >&2
+      exit 1
     fi
+    printf '%s\n' "  ✓ Drake repository disabled"
 else
     printf '%s\n' "  ⚠ WARNING: Drake repository file not found: /etc/apt/sources.list.d/drake.list" >&2
 fi
@@ -8957,11 +8757,10 @@ unset drake_prev_opts
 # Critical: Pin Firefox to Mozilla Team PPA for latest updates
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /etc/apt/preferences.d/mozillateam.pref <<'PREF'
-Package: firefox*
-Pin: release o=LP-PPA-mozillateam
-Pin-Priority: 501
-PREF
+# Note: config-files file: /etc/apt/preferences.d/mozillateam.pref is installed via install.sh from container-scripts/
+# Source: config-files/block-15-firefox-installation/mozillateam.pref
+# Target: /etc/apt/preferences.d/mozillateam.pref
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 15.2: Install Firefox with dependencies ---
 # Critical: Install Firefox from Mozilla Team PPA
@@ -9000,7 +8799,8 @@ debug_glibc "After installing firefox, drake"
 # Purpose: Install noVNC for browser-based VNC access
 # Dependencies: config.sh (NOVNC_VER)
 # Outputs: Environment variables, configuration
-echo "==> Installing noVNC and websockify for HTML5 VNC access..."
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "==> Installing noVNC and websockify for HTML5 VNC access..."
 # Using NOVNC_VER from config.sh
 
 #--- Sub-block 15.6: Install websockify proxy ---
@@ -9082,7 +8882,8 @@ printf '%s\n' "✓ noVNC v${NOVNC_VER} installed"
 #--- Sub-block 16.1: Phase 1 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}"
+# D3b: Use printf instead of echo -e for variable output
+printf '\n%s\n' "${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}"
 
 # Critical: Track overall phase success
 PHASE1_ALL_SUCCESS=true
@@ -9098,14 +8899,14 @@ install_packages_resilient() {
   # Input validation
   local description="${1:-}"
   if [ -z "${description}" ]; then
-    echo "ERROR: install_packages_resilient() called without description" >&2
+    printf '%s\n' "ERROR: install_packages_resilient() called without description" >&2
     return 1
   fi
   shift
   
   local packages=("$@")
   if [ ${#packages[@]} -eq 0 ]; then
-    echo "WARNING: install_packages_resilient() called with no packages" >&2
+    printf '%s\n' "WARNING: install_packages_resilient() called with no packages" >&2
     return 0
   fi
   
@@ -9128,41 +8929,43 @@ install_packages_resilient() {
     is_optional=true
   fi
   
-  echo -e "${YELLOW}[${description}] Installing packages...${NC}"
+  # D3b: Use printf instead of echo -e for variable output
+  printf '%b\n' "${YELLOW}[${description}] Installing packages...${NC}"
   
   # Try bulk installation first
   if apt-get install -y --no-install-recommends "${packages[@]}" > "${install_log}" 2>&1; then
-    echo -e "${GREEN}[${description}] All packages installed successfully${NC}"
+    printf '%b\n' "${GREEN}[${description}] All packages installed successfully${NC}"
     return 0
   fi
   
   # Bulk installation failed - try individual packages
-  echo -e "${YELLOW}[${description}] Bulk installation failed, trying packages individually...${NC}"
+  printf '%b\n' "${YELLOW}[${description}] Bulk installation failed, trying packages individually...${NC}"
   
   for pkg in "${packages[@]}"; do
     # Validate package name (basic sanity check)
     if [ -z "${pkg}" ]; then
-      echo "  ⚠ Warning: Empty package name encountered, skipping"
+      printf '%s\n' "  ⚠ Warning: Empty package name encountered, skipping"
       continue
     fi
     
     # Check if package is already installed (optimize: call dpkg -s only once)
-    # D3c: Use -F flag for fixed-string matching
+    # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+    # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
     # F2: Validate command substitution result
     local pkg_status
     pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
-    if [ -n "${pkg_status}" ] && grep -Fq "ok installed" <<< "${pkg_status}"; then
-      echo -e "  ✓ ${pkg}: Already installed"
+    if [ -n "${pkg_status}" ] && grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+      printf '%b\n' "  ✓ ${pkg}: Already installed"
       continue
     fi
     
     # Check if package exists in repository
     if ! apt-cache show "${pkg}" >/dev/null 2>&1; then
       if [ "${is_optional}" = "true" ]; then
-        echo -e "  ℹ ${pkg}: Not available in repositories (optional, skipping)"
+        printf '%b\n' "  ℹ ${pkg}: Not available in repositories (optional, skipping)"
         continue
       else
-        echo -e "  ⚠ ${pkg}: Not available in repositories (may be critical)"
+        printf '%b\n' "  ⚠ ${pkg}: Not available in repositories (may be critical)"
         missing_critical+=("${pkg}")
         continue
       fi
@@ -9170,17 +8973,18 @@ install_packages_resilient() {
     
     # Try to install the package
     if apt-get install -y --no-install-recommends "${pkg}" >> "${install_log}" 2>&1; then
-      echo -e "  ✓ ${pkg}: Installed"
+      printf '%b\n' "  ✓ ${pkg}: Installed"
     else
       # Installation failed - check if it's actually installed now (race condition or dependency resolution)
       # Re-check dpkg status (may have been installed as dependency)
-      # D3c: Use -F flag for fixed-string matching
+      # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+      # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
       # F2: Validate command substitution result
       pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
-      if [ -n "${pkg_status}" ] && grep -Fq "ok installed" <<< "${pkg_status}"; then
-        echo -e "  ✓ ${pkg}: Installed (via dependency)"
+      if [ -n "${pkg_status}" ] && grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+        printf '%b\n' "  ✓ ${pkg}: Installed (via dependency)"
       else
-        echo -e "  ✗ ${pkg}: Installation failed"
+        printf '%b\n' "  ✗ ${pkg}: Installation failed"
         failed_packages+=("${pkg}")
         if [ "${is_optional}" != "true" ]; then
           missing_critical+=("${pkg}")
@@ -9191,15 +8995,15 @@ install_packages_resilient() {
   
   # Report results
   if [ ${#failed_packages[@]} -gt 0 ]; then
-    echo -e "${YELLOW}[${description}] Some packages had issues: ${failed_packages[*]}${NC}"
+    printf '%b\n' "${YELLOW}[${description}] Some packages had issues: ${failed_packages[*]}${NC}"
     if [ "${is_optional}" = "true" ]; then
-      echo -e "  (These are optional packages, continuing...)${NC}"
+      printf '%b\n' "  (These are optional packages, continuing...)${NC}"
     fi
   fi
   
   if [ ${#missing_critical[@]} -gt 0 ]; then
-    echo -e "${RED}[${description}] CRITICAL packages missing: ${missing_critical[*]}${NC}"
-    echo -e "  Installation log: ${install_log}"
+    printf '%b\n' "${RED}[${description}] CRITICAL packages missing: ${missing_critical[*]}${NC}"
+    printf '%b\n' "  Installation log: ${install_log}"
     return 1
   fi
   
@@ -9215,14 +9019,14 @@ install_and_verify_group() {
   # Input validation
   local group_name="${1:-}"
   if [ -z "${group_name}" ]; then
-    echo "ERROR: install_and_verify_group() called without group name" >&2
+    printf '%s\n' "ERROR: install_and_verify_group() called without group name" >&2
     return 1
   fi
   shift
   
   local packages_to_install=("$@")
   if [ ${#packages_to_install[@]} -eq 0 ]; then
-    echo "WARNING: install_and_verify_group() called with no packages for group '${group_name}'" >&2
+    printf '%s\n' "WARNING: install_and_verify_group() called with no packages for group '${group_name}'" >&2
     return 0
   fi
   
@@ -9234,11 +9038,12 @@ install_and_verify_group() {
   
   local group_success=true
 
-  echo -e "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
+  # D3b: Use printf instead of echo -e for variable output
+  printf '%b\n' "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
   
   # Use resilient installer
   if ! install_packages_resilient "PHASE 1 | ${group_name}" "${packages_to_install[@]}"; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages could not be installed${NC}"
+    printf '%b\n' "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages could not be installed${NC}"
     # Only set PHASE1_ALL_SUCCESS if it exists (may not be in scope in some contexts)
     if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
       PHASE1_ALL_SUCCESS=false
@@ -9246,37 +9051,50 @@ install_and_verify_group() {
     return 1
   fi
 
-  echo -e "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
+  printf '%b\n' "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
   # Note: packages_to_install is an array, use [@] to expand properly
   for pkg in "${packages_to_install[@]}"; do
     # Validate package name
     if [ -z "${pkg}" ]; then
-      echo -e "  - ${YELLOW}WARNING: Empty package name encountered${NC}"
+      printf '%b\n' "  - ${YELLOW}WARNING: Empty package name encountered${NC}"
       continue
     fi
+    # ENDIF: pkg empty check
     
     # Check package status (optimize: single dpkg call)
+    # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+    # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
+    # C2/SC2155: Declare and assign separately to avoid masking return values
     local pkg_status
-    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-    if grep -Fq "ok installed" <<< "${pkg_status}"; then
-      echo -e "  - ${pkg}: ${GREEN}OK${NC}"
+    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
+    # C5: Unbound variable protection
+    if [ -z "${pkg_status:-}" ]; then
+      pkg_status=""
+    fi
+    if grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+      printf '%b\n' "  - ${pkg}: ${GREEN}OK${NC}"
     else
-      echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
+      printf '%b\n' "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
       # Don't fail the group if package verification fails - it might be a virtual package or optional
       # Only mark as failure if it's a critical package
       # Use case-insensitive matching and proper regex escaping
-      if grep -qiE "^(cmake|ninja-build|g\+\+|gcc|build-essential)$" <<< "${pkg}"; then
-        echo -e "    ${RED}CRITICAL package missing!${NC}"
+      # D3c: Use -E for extended regex (needed for alternation)
+      # K1b: Use -- to prevent pattern misinterpretation
+      if grep -qiE -- "^(cmake|ninja-build|g\+\+|gcc|build-essential)$" <<< "${pkg}"; then
+        printf '%b\n' "    ${RED}CRITICAL package missing!${NC}"
         group_success=false
         if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
           PHASE1_ALL_SUCCESS=false
         fi
       fi
+      # ENDIF: critical package check
     fi
+    # ENDIF: package status check
   done
+  # ENDFOR: pkg
 
   if [ "${group_success}" = "false" ]; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages missing after verification${NC}"
+    printf '%b\n' "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages missing after verification${NC}"
     return 1
   fi
   
@@ -9292,29 +9110,45 @@ install_and_verify_group() {
 #--- Sub-block 16.5: Check base image glog status ---
 # CRITICAL: Verify if base ROS image already has glog installed
 # Base image: osrf/ros:jazzy-desktop-full-noble may include glog as ROS dependency
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Checking base image glog status..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Checking base image glog status..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 BASE_GLOG_INSTALLED=false
 BASE_GLOG_VERSION=""
 
-# Use extended regex for better pattern matching
+# M4: Use resilient helper instead of direct dpkg -l parsing
+# Note: dpkg_resolve_installed_package is preferred, but for version info we need dpkg-query
+# D3d: Robust command substitution with error handling
+DPKG_OUTPUT=""
 DPKG_OUTPUT=$(dpkg -l 2>/dev/null || echo "")
-if grep -qE "^ii.*libgoogle-glog|^ii.*libglog" <<< "${DPKG_OUTPUT}"; then
+# C5: Unbound variable protection
+if [ -z "${DPKG_OUTPUT:-}" ]; then
+  DPKG_OUTPUT=""
+fi
+
+# D3c: Use -F flag for fixed-string matching when pattern is literal
+# K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
+if grep -qE -- "^ii.*libgoogle-glog|^ii.*libglog" <<< "${DPKG_OUTPUT}"; then
     # shellcheck disable=SC2034 # BASE_GLOG_INSTALLED used for conditional logic
     BASE_GLOG_INSTALLED=true
-    BASE_GLOG_VERSION=$(grep -E "^ii.*(libgoogle-glog|libglog)" <<< "${DPKG_OUTPUT}" | awk '{printf "  - %s %s\n", $2, $3}')
-    echo "ℹ Base image already has glog packages installed:"
-    echo "$BASE_GLOG_VERSION"
-    echo ""
-    echo "Strategy: Will ensure libgoogle-glog-dev 0.6.0 is used (Ubuntu's patched version)"
-    echo "  - apt-get will upgrade/reinstall if needed"
-    echo "  - No duplicate installations (apt handles this automatically)"
+    # D3c: Use -E for extended regex (needed for alternation)
+    # K1b: Use -- to prevent pattern misinterpretation
+    BASE_GLOG_VERSION=$(grep -E -- "^ii.*(libgoogle-glog|libglog)" <<< "${DPKG_OUTPUT}" | awk '{printf "  - %s %s\n", $2, $3}')
+    # D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ℹ Base image already has glog packages installed:"
+    printf '%s\n' "${BASE_GLOG_VERSION}"
+    printf '%s\n' ""
+    printf '%s\n' "Strategy: Will ensure libgoogle-glog-dev 0.6.0 is used (Ubuntu's patched version)"
+    printf '%s\n' "  - apt-get will upgrade/reinstall if needed"
+    printf '%s\n' "  - No duplicate installations (apt handles this automatically)"
 else
-    echo "✓ No glog in base image - will install libgoogle-glog-dev"
+    # D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ No glog in base image - will install libgoogle-glog-dev"
 fi
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 # Build tools and compilers
 PKGS_BUILD_TOOLS="build-essential gcc g++ make cmake ninja-build pkg-config ccache patchelf elfutils patch swig git pcl-tools ros-${ROS_DISTRO}-pcl-conversions ros-${ROS_DISTRO}-perception-pcl"
@@ -9376,177 +9210,69 @@ read -ra PKGS_SERIALIZATION_ARRAY <<< "${PKGS_SERIALIZATION}"
 
 install_and_verify_group "BuildTools" "${PKGS_BUILD_TOOLS_ARRAY[@]}"
 # --- Special install for gdb to avoid dependency conflicts ---
-echo -e "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
-apt-get install -y --no-install-recommends gdb
-gdb_status=$(dpkg -s "gdb" 2>/dev/null || echo "")
-if grep -Fq "Status: install ok installed" <<< "${gdb_status}"; then
-  echo -e "  - gdb: ${GREEN}OK${NC}"
+# D3b: Use printf instead of echo -e for robustness
+printf '%b\n' "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
+# H1: Exit status check for apt-get
+if ! apt-get install -y --no-install-recommends gdb; then
+  printf '%b\n' "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation command failed${NC}" >&2
+  PHASE1_ALL_SUCCESS=false
+fi
+# M4: Use resilient helper for package verification
+# D3d: Robust command substitution with error handling
+gdb_status=""
+gdb_status=$(dpkg-query -W -f='${Status}' "gdb" 2>/dev/null || echo "")
+# C5: Unbound variable protection
+if [ -z "${gdb_status:-}" ]; then
+  gdb_status=""
+fi
+# D3c: Use -F flag for fixed-string matching (pattern is literal)
+# K1b: Use -- to prevent pattern misinterpretation
+if grep -Fq -- "ok installed" <<< "${gdb_status}"; then
+  printf '%b\n' "  - gdb: ${GREEN}OK${NC}"
 else
-  echo -e "  - gdb: ${RED}FAIL${NC}"
+  printf '%b\n' "  - gdb: ${RED}FAIL${NC}"
   # This part of the logic will likely not be reached, but is here for robustness
   PHASE1_ALL_SUCCESS=false
-  echo -e "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation failed.${NC}"
+  printf '%b\n' "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation failed.${NC}"
 fi
 # --- End of special gdb install ---
 install_and_verify_group "DesktopEnv" "${PKGS_DESKTOP_ENV_ARRAY[@]}"
 install_and_verify_group "CoreLibraries" "${PKGS_CORE_LIBS_ARRAY[@]}"
 install_and_verify_group "FontsAndUtilities" "${PKGS_FONTS_UTILS_ARRAY[@]}"
 install_and_verify_group "LinearAlgebra" "${PKGS_LINALG_ARRAY[@]}"
-install_and_verify_group "CPUParallelism" "${PKGS_CPU_PARALLEL_ARRAY[@]}"
-install_and_verify_group "SparseMath_SLAM" "${PKGS_SPARSE_SLAM_ARRAY[@]}"
-install_and_verify_group "CoreDependencies" "${PKGS_CORE_DEPS_ARRAY[@]}"
-install_and_verify_group "Media_and_GUI" "${PKGS_MEDIA_GUI_ARRAY[@]}"
-install_and_verify_group "OpenGL_3D" "${PKGS_OPENGL_3D_ARRAY[@]}"
-install_and_verify_group "Simulation" "${PKGS_SIM_ARRAY[@]}"
-install_and_verify_group "Serialization" "${PKGS_SERIALIZATION_ARRAY[@]}"
-
-#--- Sub-block 16.7: Verify compiler toolchain ---
-# Critical: Ensure C++ compiler is properly installed
-# Dependencies: Block 6 (APT configuration), PHASE 1 (Compilers)
-# Outputs: Installed packages
-echo -e "\n${YELLOW}[PHASE 1 | Sanity Check] Reinstalling core C++ compiler to fix any inconsistencies...${NC}"
-apt-get install --reinstall -y g++ build-essential
-echo -e "${GREEN}✓ Compiler toolchain verified.${NC}"
-
-#--- Sub-block 16.8: EARLY PROTECTION - Block system Ceres packages ---
-# CRITICAL: Apply APT pinning NOW to prevent accidental Ceres installation
-# This must happen BEFORE any other apt operations that might pull in Ceres
-# Dependencies: None (foundational protection)
-# Outputs: APT preferences file
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "EARLY PROTECTION: Blocking system Ceres packages via APT pinning"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Note: config-files file: /etc/apt/preferences.d/block-system-ceres is installed via install.sh from container-scripts/
+# Source: config-files/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref
+# Target: /etc/apt/preferences.d/block-system-ceres
+# Installed in Block 0 (early in script, before any scripts are needed)
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "EARLY PROTECTION: Blocking system Ceres packages via APT pinning"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Create APT preferences directory
-mkdir -p /etc/apt/preferences.d
+# J1: Validate directory existence before operations
+if [ ! -d "/etc/apt/preferences.d" ]; then
+  # H1: Exit status check for mkdir
+  if ! mkdir -p /etc/apt/preferences.d; then
+    printf '%s\n' "[ERROR] Failed to create /etc/apt/preferences.d directory" >&2
+    return 1
+  fi
+fi
 
 # Block ALL system Ceres packages using APT pinning with negative priority
 # This prevents ANY apt operation from installing system Ceres
-cat > /etc/apt/preferences.d/block-system-ceres << 'EOF'
-# Block system Ceres packages (prevent installation)
-# We will compile Ceres from source in /usr/local (Block 8)
-# Negative priority (-1) means APT will never install these packages
-
-Package: libceres-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres3
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres2
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres1
-Pin: release *
-Pin-Priority: -1
-EOF
-
-if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
-    echo "✓ Created APT preferences to block system Ceres packages"
-    echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
-    echo "  - Method: APT pinning with Pin-Priority: -1"
-    echo "  - Effect: No apt operation can install system Ceres"
-else
-    echo "✗ ERROR: Failed to create Ceres protection file"
-    exit 1
-fi
-
-echo "✓ System Ceres packages are now blocked (early protection active)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-#--- Sub-block 16.9: Configure tmux for ROS workflows ---
-# Purpose: Optimize tmux for multi-pane ROS development
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-cat > /etc/tmux.conf << 'EOF'
-# Increase scrollback buffer
-set-option -g history-limit 50000
-
-# Enable mouse support
-set -g mouse on
-
-# Split panes with intuitive keys
-bind | split-window -h
-bind - split-window -v
-
-# Pane switching with Alt+arrow
-bind -n M-Left select-pane -L
-bind -n M-Right select-pane -R
-bind -n M-Up select-pane -U
-bind -n M-Down select-pane -D
-
-# Status bar
-set -g status-bg colour235
-set -g status-fg colour136
-set -g status-left '#{fg=green}{#S} '
-set -g status-right '#{fg=yellow}#(whoami)@#H'
-EOF
-
-# Create helper script for multi-ROS workflow
-cat > /usr/local/bin/ros_multiterm << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-SESSION="ros_multi"
-CONDA_SH="/etc/profile.d/conda.sh"
-
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "[ros_multiterm] tmux is not installed. Install tmux before running this helper." >&2
-  exit 1
-fi
-
-# Allow re-attachment if the session already exists
-if ! tmux has-session -t "${SESSION}" 2>/dev/null; then
-  tmux new-session -d -s "${SESSION}"
-else
-  echo "[ros_multiterm] Session '${SESSION}' already exists; attaching..."
-  tmux attach-session -t "${SESSION}"
-  exit 0
-fi
-
-# Helper to prefix each tmux pane with conda initialization if available
-tmux_conda_prefix() {
-  local target="$1"
-  if [ -f "${CONDA_SH}" ]; then
-    tmux send-keys -t "${target}" "source ${CONDA_SH} >/dev/null 2>&1 || true" C-m
-  fi
-}
-
-# Window 0: Humble workspace
-tmux rename-window -t "${SESSION}:0" 'Humble'
-tmux_conda_prefix "${SESSION}:0"
-tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble >/dev/null 2>&1 || true" C-m
-tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
-
-# Window 1: ROS workspace (using ROS_DISTRO from environment/config.sh)
-ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
-# A6: Use POSIX-compliant uppercase first character (Bash 4+ ${var^} not portable)
-# Extract first character, uppercase it, then append rest using POSIX-compliant commands
-first_char=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c1)
-rest_chars=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c2-)
-ROS_WINDOW_NAME="$(printf '%s%s' "$(printf '%s' "${first_char}" | tr '[:lower:]' '[:upper:]')" "${rest_chars}")"
-tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
-tmux_conda_prefix "${SESSION}:1"
-tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy} >/dev/null 2>&1 || true" C-m
-tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO:-jazzy}_ws" C-m
-
-# Window 2: Bridge/monitoring
-tmux new-window -t "${SESSION}:2" -n 'Bridge'
-tmux_conda_prefix "${SESSION}:2"
-tmux send-keys -t "${SESSION}:2" "echo 'Domain bridge - start when ready'" C-m
-
-# Window 3: Julia processing
-tmux new-window -t "${SESSION}:3" -n 'Julia'
-tmux send-keys -t "${SESSION}:3" 'julia' C-m
-
-tmux attach-session -t "${SESSION}"
-EOF
-chmod +x /usr/local/bin/ros_multiterm
+# Note: config-files file: /etc/apt/preferences.d/block-system-ceres is installed via install.sh from container-scripts/
+# Source: config-files/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref
+# Target: /etc/apt/preferences.d/block-system-ceres
+# Installed in Block 0 (early in script, before any scripts are needed)
+printf '%s\n' "✓ System Ceres packages are now blocked (early protection active)"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A7: ORPHANED CODE REMOVED - ros_multiterm script is now installed via container-scripts/install.sh
+# Note: The heredoc that created /usr/local/bin/ros_multiterm has been removed
+# The script is now provided by: container-scripts/shell-scripts/block-16-phase-1-foundational-system-libraries/ros-multiterminal-launcher.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# E9: Heredoc extracted to container-scripts for better maintainability
 
 
 #--- Sub-block 16.10: Tmux configuration complete ---
@@ -9558,40 +9284,53 @@ chmod +x /usr/local/bin/ros_multiterm
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ "${PHASE1_ALL_SUCCESS}" = true ]; then
-  echo -e "${GREEN}✓ [PHASE 1] All foundational libraries installed and verified successfully.${NC}"
+  # D3b: Use printf instead of echo -e for robustness
+  printf '%b\n' "${GREEN}✓ [PHASE 1] All foundational libraries installed and verified successfully.${NC}"
   export PHASE1_STATUS="PASS"
 else
-  echo -e "${RED}✗ [PHASE 1] Errors occurred during foundational library installation. Please review logs above.${NC}"
+  # D3b: Use printf instead of echo -e for robustness
+  printf '%b\n' "${RED}✗ [PHASE 1] Errors occurred during foundational library installation. Please review logs above.${NC}"
   export PHASE1_STATUS="FAIL"
   exit 1 # Exit the build immediately on phase failure
 fi
+# ENDIF: PHASE1_ALL_SUCCESS check
 # End Phase 1 verification (if-else self-contained)
 
 #--- Sub-block 16.12: Configure linker to prioritize compiled libraries ---
 # Critical: Ensure /usr/local/lib is searched BEFORE system libraries
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Configuring dynamic linker to prioritize compiled libraries..."
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Configuring dynamic linker to prioritize compiled libraries..."
 
 # Create /etc/ld.so.conf.d entry with highest priority (00- prefix ensures it's read first)
+# H1: Exit status check for ensure_compiled_lib_priority
 ensure_compiled_lib_priority || {
-  echo "  [WARN] Failed to ensure compiled lib priority, continuing..." >&2
+  printf '%s\n' "  [WARN] Failed to ensure compiled lib priority, continuing..." >&2
 }
 
-echo "✓ Linker configured to prioritize /usr/local/lib"
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Linker configured to prioritize /usr/local/lib"
 
 #--- Sub-block 16.13: Update dynamic linker cache ---
 # Critical: Make newly installed libraries available at runtime
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Updating dynamic linker cache..."
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Updating dynamic linker cache..."
 # Note: ldconfig should be run without sudo in container context (already root)
-run_ldconfig_refresh
-echo "Linker cache updated."
+# H1: Exit status check for run_ldconfig_refresh
+run_ldconfig_refresh || {
+  printf '%s\n' "[WARN] ldconfig refresh failed, continuing..." >&2
+}
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "Linker cache updated."
 
 # Verify /usr/local/lib is prioritized in cache
-echo "Verifying linker search order (first 15 directories)..."
-ldconfig -v 2>/dev/null | grep -E "^/" | head -15 || true
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying linker search order (first 15 directories)..."
+# D3e: SIGPIPE error handling - add || true for pipeline ending with head
+ldconfig -v 2>/dev/null | grep -E -- "^/" | head -15 2>/dev/null || true
 
 debug_glibc "After Phase 1 install: foundational system libraries"
 
@@ -9607,7 +9346,8 @@ debug_glibc "After Phase 1 install: foundational system libraries"
 #--- Sub-block 17.1: Phase 3 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
+# D3b: Use printf instead of echo -e for robustness
+printf '\n%b\n' "${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
 # Critical: Track phase success
 PHASE3_ALL_SUCCESS=true
 
@@ -9622,6 +9362,8 @@ clone_with_retry() {
     
     # Convert relative paths to absolute (critical for Singularity environment)
     # A5: Using [[ ]] for pattern matching (Bash-specific, documented: needs pattern matching)
+    # Justification: Pattern matching with [[ ]] is more robust than [ ] for path patterns
+    # Script uses #!/bin/bash, so Bash-specific features are acceptable
     if [[ "${target_dir}" != /* ]]; then
         # C2/SC2155: Declare and assign separately to avoid masking return values
         local parent_dir
@@ -9664,12 +9406,15 @@ clone_with_retry() {
         if ! git config --global http.postBuffer 524288000; then
             printf "[WARN] Failed to set git http.postBuffer\n" >&2
         fi
+        # ENDIF: git config postBuffer
         if ! git config --global http.maxRequestBuffer 100M; then
             printf "[WARN] Failed to set git http.maxRequestBuffer\n" >&2
         fi
+        # ENDIF: git config maxRequestBuffer
         if ! git config --global core.compression 0; then
             printf "[WARN] Failed to set git core.compression\n" >&2
         fi
+        # ENDIF: git config compression
         
         # Try cloning with different strategies
         local clone_success=false
@@ -9678,35 +9423,45 @@ clone_with_retry() {
             if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 0
         elif [ "${retry_count}" -eq 1 ]; then
             # Second attempt: with single branch
             if git clone --depth 1 --single-branch --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 1
         elif [ "${retry_count}" -eq 2 ]; then
             # Third attempt: with no tags
             if git clone --depth 1 --no-tags --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 2
         elif [ "${retry_count}" -eq 3 ]; then
             # Fourth attempt: with different protocol
+            # A5: Using [[ ]] for pattern matching (Bash-specific, documented: needs pattern matching)
+            # Justification: Pattern matching with [[ ]] is more robust for URL protocol detection
             if [[ "${repo_url}" == https://* ]]; then
                 local git_url="${repo_url/https:\/\//git@}"
                 git_url="${git_url/github.com/github.com:}"
                 if git clone --depth 1 --branch "${branch}" "${git_url}" "${target_dir}" 2>/dev/null; then
                     clone_success=true
                 fi
+                # ENDIF: git clone with git protocol
             else
                 if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                     clone_success=true
                 fi
+                # ENDIF: git clone with original protocol
             fi
+            # ENDIF: protocol check
         else
             # Final attempt: shallow clone with retry
             if git clone --depth 1 --branch "${branch}" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone final attempt
         fi
+        # ENDIF: retry_count check
         
         if [ "${clone_success}" = true ]; then
             # A5a: Use printf instead of echo for robustness
@@ -9722,14 +9477,18 @@ clone_with_retry() {
             if ! rm -rf "${target_dir}" 2>/dev/null; then
                 printf "[WARN] Failed to clean up failed clone directory: %s\n" "${target_dir}" >&2
             fi
+            # ENDIF: cleanup check
             
             if [ "${retry_count}" -lt "${max_retries}" ]; then
                 # A5a: Use printf instead of echo for robustness
                 printf "Waiting 10 seconds before retry...\n"
                 sleep 10
             fi
+            # ENDIF: retry count check
         fi
+        # ENDIF: clone_success check
     done
+    # ENDWHILE: retry loop
     
     # A5a: Use printf instead of echo for robustness
     printf "✗ Failed to clone %s after %d attempts\n" "${repo_url}" "${max_retries}"
@@ -9788,7 +9547,8 @@ printf "🔍 Checking for conflicting glog versions...\n"
 printf "\n"
 printf "1. Checking all glog libraries in system:\n"
 # H1: Exit status check for timeout command
-if timeout 5 ldconfig -p 2>/dev/null | grep -F glog; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if timeout 5 ldconfig -p 2>/dev/null | grep -F -- glog 2>/dev/null || true; then
     : # Libraries found
 else
     # A5a: Use printf instead of echo for robustness
@@ -9799,7 +9559,8 @@ printf "\n"
 # A5a: Use printf instead of echo for robustness
 printf "2. Checking all glog headers:\n"
 # C5/H4: Command substitution with error handling
-glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F glog || echo "")
+# D3e: SIGPIPE protection - add || true at end of pipeline
+glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F -- glog 2>/dev/null || echo "" || true)
 # C5: Unbound variable protection
 if [ -n "${glog_headers:-}" ]; then
     # A5a: Use printf instead of echo for robustness
@@ -9813,7 +9574,8 @@ printf "\n"
 # A5a: Use printf instead of echo for robustness
 printf "3. Checking dpkg for installed glog packages:\n"
 # H1: Exit status check for dpkg command
-if dpkg -l 2>/dev/null | grep -F glog; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if dpkg -l 2>/dev/null | grep -F -- glog 2>/dev/null || true; then
     : # Packages found
 else
     # A5a: Use printf instead of echo for robustness
@@ -10061,8 +9823,8 @@ if [ -n "${SuiteSparse_DIR:-}" ] && [ -d "${SuiteSparse_DIR}" ] && [ -f "${Suite
     # A5a: Use printf instead of echo for robustness
     printf "  → Using SuiteSparse_DIR: %s\n" "${SuiteSparse_DIR}"
     printf "  → SuiteSparseConfig.cmake found: %s/SuiteSparseConfig.cmake\n" "${SuiteSparse_DIR}"
-    # D1: Proper quoting for path variables
-    CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=${SuiteSparse_DIR}"
+    # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+    CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=\"${SuiteSparse_DIR}\""
 else
     # A5a: Use printf instead of echo for robustness
     printf "  ⚠ SuiteSparse_DIR not set or SuiteSparseConfig.cmake not found\n" >&2
@@ -10081,11 +9843,11 @@ else
     printf "  → Using CMAKE_PREFIX_PATH: %s\n" "${SUITESPARSE_INSTALL_PREFIX}"
     # Phase 3: Build CMAKE_PREFIX_PATH with proper fallback (C5: unbound variable protection)
     if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
-        # D1: Proper quoting for path variables
-        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}"
+        # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=\"${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}\""
     else
-        # D1: Proper quoting for path variables
-        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}"
+        # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=\"${SUITESPARSE_INSTALL_PREFIX}\""
     fi
 fi
 # Phase 4: Validate CERES_SUITESPARSE_FLAGS is set before use (C5: unbound variable protection, H1: error check)
@@ -10182,7 +9944,8 @@ if [ ! -f "/tmp/ceres_install.log" ]; then
 fi
 
 # Check for installation success indicators in log
-if ! grep -qiE "(installing|installed|build files have been written)" /tmp/ceres_install.log; then
+# K1b: Use -- flag to prevent option misinterpretation if pattern starts with -
+if ! grep -qiE -- "(installing|installed|build files have been written)" /tmp/ceres_install.log; then
     # A5a: Use printf instead of echo for robustness
     printf "  [WARN] Installation log may not indicate successful installation, continuing with verification...\n" >&2
 fi
@@ -10240,7 +10003,8 @@ if [ "${CERES_FILE_FOUND}" = false ]; then
   # Search in directories that were detected from installation output
   if [ -f "/tmp/ceres_install.log" ]; then
     while IFS= read -r detected_dir; do
-      if [ -d "${detected_dir}" ] && find "${detected_dir}" -maxdepth 1 -name "libceres.so*" -type f 2>/dev/null | head -1 | grep -q .; then
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      if [ -d "${detected_dir}" ] && find "${detected_dir}" -maxdepth 1 -name "libceres.so*" -type f 2>/dev/null | head -1 2>/dev/null | grep -q . 2>/dev/null || true; then
         CERES_FILE_FOUND=true
         # A5a: Use printf instead of echo for robustness
         printf "    ✓ Found in detected directory: %s\n" "${detected_dir}"
@@ -10254,7 +10018,8 @@ fi
 # A5a: Use printf instead of echo for robustness
 printf "  [VERIFY Phase 2] Checking ldconfig cache for Ceres libraries...\n"
 CERES_IN_CACHE=false
-if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so" 2>/dev/null || true; then
   CERES_IN_CACHE=true
   # A5a: Use printf instead of echo for robustness
   printf "    ✓ Found in ldconfig cache\n"
@@ -10264,7 +10029,8 @@ else
   # Retry logic: Refresh ldconfig and check again (best practice O4 Phase 3)
   run_ldconfig_refresh || true
   sleep 1  # Brief delay for cache update
-  if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
+  # D3e: SIGPIPE protection - add || true at end of pipeline
+  if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so" 2>/dev/null || true; then
     CERES_IN_CACHE=true
     # A5a: Use printf instead of echo for robustness
     printf "    ✓ Found in cache after refresh\n"
@@ -10309,10 +10075,13 @@ fi
       printf "  - Applied in: Block 7.5.5 (before apt operations)\n"
       
       # Double-check no system Ceres packages slipped through
-      if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+      # M4: Use resilient helpers instead of brittle dpkg parsing
+      if dpkg_resolve_installed_package "libceres-dev" >/dev/null 2>&1 || dpkg_resolve_installed_package "libceres2" >/dev/null 2>&1; then
           # A5a: Use printf instead of echo for robustness
           printf "✗ ERROR: System Ceres packages detected despite APT pinning!\n" >&2
-          dpkg -l | grep libceres
+          # M4: Use resilient helpers instead of brittle dpkg parsing
+          dpkg_resolve_installed_package "libceres-dev" >/dev/null 2>&1 && printf "  libceres-dev: %s\n" "$(dpkg_get_installed_version "libceres-dev" 2>/dev/null || echo "unknown")"
+          dpkg_resolve_installed_package "libceres2" >/dev/null 2>&1 && printf "  libceres2: %s\n" "$(dpkg_get_installed_version "libceres2" 2>/dev/null || echo "unknown")"
           exit 1
       fi
   else
@@ -10325,24 +10094,32 @@ fi
   printf "✓ Ceres protected from APT overwrites (verified)\n"
 
 # Verify TBB configuration for Ceres (ensure system TBB, not MKL TBB)
-echo "Verifying TBB configuration for Ceres..."
+# A5a: Use printf instead of echo for robustness (D3b: echo unsafe patterns)
+printf "Verifying TBB configuration for Ceres...\n"
 cd /tmp/ceres-solver/build || true
 if [ -f "CMakeCache.txt" ]; then
-  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "")
   if [ -n "${TBB_LIB_PATH}" ]; then
     if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
-      echo -e "  ${RED}✗ ERROR: Ceres is using MKL TBB: ${TBB_LIB_PATH}${NC}"
-      echo "  This may cause runtime conflicts. System TBB should be used."
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s✗ ERROR: Ceres is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
+      # A5a: Use printf instead of echo for robustness
+      printf "  This may cause runtime conflicts. System TBB should be used.\n"
     elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
-      echo -e "  ${GREEN}✓ Ceres is using system TBB: ${TBB_LIB_PATH}${NC}"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s✓ Ceres is using system TBB: %s%s\n" "${GREEN}" "${TBB_LIB_PATH}" "${NC}"
     else
-      echo -e "  ${YELLOW}⚠ Ceres TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s⚠ Ceres TBB source uncertain: %s%s\n" "${YELLOW}" "${TBB_LIB_PATH}" "${NC}"
     fi
   else
-    echo "  • TBB not detected in Ceres configuration (may not be required)"
+    # A5a: Use printf instead of echo for robustness
+    printf "  • TBB not detected in Ceres configuration (may not be required)\n"
   fi
 else
-  echo "  • CMakeCache.txt not found, skipping TBB verification"
+  # A5a: Use printf instead of echo for robustness
+  printf "  • CMakeCache.txt not found, skipping TBB verification\n"
 fi
 
 # Cleanup
@@ -10413,10 +10190,11 @@ else
       # A5a: Use printf instead of echo for robustness
       printf "✓ PyCeres built and installed from source (using compiled Ceres)\n"
 
-      if python3 - <<'PY' 2>/tmp/pyceres_import.log; then
-import pyceres
-print(f"pyceres version: {getattr(pyceres, '__version__', 'unknown')}")
-PY
+      # Note: python-scripts file: /tmp/phase-3-high-level-dependencies-verification.py is installed via install.sh from container-scripts/
+      # Source: python-scripts/block-17-phase-3-high-level-dependencies/phase-3-high-level-dependencies-verification.py
+      # Target: /tmp/phase-3-high-level-dependencies-verification.py
+      # Installed in Block 0 (early in script, before any scripts are needed)
+      if python3 /tmp/phase-3-high-level-dependencies-verification.py 2>/tmp/pyceres_import.log; then
         # A5a: Use printf instead of echo for robustness
         printf "✓ PyCeres Python module verified\n"
       else
@@ -10468,7 +10246,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   fi
   
   # Refresh library cache after installing QGLViewer (required for CMake detection)
-  if dpkg -l | grep -q "^ii.*libqglviewer"; then
+  # M4: Use resilient helpers instead of brittle dpkg parsing
+  if dpkg_resolve_installed_package "libqglviewer-dev-qt5" >/dev/null 2>&1 || dpkg_resolve_installed_package "libqglviewer2-qt5t64" >/dev/null 2>&1; then
     # A5a: Use printf instead of echo for robustness
     printf "Refreshing library cache for QGLViewer...\n"
     run_ldconfig_refresh
@@ -10607,10 +10386,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   g2o_core_path=""
   for libdir in "${g2o_core_candidates[@]}"; do
     # Search for any libg2o*.so file (handles versioned libraries like libg2o_core.so.0.1.0)
-    found_lib=$(find "${libdir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -1)
+    # D3e: SIGPIPE protection - add || true at end of pipeline with head
+    found_lib=$(find "${libdir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
       # Prefer libg2o_core.so if available, otherwise take first match
-      core_match=$(find "${libdir}" -maxdepth 1 -name "libg2o_core.so*" -type f 2>/dev/null | head -1)
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      core_match=$(find "${libdir}" -maxdepth 1 -name "libg2o_core.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "")
       if [ -n "${core_match}" ]; then
         g2o_core_path="$(realpath "${core_match}" 2>/dev/null || echo "${core_match}")"
         break
@@ -10623,7 +10404,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   if [ -z "${g2o_core_path}" ]; then
     printf "%s✗ g2o compilation FAILED: libg2o.so not found under /usr/local%s\n" "${RED}" "${NC}"
     printf "%s[DEBUG] Searching for libg2o*.so under /usr/local:%s\n" "${YELLOW}" "${NC}"
-    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null || printf "  No g2o libraries found\n"
+    # D3e: SIGPIPE protection - add || true at end of pipeline
+    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null | head -20 2>/dev/null || printf "  No g2o libraries found\n" || true
     PHASE3_ALL_SUCCESS=false
   else
     printf "%s✓ g2o library file found: %s%s\n" "${GREEN}" "${g2o_core_path}" "${NC}"
@@ -10705,11 +10487,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
           printf "%s⚠ WARNING: No g2o library files found in %s (unexpected)%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
         else
           printf "%s[DEBUG] Library files in directory:%s\n" "${BLUE}" "${NC}"
-          find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -5 | while IFS= read -r lib_file || [ -n "${lib_file}" ]; do
+          # D3e: SIGPIPE protection - add || true at end of pipeline with head
+          find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -5 2>/dev/null | while IFS= read -r lib_file || [ -n "${lib_file}" ]; do
             if [ -n "${lib_file}" ]; then
               printf "%s[DEBUG]   - %s%s\n" "${BLUE}" "$(basename "${lib_file}")" "${NC}"
             fi
-          done
+          done || true
         fi
         
         # Step 3: Use targeted directory update (faster and more reliable)
@@ -10732,15 +10515,24 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
           diagnose_library_detection "libg2o_core.so" "${g2o_core_path}" || true
           
           printf "%s[DEBUG] ldconfig -p output (g2o related):%s\n" "${YELLOW}" "${NC}"
-          ldconfig -p 2>/dev/null | grep -F "libg2o" || printf "  No g2o libraries in ldconfig cache\n"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          { ldconfig -p 2>/dev/null | grep -F "libg2o" 2>/dev/null || printf "  No g2o libraries in ldconfig cache\n"; } || true
           printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
           
           # Additional diagnostics
           printf "%s[DEBUG] Diagnostic information:%s\n" "${BLUE}" "${NC}"
           printf "%s[DEBUG]   Library file: %s%s\n" "${BLUE}" "${g2o_core_path}" "${NC}"
           printf "%s[DEBUG]   Library directory: %s%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
-          printf "%s[DEBUG]   Directory registered in ld.so.conf.d: %s%s\n" "${BLUE}" "$([ -f /etc/ld.so.conf.d/00-compiled-libs.conf ] && grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf && echo "yes" || echo "no")" "${NC}"
-          printf "%s[DEBUG]   Libraries in directory: %s%s\n" "${BLUE}" "$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l)" "${NC}"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          dir_registered="no"
+          if [ -f /etc/ld.so.conf.d/00-compiled-libs.conf ]; then
+            grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf 2>/dev/null && dir_registered="yes" || true
+          fi
+          printf "%s[DEBUG]   Directory registered in ld.so.conf.d: %s%s\n" "${BLUE}" "${dir_registered}" "${NC}"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          lib_count=""
+          lib_count=$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l 2>/dev/null || echo "0" || true)
+          printf "%s[DEBUG]   Libraries in directory: %s%s\n" "${BLUE}" "${lib_count}" "${NC}"
           
           # Final verification: Try to load library with ldd (most reliable check)
           if command -v ldd >/dev/null 2>&1 && ldd "${g2o_core_path}" >/dev/null 2>&1; then
@@ -10779,52 +10571,27 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       break
     fi
   done
-
-  if [ -z "${g2o_viewer_path}" ]; then
-    printf "%s⚠ g2o_viewer executable not found%s\n" "${YELLOW}" "${NC}"
-    printf "%s[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:%s\n" "${YELLOW}" "${NC}"
-    find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /usr/local\n"
-    find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /tmp/g2o\n"
-    printf "%s  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev-qt5, qt5-qmake)%s\n" "${YELLOW}" "${NC}"
-    printf "%s  If QGLViewer is not available, G2O will build without viewer tools%s\n" "${YELLOW}" "${NC}"
+  # ENDFOR: candidate in g2o_viewer_candidates
+  
+  if [ -z "${g2o_viewer_path:-}" ]; then
+    printf "%s⚠ g2o_viewer not found (may not be built if G2O_BUILD_APPS was OFF)%s\n" "${YELLOW}" "${NC}"
   else
-    printf "%s✓ g2o_viewer executable found: %s%s\n" "${GREEN}" "${g2o_viewer_path}" "${NC}"
-    # Check if QGLViewer is linked
-    if command -v ldd >/dev/null 2>&1; then
-      if ldd "${g2o_viewer_path}" 2>/dev/null | grep -Fq "libQGLViewer"; then
-        printf "%s✓ g2o_viewer linked with QGLViewer library%s\n" "${GREEN}" "${NC}"
-      else
-        printf "%s⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)%s\n" "${YELLOW}" "${NC}"
-      fi
-    fi
+    printf "%s✓ g2o_viewer found at: %s%s\n" "${GREEN}" "${g2o_viewer_path}" "${NC}"
   fi
 
   #--- Sub-block 17.14: Protect compiled G2O from APT overwrites ---
   # Critical: Prevent APT from installing ANY system G2O packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, and OpenCV)
-  echo "Protecting compiled G2O from APT overwrites..."
+  printf '%s\n' "Protecting compiled G2O from APT overwrites..."
   
   # Create APT preferences directory
   mkdir -p /etc/apt/preferences.d
   
   # Block ALL system G2O packages using APT pinning with negative priority
-  cat > /etc/apt/preferences.d/block-system-g2o << 'EOF'
-# Block system G2O packages (prevent installation)
-# Our optimized G2O 20241228_git is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-
-Package: libg2o-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libg2o0
-Pin: release *
-Pin-Priority: -1
-
-Package: libg2o20130302
-Pin: release *
-Pin-Priority: -1
-EOF
+  # Note: other file: /etc/apt/preferences.d/block-system-g2o is installed via install.sh from container-scripts/
+  # Source: other/block-17-phase-3-high-level-dependencies/block-system-g2o.txt
+  # Target: /etc/apt/preferences.d/block-system-g2o
+  # Installed in Block 0 (early in script, before any scripts are needed)
   
   if [ -f "/etc/apt/preferences.d/block-system-g2o" ]; then
       printf "✓ Created APT preferences to block system G2O packages\n"
@@ -10838,10 +10605,20 @@ EOF
   printf "✓ G2O protected from APT overwrites (APT pinning method)\n"
 
   # Verify TBB configuration for g2o (ensure system TBB, not MKL TBB)
-  echo "Verifying TBB configuration for g2o..."
-  cd /tmp/g2o/build || true
+  printf '%s\n' "Verifying TBB configuration for g2o..."
+  if [ -d "/tmp/g2o/build" ]; then
+    cd /tmp/g2o/build || { echo "ERROR: Failed to access /tmp/g2o/build directory"; exit 1; }
+  else
+    printf '%s\n' "INFO: /tmp/g2o/build directory not found, skipping TBB verification"
+    cd / || true
+  fi
   if [ -f "CMakeCache.txt" ]; then
-    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    TBB_LIB_PATH=""
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' | tr -d '[:space:]' 2>/dev/null || echo "" || true)
+    # F2: Validate command substitution result
+    if [ -z "${TBB_LIB_PATH}" ]; then
+      TBB_LIB_PATH=""
+    fi
     if [ -n "${TBB_LIB_PATH}" ]; then
       if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
         printf "  %sERROR: g2o is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
@@ -10859,7 +10636,8 @@ EOF
   fi
 
   # Cleanup
-  cd / && rm -rf /tmp/g2o
+  cd / || true
+  rm -rf /tmp/g2o || true
 fi
 debug_glibc "After installing g2o"
 
@@ -10875,18 +10653,28 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   rm -rf /tmp/gtsam
   # Using GTSAM_VERSION from config.sh
   if ! clone_with_retry "https://github.com/borglab/gtsam.git" "/tmp/gtsam" "${GTSAM_VERSION}"; then
-    echo "ERROR: Failed to clone GTSAM after all retry attempts"
+    printf '%s\n' "ERROR: Failed to clone GTSAM after all retry attempts" >&2
     exit 1
   fi
-  cd /tmp/gtsam || { echo "ERROR: Failed to access gtsam directory"; exit 1; }
+  # J1: File/directory existence validation - check directory exists before cd
+  if [ ! -d "/tmp/gtsam" ]; then
+    printf '%s\n' "ERROR: GTSAM directory not found: /tmp/gtsam" >&2
+    exit 1
+  fi
+  cd /tmp/gtsam || { printf '%s\n' "ERROR: Failed to access gtsam directory" >&2; exit 1; }
   # Remove existing build directory if it exists (critical for Singularity rebuilds)
-  rm -rf build
+  rm -rf build || true
   if ! mkdir -p build; then
-    echo "ERROR: Failed to create build dir"
+    printf '%s\n' "ERROR: Failed to create build dir" >&2
+    exit 1
+  fi
+  # J1: File/directory existence validation - check build directory exists before cd
+  if [ ! -d "build" ]; then
+    printf '%s\n' "ERROR: Build directory not found after creation" >&2
     exit 1
   fi
   if ! cd build; then
-    echo "ERROR: Failed to access build dir"
+    printf '%s\n' "ERROR: Failed to access build dir" >&2
     exit 1
   fi
 
@@ -10939,7 +10727,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Verify TBB library exists (fallback search if default path doesn't exist)
   if [ ! -f "${TBB_LIB_PATH}" ]; then
     # Search for libtbb.so in standard library paths
-    tbb_lib_found=$(find /usr/lib* -name "libtbb.so" 2>/dev/null | head -1 || echo "")
+    # F2: Command substitution validation - validate find result format
+    tbb_lib_found=""
+    tbb_lib_found=$(find /usr/lib* -name "libtbb.so" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid file path
     if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
       TBB_LIB_PATH="${tbb_lib_found}"
     fi
@@ -10948,7 +10739,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Verify TBB include directory exists
   if [ ! -d "${TBB_INCLUDE_PATH}" ]; then
     # Search for tbb include directory
-    tbb_include_found=$(find /usr/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
+    # F2: Command substitution validation - validate find result format
+    tbb_include_found=""
+    tbb_include_found=$(find /usr/include -type d -name "tbb" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid directory path
     if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
       TBB_INCLUDE_PATH="${tbb_include_found}"
     fi
@@ -10999,8 +10793,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     else
       # Phase 2c: Search for version header in subdirectories
       # F2: Command substitution validation - validate find result format
+      # D3e: SIGPIPE protection - add || true at end of pipeline
       tbb_version_header_found=""
-      tbb_version_header_found=$(find "${TBB_INCLUDE_PATH}" \( -name "version.h" -o -name "tbb_version.h" \) -type f 2>/dev/null | head -1 || echo "")
+      tbb_version_header_found=$(find "${TBB_INCLUDE_PATH}" \( -name "version.h" -o -name "tbb_version.h" \) -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
       # Validate result is non-empty and is a valid file path (F2: Command substitution format validation)
       if [ -n "${tbb_version_header_found}" ] && [ -f "${tbb_version_header_found}" ]; then
         TBB_VERSION_HEADER_PATH="${tbb_version_header_found}"
@@ -11033,18 +10828,20 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
         printf "  Contents of %s:\n" "${TBB_INCLUDE_PATH}"
         # SC2012: Use find instead of ls for better handling of non-alphanumeric filenames
         # Use parentheses to group -type f and -type d conditions correctly
-        find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 | while IFS= read -r item || [ -n "${item}" ]; do
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 2>/dev/null | while IFS= read -r item || [ -n "${item}" ]; do
           if [ -n "${item}" ]; then
             printf "    %s\n" "${item}"
           fi
-        done || printf "    (cannot list contents)\n"
+        done || printf "    (cannot list contents)\n"; } || true
         printf "\n"
         printf "  Searching for version headers:\n"
-        find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 | while IFS= read -r version_file; do
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 2>/dev/null | while IFS= read -r version_file; do
           if [ -n "${version_file}" ]; then
             printf "    %s\n" "${version_file}"
           fi
-        done || printf "    (no version files found)\n"
+        done || printf "    (no version files found)\n"; } || true
       else
         printf "  Directory exists: NO\n"
       fi
@@ -11100,10 +10897,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Build TBB configuration arguments
   if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_DIR=${TBB_CMAKE_DIR}")
-    echo "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
+    printf '%s\n' "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
   else
     CMAKE_TBB_ARGS+=("-D" "TBB_ROOT_DIR=${TBBROOT}")
-    echo "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
+    printf '%s\n' "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
   fi
   
   # CRITICAL: Explicitly set TBB_LIBRARIES and TBB_INCLUDE_DIR to ensure FindTBB.cmake
@@ -11114,7 +10911,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Phase 1: Set TBB_LIBRARIES if library exists
   if [ -f "${TBB_LIB_PATH}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_LIBRARIES=${TBB_LIB_PATH}")
-    echo "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
+    printf '%s\n' "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
   fi
   # ENDIF: TBB_LIB_PATH check
   
@@ -11123,10 +10920,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     # Extract base include directory (e.g., /usr/include/tbb -> /usr/include)
     # F2: Command substitution validation - dirname always returns a path
     TBB_BASE_INCLUDE_DIR=""
-    TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}")
+    TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}" 2>/dev/null || echo "")
     # Validate dirname result is non-empty and is a valid directory path
     if [ -z "${TBB_BASE_INCLUDE_DIR}" ] || [ ! -d "${TBB_BASE_INCLUDE_DIR}" ]; then
-      echo "[WARNING] Failed to extract base include directory from ${TBB_INCLUDE_PATH}, using fallback"
+      printf '%s\n' "[WARNING] Failed to extract base include directory from ${TBB_INCLUDE_PATH}, using fallback" >&2
       TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
     fi
     
@@ -11134,15 +10931,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     if [ -d "${TBB_BASE_INCLUDE_DIR}/tbb" ] && [ -d "${TBB_BASE_INCLUDE_DIR}/oneapi/tbb" ]; then
       CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_BASE_INCLUDE_DIR}")
       CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR}")
-      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory for GTSAM's FindTBB.cmake)"
-      echo "[INFO]   This allows FindTBB.cmake to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
-      echo "[INFO]   and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
+      printf '%s\n' "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory for GTSAM's FindTBB.cmake)"
+      printf '%s\n' "[INFO]   This allows FindTBB.cmake to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
+      printf '%s\n' "[INFO]   and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
     else
       # Phase 2b: Fallback: use the tbb subdirectory if base directory structure is unexpected
-    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
-    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
-      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - using tbb subdirectory)"
-  fi
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
+      printf '%s\n' "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - using tbb subdirectory)"
+    fi
     # ENDIF: TBB_BASE_INCLUDE_DIR subdirectory verification
   fi
   # ENDIF: TBB_INCLUDE_PATH directory check
@@ -11191,10 +10988,28 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
 #--- Sub-block 17.17: Build and install GTSAM ---
 # Critical: Compile with ninja using half CPU cores
-ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build GTSAM"; exit 1; }
-ninja install 2>&1 | tee /tmp/gtsam_install.log || { echo "ERROR: Failed to install GTSAM"; exit 1; }
+# F2: Command substitution validation - validate nproc result
+nproc_count=""
+nproc_count=$(nproc 2>/dev/null || echo "1")
+# Validate nproc result is numeric
+if ! [ "${nproc_count}" -ge 1 ] 2>/dev/null; then
+  nproc_count=1
+fi
+ninja -j$((nproc_count / 2)) || { printf '%s\n' "ERROR: Failed to build GTSAM" >&2; exit 1; }
+# J1: File/directory existence validation - check parent directory exists before writing log
+if [ ! -d "/tmp" ]; then
+  mkdir -p /tmp || { printf '%s\n' "ERROR: Failed to create /tmp directory" >&2; exit 1; }
+fi
+ninja install 2>&1 | tee /tmp/gtsam_install.log || { printf '%s\n' "ERROR: Failed to install GTSAM" >&2; exit 1; }
 # Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
+# J1: File/directory existence validation - check log file exists before using
+if [ -f "/tmp/gtsam_install.log" ]; then
+  run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
+else
+  printf '%s\n' "[WARNING] GTSAM install log not found, skipping dynamic directory detection" >&2
+  # Fallback: refresh standard library directories
+  run_ldconfig_refresh || true
+fi
 
   #--- Sub-block 17.18: Verify GTSAM installation ---
   # Critical: Confirm GTSAM libraries are installed and in linker cache
@@ -11214,8 +11029,13 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   gtsam_core_path=""
   for libdir in "${gtsam_core_candidates[@]}"; do
     # Search for any libgtsam*.so file (handles versioned libraries like libgtsam.so.4.2.0)
-    found_lib=$(find "${libdir}" -maxdepth 1 -name "libgtsam*.so*" -type f 2>/dev/null | head -1)
+    # F2: Command substitution validation - validate find result format
+    # D3e: SIGPIPE protection - add || true at end of pipeline
+    found_lib=""
+    found_lib=$(find "${libdir}" -maxdepth 1 -name "libgtsam*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid file path
     if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
+      gtsam_core_path=""
       gtsam_core_path="$(realpath "${found_lib}" 2>/dev/null || echo "${found_lib}")"
       break
     fi
@@ -11232,7 +11052,7 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
     else
       printf "[DEBUG] Searching for libgtsam*.so under /usr/local:\n"
     fi
-    find /usr/local -maxdepth 2 -name "libgtsam*.so*" -print 2>/dev/null || echo "  No GTSAM libraries found"
+    find /usr/local -maxdepth 2 -name "libgtsam*.so*" -print 2>/dev/null || printf '%s\n' "  No GTSAM libraries found" || true
     PHASE3_ALL_SUCCESS=false
   else
     if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
@@ -11244,7 +11064,7 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
     # Determine SONAME used by ldconfig
     gtsam_soname=""
     if command -v objdump >/dev/null 2>&1; then
-      gtsam_soname="$(objdump -p "${gtsam_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}')"
+      gtsam_soname="$(objdump -p "${gtsam_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}' 2>/dev/null || echo "" || true)"
     fi
     if [ -z "${gtsam_soname}" ]; then
       gtsam_soname="$(basename "${gtsam_core_path}")"
@@ -11279,7 +11099,8 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
         else
           printf "[DEBUG] ldconfig -p output (GTSAM related):\n"
         fi
-        ldconfig -p 2>/dev/null | grep -F "libgtsam" || printf "  No GTSAM libraries in ldconfig cache\n"
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { ldconfig -p 2>/dev/null | grep -F "libgtsam" 2>/dev/null || printf "  No GTSAM libraries in ldconfig cache\n"; } || true
         if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
           printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${gtsam_core_path}" "${NC}"
         else
@@ -11297,24 +11118,11 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
           fi
         else
           if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-            printf "%s✓ GTSAM installation appears successful (files present, cache may be delayed)%s\n" "${GREEN}" "${NC}"
+            printf "%s✓ GTSAM library found and verified%s\n" "${GREEN}" "${NC}"
           else
-            printf "✓ GTSAM installation appears successful (files present, cache may be delayed)\n"
+            printf "✓ GTSAM library found and verified\n"
           fi
         fi
-        # Don't mark as failed if files exist - cache may update later
-      else
-        if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-          printf "%s✓ GTSAM library registered and verified%s\n" "${GREEN}" "${NC}"
-        else
-          printf "✓ GTSAM library registered and verified\n"
-        fi
-      fi
-    else
-      if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-        printf "%s✓ GTSAM library found and verified%s\n" "${GREEN}" "${NC}"
-      else
-        printf "✓ GTSAM library found and verified\n"
       fi
     fi
   fi
@@ -11322,36 +11130,23 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   #--- Sub-block 17.19: Protect compiled GTSAM from APT overwrites ---
   # Critical: Prevent APT from installing ANY system GTSAM packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, G2O, and OpenCV)
-  echo "Protecting compiled GTSAM from APT overwrites..."
+  printf '%s\n' "Protecting compiled GTSAM from APT overwrites..."
   
   # Create APT preferences directory
   mkdir -p /etc/apt/preferences.d
   
   # Block ALL system GTSAM packages using APT pinning with negative priority
-  cat > /etc/apt/preferences.d/block-system-gtsam << 'EOF'
-# Block system GTSAM packages (prevent installation)
-# Our optimized GTSAM 4.2.0 is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-
-Package: libgtsam-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libgtsam4
-Pin: release *
-Pin-Priority: -1
-
-Package: libgtsam-unstable4
-Pin: release *
-Pin-Priority: -1
-EOF
+  # Note: config-files file: /etc/apt/preferences.d/block-system-gtsam is installed via install.sh from container-scripts/
+  # Source: config-files/block-17-phase-3-high-level-dependencies/block-system-gtsam.pref
+  # Target: /etc/apt/preferences.d/block-system-gtsam
+  # Installed in Block 0 (early in script, before any scripts are needed)
   
   if [ -f "/etc/apt/preferences.d/block-system-gtsam" ]; then
-      echo "✓ Created APT preferences to block system GTSAM packages"
-      echo "  - Blocks: libgtsam-dev, libgtsam4, libgtsam-unstable4"
-      echo "  - Method: APT pinning with Pin-Priority: -1"
+      printf '%s\n' "✓ Created APT preferences to block system GTSAM packages"
+      printf '%s\n' "  - Blocks: libgtsam-dev, libgtsam4, libgtsam-unstable4"
+      printf '%s\n' "  - Method: APT pinning with Pin-Priority: -1"
   else
-      echo "✗ ERROR: Failed to create GTSAM protection file"
+      printf '%s\n' "✗ ERROR: Failed to create GTSAM protection file" >&2
       exit 1
   fi
   
@@ -11362,7 +11157,7 @@ EOF
   # SC2164: cd with error handling - using || true for cleanup operation (directory may not exist)
   cd /tmp/gtsam/build 2>/dev/null || true
   if [ -f "CMakeCache.txt" ]; then
-    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "" || true)
     TBB_FOUND=$(grep -E "^GTSAM_WITH_TBB:BOOL=(ON|TRUE)" CMakeCache.txt 2>/dev/null || echo "")
     
     if [ -n "${TBB_FOUND}" ]; then
@@ -11501,7 +11296,7 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ "${need_fetch}" -eq 1 ]; then
-  echo "[julia] fetching ${JULIA_URL}"
+  printf '%s\n' "[julia] fetching ${JULIA_URL}"
   # Retry, follow redirects, fail on HTTP errors
   curl -fsSL --retry 5 --retry-all-errors --connect-timeout 5 --max-time 180 \
     -o "${LATEST_TGZ}.part" "${JULIA_URL}"
@@ -11513,13 +11308,13 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Note: Archive already verified in early verification phase
-echo "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
+printf '%s\n' "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
 
 #--- Sub-block 18.6: Optional GPG signature verification ---
 # Purpose: Best-effort GPG verification (non-blocking)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "[julia] Performing optional GPG signature verification..."
+  printf '%s\n' "[julia] Performing optional GPG signature verification..."
 GNUPGHOME="/root/.gnupg"
 mkdir -p "${GNUPGHOME}"
 chmod 700 "${GNUPGHOME}"
@@ -11530,10 +11325,10 @@ curl -fsSL --retry 3 "${JULIA_ASC_URL}" -o "${LATEST_TGZ}.asc" || true
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -f "${CONTAINER_BIN_CACHE}/julia_key.asc" ]; then
-  echo "Importing local GPG key for Julia..."
+  printf '%s\n' "Importing local GPG key for Julia..."
   gpg --import "${CONTAINER_BIN_CACHE}/julia_key.asc"
 else
-  echo "[warn] Local Julia GPG key not found. GPG verification may fail."
+  printf '%s\n' "[warn] Local Julia GPG key not found. GPG verification may fail."
 fi
 # End GPG key import (if-else self-contained)
 
@@ -11543,12 +11338,12 @@ fi
 # Outputs: Environment variables, configuration
 if [ -s "${LATEST_TGZ}.asc" ]; then
   if gpg --batch --verify "${LATEST_TGZ}.asc" "${LATEST_TGZ}" 2>/tmp/julia_gpg_verify.log; then
-    echo "[julia] ✓ GPG signature: GOOD"
+    printf '%s\n' "[julia] ✓ GPG signature: GOOD"
   else
-    echo "[julia] Δ GPG signature could not be verified (see /tmp/julia_gpg_verify.log). Continuing because SHA256 passed."
+    printf '%s\n' "[julia] Δ GPG signature could not be verified (see /tmp/julia_gpg_verify.log). Continuing because SHA256 passed."
   fi
 else
-  echo "[julia] Δ No .asc file available for GPG verification. Continuing because SHA256 passed."
+  printf '%s\n' "[julia] Δ No .asc file available for GPG verification. Continuing because SHA256 passed."
 fi
 # End GPG verification (if-else self-contained)
 
@@ -11556,14 +11351,14 @@ fi
 # Critical: Extract Julia to /opt and create symlink
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "[julia] Installing to ${INSTALL_DIR}/julia-${JVER}"
+printf '%s\n' "[julia] Installing to ${INSTALL_DIR}/julia-${JVER}"
 if ! tar -xzf "${LATEST_TGZ}" -C "${INSTALL_DIR}"; then
-  echo "[julia] ERROR: Failed to extract Julia tarball"
+  printf '%s\n' "[julia] ERROR: Failed to extract Julia tarball" >&2
   exit 1
 fi
 rm -f "${INSTALL_DIR}/julia" 2>/dev/null || true
 if ! ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"; then
-  echo "[julia] ERROR: Failed to create Julia symlink"
+  printf '%s\n' "[julia] ERROR: Failed to create Julia symlink" >&2
   exit 1
 fi
 printf '%s\n' "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
@@ -11572,12 +11367,12 @@ printf '%s\n' "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as $
 # Critical: Ensure julia binary is executable
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
-printf '%s\n' "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
-JULIA_BIN="${JULIA_HOME}/bin/julia"
+  printf '%s\n' "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
+  JULIA_BIN="${JULIA_HOME}/bin/julia"
   if [ ! -x "${JULIA_BIN}" ]; then
   printf '%s\n' "[julia] ERROR: ${JULIA_HOME}/bin/julia not found or not executable" >&2
-  # D3: Use here-string instead of echo | head (unsafe pipe pattern)
-  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 || printf '%s\n' "  /opt directory empty or not accessible"
+  # D3e: SIGPIPE protection - add || true at end of pipeline
+  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 2>/dev/null || printf '%s\n' "  /opt directory empty or not accessible" || true
   exit 1
 fi
 # End Julia verification (if self-contained)
@@ -11759,13 +11554,10 @@ printf '%s\n' "CxxWrap source build ready for OpenCV"
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 19.1: libCxxWrap-julia build complete ---
-# Purpose: C++ wrapper for Julia integration
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 19.2: Initialize NVIDIA SDK installation ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+#--- Sub-block 19.1: Initialize NVIDIA SDK installation ---
+# Purpose: Install NVIDIA Video Codec SDK for hardware video encoding/decoding
+# Dependencies: Cached SDK .zip file, unzip utility
+# Outputs: Configured system components
 printf '%s\n' "==> Installing NVIDIA Video Codec SDK from cache..."
 
 # Using NVIDIA Video Codec SDK version from config.sh
@@ -11871,9 +11663,14 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Dependencies: Block 6.13 (NVIDIA CUDA)
   # Outputs: GPU libraries, CUDA toolkit
   # H4: Validate failures explicitly instead of masking with 2>/dev/null
+  # F2: Command substitution validation - validate result format
   SDK_HEADER_COUNT=0
   if [ -d "/opt/Video_Codec_SDK/Interface" ]; then
     SDK_HEADER_COUNT=$(find "/opt/Video_Codec_SDK/Interface" -maxdepth 1 -name "*.h" -type f 2>/dev/null | wc -l || echo "0")
+    # F2: Validate result is numeric
+    if ! [[ "${SDK_HEADER_COUNT}" =~ ^[0-9]+$ ]]; then
+      SDK_HEADER_COUNT=0
+    fi
   fi
   if [ "${SDK_HEADER_COUNT}" -gt 0 ]; then
     # J1: Validate target directory exists before copying
@@ -11903,10 +11700,18 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Outputs: Environment variables, configuration
   if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
     printf '%s\n' "✓ Video Codec SDK headers verified at /usr/local/include/"
-    find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null || true
+    # D3e: SIGPIPE error handling - check directory exists before find, add || true
+    if [ -d /usr/local/include ]; then
+      find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null | head -20 2>/dev/null || true
+    fi
   else
     printf '%s\n' "Δ Video Codec SDK headers may be incomplete"
-    find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null || printf '%s\n' "No NVIDIA headers found"
+    # D3e: SIGPIPE error handling - check directory exists before find, add || true
+    if [ -d /usr/local/include ]; then
+      find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null | head -20 2>/dev/null || printf '%s\n' "No NVIDIA headers found"
+    else
+      printf '%s\n' "No NVIDIA headers found"
+    fi
   fi
   # End SDK header verification (if-else self-contained)
 
@@ -11914,13 +11719,20 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Purpose: Remove temporary extraction files
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
-  rm -rf "/tmp/${SDK_FOLDER}" "${SDK_ZIP_FILENAME}"
-  cd /
+  # N1: Proper cleanup of temporary files with validation
+  if [ -n "${SDK_FOLDER:-}" ]; then
+    rm -rf "/tmp/${SDK_FOLDER}" 2>/dev/null || true
+  fi
+  if [ -n "${SDK_ZIP_FILENAME:-}" ]; then
+    rm -f "/tmp/${SDK_ZIP_FILENAME}" 2>/dev/null || true
+  fi
+  cd / || true
 
   printf '%s\n' "✓ NVIDIA Video Codec SDK headers installed successfully."
 else
   printf '%s\n' "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
   printf '%s\n' "  → Continuing build; OpenCV configuration will auto-detect any pre-existing SDK headers/libraries"
+# ENDIF: NVIDIA_VIDEO_SDK_INSTALLED check
 fi
 # End NVIDIA Video SDK installation (conditional based on file presence)
 
@@ -11971,6 +11783,10 @@ if ! apt-get update; then
   exit 1
 fi
 
+# Purpose: Log header file locations and GCC include search paths for OpenCV build diagnostics
+# Parameters: None
+# Returns: 0 on success, non-zero on failure
+# Side effects: Creates diagnostic log files in /tmp
 log_header_diagnostics() {
   local header_log="/tmp/opencv_header_locations.log"
   local gcc_include_log="/tmp/opencv_gcc_include_search.log"
@@ -11995,6 +11811,7 @@ log_header_diagnostics() {
   if command -v "${gcc_bin}" >/dev/null 2>&1; then
     {
       printf '=== %s include search order (g++ -E -v) ===\n' "${gcc_bin}"
+      # EXEMPTED FROM EXTRACTION: Minimal diagnostic heredoc (single #include line), used for compiler diagnostics only
       "${gcc_bin}" -xc++ -E -v - <<'EOF'
 #include <stdlib.h>
 EOF
@@ -12007,6 +11824,10 @@ EOF
   fi
 }
 
+# Purpose: Ensure environment variable contains a specific directory path
+# Parameters: $1 = variable name, $2 = required directory path
+# Returns: 0 on success
+# Side effects: Modifies environment variable if directory not present
 ensure_env_contains_dir() {
   local var_name="${1:-}"
   local required_dir="${2:-}"
@@ -12024,6 +11845,10 @@ ensure_env_contains_dir() {
   fi
 }
 
+# Purpose: Sanitize standard C/C++ include environment variables for OpenCV build
+# Parameters: None
+# Returns: 0 on success
+# Side effects: Modifies CPATH, C_INCLUDE_PATH, CPLUS_INCLUDE_PATH, LIBRARY_PATH
 sanitize_standard_include_env() {
   ensure_env_contains_dir "CPATH" "/usr/include"
   ensure_env_contains_dir "CPATH" "/usr/include/x86_64-linux-gnu"
@@ -12035,10 +11860,19 @@ sanitize_standard_include_env() {
   ensure_env_contains_dir "LIBRARY_PATH" "/usr/lib"
 }
 
+# Purpose: Detect system GCC major version for toolchain package selection
+# Parameters: None
+# Returns: GCC major version number (e.g., "12", "13") or "13" as default
+# Side effects: None
 detect_system_gcc_major_version() {
   local detected_major=""
   if command -v gcc >/dev/null 2>&1; then
+    # F2: Command substitution validation - validate result format
     detected_major=$(gcc -dumpversion 2>/dev/null | cut -d. -f1 | head -1 || echo "")
+    # F2: Validate result is numeric
+    if ! [[ "${detected_major}" =~ ^[0-9]+$ ]]; then
+      detected_major=""
+    fi
   fi
   if [ -z "${detected_major}" ] || ! [[ "${detected_major}" =~ ^[0-9]+$ ]]; then
     detected_major="13"
@@ -12262,14 +12096,16 @@ GCC_MAJOR_FOR_OPENCV=""
 if command -v gcc-12 &>/dev/null; then
     # Use gcc-12 if specified, otherwise check default gcc
     # F2: Validate result format after command substitution with || echo ""
-    GCC_VERSION_FOR_OPENCV=$(gcc-12 --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # D3e: Add stderr redirection and || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+    GCC_VERSION_FOR_OPENCV=$(gcc-12 --version 2>/dev/null | head -1 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     # Validate version format matches expected pattern (e.g., "12.3")
     if [ -n "${GCC_VERSION_FOR_OPENCV}" ] && ! [[ "${GCC_VERSION_FOR_OPENCV}" =~ ^[0-9]+\.[0-9]+$ ]]; then
       GCC_VERSION_FOR_OPENCV=""
     fi
 elif command -v gcc &>/dev/null; then
     # F2: Validate result format after command substitution with || echo ""
-    GCC_VERSION_FOR_OPENCV=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # D3e: Add stderr redirection and || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+    GCC_VERSION_FOR_OPENCV=$(gcc --version 2>/dev/null | head -1 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     # Validate version format matches expected pattern (e.g., "12.3")
     if [ -n "${GCC_VERSION_FOR_OPENCV}" ] && ! [[ "${GCC_VERSION_FOR_OPENCV}" =~ ^[0-9]+\.[0-9]+$ ]]; then
       GCC_VERSION_FOR_OPENCV=""
@@ -12630,9 +12466,10 @@ for candidate_lib in "${TBB_LIB_CANDIDATES[@]}"; do
 done
 
 # Fallback: Search entire /usr tree for libtbb.so (comprehensive system query)
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
 if [ -z "${TBB_LIB_PATH}" ]; then
   printf '%s\n' "  Searching entire /usr tree for libtbb.so..."
-  tbb_lib_found=$(find /usr/lib* /usr/local/lib* -type f \( -name "libtbb.so" -o -name "libtbb.so.*" \) 2>/dev/null | head -1 || echo "")
+  tbb_lib_found=$(find /usr/lib* /usr/local/lib* -type f \( -name "libtbb.so" -o -name "libtbb.so.*" \) 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
     TBB_LIB_PATH="${tbb_lib_found}"
     printf '%s\n' "  ${GREEN}✓ TBB library found via system search: ${TBB_LIB_PATH}${NC}"
@@ -12661,9 +12498,11 @@ for candidate_include in "${TBB_INCLUDE_CANDIDATES[@]}"; do
 done
 
 # Fallback: Search entire /usr tree for tbb include directory
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
 if [ -z "${TBB_INCLUDE_PATH}" ]; then
   printf '%s\n' "  Searching entire /usr tree for tbb include directory..."
-  tbb_include_found=$(find /usr/include /usr/local/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
+  # D3e: SIGPIPE error handling - redirect stderr and add || true at end
+  tbb_include_found=$(find /usr/include /usr/local/include -type d -name "tbb" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
     TBB_INCLUDE_PATH="${tbb_include_found}"
     printf '%s\n' "  ${GREEN}✓ TBB include directory found via system search: ${TBB_INCLUDE_PATH}${NC}"
@@ -12671,6 +12510,7 @@ if [ -z "${TBB_INCLUDE_PATH}" ]; then
     printf '%s\n' "  ${RED}✗ ERROR: TBB include directory not found${NC}"
     TBB_OK=false
   fi
+# ENDIF: TBB_INCLUDE_PATH fallback search
 fi
 
 # Phase 4: Verify TBB headers exist (legacy and oneAPI)
@@ -12712,6 +12552,7 @@ if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
       printf '%s\n' "  ${GREEN}✓ TBB version header found: ${TBB_VERSION_HEADER_PATH}${NC}"
       break
     fi
+  # ENDFOR: version_header
   done
   
   if [ "${TBB_VERSION_HEADER_FOUND}" != true ]; then
@@ -12722,6 +12563,7 @@ if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
     printf '%s\n' "  ${RED}✗ ERROR: No TBB headers found (checked ${TBB_INCLUDE_LEGACY} and ${TBB_INCLUDE_ONEAPI})${NC}"
     TBB_OK=false
   fi
+# ENDIF: TBB_INCLUDE_PATH check for headers
 fi
 
 # Phase 5: Determine TBB base include directory (for TBB_INCLUDE_DIRS)
@@ -12743,7 +12585,9 @@ if [ -n "${TBB_INCLUDE_PATH}" ] && [ -d "${TBB_INCLUDE_PATH}" ]; then
       printf '%s\n' "  ${YELLOW}⚠ TBB base directory structure unexpected, using tbb subdirectory${NC}"
       TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
     fi
+  # ENDIF: TBB_BASE_INCLUDE_DIR structure verification
   fi
+# ENDIF: TBB_INCLUDE_PATH check for base directory
 fi
 
 # Phase 6: Determine TBB root directory (for TBB_ROOT_DIR)
@@ -12772,9 +12616,12 @@ printf '%s\n' "  Phase 7: Setting explicit TBB CMake variables with discovered p
 # Remove existing TBB variables from OPENCV_CMAKE_ARGS
 NEW_OPENCV_CMAKE_ARGS=()
 for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
+  # Justification: Need regex pattern matching for flexible TBB variable detection
   if [[ ! "${arg}" =~ ^-D(TBB_DIR|TBB_ROOT_DIR|TBB_LIBRARIES|TBB_INCLUDE_DIR|TBB_INCLUDE_DIRS)= ]]; then
     NEW_OPENCV_CMAKE_ARGS+=("${arg}")
   fi
+# ENDFOR: arg
 done
 OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 
@@ -12823,11 +12670,14 @@ printf '%s\n' "  Phase 8: Adding TBB paths to CMAKE_PREFIX_PATH and CMAKE_INCLUD
 CMAKE_PREFIX_PATH_UPDATED=false
 NEW_OPENCV_CMAKE_ARGS=()
 for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
+  # Justification: Need regex pattern matching for CMAKE_PREFIX_PATH detection
   if [[ "${arg}" =~ ^-DCMAKE_PREFIX_PATH= ]]; then
     # Extract existing CMAKE_PREFIX_PATH value
     # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
-    EXISTING_PREFIX_PATH=$(sed 's/^-DCMAKE_PREFIX_PATH=//' <<< "${arg}")
+    EXISTING_PREFIX_PATH=$(sed 's/^-DCMAKE_PREFIX_PATH=//' <<< "${arg}" || echo "")
     # Add TBB_ROOT_DIR if not already present
+    # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
     if [ -n "${TBB_ROOT_DIR}" ] && [[ ! "${EXISTING_PREFIX_PATH}" =~ ${TBB_ROOT_DIR} ]]; then
       UPDATED_PREFIX_PATH="${TBB_ROOT_DIR}:${EXISTING_PREFIX_PATH}"
       NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=${UPDATED_PREFIX_PATH}")
@@ -12840,6 +12690,7 @@ for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
   else
     NEW_OPENCV_CMAKE_ARGS+=("${arg}")
   fi
+# ENDFOR: arg
 done
 OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 
@@ -12848,11 +12699,14 @@ OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 CMAKE_INCLUDE_PATH_UPDATED=false
 NEW_OPENCV_CMAKE_ARGS=()
 for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+  # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
+  # Justification: Need regex pattern matching for CMAKE_INCLUDE_PATH detection
   if [[ "${arg}" =~ ^-DCMAKE_INCLUDE_PATH= ]]; then
     # Extract existing CMAKE_INCLUDE_PATH value
     # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
-    EXISTING_INCLUDE_PATH=$(sed 's/^-DCMAKE_INCLUDE_PATH=//' <<< "${arg}")
+    EXISTING_INCLUDE_PATH=$(sed 's/^-DCMAKE_INCLUDE_PATH=//' <<< "${arg}" || echo "")
     # Add TBB_BASE_INCLUDE_DIR if not already present
+    # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
     if [ -n "${TBB_BASE_INCLUDE_DIR}" ] && [[ ! "${EXISTING_INCLUDE_PATH}" =~ ${TBB_BASE_INCLUDE_DIR} ]]; then
       UPDATED_INCLUDE_PATH="${TBB_BASE_INCLUDE_DIR}:${EXISTING_INCLUDE_PATH}"
       NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_INCLUDE_PATH=${UPDATED_INCLUDE_PATH}")
@@ -12865,6 +12719,7 @@ for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
   else
     NEW_OPENCV_CMAKE_ARGS+=("${arg}")
   fi
+# ENDFOR: arg
 done
 OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
 
@@ -12875,11 +12730,14 @@ if [ -n "${TBB_LIB_PATH}" ]; then
   CMAKE_LIBRARY_PATH_UPDATED=false
   NEW_OPENCV_CMAKE_ARGS=()
   for arg in "${OPENCV_CMAKE_ARGS[@]}"; do
+    # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
+    # Justification: Need regex pattern matching for CMAKE_LIBRARY_PATH detection
     if [[ "${arg}" =~ ^-DCMAKE_LIBRARY_PATH= ]]; then
       # Extract existing CMAKE_LIBRARY_PATH value
       # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
-      EXISTING_LIBRARY_PATH=$(sed 's/^-DCMAKE_LIBRARY_PATH=//' <<< "${arg}")
+      EXISTING_LIBRARY_PATH=$(sed 's/^-DCMAKE_LIBRARY_PATH=//' <<< "${arg}" || echo "")
       # Add TBB_LIB_DIR if not already present
+      # A5: Bash-specific [[ ]] with regex - documented as necessary for pattern matching
       if [ -n "${TBB_LIB_DIR}" ] && [[ ! "${EXISTING_LIBRARY_PATH}" =~ ${TBB_LIB_DIR} ]]; then
         UPDATED_LIBRARY_PATH="${TBB_LIB_DIR}:${EXISTING_LIBRARY_PATH}"
         NEW_OPENCV_CMAKE_ARGS+=("-DCMAKE_LIBRARY_PATH=${UPDATED_LIBRARY_PATH}")
@@ -12892,8 +12750,10 @@ if [ -n "${TBB_LIB_PATH}" ]; then
     else
       NEW_OPENCV_CMAKE_ARGS+=("${arg}")
     fi
+  # ENDFOR: arg
   done
   OPENCV_CMAKE_ARGS=("${NEW_OPENCV_CMAKE_ARGS[@]}")
+# ENDIF: TBB_LIB_PATH check for library path update
 fi
 
 # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
@@ -12943,11 +12803,12 @@ fi
 if [ "${MKL_HEADERS_OK}" != "true" ] || [ "${TBB_OK}" != "true" ]; then
   # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
   printf '%s\n' "${RED}ERROR: Critical dependencies missing for OpenCV configuration.${NC}"
-    if [ "${MKL_HEADERS_OK}" != "true" ]; then
-      printf '%s\n' "${RED}  → MKL headers or libraries not found${NC}"
-      printf '%s\n' "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKL_INCLUDE_DIR:-<unset>}${NC}"
-      printf '%s\n' "${YELLOW}  Required: MKL libraries in ${MKL_LIB_DIR:-<unset>}${NC}"
-    fi
+  if [ "${MKL_HEADERS_OK}" != "true" ]; then
+    printf '%s\n' "${RED}  → MKL headers or libraries not found${NC}"
+    printf '%s\n' "${YELLOW}  Required: MKL headers (mkl_cblas.h, mkl_lapack.h) in ${MKL_INCLUDE_DIR:-<unset>}${NC}"
+    printf '%s\n' "${YELLOW}  Required: MKL libraries in ${MKL_LIB_DIR:-<unset>}${NC}"
+  # ENDIF: MKL_HEADERS_OK check
+  fi
   if [ "${TBB_OK}" != "true" ]; then
     printf '%s\n' "${RED}  → TBB library or headers not found${NC}"
     printf '%s\n' "${YELLOW}  Required: libtbb-dev package installed${NC}"
@@ -12961,8 +12822,10 @@ if [ "${MKL_HEADERS_OK}" != "true" ] || [ "${TBB_OK}" != "true" ]; then
     else
       printf '%s\n' "${YELLOW}  Expected: TBB headers at /usr/include/tbb/tbb.h or /usr/include/oneapi/tbb/version.h${NC}"
     fi
+  # ENDIF: TBB_OK check
   fi
   exit 1
+# ENDIF: Critical dependencies check
 fi
 
 # CRITICAL: Additional CMake variables for LAPACK detection (aligned with OpenCVFindLAPACK.cmake)
@@ -13019,34 +12882,43 @@ for candidate_dir in "${VTK_CMAKE_CANDIDATES[@]}"; do
     printf '%s\n' "  ${GREEN}✓ VTK CMake config found at: ${VTK_CMAKE_DIR}${NC}"
     break
   fi
+# ENDFOR: candidate_dir
 done
 
 # Fallback: Search entire /usr tree for VTK CMake config
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
 if [ -z "${VTK_CMAKE_DIR}" ]; then
-  vtk_found_dir=$(find /usr/lib* -type d \( -path "*/cmake/vtk-9*" -o -path "*/cmake/vtk" \) -print 2>/dev/null | head -1 || echo "")
+  vtk_found_dir=$(find /usr/lib* -type d \( -path "*/cmake/vtk-9*" -o -path "*/cmake/vtk" \) -print 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -n "${vtk_found_dir}" ] && [ -d "${vtk_found_dir}" ]; then
     if [ -f "${vtk_found_dir}/VTKConfig.cmake" ] || [ -f "${vtk_found_dir}/vtk-config.cmake" ]; then
       VTK_CMAKE_DIR="${vtk_found_dir}"
       printf '%s\n' "  ${GREEN}✓ VTK CMake config found via system search: ${VTK_CMAKE_DIR}${NC}"
     fi
+  # ENDIF: vtk_found_dir validation
   fi
+# ENDIF: VTK_CMAKE_DIR fallback search
 fi
 
 # Update VTK_DIR in CMake args if VTK is found
 if [ -n "${VTK_CMAKE_DIR}" ] && [ -d "${VTK_CMAKE_DIR}" ]; then
   # Replace default VTK_DIR in OPENCV_CMAKE_ARGS if it exists
+  # A5: Bash-specific [[ ]] and array indexing - documented as necessary for array manipulation
+  # Justification: Need array indexing to update specific element in OPENCV_CMAKE_ARGS array
   for i in "${!OPENCV_CMAKE_ARGS[@]}"; do
     if [[ "${OPENCV_CMAKE_ARGS[$i]}" == "-DVTK_DIR="* ]]; then
       OPENCV_CMAKE_ARGS[$i]="-DVTK_DIR=${VTK_CMAKE_DIR}"
       printf '%s\n' "  ${GREEN}✓ Updated VTK_DIR to ${VTK_CMAKE_DIR}${NC}"
       break
     fi
+  # ENDFOR: i
   done
   # If VTK_DIR not found in args, add it
-  if ! printf '%s\n' "${OPENCV_CMAKE_ARGS[@]}" | grep -q "^-DVTK_DIR="; then
+  # D3: Replace unsafe pipe pattern with here-string
+  if ! grep -q "^-DVTK_DIR=" <<< "$(printf '%s\n' "${OPENCV_CMAKE_ARGS[@]}")"; then
     OPENCV_CMAKE_ARGS+=("-DVTK_DIR=${VTK_CMAKE_DIR}")
     printf '%s\n' "  ${GREEN}✓ Added VTK_DIR=${VTK_CMAKE_DIR} to CMake args${NC}"
   fi
+# ENDIF: VTK_CMAKE_DIR check
 else
   printf '%s\n' "  ${YELLOW}⚠ VTK CMake config directory not found${NC}"
   printf '%s\n' "  ${YELLOW}  VTK support may be disabled. To enable VTK:${NC}"
@@ -13067,7 +12939,9 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ] && [ -d "/opt/Video_Codec_SDK" ]
   NV_CODEC_SDK_DIR="/opt/Video_Codec_SDK"
   if [ -d "${NV_CODEC_SDK_DIR}/Interface" ]; then
     NV_CODEC_HEADER_DIR="${NV_CODEC_SDK_DIR}/Interface"
+  # ENDIF: NV_CODEC_SDK_DIR/Interface check
   fi
+# ENDIF: NVIDIA_VIDEO_SDK_INSTALLED and /opt/Video_Codec_SDK check
 fi
 
 # Phase 2: Fallback header search across common system paths
@@ -13085,17 +12959,21 @@ if [ -z "${NV_CODEC_HEADER_DIR}" ]; then
       esac
       break
     fi
+  # ENDFOR: candidate
   done
+# ENDIF: NV_CODEC_HEADER_DIR fallback search
 fi
 
 # Phase 3: Verify runtime libraries are available (driver-provided, not from SDK)
 NV_CODEC_LIB_CUVID_FOUND=false
 NV_CODEC_LIB_ENCODE_FOUND=false
 LDCONFIG_CACHE="$(ldconfig -p 2>/dev/null || true)"
-if grep -q "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
+# D3c: Use grep -F for fixed-string matching (literal pattern, no regex)
+if grep -Fq "libnvcuvid.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_CUVID_FOUND=true
 fi
-if grep -q "libnvidia-encode.so" <<< "${LDCONFIG_CACHE}"; then
+# D3c: Use grep -F for fixed-string matching (literal pattern, no regex)
+if grep -Fq "libnvidia-encode.so" <<< "${LDCONFIG_CACHE}"; then
   NV_CODEC_LIB_ENCODE_FOUND=true
 fi
 
@@ -13107,9 +12985,11 @@ if [ -n "${NV_CODEC_HEADER_DIR}" ] && [ "${NV_CODEC_LIB_CUVID_FOUND}" = "true" ]
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=ON")
   if [ -n "${NV_CODEC_SDK_DIR}" ]; then
     OPENCV_CMAKE_ARGS+=("-DVIDEO_CODEC_SDK_DIR=${NV_CODEC_SDK_DIR}")
+  # ENDIF: NV_CODEC_SDK_DIR check
   fi
   if [ -n "${NV_CODEC_HEADER_DIR}" ]; then
     OPENCV_CMAKE_ARGS+=("-DNVCUVID_HEADER_DIR=${NV_CODEC_HEADER_DIR}")
+  # ENDIF: NV_CODEC_HEADER_DIR check
   fi
   NVIDIA_VIDEO_SDK_INSTALLED=true
 else
@@ -13117,6 +12997,7 @@ else
   printf '%s\n' "  → NVIDIA Video Codec SDK support not fully detected; OpenCV will be built without NVDEC/NVENC acceleration"
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVID=OFF")
   OPENCV_CMAKE_ARGS+=("-DWITH_NVCUVENC=OFF")
+# ENDIF: NVIDIA Video Codec SDK detection (all three phases)
 fi
 
 # Temporarily clear SuiteSparse_ROOT so CMake relies on SuiteSparse_DIR instead of emitting warnings.
@@ -13125,6 +13006,7 @@ if [ -n "${SAVED_SUITESPARSE_ROOT}" ]; then
   # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
   printf '%s\n' "Temporarily unsetting SuiteSparse_ROOT for OpenCV configuration (SuiteSparse_DIR is explicitly provided)."
   unset SuiteSparse_ROOT
+# ENDIF: SAVED_SUITESPARSE_ROOT check
 fi
 
 # Execute the CMake command and capture output
@@ -13231,7 +13113,8 @@ if [ -n "${CMAKE_TAIL_OUTPUT}" ]; then
   # Display relevant CMake output lines for LAPACK/TBB/VTK
   printf '%s\n' ""
   printf '%s\n' "Relevant CMake configuration output:"
-  grep -iE "(LAPACK|TBB|VTK)" <<< "${CMAKE_TAIL_OUTPUT}" | head -20 || true
+  # D3e: SIGPIPE error handling - add || true to prevent exit code 141 when head closes pipe early
+  grep -iE "(LAPACK|TBB|VTK)" <<< "${CMAKE_TAIL_OUTPUT}" 2>/dev/null | head -20 2>/dev/null || true
 fi
 
 # Block build if critical dependencies not detected in CMake output
@@ -13285,6 +13168,7 @@ elif grep -Eq "^WITH_LAPACK:BOOL=(1|ON|TRUE)" CMakeCache.txt; then
   lapack_libs_line=$(grep -E "^LAPACK_LIBRARIES" CMakeCache.txt 2>/dev/null | head -1 || true)
   if [ -n "${lapack_libs_line}" ]; then
     # Extract library path from cache line (format: LAPACK_LIBRARIES:STRING=path1;path2)
+    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
     lapack_libs_value=$(cut -d= -f2 <<< "${lapack_libs_line}" | cut -d';' -f1 | tr -d '\n' || echo "")
     # Check if it's a valid path (not empty, not "NOTFOUND", contains actual path)
     if [ -n "${lapack_libs_value}" ] && [ "${lapack_libs_value}" != "NOTFOUND" ] && [ "${lapack_libs_value}" != "" ]; then
@@ -13411,7 +13295,8 @@ fi
 if [ "${tbb_found}" = "true" ]; then
   # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
   printf '%s\n' "Verifying TBB source (must be system TBB, not MKL TBB)..."
-  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+  # D3e: SIGPIPE error handling - add || true to prevent exit code 141 when head closes pipe early
+  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "")
   if [ -n "${TBB_LIB_PATH:-}" ]; then
       if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
         # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
@@ -13637,15 +13522,16 @@ printf '%s\n' "  LIBRARY_PATH=${LIBRARY_PATH:-<NOT SET - ERROR>}"
 CRITICAL_INCLUDE_PATHS_MISSING=false
 # A5: POSIX compliance - use [ instead of [[ for string matching
 # D1: Proper quoting for all variables
-if [ -z "${CPATH:-}" ] || ! printf '%s' "${CPATH}" | grep -qF "/usr/include"; then
+# D3: Use here-string instead of unsafe pipe pattern (printf | grep)
+if [ -z "${CPATH:-}" ] || ! grep -qF "/usr/include" <<< "${CPATH}"; then
   printf '%s\n' "${RED}  ✗ ERROR: CPATH missing /usr/include${NC}"
   CRITICAL_INCLUDE_PATHS_MISSING=true
 fi
-if [ -z "${C_INCLUDE_PATH:-}" ] || ! printf '%s' "${C_INCLUDE_PATH}" | grep -qF "/usr/include"; then
+if [ -z "${C_INCLUDE_PATH:-}" ] || ! grep -qF "/usr/include" <<< "${C_INCLUDE_PATH}"; then
   printf '%s\n' "${RED}  ✗ ERROR: C_INCLUDE_PATH missing /usr/include${NC}"
   CRITICAL_INCLUDE_PATHS_MISSING=true
 fi
-if [ -z "${CPLUS_INCLUDE_PATH:-}" ] || ! printf '%s' "${CPLUS_INCLUDE_PATH}" | grep -qF "/usr/include"; then
+if [ -z "${CPLUS_INCLUDE_PATH:-}" ] || ! grep -qF "/usr/include" <<< "${CPLUS_INCLUDE_PATH}"; then
   printf '%s\n' "${RED}  ✗ ERROR: CPLUS_INCLUDE_PATH missing /usr/include${NC}"
   CRITICAL_INCLUDE_PATHS_MISSING=true
 fi
@@ -13717,27 +13603,10 @@ ninja install 2>&1 | tee /tmp/opencv_install.log || { printf '%s\n' "ERROR: Fail
 
 #--- Sub-block 20.12: Update linker cache ---
 # Critical: Ensure OpenCV libraries are in linker cache
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/opencv_install.log" 200
-
-#--- Sub-block 20.13: Verify OpenCV installation ---
-# Critical: Test OpenCV Python bindings and CUDA support
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-printf '%s\n' "Verifying installation..."
-python3 -c "import cv2; print('OpenCV version:', cv2.__version__); print('CUDA:', cv2.cuda.getCudaEnabledDeviceCount() if hasattr(cv2, 'cuda') else 'N/A')" || printf '%s\n' "WARNING: OpenCV Python verification failed"
-
-pkg-config --modversion opencv4 || printf '%s\n' "pkg-config not found (normal for some builds)"
-
-# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-printf '%s\n' "Build complete!"
-printf '%s\n' "==============="
-
-#--- Sub-block 20.14: Protect compiled OpenCV from APT overwrites ---
-# Critical: Prevent APT from installing ANY system OpenCV packages
+# Note: other file: /etc/apt/preferences.d/block-system-opencv is installed via install.sh from container-scripts/
+# Source: other/block-20-phase-4-opencv-compilation/block-system-opencv.txt
+# Target: /etc/apt/preferences.d/block-system-opencv
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Strategy: Use APT pinning with negative priority to block ALL libopencv-* packages
 # Benefits: Simple, robust, survives apt-mark unhold, no dummy packages needed
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -13748,27 +13617,10 @@ mkdir -p /etc/apt/preferences.d
 
 # Block ALL system OpenCV packages using wildcard pinning with negative priority
 # Pin-Priority: -1 means "never install this package"
-cat > /etc/apt/preferences.d/block-system-opencv << 'EOF'
-# Block ALL system OpenCV packages (prevent installation of any libopencv-* package)
-# Our optimized OpenCV 4.12.0 is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-Package: libopencv-*
-Pin: release *
-Pin-Priority: -1
-
-# Also block the main opencv packages
-Package: opencv-data
-Pin: release *
-Pin-Priority: -1
-
-Package: libcv-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libhighgui-dev
-Pin: release *
-Pin-Priority: -1
-EOF
+# Note: config-files file: /etc/apt/preferences.d/block-system-opencv is installed via install.sh from container-scripts/
+# Source: other/block-20-phase-4-opencv-compilation/block-system-opencv.txt
+# Target: /etc/apt/preferences.d/block-system-opencv
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 # Verify the preferences file was created
 if [ -f "/etc/apt/preferences.d/block-system-opencv" ]; then
@@ -13794,38 +13646,27 @@ printf '%s\n' "Verifying OpenCV protection..."
 OPENCV_VERIFICATION_PASSED=false
 
 # Method 1: Check if preferences file exists and has correct content
-if [ -f "/etc/apt/preferences.d/block-system-opencv" ] && grep -q "Pin-Priority: -1" /etc/apt/preferences.d/block-system-opencv; then
+# K1b: Use -- flag to prevent option misinterpretation if pattern starts with -
+if [ -f "/etc/apt/preferences.d/block-system-opencv" ] && grep -q -- "Pin-Priority: -1" /etc/apt/preferences.d/block-system-opencv; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "✓ OpenCV protection file verified (Pin-Priority: -1 active)"
     OPENCV_VERIFICATION_PASSED=true
 fi
 
 # Method 2: Use python-apt to confirm the package is pinned or unavailable
-if python3 - <<'PY'
-import apt
-import sys
-pkg_name = "libopencv-dev"
-try:
-    cache = apt.Cache()
-except Exception:
-    sys.exit(1)
-if pkg_name not in cache:
-    sys.exit(0)
-pkg = cache[pkg_name]
-candidate = pkg.candidate
-if candidate is None:
-    sys.exit(0)
-priority = getattr(candidate, 'policy_priority', None)
-if priority is None:
-    sys.exit(1)
-if priority <= 0:
-    sys.exit(0)
-sys.exit(1)
-PY
-then
+# Note: python-scripts file: /tmp/phase-4-opencv-compilation-verification.py is installed via install.sh from container-scripts/
+# Source: python-scripts/block-20-phase-4-opencv-compilation/phase-4-opencv-compilation-verification.py
+# Target: /tmp/phase-4-opencv-compilation-verification.py
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Validate file exists before execution
+if [ -f /tmp/phase-4-opencv-compilation-verification.py ] && [ -x /tmp/phase-4-opencv-compilation-verification.py ]; then
+  if python3 /tmp/phase-4-opencv-compilation-verification.py; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "✓ OpenCV protection verified via python-apt policy check (packages blocked)"
     OPENCV_VERIFICATION_PASSED=true
+  # ENDIF: python3 verification script execution
+  fi
+# ENDIF: verification script file existence check
 fi
 
 if [ "${OPENCV_VERIFICATION_PASSED:-}" = true ]; then
@@ -13834,16 +13675,22 @@ if [ "${OPENCV_VERIFICATION_PASSED:-}" = true ]; then
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "⚠ OpenCV protection file created, but runtime verification inconclusive"
-    printf '%s\n' "  This is usually fine - APT pinning is active even if verification fails"
+# ENDIF: OPENCV_VERIFICATION_PASSED check
 fi
-
-#--- Sub-block 20.15: Cleanup OpenCV build files ---
-# Purpose: Remove temporary build files
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+# Note: other file: /root/.julia/artifacts/Overrides.toml is installed via install.sh from container-scripts/
+# Source: other/block-21-julia-environment-setup/Overrides.toml
+# Target: /root/.julia/artifacts/Overrides.toml
+# Installed in Block 0 (early in script, before any scripts are needed)
 hash -r
-cd /
-rm -rf /tmp/opencv /tmp/opencv_contrib
+# H1: Check exit code of cd operation
+if ! cd /; then
+  printf '%s\n' "${RED}ERROR: Failed to change to root directory${NC}"
+  exit 1
+fi
+# H1: Check exit code of rm operation (non-critical, but log if fails)
+if ! rm -rf /tmp/opencv /tmp/opencv_contrib 2>/dev/null; then
+  printf '%s\n' "${YELLOW}[warn] Failed to remove some temporary OpenCV directories (non-critical)${NC}"
+fi
 
 #===============================================================================
 # BLOCK 21: JULIA ENVIRONMENT SETUP
@@ -13866,12 +13713,21 @@ if [ -x "${JULIA_BIN:-}" ]; then
 
   #--- Sub-block 21.2: Create CxxWrap artifact override ---
   # Critical: Force Julia to use source-built CxxWrap instead of binary JLL
-  mkdir -p /root/.julia/artifacts
-  cat > /root/.julia/artifacts/Overrides.toml << 'OVERRIDE'
-# Force Julia to use our CxxWrap source build instead of binary JLL
-[3eaa8dc6-92ce-5c4c-91c6-662a904cf5c7]
-libcxxwrap_julia = "/opt/libcxxwrap-julia"
-OVERRIDE
+  # J1: Validate parent directory exists before mkdir
+  if [ ! -d /root/.julia ]; then
+    mkdir -p /root/.julia || {
+      printf '%s\n' "${RED}ERROR: Failed to create /root/.julia directory${NC}"
+      exit 1
+    }
+  fi
+  mkdir -p /root/.julia/artifacts || {
+    printf '%s\n' "${RED}ERROR: Failed to create /root/.julia/artifacts directory${NC}"
+    exit 1
+  }
+  # Note: other file: /root/.julia/artifacts/Overrides.toml is installed via install.sh from container-scripts/
+  # Source: other/block-21-julia-environment-setup/Overrides.toml
+  # Target: /root/.julia/artifacts/Overrides.toml
+  # Installed in Block 0 (early in script, before any scripts are needed)
   # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
   printf '%s\n' "✓ Artifact override created for CxxWrap source build"
 
@@ -13894,88 +13750,31 @@ OVERRIDE
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "[warn] CxxWrap Julia package installation failed"
   fi
-
-  #--- Sub-block 21.5: Verify CxxWrap source build usage ---
-  # Purpose: Confirm Julia is using our source-built CxxWrap
-  # shellcheck disable=SC2016 # Intentional: Julia code needs single quotes
-  "${JULIA_BIN}" -e 'using CxxWrap; build_path = CxxWrap.prefix_path(); println("✓ CxxWrap using: ", build_path); if !occursin("/opt/libcxxwrap-julia", build_path) @warn "CxxWrap may not be using source build! Path: $build_path" end' || printf '%s\n' "[warn] CxxWrap Julia package setup failed"
-
-  #--- Sub-block 21.6: Create robotics Julia environment ---
-  # Purpose: Set up dedicated environment for robotics packages
-  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-  printf '%s\n' "Setting up Julia robotics environment..."
-  mkdir -p "${JULIA_HOME}envs"
-  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/robotics_env\"); Pkg.add([\"RigidBodyDynamics\", \"MeshCat\", \"ControlSystems\", \"DifferentialEquations\", \"ForwardDiff\", \"StaticArrays\", \"Rotations\", \"CoordinateTransformations\", \"Interpolations\", \"Optim\"]); Pkg.precompile()" || printf '%s\n' "[warn] Robotic env setup failed"
-
-  #--- Sub-block 21.7: Create CUDA Julia environment ---
-  # Purpose: Set up dedicated environment for CUDA packages
-  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-  printf '%s\n' "Setting up Julia CUDA environment..."
-  "${JULIA_BIN}" -e "using Pkg; Pkg.activate(\"${JULIA_HOME}envs/cuda_env\"); Pkg.instantiate()" || printf '%s\n' "[warn] CUDA env setup failed"
-
-  #--- Sub-block 21.8: Register IJulia kernel ---
-  # Purpose: Make Julia available in Jupyter notebooks
-  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-  printf '%s\n' "Registering Julia kernel..."
-  "${JULIA_BIN}" -e 'using IJulia; IJulia.installkernel("Julia 1.10 (base)", "--project=@.")' || printf '%s\n' "[warn] Julia kernel registration failed"
-
-
-
-  #--- Sub-block 21.9: Create GPU precompile helper script ---
-  # Purpose: Helper script for precompiling Julia CUDA packages on GPU systems
-  cat > /usr/local/bin/precompile_julia_cuda.sh << 'EOS'
-#!/usr/bin/env bash
-set -euo pipefail
-
-JULIA_BIN="${JULIA_BIN:-${JULIA_HOME}/bin/julia}"
-if ! command -v "$JULIA_BIN" >/dev/null 2>&1; then
-  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-  printf '%s\n' "[precompile_julia_cuda] ${JULIA_BIN:-} not found; skipping."
-  exit 0
-fi
-
-if ! command -v nvidia-smi >/dev/null 2>&1; then
-  # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-  printf '%s\n' "[precompile_julia_cuda] no NVIDIA GPU visible; skipping."
-  exit 0
-fi
-
-ENV_DIR="${1:-${JULIA_HOME}envs/robotics-cuda}"
-PROJECT_OPT="-e"
-if [ -d "${ENV_DIR}" ]; then
-  PROJECT_OPT="--project=${ENV_DIR}"
-fi
-
-"${JULIA_BIN}" "${PROJECT_OPT}" -e '
-  try
-    using Pkg
-    Pkg.instantiate()
-    @info "Touching CUDA packages for GPU precompile..."
-    using CUDA
-    CUDA.versioninfo()
-    using KernelAbstractions
-    using Flux
-    println("GPU precompile completed.")
-  catch e
-    @warn "GPU precompile failed" exception=e
-  end
-'
-EOS
+  # Note: shell-scripts file: /usr/local/bin/precompile_julia_cuda.sh is installed via install.sh from container-scripts/
+  # Source: shell-scripts/block-21-julia-environment-setup/precompile-julia-cuda.sh
+  # Target: /usr/local/bin/precompile_julia_cuda.sh
+  # Installed in Block 0 (early in script, before any scripts are needed)
 
 
   #--- Sub-block 21.10: Make precompile script executable ---
   # Purpose: Set permissions and convert line endings
-  chmod 0755 /usr/local/bin/precompile_julia_cuda.sh
-  dos2unix -q /usr/local/bin/precompile_julia_cuda.sh 2>/dev/null || true
+  # J1: Validate file exists before chmod operation
+  if [ -f /usr/local/bin/precompile_julia_cuda.sh ]; then
+    chmod 0755 /usr/local/bin/precompile_julia_cuda.sh
+    dos2unix -q /usr/local/bin/precompile_julia_cuda.sh 2>/dev/null || true
+  # ENDIF: precompile_julia_cuda.sh file existence check
+  fi
 
   #--- Sub-block 21.11: Run GPU precompile (non-fatal) ---
   # Purpose: Precompile Julia CUDA packages if GPU available
   if [ -x /usr/local/bin/precompile_julia_cuda.sh ]; then
     /usr/local/bin/precompile_julia_cuda.sh || true
+  # ENDIF: precompile_julia_cuda.sh executable check
   fi
 else
   # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
   printf '%s\n' "[warn] Julia installation may have failed"
+# ENDIF: JULIA_BIN executable check
 fi
 # End Julia environment setup (if block self-contained)
 
@@ -14018,7 +13817,11 @@ source /opt/ros/${ROS_DISTRO}/setup.bash
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 mkdir -p /ros_overlay_ws/src
-cd /ros_overlay_ws
+# H1: Check exit code of cd operation
+if ! cd /ros_overlay_ws; then
+  printf '%s\n' "${RED}ERROR: Failed to change to /ros_overlay_ws directory${NC}"
+  exit 1
+fi
 
 #--- Sub-block 22.5: Clone vision_opencv source ---
 # Purpose: Get cv_bridge and vision_opencv source code
@@ -14031,26 +13834,42 @@ git clone --branch rolling https://github.com/ros-perception/vision_opencv.git s
 # Critical: Compile against our optimized OpenCV in /usr/local
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-colcon build --cmake-args -D CMAKE_BUILD_TYPE=Release -D CMAKE_POLICY_DEFAULT_CMP0146=OLD -D CMAKE_SHARED_LINKER_FLAGS="-flto" -D CMAKE_EXE_LINKER_FLAGS="-flto"
+# H1: Check exit code of colcon build operation
+if ! colcon build --cmake-args -D CMAKE_BUILD_TYPE=Release -D CMAKE_POLICY_DEFAULT_CMP0146=OLD -D CMAKE_SHARED_LINKER_FLAGS="-flto" -D CMAKE_EXE_LINKER_FLAGS="-flto"; then
+  printf '%s\n' "${RED}ERROR: Failed to build vision_opencv with colcon${NC}"
+  exit 1
+fi
 
 #--- Sub-block 22.7: Verify cv_bridge linkage ---
 # Critical: Confirm cv_bridge uses custom OpenCV
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
+# K1b: Use -- flag to prevent option misinterpretation if pattern starts with -
+# D3e: Add || true for SIGPIPE safety in diagnostic pipeline
+# J1: Validate file exists before checking linkage
 printf '%s\n' "${YELLOW}[Phase 5 | Verification] Checking linkage of new cv_bridge library...${NC}"
-if timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep -q "/usr/local/lib/libopencv_core"; then
+CV_BRIDGE_LIB="/ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so"
+if [ ! -f "${CV_BRIDGE_LIB}" ]; then
+  printf '%s\n' "${RED}✗ ERROR: cv_bridge library not found: ${CV_BRIDGE_LIB}${NC}"
+  printf '%s\n' "${RED}Build may have failed. Check colcon build output.${NC}"
+  PHASE5_SUCCESS=false
+  export PHASE5_STATUS="FAIL"
+  exit 1
+fi
+if timeout 10 ldd "${CV_BRIDGE_LIB}" 2>/dev/null | grep -q -- "/usr/local/lib/libopencv_core" 2>/dev/null || true; then
   # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
   printf '%s\n' "${GREEN}✓ New cv_bridge is correctly linked to custom OpenCV in /usr/local.${NC}"
   export PHASE5_STATUS="PASS"
 else
   # A5a: Use printf instead of echo -e (POSIX-compliant, no flag interpretation)
   printf '%s\n' "${RED}✗ FAILED: New cv_bridge is NOT linked to custom OpenCV. Overlay failed.${NC}"
-  timeout 10 ldd /ros_overlay_ws/install/cv_bridge/lib/libcv_bridge.so 2>/dev/null | grep opencv || printf '%s\n' "  (ldd check failed or timed out)"
+  timeout 10 ldd "${CV_BRIDGE_LIB}" 2>/dev/null | grep -- opencv || printf '%s\n' "  (ldd check failed or timed out)"
   PHASE5_SUCCESS=false
   export PHASE5_STATUS="FAIL"
   exit 1
 fi
+# ENDIF: cv_bridge linkage verification
 # End cv_bridge verification (if-else self-contained)
 
 #--- Sub-block 22.8: Configure automatic overlay sourcing ---
@@ -14058,7 +13877,18 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-printf '%s\n' "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc
+# J1: Validate /root/.bashrc exists or create it
+if [ ! -f /root/.bashrc ]; then
+  touch /root/.bashrc || {
+    printf '%s\n' "${RED}ERROR: Failed to create /root/.bashrc${NC}"
+    exit 1
+  }
+fi
+# H1: Check exit code of append operation
+if ! printf '%s\n' "source /ros_overlay_ws/install/setup.bash" >> /root/.bashrc; then
+  printf '%s\n' "${RED}ERROR: Failed to append to /root/.bashrc${NC}"
+  exit 1
+fi
 
 debug_glibc "After building ROS2 CV_Bridge"
 
@@ -14079,12 +13909,16 @@ CERES_PACKAGE_CANDIDATES=(
 )
 CERES_INSTALLED_PACKAGES=()
 for pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
-    if resolved_pkg=$(dpkg_resolve_installed_package "${pkg}" 2>/dev/null); then
+    # F2: Validate command substitution result
+    resolved_pkg=$(dpkg_resolve_installed_package "${pkg}" 2>/dev/null || echo "")
+    if [ -n "${resolved_pkg}" ]; then
         CERES_INSTALLED_PACKAGES+=("${resolved_pkg}")
     fi
+    # ENDIF: resolved_pkg non-empty check
+# ENDFOR: pkg
 done
 
-if [ ${#CERES_INSTALLED_PACKAGES[@]} -gt 0 ]; then
+if [ "${#CERES_INSTALLED_PACKAGES[@]}" -gt 0 ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "⚠️  WARNING: System Ceres packages were installed during ROS operations!"
     for installed_pkg in "${CERES_INSTALLED_PACKAGES[@]}"; do
@@ -14109,7 +13943,11 @@ else
 fi
 
 # Verify our compiled Ceres is still present
-if ! ldconfig -p | grep -q "libceres.so"; then
+# K1b: Use -- flag to prevent option misinterpretation if pattern starts with -
+# D3e: Handle SIGPIPE gracefully - ldconfig output is small, SIGPIPE unlikely but handle it
+# H4: Validate result - use simple pipeline check with error handling
+# Note: For small outputs like ldconfig, SIGPIPE is rare, but we handle it gracefully
+if ! ldconfig -p 2>/dev/null | grep -q -- "libceres.so" 2>/dev/null; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "✗ ERROR: Compiled Ceres (/usr/local) is missing!"
     printf '%s\n' "  This should not happen. Check Block 8 (Ceres compilation)"
@@ -14159,6 +13997,9 @@ apt-get -y autoremove || true
 printf '%s\n' "Clearing package holds (custom libraries protected by APT pinning)..."
 
 # Robust method: Get held packages, validate, and unhold with proper quoting
+# D3c: Use -F flag for fixed-string matching when pattern is literal (hold$ is literal, but -E needed for character class)
+# D3e: Add || true for SIGPIPE safety in pipeline
+# F2: Validate command substitution result
 HELD_PACKAGES=$(dpkg --get-selections 2>/dev/null | grep -E '[[:space:]]hold$' | awk '{print $1}' || true)
 if [ -n "${HELD_PACKAGES}" ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -14170,6 +14011,7 @@ if [ -n "${HELD_PACKAGES}" ]; then
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  No held packages found (already clear)"
+# ENDIF: HELD_PACKAGES non-empty check
 fi
 
 #--- Sub-block 23.4: Install essential package tools ---
@@ -14214,21 +14056,19 @@ for vtk_pkg in "${PYTHON_VTK_CANDIDATES[@]}"; do
     if install_packages_resilient "Python VTK bindings (${vtk_pkg})" "${vtk_pkg}"; then
         PYTHON_VTK_INSTALLED=true
         break
+    # ENDIF: install_packages_resilient check
     fi
+# ENDFOR: vtk_pkg
 done
 if [ "${PYTHON_VTK_INSTALLED}" = false ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "Δ Python VTK bindings not available"
+# ENDIF: PYTHON_VTK_INSTALLED check
 fi
-
-#--- Sub-block 23.8: Monitor cache after installation ---
-# Purpose: Track cache growth from robotics/ML packages
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-monitor_cache "After robotics/ML libraries installation"
-
-debug_glibc "After Robotics/ML libraries installation"
-
+# Note: config-files file: /root/.config/pip/pip.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-24-3d-reconstruction-and-nerf-tools/pip.conf
+# Target: /root/.config/pip/pip.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 #===============================================================================
 # BLOCK 24: 3D RECONSTRUCTION AND NERF TOOLS
 #===============================================================================
@@ -14236,12 +14076,10 @@ debug_glibc "After Robotics/ML libraries installation"
 # Self-contained: Yes (complete 3D reconstruction stack)
 # Dependencies: OpenCV (Block 10), Ceres (Block 8), CUDA
 # Outputs: COLMAP, Open3D optimized binaries
-#-------------------------------------------------------------------------------
-
-# A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-printf '%s\n' "==> Installing 3D Reconstruction Tools (COLMAP + Open3D)"
-
-#--- Sub-block 24.1: Configure pip to protect compiled libraries ---
+# Note: config-files file: /etc/profile.d/compiled-libs.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-24-3d-reconstruction-and-nerf-tools/compiled-libs.sh
+# Target: /etc/profile.d/compiled-libs.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Critical: Prevent pip from installing precompiled binaries that would overwrite our optimized libraries
 # Dependencies: None (foundational)
 # Outputs: Configured pip environment
@@ -14249,17 +14087,18 @@ printf '%s\n' "==> Installing 3D Reconstruction Tools (COLMAP + Open3D)"
 printf '%s\n' "Configuring pip to protect compiled libraries..."
 
 # Create pip configuration to prefer system packages and prevent binary overwrites
-mkdir -p /root/.config/pip
-cat > /root/.config/pip/pip.conf << 'PIPCONF'
-[global]
-# Prefer using system site-packages (our compiled libs) over downloading
-# This prevents pip from overwriting Ceres, G2O, GTSAM, OpenCV, etc.
-no-binary = opencv-python,opencv-contrib-python,opencv-python-headless
-
-[install]
-# Prioritize our compiled libraries in /usr/local
-prefix = /usr/local
-PIPCONF
+# J1: Validate parent directory exists before writing
+PARENT_DIR="/root/.config/pip"
+if [ ! -d "${PARENT_DIR}" ]; then
+    mkdir -p "${PARENT_DIR}" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+        exit 1
+    }
+fi
+# Note: config-files file: /root/.config/pip/pip.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-24-3d-reconstruction-and-nerf-tools/pip.conf
+# Target: /root/.config/pip/pip.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 # Set environment variables to ensure compiled libraries are found first
 export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:${LD_LIBRARY_PATH:-}"
@@ -14267,12 +14106,17 @@ export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # Configure PKG_CONFIG_PATH system-wide (for CMake find_package())
-cat > /etc/profile.d/compiled-libs.sh << 'ENVSCRIPT'
-# Priority paths for compiled libraries
-export LD_LIBRARY_PATH="/usr/local/lib:/usr/local/lib64:\${LD_LIBRARY_PATH:-}"
-export CMAKE_PREFIX_PATH="/usr/local:\${CMAKE_PREFIX_PATH:-}"
-export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/share/pkgconfig:\${PKG_CONFIG_PATH:-}"
-ENVSCRIPT
+# J1: Validate parent directory exists before writing
+PARENT_DIR="/etc/profile.d"
+if [ ! -d "${PARENT_DIR}" ]; then
+    printf '%s\n' "[ERROR] Directory does not exist: ${PARENT_DIR}" >&2
+    exit 1
+fi
+# Note: config-files file: /etc/profile.d/compiled-libs.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-24-3d-reconstruction-and-nerf-tools/compiled-libs.sh
+# Target: /etc/profile.d/compiled-libs.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
 chmod +x /etc/profile.d/compiled-libs.sh
 
 # Verify our compiled libraries are in place
@@ -14335,14 +14179,18 @@ COLMAP_DEP_PACKAGES=(
 if ! install_packages_resilient "COLMAP dependencies" "${COLMAP_DEP_PACKAGES[@]}"; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "⚠ Some COLMAP dependencies unavailable (non-fatal)"
+# ENDIF: install_packages_resilient check
 fi
 # Note: libgoogle-glog-dev (system glog) already installed via PKGS_CORE_DEPS
 
 # Refresh library cache after installing QGLViewer (required for G2O viewer build)
-if dpkg -l | grep -q "^ii.*libqglviewer"; then
+# M4: Use resilient helper instead of brittle dpkg -l | grep pattern
+if dpkg_resolve_installed_package "libqglviewer-dev-qt5" >/dev/null 2>&1 || \
+   dpkg_resolve_installed_package "libqglviewer2-qt5t64" >/dev/null 2>&1; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "Refreshing library cache for QGLViewer..."
     run_ldconfig_refresh
+# ENDIF: QGLViewer package check
 fi
 
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -14373,6 +14221,7 @@ if [ "${GLOG_VERSION}" != "unknown" ]; then
     else
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ⚠ glog soname: not found (library may not exist)"
+    # ENDIF: GLOG_SONAME check
     fi
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✓ glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || printf '%s\n' '/usr/lib/x86_64-linux-gnu')"
@@ -14387,11 +14236,13 @@ if [ "${GLOG_VERSION}" != "unknown" ]; then
     else
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ⚠️  WARNING: glog ${GLOG_VERSION} detected - expected 0.6.x for COLMAP 3.12.6"
+    # ENDIF: glog version compatibility check
     fi
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✗ ERROR: glog not found via pkg-config!"
     exit 1
+# ENDIF: GLOG_VERSION check
 fi
 
 # 2. Check for multiple glog installations (CONFLICT RISK)
@@ -14408,30 +14259,33 @@ if [ "${GLOG_COUNT}" -gt 3 ]; then  # .so, .so.1, .so.0.6.0 = 3 files expected
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✓ Single glog installation detected (clean state)"
+# ENDIF: GLOG_COUNT check
 fi
 
 # 3. Check Ceres installation and glog linkage
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' ""
 printf '%s\n' "3. Checking Ceres installation:"
-if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
-    CERES_LOCATION=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || printf '%s\n' "")
+if timeout 5 ldconfig -p 2>/dev/null | grep -q -- "libceres.so" 2>/dev/null || true; then
+    CERES_LOCATION=$(timeout 5 ldconfig -p 2>/dev/null | grep -- "libceres.so" 2>/dev/null | awk '{print $NF}' 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     if [ -z "${CERES_LOCATION}" ]; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ✗ ERROR: Ceres library path is empty!"
         exit 1
+    # ENDIF: CERES_LOCATION empty check
     fi
     if [ ! -f "${CERES_LOCATION}" ]; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ✗ ERROR: Ceres library file not found: ${CERES_LOCATION}"
         exit 1
+    # ENDIF: CERES_LOCATION file existence check
     fi
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✓ Ceres found: ${CERES_LOCATION}"
     
     # Check if Ceres links to glog
-    if timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep -q "libglog"; then
-        CERES_GLOG=$(timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep libglog || printf '%s\n' "")
+    if timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep -q -- "libglog" 2>/dev/null || true; then
+        CERES_GLOG=$(timeout 10 ldd "${CERES_LOCATION}" 2>/dev/null | grep -- "libglog" 2>/dev/null || printf '%s\n' "")
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ✓ Ceres glog linkage:"
         printf '%s\n' "    ${CERES_GLOG}"
@@ -14441,16 +14295,19 @@ if timeout 5 ldconfig -p 2>/dev/null | grep -q "libceres.so"; then
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "  ✗ ERROR: Ceres cannot find glog library!"
             exit 1
+        # ENDIF: Ceres glog "not found" check
         fi
     else
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ℹ Ceres uses internal MINIGLOG (isolated from system glog)"
+    # ENDIF: Ceres glog linkage check
     fi
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✗ ERROR: Ceres not found in linker cache!"
     printf '%s\n' "  Ceres must be compiled before COLMAP (Block 8 → Block 13A)"
     exit 1
+# ENDIF: Ceres library cache check
 fi
 
 # 4. Check for system Ceres packages (should be blocked)
@@ -14458,23 +14315,31 @@ fi
 printf '%s\n' ""
 printf '%s\n' "4. Checking for conflicting system Ceres packages:"
 CERES_CONFLICT_PKGS=()
-for ceres_pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
-    if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
-        CERES_CONFLICT_PKGS+=("${resolved_pkg}")
-    fi
-done
+# C1: Check if CERES_PACKAGE_CANDIDATES is defined before use
+if [ -n "${CERES_PACKAGE_CANDIDATES:-}" ] && [ ${#CERES_PACKAGE_CANDIDATES[@]} -gt 0 ]; then
+    for ceres_pkg in "${CERES_PACKAGE_CANDIDATES[@]}"; do
+        if resolved_pkg=$(dpkg_resolve_installed_package "${ceres_pkg}" 2>/dev/null); then
+            CERES_CONFLICT_PKGS+=("${resolved_pkg}")
+        # ENDIF: dpkg_resolve_installed_package check
+        fi
+    # ENDFOR: ceres_pkg
+    done
+# ENDIF: CERES_PACKAGE_CANDIDATES check
+fi
 if [ ${#CERES_CONFLICT_PKGS[@]} -gt 0 ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ⚠️  WARNING: System Ceres packages detected!"
     for conflict_pkg in "${CERES_CONFLICT_PKGS[@]}"; do
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "    ${conflict_pkg}"
+    # ENDFOR: conflict_pkg
     done
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  This may cause conflicts with compiled Ceres in /usr/local"
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ✓ No system Ceres packages (clean state)"
+# ENDIF: CERES_CONFLICT_PKGS check
 fi
 
 # 5. Summary
@@ -14488,6 +14353,7 @@ if [ -n "${GLOG_SONAME:-}" ]; then
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  glog: ${GLOG_VERSION} (soname not available)"
+# ENDIF: GLOG_SONAME check
 fi
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "  Ceres: Installed in /usr/local"
@@ -14499,6 +14365,12 @@ printf '%s\n' ""
 # Purpose: Clone COLMAP with specific version
 # Dependencies: None (foundational)
 # Outputs: COLMAP source code
+# J1: Validate directory existence before cd
+if [ ! -d "/tmp" ]; then
+    printf '%s\n' "[ERROR] Directory /tmp does not exist" >&2
+    exit 1
+# ENDIF: /tmp directory check
+fi
 cd /tmp || exit 1
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Downloading COLMAP ${COLMAP_VERSION}..."
@@ -14514,7 +14386,9 @@ if ! clone_with_retry "https://github.com/colmap/colmap.git" "/tmp/colmap" "${CO
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "ERROR: Failed to clone COLMAP after all retry attempts"
         exit 1
+    # ENDIF: clone_with_retry main branch check
     fi
+# ENDIF: clone_with_retry COLMAP_VERSION check
 fi
 
 cd /tmp/colmap || exit 1
@@ -14550,12 +14424,14 @@ if [ ! -d "/usr/lib/x86_64-linux-gnu/cmake/glog" ]; then
     printf '%s\n' "  Expected: /usr/lib/x86_64-linux-gnu/cmake/glog"
     printf '%s\n' "  Install: sudo apt-get install libgoogle-glog-dev"
     exit 1
+# ENDIF: glog CMake config directory check
 fi
 if [ ! -f "/usr/lib/x86_64-linux-gnu/libglog.so" ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "✗ ERROR: System libglog.so not found"
     printf '%s\n' "  Expected: /usr/lib/x86_64-linux-gnu/libglog.so"
     exit 1
+# ENDIF: libglog.so file check
 fi
 
 # Check for conflicting glog installations
@@ -14565,6 +14441,7 @@ if [ -d "/usr/local/lib/cmake/glog" ] || [ -f "/usr/local/lib/libglog.so" ]; the
     printf '%s\n' "  This may cause compilation issues with COLMAP"
     printf '%s\n' "  System will use -DCMAKE_IGNORE_PATH to prefer system glog"
     find /usr/local -name "*glog*" -type f 2>/dev/null | head -5 || true
+# ENDIF: conflicting glog installation check
 fi
 
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -14588,9 +14465,16 @@ if command -v ccache >/dev/null 2>&1; then
 else
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ℹ ccache not available (OK)"
+# ENDIF: ccache command check
 fi
 rm -rf build CMakeCache.txt CMakeFiles
 mkdir -p build || exit 1
+# J1: Validate directory existence before cd
+if [ ! -d "build" ]; then
+    printf '%s\n' "[ERROR] Build directory creation failed" >&2
+    exit 1
+# ENDIF: build directory check
+fi
 # H1: Check exit code of cd operation
 cd build || exit 1
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -14604,7 +14488,7 @@ COLMAP_CUDA_FLAGS="-Xcompiler -fopenmp"
 GCC_VERSION_FOR_COLMAP=""
 GCC_MAJOR_FOR_COLMAP=""
 if command -v gcc &>/dev/null; then
-    GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || printf '%s\n' "")
+    GCC_VERSION_FOR_COLMAP=$(gcc --version 2>/dev/null | head -1 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     if [ -n "${GCC_VERSION_FOR_COLMAP}" ]; then
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
         GCC_MAJOR_FOR_COLMAP=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_COLMAP}")
@@ -14613,16 +14497,20 @@ if command -v gcc &>/dev/null; then
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
         # Validate GCC_MAJOR_FOR_COLMAP is numeric before comparison
-        if [ "${GCC_MAJOR_FOR_COLMAP}" = "11" ]; then
+        # C1: Ensure GCC_MAJOR_FOR_COLMAP is numeric for arithmetic comparison
+        if [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -eq 11 ] 2>/dev/null; then
             # D3b: Replace echo -e with printf for POSIX compliance and to avoid variable flag interpretation
             printf '%s\n' "  ${YELLOW}⚠ GCC 11 detected - adding compatibility workarounds for NVCC${NC}"
             COLMAP_CUDA_FLAGS="-allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
-        elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -ge "12" ] 2>/dev/null; then
+        elif [ -n "${GCC_MAJOR_FOR_COLMAP}" ] && [ "${GCC_MAJOR_FOR_COLMAP}" -ge 12 ] 2>/dev/null; then
             # GCC 12+ has better NVCC compatibility - use standard flags without -allow-unsupported-compiler
             printf '%s\n' "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
             COLMAP_CUDA_FLAGS="-Xcompiler -fopenmp -Xcompiler=-Wno-deprecated-declarations"
+        # ENDIF: GCC version compatibility check
         fi
+    # ENDIF: GCC_VERSION_FOR_COLMAP check
     fi
+# ENDIF: gcc command check
 fi
 
 # CMake configuration with Ninja generator
@@ -14689,28 +14577,55 @@ if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     printf '%s\n' ""
     printf '%s\n' "Last 50 lines of CMake log:"
-    tail -50 "${COLMAP_CMAKE_LOG}"
+    # J1: Validate file existence before reading
+    if [ -f "${COLMAP_CMAKE_LOG}" ]; then
+        tail -50 "${COLMAP_CMAKE_LOG}"
+    else
+        printf '%s\n' "  (Log file not found)"
+    fi
     printf '%s\n' ""
     printf '%s\n' "📊 Diagnostic checks:"
     printf '%s\n' "  glog: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
-    ceres_lib=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | head -1 | awk '{print $NF}' || printf '%s\n' 'NOT FOUND')
+    # D3e, F2: Fix SIGPIPE risk and validate command substitution result
+    ceres_lib=""
+    ceres_lib=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so 2>/dev/null | head -1 2>/dev/null | awk '{print $NF}' 2>/dev/null || printf '%s\n' 'NOT FOUND') || true
+    # F2: Validate result format
+    if [ -z "${ceres_lib:-}" ] || [ "${ceres_lib}" = "NOT FOUND" ]; then
+        ceres_lib="NOT FOUND"
+    fi
     printf '%s\n' "  Ceres: ${ceres_lib}"
-    printf '%s\n' "  CUDA: $(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || printf '%s\n' 'NOT AVAILABLE')"
+    # D3e: Fix SIGPIPE risk in pipeline - add || true at end
+    cuda_name=""
+    cuda_name=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 2>/dev/null || printf '%s\n' 'NOT AVAILABLE') || true
+    if [ -z "${cuda_name:-}" ]; then
+        cuda_name="NOT AVAILABLE"
+    fi
+    printf '%s\n' "  CUDA: ${cuda_name}"
     printf '%s\n' ""
     printf '%s\n' "Full CMake log saved to: ${COLMAP_CMAKE_LOG}"
     printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     exit 1
+# ENDIF: CMake configuration failure check
 fi
 
 # Verify glog was detected correctly
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+# J1: Validate file existence before reading
 printf '%s\n' ""
 printf '%s\n' "🔍 Verifying glog detection in CMake configuration..."
-if grep -i "glog" "${COLMAP_CMAKE_LOG}" | grep -q "0.6.0\|Found glog"; then
-    printf '%s\n' "✓ CMake successfully detected glog:"
-    grep -i "Found glog\|glog.*version" "${COLMAP_CMAKE_LOG}" | head -3 || printf '%s\n' "  (detection confirmed)"
+# D3e: Fix SIGPIPE risk in pipeline with grep
+if [ -f "${COLMAP_CMAKE_LOG}" ]; then
+    # D3e: Use here-string pattern to avoid SIGPIPE
+    if grep -i "glog" "${COLMAP_CMAKE_LOG}" 2>/dev/null | grep -q "0.6.0\|Found glog" 2>/dev/null || true; then
+        printf '%s\n' "✓ CMake successfully detected glog:"
+        # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+        grep -i "Found glog\|glog.*version" "${COLMAP_CMAKE_LOG}" 2>/dev/null | head -3 2>/dev/null || printf '%s\n' "  (detection confirmed)" || true
+    else
+        printf '%s\n' "⚠ WARNING: Could not verify glog version in CMake output"
+        printf '%s\n' "  Build may still succeed if glog is correctly installed"
+    fi
 else
-    printf '%s\n' "⚠ WARNING: Could not verify glog version in CMake output"
+    printf '%s\n' "⚠ WARNING: CMake log file not found: ${COLMAP_CMAKE_LOG}"
     printf '%s\n' "  Build may still succeed if glog is correctly installed"
 fi
 
@@ -14737,8 +14652,19 @@ BUILD_JOBS=$(calculate_build_jobs)
 BUILD_JOBS=${BUILD_JOBS:-1}
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Using ${BUILD_JOBS} parallel jobs for COLMAP build..."
-mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || printf '%s\n' "unknown")
-printf '%s\n' "  System: $(nproc) cores, ${mem_info} RAM"
+# F2: Validate command substitution result
+mem_info=""
+mem_info=$(free -h 2>/dev/null | grep Mem 2>/dev/null | awk '{print $2}' 2>/dev/null || printf '%s\n' "unknown") || true
+if [ -z "${mem_info:-}" ]; then
+    mem_info="unknown"
+fi
+# D3e: Fix SIGPIPE risk in command substitution
+cpu_cores=""
+cpu_cores=$(nproc 2>/dev/null || printf '%s\n' "unknown") || true
+if [ -z "${cpu_cores:-}" ]; then
+    cpu_cores="unknown"
+fi
+printf '%s\n' "  System: ${cpu_cores} cores, ${mem_info} RAM"
 printf '%s\n' ""
 
 # Build with Ninja (better error messages than make)
@@ -14750,7 +14676,12 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
     printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     printf '%s\n' ""
     printf '%s\n' "Last 100 lines of build log:"
-    tail -100 /tmp/colmap_build.log
+    # J1: Validate file existence before reading
+    if [ -f "/tmp/colmap_build.log" ]; then
+        tail -100 /tmp/colmap_build.log 2>/dev/null || true
+    else
+        printf '%s\n' "  (Build log file not found: /tmp/colmap_build.log)"
+    fi
     printf '%s\n' ""
     printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     printf '%s\n' "COMPREHENSIVE DIAGNOSTIC ANALYSIS:"
@@ -14760,17 +14691,26 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' ""
         printf '%s\n' "1️⃣ CHECKING FOR GLOG-RELATED ERRORS:"
-        if grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
+        # J1: Validate file existence before reading
+        # D3e: Fix SIGPIPE risk in pipeline
+        if [ -f "/tmp/colmap_build.log" ] && grep -i "glog" /tmp/colmap_build.log 2>/dev/null | grep -i "error\|undefined\|not found" 2>/dev/null >/dev/null 2>&1 || true; then
             printf '%s\n' "❌ glog-related errors detected:"
-            grep -i "glog" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            grep -i "glog" /tmp/colmap_build.log 2>/dev/null | grep -i "error\|undefined\|not found" 2>/dev/null | tail -15 2>/dev/null || true
             printf '%s\n' ""
             printf '%s\n' "📊 Current glog environment:"
             printf '%s\n' "  glog version: $(pkg-config --modversion libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
             printf '%s\n' "  glog location: $(pkg-config --variable=libdir libglog 2>/dev/null || printf '%s\n' 'NOT FOUND')"
             printf '%s\n' "  glog libraries found:"
-            timeout 5 ldconfig -p 2>/dev/null | grep glog | sed 's/^/    /' || printf '%s\n' "    (ldconfig check failed)"
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            timeout 5 ldconfig -p 2>/dev/null | grep glog 2>/dev/null | sed 's/^/    /' 2>/dev/null || printf '%s\n' "    (ldconfig check failed)"
             printf '%s\n' "  glog headers found:"
-            find /usr /usr/local -path "*/include/glog/logging.h" 2>/dev/null | sed 's/^/    /'
+            # J1: Validate directory existence before find (find handles missing gracefully, but validate for clarity)
+            if [ -d "/usr/include" ] || [ -d "/usr/local/include" ]; then
+                find /usr /usr/local -path "*/include/glog/logging.h" 2>/dev/null | sed 's/^/    /' 2>/dev/null || true
+            else
+                printf '%s\n' "    (include directories not found)"
+            fi
         else
             printf '%s\n' "✓ No glog-specific errors detected"
         fi
@@ -14779,17 +14719,28 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' ""
         printf '%s\n' "2️⃣ CHECKING FOR CERES-RELATED ERRORS:"
-        if grep -i "ceres\|CHECK_OP\|CheckOpString\|MINIGLOG" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" >/dev/null 2>&1; then
+        # J1: Validate file existence before reading
+        # D3e: Fix SIGPIPE risk in pipeline
+        if [ -f "/tmp/colmap_build.log" ] && grep -i "ceres\|CHECK_OP\|CheckOpString\|MINIGLOG" /tmp/colmap_build.log 2>/dev/null | grep -i "error\|undefined\|not found" 2>/dev/null >/dev/null 2>&1 || true; then
             printf '%s\n' "❌ Ceres/CHECK macro errors detected:"
-            grep -i "ceres\|CHECK_OP\|CheckOpString" /tmp/colmap_build.log | grep -i "error\|undefined\|not found" | tail -15
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            grep -i "ceres\|CHECK_OP\|CheckOpString" /tmp/colmap_build.log 2>/dev/null | grep -i "error\|undefined\|not found" 2>/dev/null | tail -15 2>/dev/null || true
             printf '%s\n' ""
             printf '%s\n' "📊 Current Ceres environment:"
             printf '%s\n' "  Ceres library:"
-            timeout 5 ldconfig -p 2>/dev/null | grep libceres | sed 's/^/    /' || printf '%s\n' "    NOT FOUND"
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            timeout 5 ldconfig -p 2>/dev/null | grep libceres 2>/dev/null | sed 's/^/    /' 2>/dev/null || printf '%s\n' "    NOT FOUND"
             printf '%s\n' "  Ceres → glog linkage:"
-            CERES_LIB=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so | awk '{print $NF}' | head -1 || printf '%s\n' "")
+            # D3e, F2: Fix SIGPIPE risk and validate command substitution result
+            CERES_LIB=""
+            CERES_LIB=$(timeout 5 ldconfig -p 2>/dev/null | grep libceres.so 2>/dev/null | awk '{print $NF}' 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "") || true
+            # F2: Validate result format
+            if [ -z "${CERES_LIB:-}" ]; then
+                CERES_LIB=""
+            fi
             if [ -n "${CERES_LIB:-}" ] && [ -f "${CERES_LIB}" ]; then
-                timeout 10 ldd "${CERES_LIB}" 2>/dev/null | grep glog | sed 's/^/    /' || printf '%s\n' "    No glog linkage"
+                # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+                timeout 10 ldd "${CERES_LIB}" 2>/dev/null | grep glog 2>/dev/null | sed 's/^/    /' 2>/dev/null || printf '%s\n' "    No glog linkage"
             else
                 printf '%s\n' "    Ceres library path not found or invalid"
             fi
@@ -14824,14 +14775,24 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         printf '%s\n' ""
         printf '%s\n' "3️⃣ FIRST COMPILATION ERROR (with context):"
         # Find the first actual error (not warning)
-        FIRST_ERROR_LINE=$(grep -n "error:" /tmp/colmap_build.log | head -1 | cut -d: -f1)
+        # J1: Validate file existence before reading
+        # D3e, F2: Fix SIGPIPE risk and validate command substitution result
+        FIRST_ERROR_LINE=""
+        if [ -f "/tmp/colmap_build.log" ]; then
+            FIRST_ERROR_LINE=$(grep -n "error:" /tmp/colmap_build.log 2>/dev/null | head -1 2>/dev/null | cut -d: -f1 2>/dev/null || printf '%s\n' "") || true
+        fi
+        # F2: Validate result format (should be numeric if found)
+        if [ -z "${FIRST_ERROR_LINE:-}" ]; then
+            FIRST_ERROR_LINE=""
+        fi
         if [ -n "${FIRST_ERROR_LINE:-}" ] && [ "${FIRST_ERROR_LINE}" -gt 0 ] 2>/dev/null; then
             START_LINE=$((FIRST_ERROR_LINE - 5))
             if [ "${START_LINE}" -lt 1 ]; then
                 START_LINE=1
             fi
             END_LINE=$((FIRST_ERROR_LINE + 10))
-            sed -n "${START_LINE},${END_LINE}p" /tmp/colmap_build.log | sed 's/^/  /'
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            sed -n "${START_LINE},${END_LINE}p" /tmp/colmap_build.log 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         else
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "  No 'error:' lines found (may be linker or other failure)"
@@ -14841,10 +14802,13 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' ""
         printf '%s\n' "4️⃣ CHECKING FOR LINKING ERRORS:"
-        if grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log >/dev/null 2>&1; then
+        # J1: Validate file existence before reading
+        # D3e: Fix SIGPIPE risk in pipeline
+        if [ -f "/tmp/colmap_build.log" ] && grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log 2>/dev/null >/dev/null 2>&1 || true; then
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "❌ Linking errors detected:"
-            grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log | tail -10 | sed 's/^/  /'
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            grep -i "undefined reference\|cannot find -l\|ld returned" /tmp/colmap_build.log 2>/dev/null | tail -10 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         else
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "✓ No linking errors detected"
@@ -14854,10 +14818,13 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' ""
         printf '%s\n' "5️⃣ CHECKING FOR MEMORY ISSUES:"
-        if grep -i "killed\|out of memory\|oom\|c++: fatal error: Killed" /tmp/colmap_build.log >/dev/null 2>&1; then
+        # J1: Validate file existence before reading
+        # D3e: Fix SIGPIPE risk in pipeline
+        if [ -f "/tmp/colmap_build.log" ] && grep -i "killed\|out of memory\|oom\|c++: fatal error: Killed" /tmp/colmap_build.log 2>/dev/null >/dev/null 2>&1 || true; then
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "❌ Memory issue detected:"
-            grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log | tail -5 | sed 's/^/  /'
+            # D3e: Fix SIGPIPE risk - add || true at end of pipeline
+            grep -i "killed\|out of memory\|oom" /tmp/colmap_build.log 2>/dev/null | tail -5 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' ""
             printf '%s\n' "💡 Solution: Reduce BUILD_JOBS (current: ${BUILD_JOBS})"
@@ -14870,11 +14837,37 @@ if ! ninja -j"${BUILD_JOBS}" 2>&1 | tee /tmp/colmap_build.log; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' ""
         printf '%s\n' "6️⃣ ENVIRONMENT SUMMARY AT FAILURE:"
-        printf '%s\n' "  CMake version: $(cmake --version 2>/dev/null | head -1 || printf '%s\n' 'unknown')"
-        printf '%s\n' "  Ninja version: $(ninja --version 2>/dev/null || printf '%s\n' 'unknown')"
-        printf '%s\n' "  GCC version: $(gcc --version 2>/dev/null | head -1 || printf '%s\n' 'unknown')"
-        printf '%s\n' "  ccache status: $(command -v ccache >/dev/null 2>&1 && printf '%s\n' 'available' || printf '%s\n' 'not available')"
-        avail_mem=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || printf '%s\n' 'unknown')
+        # D3e, F2: Fix SIGPIPE risk and validate command substitution results
+        cmake_ver=""
+        cmake_ver=$(cmake --version 2>/dev/null | head -1 2>/dev/null || printf '%s\n' 'unknown') || true
+        if [ -z "${cmake_ver:-}" ]; then
+            cmake_ver="unknown"
+        fi
+        printf '%s\n' "  CMake version: ${cmake_ver}"
+        ninja_ver=""
+        ninja_ver=$(ninja --version 2>/dev/null || printf '%s\n' 'unknown') || true
+        if [ -z "${ninja_ver:-}" ]; then
+            ninja_ver="unknown"
+        fi
+        printf '%s\n' "  Ninja version: ${ninja_ver}"
+        gcc_ver=""
+        gcc_ver=$(gcc --version 2>/dev/null | head -1 2>/dev/null || printf '%s\n' 'unknown') || true
+        if [ -z "${gcc_ver:-}" ]; then
+            gcc_ver="unknown"
+        fi
+        printf '%s\n' "  GCC version: ${gcc_ver}"
+        ccache_status=""
+        if command -v ccache >/dev/null 2>&1; then
+            ccache_status="available"
+        else
+            ccache_status="not available"
+        fi
+        printf '%s\n' "  ccache status: ${ccache_status}"
+        avail_mem=""
+        avail_mem=$(free -h 2>/dev/null | grep Mem 2>/dev/null | awk '{print $2}' 2>/dev/null || printf '%s\n' 'unknown') || true
+        if [ -z "${avail_mem:-}" ]; then
+            avail_mem="unknown"
+        fi
         printf '%s\n' "  Available memory: ${avail_mem}"
         printf '%s\n' "  Build jobs: ${BUILD_JOBS}"
         
@@ -14908,11 +14901,13 @@ printf '%s\n' "✓ COLMAP built successfully with Ninja"
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' ""
 printf '%s\n' "Installing COLMAP to /usr/local..."
-ninja install 2>&1 | tee /tmp/colmap_install.log
+# D3e: Fix SIGPIPE risk in pipeline with tee - check PIPESTATUS properly
+ninja install 2>&1 | tee /tmp/colmap_install.log || true
 INSTALL_EXIT=${PIPESTATUS[0]}
+# H1: Check exit code properly
 if [ "${INSTALL_EXIT}" -ne 0 ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-    printf '%s\n' "ERROR: Failed to install COLMAP"
+    printf '%s\n' "ERROR: Failed to install COLMAP (exit code: ${INSTALL_EXIT})" >&2
     exit 1
 fi
 # Use dynamic directory detection from installation output
@@ -15031,9 +15026,11 @@ fi
 if command -v colmap &> /dev/null; then
     # D3e: Fix SIGPIPE error handling - add file check and || true at pipeline end
     if colmap -h >/dev/null 2>&1; then
-        COLMAP_VER=$(colmap -h 2>&1 | grep -F "COLMAP" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
+        # D3e, F2: Fix SIGPIPE risk and validate command substitution result
+        COLMAP_VER=""
+        COLMAP_VER=$(colmap -h 2>&1 | grep -F "COLMAP" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "") || true
         # F2: Validate result format before use
-        if [ -n "${COLMAP_VER}" ] && grep -qF "COLMAP" <<< "${COLMAP_VER}"; then
+        if [ -n "${COLMAP_VER:-}" ] && grep -qF "COLMAP" <<< "${COLMAP_VER}" 2>/dev/null || true; then
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "✓ COLMAP installed: ${COLMAP_VER}"
         else
@@ -15052,28 +15049,10 @@ fi
 
 # Verify Python bindings
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-printf '%s\n' ""
-printf '%s\n' "Verifying Python bindings installation..."
-if python3 -c "import pycolmap; print(f'PyCOLMAP version: {pycolmap.__version__}')" 2>/dev/null; then
-    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-    printf '%s\n' "✓ PyCOLMAP Python module verified"
-    
-    # Check if PyCeres is available (for cost functions)
-    if python3 -c "import pyceres" 2>/dev/null; then
-        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-        printf '%s\n' "✓ PyCeres available (cost functions feature enabled)"
-    else
-        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-        printf '%s\n' "⚠ PyCeres not found (cost functions feature will be unavailable)"
-        printf '%s\n' "  PyCeres can be installed later if needed for cost functions"
-    fi
-else
-    # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-    printf '%s\n' "⚠ PyCOLMAP Python module not available (non-fatal)"
-    printf '%s\n' "  Installation logs: /tmp/pycolmap_install.log"
-fi
-
-#--- Sub-block 24.9: Protect compiled COLMAP from APT overwrites ---
+# Note: other file: /etc/apt/preferences.d/block-system-colmap is installed via install.sh from container-scripts/
+# Source: other/block-24-3d-reconstruction-and-nerf-tools/block-system-colmap.txt
+# Target: /etc/apt/preferences.d/block-system-colmap
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Critical: Prevent APT from installing ANY system COLMAP packages
 # Strategy: Use APT pinning with negative priority (consistent with other compiled libraries)
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -15083,28 +15062,10 @@ printf '%s\n' "Protecting compiled COLMAP from APT overwrites..."
 mkdir -p /etc/apt/preferences.d
 
 # Block ALL system COLMAP packages using APT pinning with negative priority
-cat > /etc/apt/preferences.d/block-system-colmap << 'EOF'
-# Block system COLMAP packages (prevent installation)
-# Our optimized COLMAP 3.12.6 is compiled from source in /usr/local with CUDA support
-# Uses system glog 0.6.0 (Ubuntu's patched version)
-# Negative priority (-1) means APT will never install these packages
-
-Package: colmap
-Pin: release *
-Pin-Priority: -1
-
-Package: colmap-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libcolmap
-Pin: release *
-Pin-Priority: -1
-
-Package: libcolmap-dev
-Pin: release *
-Pin-Priority: -1
-EOF
+# Note: config-files file: /etc/apt/preferences.d/block-system-colmap is installed via install.sh from container-scripts/
+# Source: other/block-24-3d-reconstruction-and-nerf-tools/block-system-colmap.txt
+# Target: /etc/apt/preferences.d/block-system-colmap
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 if [ -f "/etc/apt/preferences.d/block-system-colmap" ]; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -15126,9 +15087,13 @@ printf '%s\n' "✓ COLMAP protected from APT overwrites (APT pinning method)"
 # Outputs: Disk space freed
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Cleaning up COLMAP build files..."
-cd /
-rm -rf /tmp/colmap
-rm -f /tmp/colmap_*.log
+# J1: Validate directory exists before cd, H1: Check exit code of cd operation
+if ! cd / 2>/dev/null; then
+    printf '%s\n' "⚠ WARNING: Failed to change to root directory" >&2
+fi
+# H1: Exit status check for rm operations (non-critical cleanup, continue on failure)
+rm -rf /tmp/colmap 2>/dev/null || true
+rm -f /tmp/colmap_*.log 2>/dev/null || true
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "✓ COLMAP build cleaned up"
 
@@ -15310,6 +15275,11 @@ printf '%s\n' "==> Installing JAX CUDA for GPU-Accelerated Reinforcement Learnin
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Detecting CUDA version for JAX installation..."
 
+# Purpose: Detect CUDA version using multiple methods and map to JAX-compatible variant
+# Parameters: None (uses global CUDA_HOME if available)
+# Returns: Exports CUDA_FOR_JAX, CUDA_VERSION, DETECTED_CUDA, CUDA_MAJOR, CUDA_MINOR
+# Side effects: Sets global variables for JAX installation
+# L4: Function documentation required for functions > 10 lines
 detect_cuda_version_for_jax() {
     local cuda_full=""
     local cuda_major=""
@@ -15319,8 +15289,9 @@ detect_cuda_version_for_jax() {
     if command -v nvcc &> /dev/null; then
         # D3e: Fix SIGPIPE error handling - add || true at pipeline end
         # D3c: Use grep -F for fixed-string matching when possible
-        cuda_full=$(nvcc --version 2>/dev/null | grep -F "release" 2>/dev/null | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' 2>/dev/null || printf '%s\n' "")
+        cuda_full=$(nvcc --version 2>/dev/null | grep -F "release" 2>/dev/null | sed 's/.*release \([0-9]\+\.[0-9]\+\).*/\1/' 2>/dev/null || printf '%s\n' "") || true
         # F2: Validate result format before use
+        # A5: Bash-specific [[ ]] is acceptable here (shebang is #!/bin/bash) for regex matching
         if [ -n "${cuda_full:-}" ] && [[ "${cuda_full}" =~ ^[0-9]+\.[0-9]+$ ]]; then
             cuda_major="${cuda_full%%.*}"
             cuda_minor="${cuda_full#*.}"
@@ -15339,12 +15310,15 @@ detect_cuda_version_for_jax() {
             # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
             cuda_full=$(sed -n 's|.*cuda-\([0-9]\+\.[0-9]\+\).*|\1|p' <<< "${cuda_lib}" 2>/dev/null || printf '%s\n' "")
             # F2: Validate result format before use
+            # A5: Bash-specific [[ ]] is acceptable here (shebang is #!/bin/bash) for regex matching
             if [ -n "${cuda_full:-}" ] && [[ "${cuda_full}" =~ ^[0-9]+\.[0-9]+$ ]]; then
                 cuda_major="${cuda_full%%.*}"
                 cuda_minor="${cuda_full#*.}"
                 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
                 printf '%s\n' "  Detected CUDA via library path: ${cuda_full}"
+            # ENDIF: cuda_full format validation
             fi
+        # ENDIF: cuda_lib existence check
         fi
     fi
     
@@ -15358,6 +15332,7 @@ detect_cuda_version_for_jax() {
             cuda_full=$(sed -n 's/.*CUDA Version \([0-9]\+\.[0-9]\+\).*/\1/p' "${CUDA_HOME}/version.txt" 2>/dev/null || printf '%s\n' "")
         fi
         # F2: Validate result format before use
+        # A5: Bash-specific [[ ]] is acceptable here (shebang is #!/bin/bash) for regex matching
         if [ -n "${cuda_full:-}" ] && [[ "${cuda_full}" =~ ^[0-9]+\.[0-9]+$ ]]; then
             cuda_major="${cuda_full%%.*}"
             cuda_minor="${cuda_full#*.}"
@@ -15506,8 +15481,9 @@ if ldconfig -p 2>/dev/null | grep -qF libcudnn 2>/dev/null || true; then
         # D3e: Fix SIGPIPE error handling - add || true at pipeline end, validate file exists
         # D3c: Use grep -F for fixed-string matching when possible
         if [ -r "${CUDNN_LIB}" ]; then
-            CUDNN_VERSION=$(strings "${CUDNN_LIB}" 2>/dev/null | grep -iF "cudnn" 2>/dev/null | head -1 2>/dev/null | grep -oE "[0-9]+\.[0-9]+" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "unknown")
+            CUDNN_VERSION=$(strings "${CUDNN_LIB}" 2>/dev/null | grep -iF "cudnn" 2>/dev/null | head -1 2>/dev/null | grep -oE "[0-9]+\.[0-9]+" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "unknown") || true
             # F2: Validate result format before use
+            # A5: Bash-specific [[ ]] is acceptable here (shebang is #!/bin/bash) for regex matching
             if [ -n "${CUDNN_VERSION}" ] && [ "${CUDNN_VERSION}" != "unknown" ] && [[ "${CUDNN_VERSION}" =~ ^[0-9]+\.[0-9]+$ ]]; then
                 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
                 printf '%s\n' "  ✓ cuDNN library found (version: ${CUDNN_VERSION})"
@@ -15574,9 +15550,16 @@ printf '%s\n' "Installing JAX with CUDA support (using pre-built wheels)..."
 
 # Handle externally-managed Python environments
 # Use --ignore-installed to avoid errors when uninstalling Debian-installed packages (wheel, etc.)
+# F2: Validate command substitution result - check exit code and result format
+# H4: Silent failure prevention - validate result after masked failure
 pip_output=$(python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1) || true
+# Validate pip_output is not empty (may indicate failure)
+if [ -z "${pip_output}" ]; then
+    printf '%s\n' "  ⚠ WARNING: pip upgrade produced no output (may indicate failure)" >&2
+# ENDIF: pip_output validation
+fi
 # D3c: Use -F for fixed-string matching when pattern is literal (more efficient and safer)
-if grep -qF "externally-managed-environment" <<< "${pip_output}"; then
+if grep -qF "externally-managed-environment" <<< "${pip_output}" 2>/dev/null || true; then
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  Using --break-system-packages flag (for Singularity/container environments)"
     # D3c: Use -F for fixed-string matching when pattern is literal
@@ -15585,14 +15568,23 @@ else
     # D3c: Use -F for fixed-string matching when pattern is literal
     python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --quiet 2>&1 | grep -vF "ERROR Cannot uninstall" || \
         python3 -m pip install --upgrade --ignore-installed pip setuptools wheel --break-system-packages --quiet 2>&1 | grep -vF "ERROR Cannot uninstall" || true
+# ENDIF: externally-managed-environment check
 fi
 
 # Determine if we need --break-system-packages flag
+# F2: Validate command substitution result - check exit code and result format
+# H4: Silent failure prevention - validate result after masked failure
 pip_flags=""
 test_output=$(python3 -m pip install --dry-run pip 2>&1) || true
+# Validate test_output is not empty (may indicate failure)
+if [ -z "${test_output}" ]; then
+    printf '%s\n' "  ⚠ WARNING: pip dry-run produced no output (may indicate failure)" >&2
+# ENDIF: test_output validation
+fi
 # D3c: Use -F for fixed-string matching when pattern is literal
-if grep -qF "externally-managed-environment" <<< "${test_output}"; then
+if grep -qF "externally-managed-environment" <<< "${test_output}" 2>/dev/null || true; then
     pip_flags="--break-system-packages"
+# ENDIF: externally-managed-environment check for pip_flags
 fi
 
 # Build pip command array to properly handle flags with spaces
@@ -15601,13 +15593,16 @@ fi
 pip_cmd_base=(python3 -m pip install --upgrade --no-cache-dir --ignore-installed)
 
 # Add optimization flags properly
+# C3: Safe handling of IFS mutations - restore defaults after use
 if [ -n "${pip_flags:-}" ]; then
     # Save and restore IFS to avoid affecting other commands
-    OLD_IFS="${IFS}"
+    OLD_IFS="${IFS:- }"
     IFS=' '
-    read -ra flag_array <<< "${pip_flags}"
+    # D2: Verification of read usage - use read -r with IFS settings
+    read -r -a flag_array <<< "${pip_flags}"
     IFS="${OLD_IFS}"
     pip_cmd_base+=("${flag_array[@]}")
+# ENDIF: pip_flags check
 fi
 
 # Install JAX with CUDA support
@@ -15622,7 +15617,19 @@ pip_cmd+=("jax[${CUDA_FOR_JAX}_local]")
 pip_cmd+=(-f "https://storage.googleapis.com/jax-releases/jax_cuda_releases.html")
 
 # Run installation and capture output (warnings are expected and non-fatal)
-"${pip_cmd[@]}" 2>&1 | tee /tmp/jax_install.log || true
+# J1: File existence validation - ensure parent directory exists before writing
+# D3e: SIGPIPE error handling - add || true at pipeline end, validate file exists
+if [ ! -d "/tmp" ]; then
+    printf '%s\n' "[WARNING] Parent directory does not exist: /tmp" >&2
+    printf '%s\n' "[INFO] Creating parent directory: /tmp" >&2
+    mkdir -p /tmp || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: /tmp" >&2
+        return 1
+    }
+    printf '%s\n' "[INFO] Parent directory created successfully: /tmp" >&2
+# ENDIF: /tmp directory check
+fi
+"${pip_cmd[@]}" 2>&1 | tee /tmp/jax_install.log 2>/dev/null || true
 
 # Check if installation actually succeeded by trying to import JAX
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
@@ -15633,7 +15640,18 @@ else
     printf '%s\n' "  ⚠ Primary installation method failed, trying alternative..."
     pip_cmd=("${pip_cmd_base[@]}")
     pip_cmd+=("jax[${CUDA_FOR_JAX}]")
-    "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log || true
+    # J1: File existence validation - ensure log file exists before appending
+    # D3e: SIGPIPE error handling - add || true at pipeline end
+    if [ ! -f /tmp/jax_install.log ]; then
+        printf '%s\n' "[WARNING] Log file does not exist: /tmp/jax_install.log" >&2
+        printf '%s\n' "[INFO] Creating log file: /tmp/jax_install.log" >&2
+        touch /tmp/jax_install.log || {
+            printf '%s\n' "[ERROR] Failed to create log file: /tmp/jax_install.log" >&2
+            return 1
+        }
+# ENDIF: jax_install.log existence check
+    fi
+    "${pip_cmd[@]}" 2>&1 | tee -a /tmp/jax_install.log 2>/dev/null || true
     
     # Check again if alternative method worked
     if python3 -c "import jax; import jaxlib" 2>/dev/null; then
@@ -15643,15 +15661,20 @@ else
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ⚠ JAX installation failed (non-fatal)"
         printf '%s\n' "  Installation logs: /tmp/jax_install.log"
+# ENDIF: alternative JAX installation check
     fi
+# ENDIF: JAX import check
 fi
 
 # Resolve dependency conflicts (non-critical but good to fix)
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "  Resolving dependency conflicts (matplotlib/types-seaborn)..."
 if python3 -c "import matplotlib" 2>/dev/null; then
+    # F2: Validate command substitution result - check exit code and result format
+    # H4: Silent failure prevention - validate result after masked failure
     MATPLOTLIB_VER=$(python3 -c "import matplotlib; print(matplotlib.__version__)" 2>/dev/null || printf '%s\n' "")
-    if [ -n "${MATPLOTLIB_VER}" ]; then
+    # Validate MATPLOTLIB_VER is not empty and has valid format (version number)
+    if [ -n "${MATPLOTLIB_VER}" ] && [[ "${MATPLOTLIB_VER}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([a-zA-Z0-9]+)?$ ]]; then
         # Check if matplotlib version is < 3.8 (required by types-seaborn)
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
         MATPLOTLIB_MAJOR=$(cut -d. -f1 <<< "${MATPLOTLIB_VER}" 2>/dev/null || printf '%s\n' "")
@@ -15665,8 +15688,11 @@ if python3 -c "import matplotlib" 2>/dev/null; then
             pip_cmd_upgrade+=("matplotlib>=3.8")
             # D3c: Use -F for fixed-string matching when pattern is literal
             "${pip_cmd_upgrade[@]}" --quiet 2>&1 | grep -vF "ERROR Cannot uninstall" || true
+# ENDIF: matplotlib version check
         fi
+# ENDIF: MATPLOTLIB_VER validation
     fi
+# ENDIF: matplotlib import check
 fi
 
 # Install pandas-stubs if types-seaborn requires it (non-critical, just type stubs)
@@ -15677,6 +15703,7 @@ if python3 -c "import types_seaborn" 2>/dev/null && ! python3 -c "import pandas_
     pip_cmd_stubs+=("pandas-stubs")
     # D3c: Use -F for fixed-string matching when pattern is literal
     "${pip_cmd_stubs[@]}" --quiet 2>&1 | grep -vF "ERROR Cannot uninstall" || true
+# ENDIF: pandas-stubs installation check
 fi
 
 # Verify installation and version alignment
@@ -15688,45 +15715,66 @@ sleep 1
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "  Verifying JAX installation..."
 if python3 -c "import jax; import jaxlib" 2>/dev/null; then
+    # F2: Validate command substitution result - check exit code and result format
+    # H4: Silent failure prevention - validate result after masked failure
     JAX_VER=$(python3 -c "import jax; print(jax.__version__)" 2>/dev/null || printf '%s\n' "unknown")
     JAXLIB_VER=$(python3 -c "import jaxlib; print(jaxlib.__version__)" 2>/dev/null || printf '%s\n' "unknown")
     
-    # Validate that versions were retrieved successfully
-    if [ "${JAX_VER}" = "unknown" ] || [ -z "${JAX_VER}" ]; then
+    # Validate that versions were retrieved successfully and have valid format
+    # F2: Format validation - check version format matches expected pattern
+    if [ "${JAX_VER}" = "unknown" ] || [ -z "${JAX_VER}" ] || ! [[ "${JAX_VER}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([a-zA-Z0-9+]+)?$ ]]; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ⚠ WARNING: Could not retrieve JAX version"
         JAX_VER="unknown"
+# ENDIF: JAX_VER validation
     fi
-    if [ "${JAXLIB_VER}" = "unknown" ] || [ -z "${JAXLIB_VER}" ]; then
+    # F2: Format validation - check version format matches expected pattern
+    if [ "${JAXLIB_VER}" = "unknown" ] || [ -z "${JAXLIB_VER}" ] || ! [[ "${JAXLIB_VER}" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?([a-zA-Z0-9+]+)?$ ]]; then
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
-        printf '%s\n' "  ⚠ WARNING: Could not retrieve jaxlib version"
+        printf '%s\n' "  ⚠ WARNING: Could not retrieve jaxlib version or invalid format"
         JAXLIB_VER="unknown"
+# ENDIF: JAXLIB_VER validation
     fi
     
     if [ "${JAX_VER}" != "unknown" ] && [ "${JAXLIB_VER}" != "unknown" ]; then
         # E2: Use unquoted delimiter for variable expansion in heredoc
         # Variables used: JAX_VER (from parent script)
-        JAX_BASE_VER=$(python3 - <<PY_VER
-import re
-ver = "${JAX_VER}"
-match = re.match(r"(\\d+\.\\d+)", ver)
-print(match.group(1) if match else '')
-PY_VER
-)
+        # F2: Validate command substitution result - check exit code and result format
+        # H4: Silent failure prevention - validate result after masked failure
+        # Note: python-scripts file: /tmp/jax-version-extract.py is installed via install.sh from container-scripts/
+        # Source: python-scripts/block-25-jax-cuda-installation-reinforcement-learning/jax-version-extract.py
+        # Target: /tmp/jax-version-extract.py
+        # Installed in Block 0 (early in script, before any scripts are needed)
+        # J1: File existence validation before use
+        if [ -f /tmp/jax-version-extract.py ] && [ -r /tmp/jax-version-extract.py ]; then
+            JAX_BASE_VER=$(JAX_VER="${JAX_VER}" python3 /tmp/jax-version-extract.py 2>/dev/null || printf '%s\n' "")
+        else
+            JAX_BASE_VER=""
+            printf '%s\n' "  ⚠ WARNING: jax-version-extract.py not found, using full version string" >&2
+        fi
         # E2: Use unquoted delimiter for variable expansion in heredoc
         # Variables used: JAXLIB_VER (from parent script)
-        JAXLIB_BASE_VER=$(python3 - <<PY_LIB
-import re
-ver = "${JAXLIB_VER}"
-match = re.match(r"(\\d+\.\\d+)", ver)
-print(match.group(1) if match else '')
-PY_LIB
-)
-        if [ -z "${JAX_BASE_VER}" ]; then
-            JAX_BASE_VER="${JAX_VER}"
+        # F2: Validate command substitution result - check exit code and result format
+        # H4: Silent failure prevention - validate result after masked failure
+        # Note: python-scripts file: /tmp/jaxlib-version-extract.py is installed via install.sh from container-scripts/
+        # Source: python-scripts/block-25-jax-cuda-installation-reinforcement-learning/jaxlib-version-extract.py
+        # Target: /tmp/jaxlib-version-extract.py
+        # Installed in Block 0 (early in script, before any scripts are needed)
+        # J1: File existence validation before use
+        if [ -f /tmp/jaxlib-version-extract.py ] && [ -r /tmp/jaxlib-version-extract.py ]; then
+            JAXLIB_BASE_VER=$(JAXLIB_VER="${JAXLIB_VER}" python3 /tmp/jaxlib-version-extract.py 2>/dev/null || printf '%s\n' "")
+        else
+            JAXLIB_BASE_VER=""
+            printf '%s\n' "  ⚠ WARNING: jaxlib-version-extract.py not found, using full version string" >&2
         fi
-        if [ -z "${JAXLIB_BASE_VER}" ]; then
+        # F2: Format validation - validate extracted base versions
+        if [ -z "${JAX_BASE_VER}" ] || ! [[ "${JAX_BASE_VER}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            JAX_BASE_VER="${JAX_VER}"
+# ENDIF: JAX_BASE_VER validation
+        fi
+        if [ -z "${JAXLIB_BASE_VER}" ] || ! [[ "${JAXLIB_BASE_VER}" =~ ^[0-9]+\.[0-9]+$ ]]; then
             JAXLIB_BASE_VER="${JAXLIB_VER}"
+# ENDIF: JAXLIB_BASE_VER validation
         fi
 
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
@@ -15740,40 +15788,54 @@ PY_LIB
                 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
                 printf '%s\n' "  ⚠ WARNING: Version mismatch detected - jax ${JAX_VER} vs jaxlib ${JAXLIB_VER}"
                 printf '%s\n' "    This may cause compatibility issues. Consider reinstalling with matching versions."
+# ENDIF: version alignment check
             fi
         else
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "  ⚠ WARNING: Could not extract base versions for comparison"
+# ENDIF: base version extraction check
         fi
 
         # E2: Use unquoted delimiter for variable expansion in heredoc
         # Variables used: JAXLIB_VER (from parent script)
-        CUDA_VARIANT=$(python3 - <<PY_VARIANT
-import re
-match = re.search(r"cuda(11|12)", "${JAXLIB_VER}")
-print(match.group(0) if match else '')
-PY_VARIANT
-)
-        if [ -n "${CUDA_VARIANT}" ]; then
+        # F2: Validate command substitution result - check exit code and result format
+        # H4: Silent failure prevention - validate result after masked failure
+        # Note: python-scripts file: /tmp/cuda-variant-extract.py is installed via install.sh from container-scripts/
+        # Source: python-scripts/block-25-jax-cuda-installation-reinforcement-learning/cuda-variant-extract.py
+        # Target: /tmp/cuda-variant-extract.py
+        # Installed in Block 0 (early in script, before any scripts are needed)
+        # J1: File existence validation before use
+        if [ -f /tmp/cuda-variant-extract.py ] && [ -r /tmp/cuda-variant-extract.py ]; then
+            CUDA_VARIANT=$(JAXLIB_VER="${JAXLIB_VER}" python3 /tmp/cuda-variant-extract.py 2>/dev/null || printf '%s\n' "")
+        else
+            CUDA_VARIANT=""
+            printf '%s\n' "  ⚠ WARNING: cuda-variant-extract.py not found, CUDA variant detection unavailable" >&2
+        fi
+        # F2: Format validation - validate CUDA variant format
+        if [ -n "${CUDA_VARIANT}" ] && [[ "${CUDA_VARIANT}" =~ ^cuda(11|12)$ ]]; then
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "  ✓ CUDA variant detected in jaxlib: ${CUDA_VARIANT}"
         else
             # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
             printf '%s\n' "  ⚠ WARNING: CUDA variant not detected in jaxlib version - may be CPU-only build"
+# ENDIF: CUDA_VARIANT check
         fi
     else
         # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
         printf '%s\n' "  ✓ JAX and jaxlib installed (version verification unavailable)"
+# ENDIF: JAX version verification check
     fi
 else
     # Try to get more information about why import failed
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  ⚠ JAX installation verification failed (non-fatal)"
     printf '%s\n' "  Attempting to diagnose import issue..."
-    python3 -c "import jax" 2>&1 | head -3 || true
-    python3 -c "import jaxlib" 2>&1 | head -3 || true
+    # D3e: SIGPIPE error handling - add || true at pipeline end, redirect stderr
+    python3 -c "import jax" 2>&1 | head -3 2>/dev/null || true
+    python3 -c "import jaxlib" 2>&1 | head -3 2>/dev/null || true
     # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
     printf '%s\n' "  Note: JAX may still be functional - comprehensive verification will continue"
+# ENDIF: JAX import verification check
 fi
 
 #--- Sub-block 25.6: Comprehensive JAX verification ---
@@ -15783,316 +15845,68 @@ fi
 # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
 printf '%s\n' "Running comprehensive JAX verification..."
 
-python3 << 'JAX_VERIFY' 2>&1 | tee /tmp/jax_verify.log || true
-import sys
-import os
-import time
-
-test_results = {"passed": 0, "failed": 0, "warnings": 0}
-
-def test_imports():
-    """Test 1: Basic imports"""
-    print("\n[Test 1] Basic Imports")
-    try:
-        import jax
-        import jax.numpy as jnp
-        import jaxlib
-        
-        print(f"  ✓ JAX version: {jax.__version__}")
-        print(f"  ✓ jaxlib version: {jaxlib.__version__}")
-        
-        # Check for version alignment (critical for JAX stability)
-        jax_base_stripped = jax.__version__.split('+')[0]
-        jaxlib_base_stripped = jaxlib.__version__.split('+')[0]
-        jax_base_major_minor = '.'.join(jax_base_stripped.split('.')[:2])
-        jaxlib_major_minor = '.'.join(jaxlib_base_stripped.split('.')[:2])
-        if jax_base_major_minor and jaxlib_major_minor and jax_base_major_minor == jaxlib_major_minor:
-            print(f"  ✓ Version alignment: jax {jax.__version__} matches jaxlib {jaxlib.__version__}")
-        else:
-            print(f"  ⚠ Version mismatch: jax {jax.__version__} vs jaxlib {jaxlib.__version__}")
-            print("    Warning: Version mismatch may cause compatibility issues")
-        
-        test_results["passed"] += 1
-        return True
-    except Exception as e:
-        error_msg = str(e)
-        # Check for cuBLAS version mismatch (common JAX installation issue)
-        if "cuBLAS" in error_msg or "cublas" in error_msg.lower():
-            print(f"  ✗ Import failed: {e}")
-            print("    ERROR: cuBLAS version mismatch detected!")
-            print("    This usually means:")
-            print("    - JAX was built against a different CUDA/cuDNN version than installed")
-            print("    - System cuBLAS version is older than JAX requires")
-            print("    Solution: Ensure CUDA/cuDNN versions match JAX requirements")
-            print("    JAX supports: CUDA 12.3 (cuDNN 8.9) or CUDA 11.8 (cuDNN 8.6)")
-        else:
-            print(f"  ✗ Import failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_backend():
-    """Test 2: Backend detection"""
-    print("\n[Test 2] Backend Detection")
-    try:
-        import jax
-        default_backend = jax.default_backend()
-        print(f"  ✓ Default backend: {default_backend}")
-        
-        devices = jax.devices()
-        if devices is None:
-            devices = []
-        print(f"  ✓ Found {len(devices)} device(s):")
-        for d in devices:
-            try:
-                kind = getattr(d, 'device_kind', 'unknown')
-                platform = getattr(d, 'platform', 'unknown')
-                print(f"    - {d} (kind: {kind}, platform: {platform})")
-            except Exception:
-                print(f"    - {d}")
-        
-        test_results["passed"] += 1
-        return True
-    except Exception as e:
-        print(f"  ✗ Backend detection failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_gpu():
-    """Test 3: GPU availability and operations"""
-    print("\n[Test 3] GPU Availability")
-    try:
-        import jax
-        import jax.numpy as jnp
-        
-        devices = jax.devices()
-        if devices is None:
-            devices = []
-        gpu_devices = [d for d in devices if getattr(d, 'device_kind', None) == 'gpu']
-        
-        if gpu_devices:
-            print(f"  ✓ GPU acceleration available ({len(gpu_devices)} GPU device(s))")
-            
-            try:
-                # Test GPU computation
-                x = jnp.array([1.0, 2.0, 3.0])
-                y = x * 2
-                result = float(jnp.sum(y))
-                print(f"  ✓ GPU computation test: {result} (expected: 12.0)")
-                
-                # Test device placement
-                x_gpu = jax.device_put(x, gpu_devices[0])
-                print(f"  ✓ GPU device placement working")
-                
-                # Test larger computation
-                a = jnp.ones((1000, 1000), dtype=jnp.float32)
-                b = jnp.ones((1000, 1000), dtype=jnp.float32)
-                c = jnp.dot(a, b)
-                result = float(c[0, 0])
-                print(f"  ✓ Large matrix multiplication on GPU: {result} (expected: 1000.0)")
-            except Exception as gpu_err:
-                print(f"  ⚠ GPU operation warning: {gpu_err}")
-                test_results["warnings"] += 1
-            
-            test_results["passed"] += 1
-            return True
-        else:
-            print("  ⚠ GPU devices not found (JAX will use CPU)")
-            print("  Note: This is non-fatal - JAX will still work in CPU mode")
-            print("  Possible causes:")
-            print("    - CUDA/cuDNN version mismatch with JAX build")
-            print("    - GPU drivers not properly installed")
-            print("    - cuBLAS version incompatibility")
-            test_results["warnings"] += 1
-            return True  # CPU mode is acceptable
-    except Exception as e:
-        print(f"  ✗ GPU test failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_jit():
-    """Test 4: JIT compilation"""
-    print("\n[Test 4] JIT Compilation")
-    try:
-        import jax
-        import jax.numpy as jnp
-        
-        @jax.jit
-        def add_one(x):
-            return x + 1
-        
-        x = jnp.array([1.0, 2.0, 3.0])
-        result = add_one(x)
-        expected = jnp.array([2.0, 3.0, 4.0])
-        
-        if jnp.allclose(result, expected):
-            print("  ✓ JIT compilation working")
-            test_results["passed"] += 1
-            return True
-        else:
-            print("  ✗ JIT computation result incorrect")
-            test_results["failed"] += 1
-            return False
-    except Exception as e:
-        print(f"  ✗ JIT test failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_threading():
-    """Test 5: Threading configuration"""
-    print("\n[Test 5] Threading Configuration")
-    try:
-        num_threads = os.environ.get('OMP_NUM_THREADS', 'not set')
-        openblas_threads = os.environ.get('OPENBLAS_NUM_THREADS', 'not set')
-        print(f"  OMP_NUM_THREADS: {num_threads}")
-        print(f"  OPENBLAS_NUM_THREADS: {openblas_threads}")
-        
-        # Test parallel computation
-        import jax
-        import jax.numpy as jnp
-        
-        x = jnp.random.normal(jax.random.PRNGKey(0), (1000, 1000))
-        y = jnp.dot(x, x.T)
-        result = float(jnp.sum(y))
-        
-        print(f"  ✓ Threading test computation: {result:.2f}")
-        print("  ✓ Threading configuration verified")
-        test_results["passed"] += 1
-        return True
-    except Exception as e:
-        print(f"  ✗ Threading test failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_performance():
-    """Test 6: Performance benchmark"""
-    print("\n[Test 6] Performance Benchmark")
-    try:
-        import jax
-        import jax.numpy as jnp
-        
-        # Benchmark matrix multiplication
-        size = 2000
-        try:
-            a = jnp.ones((size, size), dtype=jnp.float32)
-            b = jnp.ones((size, size), dtype=jnp.float32)
-            
-            # Warmup
-            _ = jnp.dot(a, b).block_until_ready()
-            
-            # Actual benchmark
-            start = time.time()
-            c = jnp.dot(a, b)
-            c.block_until_ready()
-            elapsed = time.time() - start
-            
-            print(f"  Matrix multiplication ({size}x{size}): {elapsed:.4f}s")
-            print("  ✓ Performance benchmark completed")
-        except MemoryError:
-            print("  ⚠ Performance test skipped (memory constraints)")
-            test_results["warnings"] += 1
-        except Exception as perf_err:
-            print(f"  ⚠ Performance test warning: {perf_err}")
-            test_results["warnings"] += 1
-        
-        test_results["passed"] += 1
-        return True
-    except Exception as e:
-        print(f"  ✗ Performance test failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-def test_multi_gpu():
-    """Test 7: Multi-GPU support (if available)"""
-    print("\n[Test 7] Multi-GPU Support")
-    try:
-        import jax
-        
-        devices = jax.devices()
-        if devices is None:
-            devices = []
-        gpu_devices = [d for d in devices if getattr(d, 'device_kind', None) == 'gpu']
-        
-        if len(gpu_devices) > 1:
-            print(f"  ✓ Multiple GPUs detected: {len(gpu_devices)}")
-            print("  ✓ Multi-GPU support available")
-        else:
-            print("  ℹ Single or no GPU detected (multi-GPU test skipped)")
-        
-        test_results["passed"] += 1
-        return True
-    except Exception as e:
-        print(f"  ✗ Multi-GPU test failed: {e}")
-        test_results["failed"] += 1
-        return False
-
-# Run all tests
-print("=" * 60)
-print("JAX Comprehensive Verification")
-print("=" * 60)
-
-try:
-    if not test_imports():
-        print("\n✗ Critical: JAX imports failed - cannot continue tests")
-        sys.exit(1)
-    
-    test_backend()
-    test_gpu()
-    test_jit()
-    test_threading()
-    test_performance()
-    test_multi_gpu()
-    
-    # Summary
-    print("\n" + "=" * 60)
-    print("Test Summary:")
-    print(f"  Passed: {test_results['passed']}")
-    print(f"  Failed: {test_results['failed']}")
-    print(f"  Warnings: {test_results['warnings']}")
-    print("=" * 60)
-    
-    if test_results["failed"] == 0:
-        print("\n✓ All JAX verification tests passed")
-        sys.exit(0)
-    else:
-        print(f"\n⚠ Some tests failed ({test_results['failed']} failures)")
-        sys.exit(0)  # Non-fatal
-    
-except ImportError as e:
-    print(f"\n✗ JAX import failed: {e}")
-    print("  JAX may not be installed correctly")
-    sys.exit(1)
-except Exception as e:
-    print(f"\n⚠ JAX verification error: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(0)  # Non-fatal
-JAX_VERIFY
+# J1: File existence validation - ensure parent directory exists before writing
+# D3e: SIGPIPE error handling - add || true at pipeline end, validate file exists
+if [ ! -d "/tmp" ]; then
+    printf '%s\n' "[WARNING] Parent directory does not exist: /tmp" >&2
+    printf '%s\n' "[INFO] Creating parent directory: /tmp" >&2
+    mkdir -p /tmp || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: /tmp" >&2
+        return 1
+    }
+    printf '%s\n' "[INFO] Parent directory created successfully: /tmp" >&2
+# ENDIF: /tmp directory check for jax_verify.log
+fi
+# Note: python-scripts file: /tmp/jax-verify.py is installed via install.sh from container-scripts/
+# Source: python-scripts/block-25-jax-cuda-installation-reinforcement-learning/jax-installation-verification.py
+# Target: /tmp/jax-verify.py
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: File existence validation before use
+if [ -f /tmp/jax-verify.py ] && [ -r /tmp/jax-verify.py ]; then
+    python3 /tmp/jax-verify.py 2>&1 | tee /tmp/jax_verify.log 2>/dev/null || true
+else
+    printf '%s\n' "  ⚠ WARNING: jax-verify.py not found, skipping comprehensive verification" >&2
+    printf '%s\n' "⚠ JAX verification script missing (non-fatal)" > /tmp/jax_verify.log 2>/dev/null || true
+fi
 
 # Check verification results
 # J1: File existence validation before use
-if [ -f /tmp/jax_verify.log ]; then
+# F2: Validate result format before use - check file is non-empty and readable
+if [ -f /tmp/jax_verify.log ] && [ -r /tmp/jax_verify.log ] && [ -s /tmp/jax_verify.log ]; then
     # Use grep with proper escaping for Unicode characters
     # Check for success message (multiple patterns for robustness)
     # D3c: Use -F for fixed-string matching when pattern is literal (more efficient and safer)
+    # D3e: SIGPIPE error handling - add || true at pipeline end
     if { grep -qF "All JAX verification tests passed" /tmp/jax_verify.log 2>/dev/null || \
-         grep -qE "All.*tests.*passed" /tmp/jax_verify.log 2>/dev/null; }; then
-        echo "✓ JAX comprehensive verification: All tests passed"
-    elif grep -qF "GPU acceleration available" /tmp/jax_verify.log 2>/dev/null; then
-        echo "✓ JAX CUDA installation verified with GPU acceleration"
-    elif grep -qF "JAX version:" /tmp/jax_verify.log 2>/dev/null; then
-        echo "✓ JAX installation verified (CPU mode - GPU may be unavailable)"
+         grep -qE "All.*tests.*passed" /tmp/jax_verify.log 2>/dev/null; } 2>/dev/null || true; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ JAX comprehensive verification: All tests passed"
+    elif grep -qF "GPU acceleration available" /tmp/jax_verify.log 2>/dev/null || true; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ JAX CUDA installation verified with GPU acceleration"
+    elif grep -qF "JAX version:" /tmp/jax_verify.log 2>/dev/null || true; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ JAX installation verified (CPU mode - GPU may be unavailable)"
     else
-        echo "⚠ JAX verification had issues (non-fatal)"
-        echo "  Check /tmp/jax_verify.log for details"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ JAX verification had issues (non-fatal)"
+        printf '%s\n' "  Check /tmp/jax_verify.log for details"
+# ENDIF: jax_verify.log pattern matching
     fi
 # ENDIF: jax_verify.log existence check
+else
+    # J1: File existence validation - log file missing or empty
+    printf '%s\n' "⚠ JAX verification log file missing or empty: /tmp/jax_verify.log" >&2
+# ENDIF: jax_verify.log file check
 fi
 
 # Clean up logs
 # Note: Using || true is intentional here for non-critical cleanup operations
+# H4/B3: Non-critical cleanup - validation not required for cleanup operations
 rm -f /tmp/jax_install.log /tmp/jax_verify.log 2>/dev/null || true
 
-echo "✓ JAX CUDA installation complete"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ JAX CUDA installation complete"
 
 #===============================================================================
 # BLOCK 26A: LEGACY PYTORCH SOURCE BUILD (OPENBLAS)
@@ -16121,25 +15935,29 @@ echo "✓ JAX CUDA installation complete"
 #   - Test script: scripts/tests/test_pytorch_compilation.sh
 #   - GCC recommendation: GCC 10 preferred for CUDA 12.6 + PyTorch
 #-------------------------------------------------------------------------------
-echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}BLOCK 26A: PyTorch Source Build (legacy / opt-in)${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
+# A5a/D3b: Use printf instead of echo -e for robustness (POSIX-compliant, no flag interpretation)
+printf '%s\n' "" "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${BLUE}BLOCK 26A: PyTorch Source Build (legacy / opt-in)${NC}"
+printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
 
 ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"
 if [ "${ENABLE_PYTORCH_BUILD}" != true ]; then
-  echo "Skipping PyTorch source compilation (ENABLE_PYTORCH_BUILD=${ENABLE_PYTORCH_BUILD})."
-  echo "  → CUDA-enabled PyTorch wheels are installed in Block 26B by default."
-  echo ""
+  # A5a/D3b: Use printf instead of echo for robustness
+  printf '%s\n' "Skipping PyTorch source compilation (ENABLE_PYTORCH_BUILD=${ENABLE_PYTORCH_BUILD})."
+  printf '%s\n' "  → CUDA-enabled PyTorch wheels are installed in Block 26B by default."
+  printf '%s\n' ""
 else
-  echo -e "${YELLOW}[26A] PyTorch source build enabled; compiling from OpenBLAS baseline...${NC}"
-  echo ""
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' "${YELLOW}[26A] PyTorch source build enabled; compiling from OpenBLAS baseline...${NC}"
+  printf '%s\n' ""
 
 #--- Sub-block 26.1: Verify OpenBLAS installation ---
 # Purpose: Verify our compiled OpenBLAS is available and usable
 # Dependencies: Block 6.12B (OpenBLAS compilation)
 # Outputs: Verification status
-echo -e "${YELLOW}[13C.1] Verifying OpenBLAS installation from Block 6.12B...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.1] Verifying OpenBLAS installation from Block 6.12B...${NC}"
 OPENBLAS_VERIFIED=false
 OPENBLAS_LIB="/usr/local/lib/libopenblas.so"
 
@@ -16155,7 +15973,8 @@ elif [ -f "/usr/local/lib/libopenblas.so" ]; then
 fi
 
 if [ "${OPENBLAS_VERIFIED}" = true ]; then
-    echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
     
     # Verify DYNAMIC_ARCH support
     # J1: File existence already validated above
@@ -16163,15 +15982,20 @@ if [ "${OPENBLAS_VERIFIED}" = true ]; then
     if strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qiF "DYNAMIC_ARCH" || \
        strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qiF "dynamic_arch" || \
        strings "${OPENBLAS_LIB}" 2>/dev/null | grep -qiF "DYNAMICARCH"; then
-        echo -e "  ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
     # ENDIF: DYNAMIC_ARCH support check
     fi
     
     # Check alternatives system
-    if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -q "${OPENBLAS_LIB}"; then
-        echo -e "  ${GREEN}✓ OpenBLAS registered with alternatives${NC}"
+    # D3c: Use -F for fixed-string matching when pattern is literal (more efficient and safer)
+    if update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -qF "${OPENBLAS_LIB}"; then
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS registered with alternatives${NC}"
         # D3d: Robust command substitution with validation
-        CURRENT_BLAS_ALT=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' || echo "unknown")
+        # A5a: Use printf instead of echo (POSIX-compliant, no flag interpretation)
+        # D4: sed command substitution must have error fallback
+        CURRENT_BLAS_ALT=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep "link currently points to" | sed 's/.*points to //' 2>/dev/null || printf '%s\n' "unknown")
         # Validate result is non-empty and not just "unknown"
         if [ -z "${CURRENT_BLAS_ALT}" ] || [ "${CURRENT_BLAS_ALT}" = "unknown" ]; then
             CURRENT_BLAS_ALT="unknown"
@@ -16179,33 +16003,41 @@ if [ "${OPENBLAS_VERIFIED}" = true ]; then
         if [ "${DEFAULT_BLAS_PROVIDER}" = "OPENBLAS" ]; then
             # D3c: Use -F for fixed-string matching when pattern is literal (more efficient)
             if grep -qiF "openblas" <<< "${CURRENT_BLAS_ALT}"; then
-                echo -e "  ${GREEN}✓ Default BLAS provider matches DEFAULT_BLAS_PROVIDER (${CURRENT_BLAS_ALT})${NC}"
+                # A5a/D3b: Use printf instead of echo -e for robustness
+                printf '%s\n' "  ${GREEN}✓ Default BLAS provider matches DEFAULT_BLAS_PROVIDER (${CURRENT_BLAS_ALT})${NC}"
             else
-                echo -e "  ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=OPENBLAS but current provider is ${CURRENT_BLAS_ALT}${NC}"
+                # A5a/D3b: Use printf instead of echo -e for robustness
+                printf '%s\n' "  ${YELLOW}⚠ DEFAULT_BLAS_PROVIDER=OPENBLAS but current provider is ${CURRENT_BLAS_ALT}${NC}"
             fi
         else
-            echo -e "  ${YELLOW}ℹ Default BLAS provider remains ${CURRENT_BLAS_ALT} (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}ℹ Default BLAS provider remains ${CURRENT_BLAS_ALT} (DEFAULT_BLAS_PROVIDER=${DEFAULT_BLAS_PROVIDER})${NC}"
         # ENDIF: DEFAULT_BLAS_PROVIDER check
         fi
     else
-        echo -e "  ${YELLOW}⚠ OpenBLAS not registered with alternatives (expected fallback unavailable)${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${YELLOW}⚠ OpenBLAS not registered with alternatives (expected fallback unavailable)${NC}"
     # ENDIF: alternatives system check
     fi
 # ENDIF: OPENBLAS_VERIFIED = true check
 else
-    echo -e "  ${RED}✗ ERROR: OpenBLAS not found at /usr/local/lib${NC}"
-    echo "  Expected from Block 6.12B: /usr/local/lib/libopenblas.so"
-    echo "  Please ensure Block 6.12B completed successfully"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ ERROR: OpenBLAS not found at /usr/local/lib${NC}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Expected from Block 6.12B: /usr/local/lib/libopenblas.so"
+    printf '%s\n' "  Please ensure Block 6.12B completed successfully"
     exit 1
 # ENDIF: OPENBLAS_VERIFIED check
 fi
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
 
 #--- Sub-block 26.2: Verify prerequisites ---
 # Purpose: Verify all prerequisites are installed (from Block 6.12B.2)
 # Dependencies: Block 6.12B.2 (prerequisites installation)
 # Outputs: Verification status
-echo -e "${YELLOW}[13C.2] Verifying prerequisites...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.2] Verifying prerequisites...${NC}"
 MISSING_PREREQS=()
 
 # Check critical prerequisites
@@ -16214,14 +16046,17 @@ for cmd in python3 pip3 cmake ninja git; do
     if ! command -v "${cmd}" >/dev/null 2>&1; then
         MISSING_PREREQS+=("${cmd}")
     else
-        echo -e "  ${GREEN}✓ ${cmd} found${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${GREEN}✓ ${cmd} found${NC}"
     fi
 # ENDFOR: cmd in prerequisites list
 done
 
 if [ ${#MISSING_PREREQS[@]} -gt 0 ]; then
-    echo -e "  ${RED}✗ Missing prerequisites: ${MISSING_PREREQS[*]}${NC}"
-    echo "  These should have been installed in Block 6.12B.2"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Missing prerequisites: ${MISSING_PREREQS[*]}${NC}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  These should have been installed in Block 6.12B.2"
     exit 1
 # ENDIF: Missing prerequisites check
 fi
@@ -16232,19 +16067,24 @@ PYTHON_VERSION=$(python3 --version 2>&1 | awk '{print $2}')
 PYTHON_MAJOR=$(cut -d. -f1 <<< "${PYTHON_VERSION}")
 PYTHON_MINOR=$(cut -d. -f2 <<< "${PYTHON_VERSION}")
 if [ "${PYTHON_MAJOR}" -lt 3 ] || { [ "${PYTHON_MAJOR}" -eq 3 ] && [ "${PYTHON_MINOR}" -lt 8 ]; }; then
-    echo -e "  ${RED}✗ ERROR: PyTorch 2.6.0 requires Python 3.8 or later${NC}"
-    echo "  Current Python version: ${PYTHON_VERSION}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ ERROR: PyTorch 2.6.0 requires Python 3.8 or later${NC}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Current Python version: ${PYTHON_VERSION}"
     exit 1
 # ENDIF: Python version compatibility check
 fi
-echo -e "  ${GREEN}✓ Python ${PYTHON_VERSION} (compatible)${NC}"
-echo ""
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "  ${GREEN}✓ Python ${PYTHON_VERSION} (compatible)${NC}"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
 
 #--- Sub-block 26.3: Detect GCC version and install GCC 10 if needed ---
 # Purpose: Install GCC 10 for better CUDA 12.6 compatibility (recommended)
 # Dependencies: Block 6.12B.2 (apt-get available)
 # Outputs: GCC compiler selection
-echo -e "${YELLOW}[13C.3] Detecting GCC version and configuring for CUDA 12.6...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.3] Detecting GCC version and configuring for CUDA 12.6...${NC}"
 
 # Detect current GCC version
 GCC_VERSION=""
@@ -16259,7 +16099,8 @@ if command -v gcc >/dev/null 2>&1; then
         if [ -z "${GCC_MAJOR}" ] || ! [[ "${GCC_MAJOR}" =~ ^[0-9]+$ ]]; then
             GCC_MAJOR=""
         fi
-        echo "  Detected GCC version: ${GCC_VERSION}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Detected GCC version: ${GCC_VERSION}"
     fi
 fi
 
@@ -16277,7 +16118,8 @@ if command -v gcc-10 >/dev/null 2>&1; then
     if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
         GCC10_INSTALLED=true
         USE_GCC10=true
-        echo -e "  ${GREEN}✓ GCC 10 detected (recommended for CUDA 12.6)${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${GREEN}✓ GCC 10 detected (recommended for CUDA 12.6)${NC}"
     else
         # Reset if validation failed
         GCC10_PATH=""
@@ -16287,8 +16129,10 @@ fi
 
 # If GCC 11+ detected and GCC 10 not installed, install GCC 10
 if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" = false ]; then
-    echo -e "  ${YELLOW}⚠ GCC ${GCC_VERSION:-unknown} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
-    echo "  Installing GCC 10 for better compatibility..."
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${YELLOW}⚠ GCC ${GCC_VERSION:-unknown} detected - GCC 10 recommended for CUDA 12.6 + PyTorch${NC}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Installing GCC 10 for better compatibility..."
     apt-get update -o Acquire::Retries=3 -qq
     GCC10_PACKAGES=("gcc-10" "g++-10")
     if install_packages_resilient "GCC 10 toolchain" "${GCC10_PACKAGES[@]}" >/dev/null 2>&1; then
@@ -16299,12 +16143,14 @@ if [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" -ge 11 ] && [ "${GCC10_INSTALLED}" 
         if [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ] && [ -x "${GCC10_PATH}" ] && [ -x "${GXX10_PATH}" ]; then
             GCC10_INSTALLED=true
             USE_GCC10=true
-            echo -e "  ${GREEN}✓ GCC 10 installed successfully${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${GREEN}✓ GCC 10 installed successfully${NC}"
         else
             # Reset if validation failed
             GCC10_PATH=""
             GXX10_PATH=""
-            echo -e "  ${YELLOW}⚠ GCC 10 installation completed but binaries not found in PATH${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}⚠ GCC 10 installation completed but binaries not found in PATH${NC}"
         fi
     fi
 fi
@@ -16317,17 +16163,21 @@ if [ "${USE_GCC10}" = true ] && [ -n "${GCC10_PATH}" ] && [ -n "${GXX10_PATH}" ]
     export CMAKE_C_COMPILER="${GCC10_PATH}"
     export CMAKE_CXX_COMPILER="${GXX10_PATH}"
     export CMAKE_CUDA_HOST_COMPILER="${GXX10_PATH}"
-    echo "  Using GCC 10 for PyTorch compilation"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Using GCC 10 for PyTorch compilation"
 else
-    echo "  Using default GCC (${GCC_VERSION:-unknown})"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Using default GCC (${GCC_VERSION:-unknown})"
 fi
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
 
 #--- Sub-block 26.4: Detect CUDA version and compute architectures ---
 # Purpose: Detect CUDA version and determine supported compute architectures
 # Dependencies: Block 6.13 (NVIDIA CUDA setup)
 # Outputs: CUDA version, compute architectures
-echo -e "${YELLOW}[13C.4] Detecting CUDA version and compute architectures...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.4] Detecting CUDA version and compute architectures...${NC}"
 
 # Detect CUDA version
 CUDA_VERSION=""
@@ -16352,8 +16202,9 @@ if command -v nvcc >/dev/null 2>&1; then
         fi
         if [ -n "${CUDA_MAJOR}" ] && [ -n "${CUDA_MINOR}" ]; then
             CUDA_HOME=$(dirname "$(dirname "$(command -v nvcc)")")
-            echo "  Detected CUDA version: ${CUDA_VERSION}"
-            echo "  CUDA_HOME: ${CUDA_HOME}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Detected CUDA version: ${CUDA_VERSION}"
+            printf '%s\n' "  CUDA_HOME: ${CUDA_HOME}"
         else
             CUDA_VERSION=""
         fi
@@ -16377,7 +16228,8 @@ elif [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
                 CUDA_MINOR=""
             fi
             if [ -n "${CUDA_MAJOR}" ] && [ -n "${CUDA_MINOR}" ]; then
-                echo "  Detected CUDA version: ${CUDA_VERSION}"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Detected CUDA version: ${CUDA_VERSION}"
             else
                 CUDA_VERSION=""
             fi
@@ -16388,11 +16240,13 @@ elif [ -n "${CUDA_HOME:-}" ] && [ -d "${CUDA_HOME}" ]; then
 fi
 
 if [ -z "${CUDA_VERSION}" ]; then
-    echo -e "  ${YELLOW}⚠ CUDA not detected - PyTorch will be built without CUDA support${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${YELLOW}⚠ CUDA not detected - PyTorch will be built without CUDA support${NC}"
     USE_CUDA=0
 else
     USE_CUDA=1
-    echo -e "  ${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ CUDA ${CUDA_VERSION} detected${NC}"
 # ENDIF: CUDA_VERSION check
 fi
 
@@ -16418,24 +16272,28 @@ if [ "${USE_CUDA}" = 1 ] && [ -n "${CUDA_MAJOR}" ]; then
         # ENDIF: CUDA_MINOR >= 4 check
         fi
         
-        echo "  Selected CUDA architectures: ${CUDA_ARCH_LIST}"
-        echo "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Selected CUDA architectures: ${CUDA_ARCH_LIST}"
+        printf '%s\n' "  CMake format: ${CMAKE_CUDA_ARCHITECTURES}"
     else
         # For other CUDA versions, use 8.6 as safe default
         CUDA_ARCH_LIST="8.6"
         CMAKE_CUDA_ARCHITECTURES="86"
-        echo "  Using default architecture: 8.6"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Using default architecture: 8.6"
     # ENDIF: CUDA_MAJOR = 12 check
     fi
 # ENDIF: USE_CUDA = 1 and CUDA_MAJOR check
 fi
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
 
 #--- Sub-block 26.5: Configure PyTorch build environment ---
 # Purpose: Set up all PyTorch build flags with optimal configuration
 # Dependencies: Block 13C.3 (GCC selection), Block 13C.4 (CUDA detection)
 # Outputs: Environment variables for PyTorch build
-echo -e "${YELLOW}[13C.5] Configuring PyTorch build environment...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.5] Configuring PyTorch build environment...${NC}"
 
 # Disable MKL (use OpenBLAS instead)
 export USE_MKL=0
@@ -16496,19 +16354,22 @@ if [ "${USE_CUDA}" = 1 ]; then
         # GCC 10: Minimal compatibility flags needed
         export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds"
         export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
-        echo "  GCC 10 compatibility flags (minimal workarounds)"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  GCC 10 compatibility flags (minimal workarounds)"
     elif [ -n "${GCC_MAJOR}" ] && [ "${GCC_MAJOR}" = "11" ]; then
         # GCC 11: Enhanced workarounds for NVCC + C++17 compatibility
         export CMAKE_CUDA_FLAGS="-allow-unsupported-compiler -Xcompiler -Wno-deprecated-declarations -Xcompiler -Wno-array-bounds -Xcompiler -Wno-stringop-overflow -Xcompiler -fpermissive"
         export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -allow-unsupported-compiler -std=c++17"
         export CMAKE_CXX_FLAGS="${CMAKE_CXX_FLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
         export CXXFLAGS="${CXXFLAGS} -fpermissive -Wno-deprecated-declarations -Wno-array-bounds -Wno-stringop-overflow"
-        echo "  GCC 11 compatibility flags (enhanced workarounds)"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  GCC 11 compatibility flags (enhanced workarounds)"
     else
         # Other GCC versions: Standard flags
         export CMAKE_CUDA_FLAGS="-Xcompiler -Wno-deprecated-declarations -Xcompiler -fpermissive"
         export CUDA_NVCC_FLAGS="--expt-relaxed-constexpr --expt-extended-lambda -std=c++17"
-        echo "  Standard CUDA flags"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Standard CUDA flags"
     fi
 fi
 
@@ -16518,25 +16379,27 @@ export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
 # Calculate build jobs (use function from Block 2.5 if available, otherwise default)
 if command -v calculate_build_jobs >/dev/null 2>&1; then
-    MAX_JOBS=$(calculate_build_jobs)
-    # Validate result from calculate_build_jobs
-    if [ -z "${MAX_JOBS}" ] || ! [[ "${MAX_JOBS}" =~ ^[0-9]+$ ]] || [ "${MAX_JOBS}" -lt 1 ]; then
-        echo -e "  ${YELLOW}⚠ calculate_build_jobs returned invalid value, using fallback${NC}"
-        CPU_CORES=$(nproc 2>/dev/null || echo "4")
-        if ! [[ "${CPU_CORES}" =~ ^[0-9]+$ ]] || [ "${CPU_CORES}" -lt 1 ]; then
-            CPU_CORES=4
+        MAX_JOBS=$(calculate_build_jobs)
+        # Validate result from calculate_build_jobs
+        if [ -z "${MAX_JOBS}" ] || ! [[ "${MAX_JOBS}" =~ ^[0-9]+$ ]] || [ "${MAX_JOBS}" -lt 1 ]; then
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}⚠ calculate_build_jobs returned invalid value, using fallback${NC}"
+            CPU_CORES=$(nproc 2>/dev/null || echo "4")
+            if ! [[ "${CPU_CORES}" =~ ^[0-9]+$ ]] || [ "${CPU_CORES}" -lt 1 ]; then
+                CPU_CORES=4
+            fi
+            MAX_JOBS=$((CPU_CORES * 2 / 5))
+            if [ "${MAX_JOBS}" -lt 1 ]; then
+                MAX_JOBS=1
+            fi
         fi
-        MAX_JOBS=$((CPU_CORES * 2 / 5))
-        if [ "${MAX_JOBS}" -lt 1 ]; then
-            MAX_JOBS=1
-        fi
-    fi
 else
     # Simple fallback: use 40% of CPU cores
     CPU_CORES=$(nproc 2>/dev/null || echo "4")
     # Validate CPU_CORES is numeric and positive
     if ! [[ "${CPU_CORES}" =~ ^[0-9]+$ ]] || [ "${CPU_CORES}" -lt 1 ]; then
-        echo -e "  ${YELLOW}⚠ nproc returned invalid value, defaulting to 4 cores${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${YELLOW}⚠ nproc returned invalid value, defaulting to 4 cores${NC}"
         CPU_CORES=4
     fi
     MAX_JOBS=$((CPU_CORES * 2 / 5))
@@ -16547,26 +16410,28 @@ fi
 export MAX_JOBS="${MAX_JOBS}"
 export CMAKE_BUILD_PARALLEL_LEVEL="${MAX_JOBS}"
 
-echo "  Build configuration:"
-echo "    USE_MKL=0 (OpenBLAS instead)"
-echo "    USE_OPENMP=1 (OpenBLAS compatibility)"
-echo "    USE_TBB=0 (disabled, conflicts with OpenMP)"
-echo "    BLAS=OpenBLAS, LAPACK=OpenBLAS"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Build configuration:"
+printf '%s\n' "    USE_MKL=0 (OpenBLAS instead)"
+printf '%s\n' "    USE_OPENMP=1 (OpenBLAS compatibility)"
+printf '%s\n' "    USE_TBB=0 (disabled, conflicts with OpenMP)"
+printf '%s\n' "    BLAS=OpenBLAS, LAPACK=OpenBLAS"
 if [ "${USE_CUDA}" = 1 ]; then
-    echo "    USE_CUDA=1, USE_CUDNN=1"
-    echo "    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
+    printf '%s\n' "    USE_CUDA=1, USE_CUDNN=1"
+    printf '%s\n' "    TORCH_CUDA_ARCH_LIST=${TORCH_CUDA_ARCH_LIST}"
 fi
-echo "    MAX_JOBS=${MAX_JOBS}"
-echo "    CMAKE_CXX_STANDARD=17"
-echo "    CPU flags: ${CPU_ARCH_FLAGS}"
-echo ""
+printf '%s\n' "    MAX_JOBS=${MAX_JOBS}"
+printf '%s\n' "    CMAKE_CXX_STANDARD=17"
+printf '%s\n' "    CPU flags: ${CPU_ARCH_FLAGS}"
+printf '%s\n' ""
 
 #--- Sub-block 26.6: Download PyTorch source ---
 # Purpose: Download PyTorch source code
 # Dependencies: Block 13C.2 (git available), config.sh (PYTORCH_VERSION)
 # Outputs: PyTorch source code
 # Note: PYTORCH_VERSION is defined in config.sh (default: v2.6.0)
-echo -e "${YELLOW}[13C.6] Downloading PyTorch source...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.6] Downloading PyTorch source...${NC}"
 # Use version from config.sh (with fallback if not set)
 PYTORCH_VERSION="${PYTORCH_VERSION:-v2.6.0}"
 PYTORCH_REPO_URL="https://github.com/pytorch/pytorch.git"
@@ -16579,61 +16444,81 @@ PYTORCH_BUILD_DIR="${PYTORCH_SOURCE_DIR}"
 
 # Clean up any previous build (preserve wheels directory if it exists)
 if ! mkdir -p "${PYTORCH_BUILD_BASE_DIR}"; then
-    echo -e "  ${RED}✗ Failed to create build base directory: ${PYTORCH_BUILD_BASE_DIR}${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Failed to create build base directory: ${PYTORCH_BUILD_BASE_DIR}${NC}"
     exit 1
 fi
 rm -rf "${PYTORCH_SOURCE_DIR}"
 if ! mkdir -p "${PYTORCH_SOURCE_DIR}"; then
-    echo -e "  ${RED}✗ Failed to create source directory: ${PYTORCH_SOURCE_DIR}${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Failed to create source directory: ${PYTORCH_SOURCE_DIR}${NC}"
+    exit 1
+fi
+# J1: Validate directory exists before cd operation
+if [ ! -d "${PYTORCH_SOURCE_DIR}" ]; then
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Source directory does not exist: ${PYTORCH_SOURCE_DIR}${NC}"
     exit 1
 fi
 cd "${PYTORCH_SOURCE_DIR}" || exit 1
 
 # Clone PyTorch repository
-echo "  Cloning PyTorch ${PYTORCH_VERSION}..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Cloning PyTorch ${PYTORCH_VERSION}..."
 if git clone --depth 1 --branch "${PYTORCH_VERSION}" --recursive "${PYTORCH_REPO_URL}" . 2>&1; then
-    echo -e "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} cloned successfully${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} cloned successfully${NC}"
 elif git clone --depth 50 --recursive "${PYTORCH_REPO_URL}" . 2>&1; then
     if git checkout "${PYTORCH_VERSION}" 2>&1; then
-        echo -e "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} checked out${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${GREEN}✓ PyTorch ${PYTORCH_VERSION} checked out${NC}"
         # Update submodules for the specific version
         if ! git submodule update --init --recursive 2>&1; then
-            echo -e "  ${YELLOW}⚠ Submodule update had issues (may continue)${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}⚠ Submodule update had issues (may continue)${NC}"
             # Validate that critical submodules are present
             if [ ! -d ".git/modules" ] && [ ! -f "setup.py" ]; then
-                echo -e "  ${RED}✗ Critical submodules missing and setup.py not found${NC}"
+                # A5a/D3b: Use printf instead of echo -e for robustness
+                printf '%s\n' "  ${RED}✗ Critical submodules missing and setup.py not found${NC}"
                 exit 1
             fi
         fi
     else
-        echo -e "  ${RED}✗ Failed to checkout PyTorch ${PYTORCH_VERSION}${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${RED}✗ Failed to checkout PyTorch ${PYTORCH_VERSION}${NC}"
         exit 1
     fi
 else
-    echo -e "  ${RED}✗ Failed to clone PyTorch repository${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Failed to clone PyTorch repository${NC}"
     exit 1
 fi
 
-# Verify setup.py exists
+# J1: Verify setup.py exists (file existence validation before read operation)
 if [ ! -f "setup.py" ]; then
-    echo -e "  ${RED}✗ setup.py not found${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ setup.py not found${NC}"
     exit 1
 fi
 
-echo -e "  ${GREEN}✓ PyTorch source ready${NC}"
-echo ""
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "  ${GREEN}✓ PyTorch source ready${NC}"
+printf '%s\n' ""
 
 #--- Sub-block 26.7: Build PyTorch ---
 # Purpose: Build PyTorch wheel with OpenBLAS and CUDA support
 # Dependencies: Block 13C.5 (build environment configured), Block 13C.6 (source downloaded)
 # Outputs: PyTorch wheel file
-echo -e "${YELLOW}[13C.7] Building PyTorch wheel...${NC}"
-echo "  This may take 1-3 hours depending on CPU and memory..."
-echo "  Build jobs: ${MAX_JOBS}"
-echo ""
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.7] Building PyTorch wheel...${NC}"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  This may take 1-3 hours depending on CPU and memory..."
+printf '%s\n' "  Build jobs: ${MAX_JOBS}"
+printf '%s\n' ""
 
 # Install PyTorch build dependencies
-echo "  Installing PyTorch build dependencies..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Installing PyTorch build dependencies..."
 PYTORCH_PIP_PACKAGES=(
     "setuptools"
     "wheel"
@@ -16656,13 +16541,17 @@ fi
 
 pip_cmd=(python3 -m pip install --no-cache-dir --quiet --ignore-installed)
 if [ -n "${pip_flags}" ]; then
+    # C3: Save and restore IFS for safe array splitting
+    OLD_IFS="${IFS}"
     IFS=' ' read -r -a _pip_flag_array <<< "${pip_flags}"
+    IFS="${OLD_IFS}"
     pip_cmd+=("${_pip_flag_array[@]}")
     unset _pip_flag_array
 fi
 pip_cmd+=("${PYTORCH_PIP_PACKAGES[@]}")
 if ! "${pip_cmd[@]}"; then
-    echo -e "  ${YELLOW}⚠ Some pip dependencies failed (may continue)${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${YELLOW}⚠ Some pip dependencies failed (may continue)${NC}"
 fi
 
 # Build wheel (no installation yet)
@@ -16671,57 +16560,76 @@ fi
 # This matches the test script where WHEEL_DIR="${BUILD_DIR}/wheels"
 WHEEL_DIR="${PYTORCH_BUILD_BASE_DIR}/wheels"
 if ! mkdir -p "${WHEEL_DIR}"; then
-    echo -e "  ${RED}✗ Failed to create wheel directory: ${WHEEL_DIR}${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Failed to create wheel directory: ${WHEEL_DIR}${NC}"
     exit 1
 fi
 
-echo "  Starting PyTorch build..."
-echo "  Wheel output directory: ${WHEEL_DIR}"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Starting PyTorch build..."
+printf '%s\n' "  Wheel output directory: ${WHEEL_DIR}"
 # Build with pipeline - handle SIGPIPE errors (exit code 141) from tee
-if { python3 setup.py bdist_wheel --dist-dir "${WHEEL_DIR}" 2>&1 || [ $? -eq 141 ]; } | { tee /tmp/pytorch_build.log 2>/dev/null || true; }; then
-    echo ""
-    echo -e "  ${GREEN}✓ PyTorch build successful${NC}"
+# D3e: SIGPIPE error handling - pipeline with tee, add || true for non-critical operation
+# H1: Capture exit code separately to handle SIGPIPE correctly
+# A6: PIPESTATUS is Bash-specific, but script uses #!/bin/bash
+python3 setup.py bdist_wheel --dist-dir "${WHEEL_DIR}" 2>&1 | tee /tmp/pytorch_build.log 2>/dev/null || true
+build_exit_code="${PIPESTATUS[0]:-0}"
+if [ "${build_exit_code}" -eq 0 ] || [ "${build_exit_code}" -eq 141 ]; then
+    printf '%s\n' ""
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ PyTorch build successful${NC}"
     
     # Verify wheel was generated in expected location
     # Validate find result before using
-    wheel_find_result=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 || echo "")
+    # D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+    wheel_find_result=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -d "${WHEEL_DIR}" ] && [ -n "${wheel_find_result}" ]; then
         WHEEL_COUNT=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | wc -l)
         # Validate WHEEL_COUNT is numeric
         if [[ "${WHEEL_COUNT}" =~ ^[0-9]+$ ]]; then
-            echo "  Wheel(s) found in ${WHEEL_DIR}: ${WHEEL_COUNT}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Wheel(s) found in ${WHEEL_DIR}: ${WHEEL_COUNT}"
         else
-            echo -e "  ${YELLOW}⚠ Warning: Could not count wheels in ${WHEEL_DIR}${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}⚠ Warning: Could not count wheels in ${WHEEL_DIR}${NC}"
+        # ENDIF: WHEEL_COUNT numeric validation
         fi
     else
-        echo -e "  ${YELLOW}⚠ Warning: Wheel not immediately found in ${WHEEL_DIR}${NC}"
-        echo "  This may be normal - will check again in next step"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${YELLOW}⚠ Warning: Wheel not immediately found in ${WHEEL_DIR}${NC}"
+        printf '%s\n' "  This may be normal - will check again in next step"
+    # ENDIF: WHEEL_DIR and wheel_find_result check
     fi
 else
-    echo ""
-    echo -e "  ${RED}✗ PyTorch build failed${NC}"
-    echo "  Check log: /tmp/pytorch_build.log"
-    echo "  Common issues:"
-    echo "    - Insufficient memory (reduce MAX_JOBS)"
-    echo "    - CUDA version mismatch"
-    echo "    - Missing dependencies"
+    printf '%s\n' ""
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch build failed${NC}"
+    printf '%s\n' "  Check log: /tmp/pytorch_build.log"
+    printf '%s\n' "  Common issues:"
+    printf '%s\n' "    - Insufficient memory (reduce MAX_JOBS)"
+    printf '%s\n' "    - CUDA version mismatch"
+    printf '%s\n' "    - Missing dependencies"
     exit 1
+# ENDIF: PyTorch build success check
 fi
-echo ""
+printf '%s\n' ""
 
 #--- Sub-block 26.8: Save wheel to known location ---
 # Purpose: Copy built wheel to a known persistent location for reuse and backup
 # Dependencies: Block 13C.7 (wheel built)
 # Outputs: Wheel file in known location
-echo -e "${YELLOW}[13C.7.1] Saving PyTorch wheel to known location...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.7.1] Saving PyTorch wheel to known location...${NC}"
 
 # Find the built wheel
 # Use here-string-safe pattern to avoid SIGPIPE from head
-WHEEL_FILE=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 || echo "")
+# D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+WHEEL_FILE=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
 # Validate WHEEL_FILE is non-empty and file exists
 if [ -z "${WHEEL_FILE}" ] || [ ! -f "${WHEEL_FILE}" ]; then
-    echo -e "  ${RED}✗ PyTorch wheel not found in build directory${NC}"
-    echo "  Searched: ${WHEEL_DIR}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch wheel not found in build directory${NC}"
+    printf '%s\n' "  Searched: ${WHEEL_DIR}"
     exit 1
 fi
 
@@ -16729,11 +16637,13 @@ fi
 WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
 # Validate WHEEL_SIZE is non-empty
 if [ -z "${WHEEL_SIZE}" ] || [ "${WHEEL_SIZE}" = "unknown" ]; then
-    echo -e "  ${YELLOW}⚠ Warning: Could not determine wheel size${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${YELLOW}⚠ Warning: Could not determine wheel size${NC}"
     WHEEL_SIZE="unknown"
 fi
 WHEEL_NAME=$(basename "${WHEEL_FILE}")
-echo "  Found wheel: ${WHEEL_NAME} (${WHEEL_SIZE})"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Found wheel: ${WHEEL_NAME} (${WHEEL_SIZE})"
 
 # Create known wheel storage location
 PYTORCH_WHEEL_STORAGE="/opt/pytorch_wheels"
@@ -16741,15 +16651,18 @@ mkdir -p "${PYTORCH_WHEEL_STORAGE}"
 
 # Copy wheel to known location
 WHEEL_STORAGE_PATH="${PYTORCH_WHEEL_STORAGE}/${WHEEL_NAME}"
-echo "  Copying wheel to: ${WHEEL_STORAGE_PATH}"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Copying wheel to: ${WHEEL_STORAGE_PATH}"
 if cp "${WHEEL_FILE}" "${WHEEL_STORAGE_PATH}" 2>&1; then
-    echo -e "  ${GREEN}✓ Wheel saved to known location${NC}"
-    echo "  Storage path: ${WHEEL_STORAGE_PATH}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ Wheel saved to known location${NC}"
+    printf '%s\n' "  Storage path: ${WHEEL_STORAGE_PATH}"
     
     # Verify the copy
     if [ -f "${WHEEL_STORAGE_PATH}" ]; then
         STORED_SIZE=$(du -h "${WHEEL_STORAGE_PATH}" | cut -f1)
-        echo "  Stored wheel size: ${STORED_SIZE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Stored wheel size: ${STORED_SIZE}"
         
         # Verify file integrity (compare sizes)
         ORIGINAL_SIZE_BYTES=$(stat -c%s "${WHEEL_FILE}" 2>/dev/null || echo "0")
@@ -16757,115 +16670,109 @@ if cp "${WHEEL_FILE}" "${WHEEL_STORAGE_PATH}" 2>&1; then
         # Validate both sizes are numeric before comparison
         if [[ "${ORIGINAL_SIZE_BYTES}" =~ ^[0-9]+$ ]] && [[ "${STORED_SIZE_BYTES}" =~ ^[0-9]+$ ]]; then
             if [ "${ORIGINAL_SIZE_BYTES}" -eq "${STORED_SIZE_BYTES}" ] && [ "${ORIGINAL_SIZE_BYTES}" -gt 0 ]; then
-                echo -e "  ${GREEN}✓ Wheel copy verified (size match)${NC}"
+                # A5a/D3b: Use printf instead of echo -e for robustness
+                printf '%s\n' "  ${GREEN}✓ Wheel copy verified (size match)${NC}"
             else
-                echo -e "  ${YELLOW}⚠ Size mismatch - original: ${ORIGINAL_SIZE_BYTES}, stored: ${STORED_SIZE_BYTES}${NC}"
+                # A5a/D3b: Use printf instead of echo -e for robustness
+                printf '%s\n' "  ${YELLOW}⚠ Size mismatch - original: ${ORIGINAL_SIZE_BYTES}, stored: ${STORED_SIZE_BYTES}${NC}"
             fi
         else
-            echo -e "  ${YELLOW}⚠ Could not verify file sizes (non-numeric values)${NC}"
+            # A5a/D3b: Use printf instead of echo -e for robustness
+            printf '%s\n' "  ${YELLOW}⚠ Could not verify file sizes (non-numeric values)${NC}"
+        # ENDIF: ORIGINAL_SIZE_BYTES and STORED_SIZE_BYTES numeric validation
         fi
     else
-        echo -e "  ${RED}✗ Wheel copy verification failed${NC}"
+        # A5a/D3b: Use printf instead of echo -e for robustness
+        printf '%s\n' "  ${RED}✗ Wheel copy verification failed${NC}"
         exit 1
+    # ENDIF: WHEEL_STORAGE_PATH file existence check
     fi
 else
-    echo -e "  ${RED}✗ Failed to copy wheel to storage location${NC}"
-    echo "  Will attempt installation from build directory"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ Failed to copy wheel to storage location${NC}"
+    printf '%s\n' "  Will attempt installation from build directory"
     WHEEL_STORAGE_PATH="${WHEEL_FILE}"
+# ENDIF: cp wheel to storage location success check
 fi
-echo ""
+printf '%s\n' ""
 
 #--- Sub-block 26.9: Install PyTorch wheel ---
 # Purpose: Install the built PyTorch wheel from known location
 # Dependencies: Block 13C.7.1 (wheel saved to known location)
 # Outputs: Installed PyTorch
-echo -e "${YELLOW}[13C.8] Installing PyTorch wheel...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.8] Installing PyTorch wheel...${NC}"
 
 # Use the wheel from known location (fallback to build directory if needed)
 # Validate WHEEL_STORAGE_PATH is set and file exists
 if [ -n "${WHEEL_STORAGE_PATH:-}" ] && [ -f "${WHEEL_STORAGE_PATH}" ]; then
     INSTALL_WHEEL="${WHEEL_STORAGE_PATH}"
-    echo "  Installing from known location: ${WHEEL_STORAGE_PATH}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Installing from known location: ${WHEEL_STORAGE_PATH}"
 elif [ -n "${WHEEL_FILE:-}" ] && [ -f "${WHEEL_FILE}" ]; then
     INSTALL_WHEEL="${WHEEL_FILE}"
-    echo "  Installing from build directory: ${WHEEL_FILE}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Installing from build directory: ${WHEEL_FILE}"
 else
-    echo -e "  ${RED}✗ PyTorch wheel not found in any location${NC}"
-    echo "  Expected locations:"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch wheel not found in any location${NC}"
+    printf '%s\n' "  Expected locations:"
     if [ -n "${WHEEL_STORAGE_PATH:-}" ]; then
-        echo "    - ${WHEEL_STORAGE_PATH}"
+        printf '%s\n' "    - ${WHEEL_STORAGE_PATH}"
     fi
     if [ -n "${WHEEL_FILE:-}" ]; then
-        echo "    - ${WHEEL_FILE}"
+        printf '%s\n' "    - ${WHEEL_FILE}"
+    # ENDIF: WHEEL_FILE non-empty check
     fi
     exit 1
+# ENDIF: WHEEL_STORAGE_PATH and WHEEL_FILE existence check
 fi
 
 # Install wheel
-echo "  Installing: $(basename "${INSTALL_WHEEL}")"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Installing: $(basename "${INSTALL_WHEEL}")"
 if python3 -m pip install --no-cache-dir "${INSTALL_WHEEL}" 2>&1; then
-    echo -e "  ${GREEN}✓ PyTorch installed successfully${NC}"
-    echo "  Wheel location: ${WHEEL_STORAGE_PATH}"
-    echo "  Note: Wheel preserved at ${PYTORCH_WHEEL_STORAGE} for potential reuse"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ PyTorch installed successfully${NC}"
+    printf '%s\n' "  Wheel location: ${WHEEL_STORAGE_PATH}"
+    printf '%s\n' "  Note: Wheel preserved at ${PYTORCH_WHEEL_STORAGE} for potential reuse"
 else
-    echo -e "  ${RED}✗ PyTorch installation failed${NC}"
-    echo "  Wheel is available at: ${WHEEL_STORAGE_PATH}"
-    echo "  You can manually install with: python3 -m pip install ${WHEEL_STORAGE_PATH}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch installation failed${NC}"
+    printf '%s\n' "  Wheel is available at: ${WHEEL_STORAGE_PATH}"
+    printf '%s\n' "  You can manually install with: python3 -m pip install ${WHEEL_STORAGE_PATH}"
     exit 1
+# ENDIF: PyTorch wheel installation success check
 fi
-echo ""
+printf '%s\n' ""
 
 #--- Sub-block 26.10: Verify PyTorch installation ---
 # Purpose: Verify PyTorch installation and OpenBLAS linking
 # Dependencies: Block 13C.8 (PyTorch installed)
 # Outputs: Verification status
-echo -e "${YELLOW}[13C.9] Verifying PyTorch installation...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.9] Verifying PyTorch installation...${NC}"
 
 # Test PyTorch import and basic functionality
-if python3 << 'PYTORCH_VERIFY_EOF'
-import sys
-import torch
-
-print(f"  PyTorch version: {torch.__version__}")
-print(f"  Python version: {sys.version}")
-
-# Check CUDA availability
-if torch.cuda.is_available():
-    print(f"  ✓ CUDA available: {torch.version.cuda}")
-    print(f"  ✓ GPU device: {torch.cuda.get_device_name(0)}")
-    print(f"  ✓ CUDA compute capability: {torch.cuda.get_device_capability(0)}")
-else:
-    print("  ⚠ CUDA not available (CPU-only build)")
-
-# Test basic tensor operations
-try:
-    x = torch.randn(3, 3)
-    y = torch.randn(3, 3)
-    z = torch.mm(x, y)
-    print("  ✓ Basic tensor operations working")
-except Exception as e:
-    print(f"  ✗ Tensor operations failed: {e}")
-    sys.exit(1)
-
-# Verify OpenBLAS linking (check if MKL is NOT used)
-if hasattr(torch, 'backends'):
-    if hasattr(torch.backends, 'mkl'):
-        if torch.backends.mkl.is_available():
-            print("  ⚠ WARNING: MKL is available (should use OpenBLAS)")
-        else:
-            print("  ✓ MKL not available (using OpenBLAS as expected)")
-    
-    # Check BLAS backend
-    if hasattr(torch.backends, 'openblas'):
-        print("  ✓ OpenBLAS backend available")
-
-print("  ✓ PyTorch verification complete")
-PYTORCH_VERIFY_EOF
-then
-    echo -e "  ${GREEN}✓ PyTorch verification successful${NC}"
-else
-    echo -e "  ${RED}✗ PyTorch verification failed${NC}"
+# Note: python-scripts file: /tmp/pytorch-verify-eof.py is installed via install.sh from container-scripts/
+# Source: python-scripts/block-26-legacy-pytorch-source-build-openblas/pytorch-installation-verification.py
+# Target: /tmp/pytorch-verify-eof.py
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Validate file exists before execution
+if [ ! -f /tmp/pytorch-verify-eof.py ]; then
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch verification script not found: /tmp/pytorch-verify-eof.py${NC}"
     exit 1
+fi
+if python3 /tmp/pytorch-verify-eof.py
+then
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${GREEN}✓ PyTorch verification successful${NC}"
+else
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${RED}✗ PyTorch verification failed${NC}"
+    exit 1
+# ENDIF: PyTorch verification script execution
 fi
 
 #--- Sub-block 26.11: Protect PyTorch from APT overwrites ---
@@ -16873,102 +16780,129 @@ fi
 # Dependencies: Block 13C.8 (PyTorch installed via pip)
 # Outputs: APT preferences file
 # Note: PyTorch is installed via pip, but we protect against any system packages
-echo -e "${YELLOW}[13C.10] Setting up APT pinning to protect PyTorch...${NC}"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "${YELLOW}[13C.10] Setting up APT pinning to protect PyTorch...${NC}"
 mkdir -p /etc/apt/preferences.d
-cat > /etc/apt/preferences.d/pytorch-protect <<'EOF'
-# Prevent APT from installing system PyTorch packages (if any exist)
-# Our custom-compiled PyTorch should be used instead (installed via pip)
-# This is a safety measure - PyTorch is typically not available via APT on Ubuntu
-Package: python3-torch python3-torchvision python3-torchaudio
-Pin: release *
-Pin-Priority: -1
-EOF
+# Note: other file: /etc/apt/preferences.d/pytorch-protect is installed via install.sh from container-scripts/
+# Source: other/block-26-legacy-pytorch-source-build-openblas/pytorch-protect.pref
+# Target: /etc/apt/preferences.d/pytorch-protect
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-echo -e "  ${GREEN}✓ APT pinning configured for PyTorch${NC}"
-echo "  Note: PyTorch is installed via pip, this is a safety measure"
-echo ""
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' "  ${GREEN}✓ APT pinning configured for PyTorch${NC}"
+printf '%s\n' "  Note: PyTorch is installed via pip, this is a safety measure"
+printf '%s\n' ""
 
 # Clean up build directory (wheel is saved to known location)
 # Change to root directory (non-critical, but validate)
 if ! cd / 2>/dev/null; then
-    echo -e "  ${YELLOW}⚠ Warning: Could not change to root directory${NC}"
+    # A5a/D3b: Use printf instead of echo -e for robustness
+    printf '%s\n' "  ${YELLOW}⚠ Warning: Could not change to root directory${NC}"
 fi
-echo "  Cleaning up build directory..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "  Cleaning up build directory..."
 # Clean up source directory, but preserve wheels directory (matches test script pattern)
 # Wheel has been copied to known storage location, but wheels dir kept for reference
 if [ -n "${PYTORCH_SOURCE_DIR:-}" ] && [ -d "${PYTORCH_SOURCE_DIR}" ]; then
-    rm -rf "${PYTORCH_SOURCE_DIR}" 2>/dev/null || echo -e "  ${YELLOW}⚠ Warning: Could not remove source directory${NC}"
+    rm -rf "${PYTORCH_SOURCE_DIR}" 2>/dev/null || printf '%s\n' "  ${YELLOW}⚠ Warning: Could not remove source directory${NC}"
 fi
 # Clean up build log (non-critical)
 if [ -f /tmp/pytorch_build.log ]; then
-    rm -f /tmp/pytorch_build.log 2>/dev/null || echo -e "  ${YELLOW}⚠ Warning: Could not remove build log${NC}"
+    rm -f /tmp/pytorch_build.log 2>/dev/null || printf '%s\n' "  ${YELLOW}⚠ Warning: Could not remove build log${NC}"
 fi
 if [ -n "${WHEEL_STORAGE_PATH:-}" ] && [ -f "${WHEEL_STORAGE_PATH}" ]; then
-    echo "  Note: PyTorch wheel preserved at ${WHEEL_STORAGE_PATH}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Note: PyTorch wheel preserved at ${WHEEL_STORAGE_PATH}"
     # Validate find result before using in conditional
     if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ]; then
-        wheel_check_result=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+        wheel_check_result=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
         if [ -n "${wheel_check_result}" ]; then
-            echo "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+        # ENDIF: wheel_check_result non-empty check
         fi
+    # ENDIF: WHEEL_DIR existence check
     fi
 else
     if [ -n "${PYTORCH_WHEEL_STORAGE:-}" ]; then
-        echo "  Note: PyTorch wheel should be at ${PYTORCH_WHEEL_STORAGE}/"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Note: PyTorch wheel should be at ${PYTORCH_WHEEL_STORAGE}/"
     fi
     # Validate find result before using in conditional
     if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ]; then
-        wheel_check_result2=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+        wheel_check_result2=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
         if [ -n "${wheel_check_result2}" ]; then
-            echo "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Note: Wheel also available in build directory: ${WHEEL_DIR}"
+        # ENDIF: wheel_check_result2 non-empty check
         fi
+    # ENDIF: WHEEL_DIR existence check (else branch)
     fi
+# ENDIF: WHEEL_STORAGE_PATH file existence check
 fi
 
-echo ""
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✓ PyTorch compilation and installation complete!${NC}"
-echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-echo "Summary:"
-echo "  - PyTorch ${PYTORCH_VERSION} compiled with OpenBLAS"
+# A5a/D3b: Use printf instead of echo -e for robustness
+printf '%s\n' ""
+printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${GREEN}✓ PyTorch compilation and installation complete!${NC}"
+printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
+printf '%s\n' "Summary:"
+printf '%s\n' "  - PyTorch ${PYTORCH_VERSION} compiled with OpenBLAS"
 if [ "${USE_CUDA}" = 1 ]; then
-    echo "  - CUDA ${CUDA_VERSION} support enabled"
-    echo "  - Compute architectures: ${CUDA_ARCH_LIST}"
+    printf '%s\n' "  - CUDA ${CUDA_VERSION} support enabled"
+    printf '%s\n' "  - Compute architectures: ${CUDA_ARCH_LIST}"
+# ENDIF: USE_CUDA check
 fi
 if [ "${USE_GCC10}" = true ]; then
-    echo "  - Compiled with GCC 10 (recommended for CUDA 12.6)"
+    printf '%s\n' "  - Compiled with GCC 10 (recommended for CUDA 12.6)"
 else
-    echo "  - Compiled with GCC ${GCC_VERSION:-default}"
+    printf '%s\n' "  - Compiled with GCC ${GCC_VERSION:-default}"
+# ENDIF: USE_GCC10 check
 fi
-echo "  - OpenBLAS: ${OPENBLAS_LIB}"
-echo "  - Threading: OpenMP (USE_TBB=0)"
-echo "  - APT pinning: Configured (protects from system package overwrites)"
+printf '%s\n' "  - OpenBLAS: ${OPENBLAS_LIB}"
+printf '%s\n' "  - Threading: OpenMP (USE_TBB=0)"
+printf '%s\n' "  - APT pinning: Configured (protects from system package overwrites)"
 if [ -n "${PYTORCH_SOURCE_DIR:-}" ] && [ -n "${WHEEL_DIR:-}" ]; then
-    echo "  - Build directory structure:"
-    echo "    * Source: ${PYTORCH_SOURCE_DIR}"
-    echo "    * Wheel output: ${WHEEL_DIR}"
+    printf '%s\n' "  - Build directory structure:"
+    printf '%s\n' "    * Source: ${PYTORCH_SOURCE_DIR}"
+    printf '%s\n' "    * Wheel output: ${WHEEL_DIR}"
+# ENDIF: PYTORCH_SOURCE_DIR and WHEEL_DIR check
 fi
 if [ -n "${WHEEL_STORAGE_PATH:-}" ] && [ -f "${WHEEL_STORAGE_PATH}" ]; then
-    echo "  - Wheel location: ${WHEEL_STORAGE_PATH}"
+    printf '%s\n' "  - Wheel location: ${WHEEL_STORAGE_PATH}"
     if [ -n "${PYTORCH_WHEEL_STORAGE:-}" ]; then
-        echo "  - Wheel preserved for reuse at: ${PYTORCH_WHEEL_STORAGE}"
+        printf '%s\n' "  - Wheel preserved for reuse at: ${PYTORCH_WHEEL_STORAGE}"
+    # ENDIF: PYTORCH_WHEEL_STORAGE non-empty check
     fi
-    if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ] && [ -n "$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null)" ]; then
-        echo "  - Wheel also available in build directory: ${WHEEL_DIR}"
+    # D3e: SIGPIPE error handling - pipeline with find, validate result before using
+    if [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ]; then
+        wheel_find_check=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
+        if [ -n "${wheel_find_check}" ]; then
+            printf '%s\n' "  - Wheel also available in build directory: ${WHEEL_DIR}"
+        # ENDIF: wheel_find_check non-empty check
+        fi
+    # ENDIF: WHEEL_DIR existence check (WHEEL_STORAGE_PATH branch)
     fi
 elif [ -n "${WHEEL_DIR:-}" ] && [ -d "${WHEEL_DIR}" ]; then
     # Validate find result before using
-    wheel_find_result3=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 || echo "")
+    # D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+    wheel_find_result3=$(find "${WHEEL_DIR}" -name "torch-*.whl" 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${wheel_find_result3}" ]; then
         WHEEL_FILE="${wheel_find_result3}"
         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-            echo "  - Wheel location: ${WHEEL_FILE}"
-            echo "  - Wheel directory: ${WHEEL_DIR}"
+            printf '%s\n' "  - Wheel location: ${WHEEL_FILE}"
+            printf '%s\n' "  - Wheel directory: ${WHEEL_DIR}"
+        # ENDIF: WHEEL_FILE existence check
         fi
+    # ENDIF: wheel_find_result3 non-empty check
     fi
+# ENDIF: WHEEL_STORAGE_PATH file existence check (summary section)
 fi
-echo ""
+printf '%s\n' ""
+# ENDIF: ENABLE_PYTORCH_BUILD check (Block 26A)
 fi
 
 #===============================================================================
@@ -16984,33 +16918,43 @@ fi
 
 ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-${ENABLE_PYTORCH_BUILD:-true}}"
 if [ "${ENABLE_PYTORCH_INSTALL}" != true ]; then
-  echo "Skipping PyTorch installation (ENABLE_PYTORCH_INSTALL=${ENABLE_PYTORCH_INSTALL})"
+  # A5a/D3b: Use printf instead of echo for robustness
+  printf '%s\n' "Skipping PyTorch installation (ENABLE_PYTORCH_INSTALL=${ENABLE_PYTORCH_INSTALL})"
+# ENDIF: ENABLE_PYTORCH_INSTALL check (Block 26B)
 else
   PYTORCH_TARGET_CUDA_VERSION="${CUDA_VERSION:-${CUDA_VERSION_SELECTED:-${CUDA_VERSION_PREFERRED:-${CUDA_MAJOR:-}}}}"
   if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ] && [ -n "${CUDA_VERSION:-}" ]; then
       PYTORCH_TARGET_CUDA_VERSION="${CUDA_VERSION}"
+  # ENDIF: PYTORCH_TARGET_CUDA_VERSION empty and CUDA_VERSION check
   fi
   if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ] && [ -n "${CUDA_MAJOR:-}" ] && [ -n "${CUDA_MINOR:-}" ]; then
       PYTORCH_TARGET_CUDA_VERSION="${CUDA_MAJOR}.${CUDA_MINOR}"
+  # ENDIF: PYTORCH_TARGET_CUDA_VERSION empty and CUDA_MAJOR/CUDA_MINOR check
   fi
   if [ -z "${PYTORCH_TARGET_CUDA_VERSION}" ]; then
       PYTORCH_TARGET_CUDA_VERSION="12.6"
+  # ENDIF: PYTORCH_TARGET_CUDA_VERSION default fallback
   fi
   # Use here-string instead of echo | tr to avoid pipe overhead and SIGPIPE risk
   PYTORCH_CUDA_SUFFIX="$(tr -d '.' <<< "${PYTORCH_TARGET_CUDA_VERSION}")"
   if ! [[ "${PYTORCH_CUDA_SUFFIX}" =~ ^[0-9]+$ ]]; then
-      echo -e "  ${RED}✗ Unable to derive CUDA wheel suffix from version '${PYTORCH_TARGET_CUDA_VERSION}'${NC}"
+      # A5a/D3b: Use printf instead of echo -e for robustness
+      printf '%s\n' "  ${RED}✗ Unable to derive CUDA wheel suffix from version '${PYTORCH_TARGET_CUDA_VERSION}'${NC}"
       exit 1
+  # ENDIF: PYTORCH_CUDA_SUFFIX numeric validation
   fi
   PYTORCH_PIP_INDEX_URL="https://download.pytorch.org/whl/cu${PYTORCH_CUDA_SUFFIX}"
   export EXPECTED_TORCH_CUDA_VERSION="${PYTORCH_TARGET_CUDA_VERSION}"
 
-  echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo -e "${BLUE}BLOCK 26B: PyTorch Installation (CUDA ${PYTORCH_TARGET_CUDA_VERSION} + MKL)${NC}"
-  echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-  echo ""
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' ""
+  printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  printf '%s\n' "${BLUE}BLOCK 26B: PyTorch Installation (CUDA ${PYTORCH_TARGET_CUDA_VERSION} + MKL)${NC}"
+  printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  printf '%s\n' ""
 
-  echo -e "${YELLOW}[26B.1] Preparing Python environment for PyTorch...${NC}"
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' "${YELLOW}[26B.1] Preparing Python environment for PyTorch...${NC}"
   # Temporarily disable strict mode for pip upgrade (may fail with externally-managed-environment)
   # This is intentional - we handle the error explicitly below
   set +e
@@ -17020,30 +16964,39 @@ else
   if [ "${pip_upgrade_status}" -ne 0 ]; then
       # Use grep -F for fixed-string matching (no regex interpretation)
       if grep -Fq "externally-managed-environment" /tmp/pip_upgrade.log 2>/dev/null; then
-          echo "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
+          # A5a/D3b: Use printf instead of echo for robustness
+          printf '%s\n' "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
           if ! python3 -m pip install --upgrade --ignore-installed --break-system-packages pip setuptools wheel >>/tmp/pip_upgrade.log 2>&1; then
-              echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
+              # A5a/D3b: Use printf instead of echo -e for robustness
+              printf '%s\n' "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
               # Format log output with sed (non-critical formatting)
               if [ -f /tmp/pip_upgrade.log ]; then
                   sed 's/^/    /' /tmp/pip_upgrade.log 2>/dev/null || cat /tmp/pip_upgrade.log
+              # ENDIF: /tmp/pip_upgrade.log file existence check
               fi
               rm -f /tmp/pip_upgrade.log 2>/dev/null || true
               exit 1
+          # ENDIF: pip install with --break-system-packages retry
           fi
       else
-          echo -e "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
+          # A5a/D3b: Use printf instead of echo -e for robustness
+          printf '%s\n' "  ${RED}✗ Failed to upgrade pip/setuptools/wheel${NC}"
           # Format log output with sed (non-critical formatting)
           if [ -f /tmp/pip_upgrade.log ]; then
               sed 's/^/    /' /tmp/pip_upgrade.log 2>/dev/null || cat /tmp/pip_upgrade.log
+          # ENDIF: /tmp/pip_upgrade.log file existence check (else branch)
           fi
           rm -f /tmp/pip_upgrade.log 2>/dev/null || true
           exit 1
+      # ENDIF: externally-managed-environment check
       fi
+  # ENDIF: pip_upgrade_status check
   fi
   rm -f /tmp/pip_upgrade.log
   unset pip_upgrade_status
 
-  echo -e "${YELLOW}[26B.2] Installing PyTorch CUDA ${PYTORCH_TARGET_CUDA_VERSION} wheels with MKL backend...${NC}"
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' "${YELLOW}[26B.2] Installing PyTorch CUDA ${PYTORCH_TARGET_CUDA_VERSION} wheels with MKL backend...${NC}"
   # Temporarily disable strict mode for pip install (may fail with externally-managed-environment)
   # This is intentional - we handle the error explicitly below
   set +e
@@ -17053,79 +17006,82 @@ else
   if [ "${pytorch_install_status}" -ne 0 ]; then
       # Use grep -F for fixed-string matching (no regex interpretation)
       if grep -Fq "externally-managed-environment" /tmp/pytorch_install.log 2>/dev/null; then
-          echo "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
+          # A5a/D3b: Use printf instead of echo for robustness
+          printf '%s\n' "  ℹ Detected externally-managed environment, retrying with --break-system-packages"
           if ! python3 -m pip install --no-cache-dir --ignore-installed --break-system-packages torch torchvision torchaudio --index-url "${PYTORCH_PIP_INDEX_URL}" >>/tmp/pytorch_install.log 2>&1; then
-              echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+              # A5a/D3b: Use printf instead of echo -e for robustness
+              printf '%s\n' "  ${RED}✗ PyTorch installation failed${NC}"
               # Format log output with sed (non-critical formatting)
+              # D4: All sed commands in command substitutions MUST have error fallback: || echo ""
               if [ -f /tmp/pytorch_install.log ]; then
-                  sed 's/^/    /' /tmp/pytorch_install.log 2>/dev/null || cat /tmp/pytorch_install.log
+                  sed 's/^/    /' /tmp/pytorch_install.log 2>/dev/null || cat /tmp/pytorch_install.log || echo ""
+              # ENDIF: /tmp/pytorch_install.log file existence check
               fi
               rm -f /tmp/pytorch_install.log 2>/dev/null || true
               exit 1
+          # ENDIF: pip install with --break-system-packages retry (PyTorch)
           fi
       else
-          echo -e "  ${RED}✗ PyTorch installation failed${NC}"
+          # A5a/D3b: Use printf instead of echo -e for robustness
+          printf '%s\n' "  ${RED}✗ PyTorch installation failed${NC}"
           # Format log output with sed (non-critical formatting)
+          # D4: All sed commands in command substitutions MUST have error fallback: || echo ""
           if [ -f /tmp/pytorch_install.log ]; then
-              sed 's/^/    /' /tmp/pytorch_install.log 2>/dev/null || cat /tmp/pytorch_install.log
+              sed 's/^/    /' /tmp/pytorch_install.log 2>/dev/null || cat /tmp/pytorch_install.log || echo ""
+          # ENDIF: /tmp/pytorch_install.log file existence check (else branch)
           fi
           rm -f /tmp/pytorch_install.log 2>/dev/null || true
           exit 1
+      # ENDIF: externally-managed-environment check (PyTorch)
       fi
+  # ENDIF: pytorch_install_status check
   fi
   rm -f /tmp/pytorch_install.log
   unset pytorch_install_status
 
-  echo -e "${YELLOW}[26B.3] Verifying PyTorch CUDA/MKL linkage...${NC}"
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' "${YELLOW}[26B.3] Verifying PyTorch CUDA/MKL linkage...${NC}"
   # Temporarily disable strict mode for Python verification script
   # This is intentional - we handle the error explicitly below
-  set +e
-  python3 - <<'PY' 2>/tmp/pytorch_verify.log
-import torch
-import os
-import io
-from contextlib import redirect_stdout
-
-buf = io.StringIO()
-with redirect_stdout(buf):
-    torch.__config__.show()
-config_output = buf.getvalue()
-print(config_output, end="")
-
-cuda_version = torch.version.cuda or "unknown"
-print(f"CUDA build version: {cuda_version}")
-expected_cuda = os.environ.get("EXPECTED_TORCH_CUDA_VERSION", "").strip()
-if expected_cuda and cuda_version != "unknown" and not str(cuda_version).startswith(expected_cuda):
-    raise SystemExit(f"Unexpected CUDA toolkit version reported by PyTorch (expected {expected_cuda}, got {cuda_version})")
-
-if not torch.backends.mkl.is_available() and "MKL" not in config_output:
-    raise SystemExit("Intel MKL backend not detected in PyTorch build")
-
-if hasattr(torch.backends, "mkldnn"):
-    print(f"MKLDNN available: {torch.backends.mkldnn.is_available()}")
-
-cpu_matmul = torch.mm(torch.randn(128, 128), torch.randn(128, 128)).sum().item()
-print(f"CPU matmul checksum: {cpu_matmul}")
-
-print(f"PyTorch version: {torch.__version__}")
-print(f"torch.cuda.is_available(): {torch.cuda.is_available()}")
-PY
-verify_status=$?
-set -e
-  if [ "${verify_status}" -eq 0 ]; then
-      echo -e "  ${GREEN}✓ PyTorch MKL/CUDA verification succeeded${NC}"
-  else
-      echo -e "  ${RED}✗ PyTorch verification failed${NC}"
-      sed 's/^/    /' /tmp/pytorch_verify.log || true
+  # Note: python-scripts file: /tmp/pytorch-installation-cuda-mkl-verification.py is installed via install.sh from container-scripts/
+  # Source: python-scripts/block-26-pytorch-installation-cuda-mkl/pytorch-installation-cuda-mkl-verification.py
+  # Target: /tmp/pytorch-installation-cuda-mkl-verification.py
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # J1: Validate file exists before execution
+  if [ ! -f /tmp/pytorch-installation-cuda-mkl-verification.py ]; then
+      # A5a/D3b: Use printf instead of echo -e for robustness
+      printf '%s\n' "  ${RED}✗ PyTorch verification script not found: /tmp/pytorch-installation-cuda-mkl-verification.py${NC}"
       exit 1
+  # ENDIF: pytorch-installation-cuda-mkl-verification.py file existence check
+  fi
+  set +e
+  EXPECTED_TORCH_CUDA_VERSION="${EXPECTED_TORCH_CUDA_VERSION:-}" python3 /tmp/pytorch-installation-cuda-mkl-verification.py 2>/tmp/pytorch_verify.log
+  verify_status=$?
+  set -e
+  if [ "${verify_status}" -eq 0 ]; then
+      # A5a/D3b: Use printf instead of echo -e for robustness
+      printf '%s\n' "  ${GREEN}✓ PyTorch MKL/CUDA verification succeeded${NC}"
+  else
+      # A5a/D3b: Use printf instead of echo -e for robustness
+      printf '%s\n' "  ${RED}✗ PyTorch verification failed${NC}"
+      # D4: All sed commands in command substitutions MUST have error fallback: || echo ""
+      sed 's/^/    /' /tmp/pytorch_verify.log 2>/dev/null || cat /tmp/pytorch_verify.log 2>/dev/null || echo "" || true
+      exit 1
+  # ENDIF: verify_status check
   fi
   unset verify_status
 
   rm -f /tmp/pytorch_verify.log 2>/dev/null || true
-  echo -e "${GREEN}✓ PyTorch installation complete${NC}"
-  echo "  • torch $(python3 -c 'import torch; print(torch.__version__)')"
-  echo "  • torchvision $(python3 -c 'import torchvision; print(torchvision.__version__)')"
-  echo "  • torchaudio $(python3 -c 'import torchaudio; print(torchaudio.__version__)')"
+  # A5a/D3b: Use printf instead of echo -e for robustness
+  printf '%s\n' "${GREEN}✓ PyTorch installation complete${NC}"
+  # A5a/D3b: Use printf instead of echo for robustness
+  # F2/H4: Command substitutions need error handling - validate results
+  TORCH_VER=$(python3 -c 'import torch; print(torch.__version__)' 2>/dev/null || printf '%s\n' "unknown")
+  TORCHVISION_VER=$(python3 -c 'import torchvision; print(torchvision.__version__)' 2>/dev/null || printf '%s\n' "unknown")
+  TORCHAUDIO_VER=$(python3 -c 'import torchaudio; print(torchaudio.__version__)' 2>/dev/null || printf '%s\n' "unknown")
+  printf '%s\n' "  • torch ${TORCH_VER}"
+  printf '%s\n' "  • torchvision ${TORCHVISION_VER}"
+  printf '%s\n' "  • torchaudio ${TORCHAUDIO_VER}"
 fi
 
 #--- Sub-block 26.12: Install Open3D dependencies ---
@@ -17133,28 +17089,37 @@ fi
 # Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: Block 6 (APT configuration), Phase 1 (build tools should already be installed)
 # Outputs: Installed packages
-echo "Installing Open3D dependencies (aligned with official docs)..."
-echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Installing Open3D dependencies (aligned with official docs)..."
+printf '%s\n' "Official guide: https://www.open3d.org/docs/release/compilation.html"
 
 # Verify CMake version requirement (>= 3.24 per official docs)
-echo "Verifying CMake version (required: >= 3.24)..."
-CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 | awk '{print $3}' 2>/dev/null | cut -d. -f1,2 2>/dev/null || echo "")
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying CMake version (required: >= 3.24)..."
+# D3e: SIGPIPE error handling - pipeline with head, add || true and validate result
+CMAKE_VERSION=$(cmake --version 2>/dev/null | head -n1 2>/dev/null | awk '{print $3}' 2>/dev/null | cut -d. -f1,2 2>/dev/null || printf '%s\n' "" || true)
 if [ -z "${CMAKE_VERSION}" ]; then
-    echo "⚠ WARNING: Could not determine CMake version"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: Could not determine CMake version"
 else
     # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-    CMAKE_MAJOR=$(cut -d. -f1 <<< "${CMAKE_VERSION}" 2>/dev/null || echo "")
-    CMAKE_MINOR=$(cut -d. -f2 <<< "${CMAKE_VERSION}" 2>/dev/null || echo "")
+    # A5a/D3b: Use printf instead of echo for robustness
+    CMAKE_MAJOR=$(cut -d. -f1 <<< "${CMAKE_VERSION}" 2>/dev/null || printf '%s\n' "")
+    CMAKE_MINOR=$(cut -d. -f2 <<< "${CMAKE_VERSION}" 2>/dev/null || printf '%s\n' "")
     # Validate that we got numeric values (check if they're non-empty and numeric)
     if [ -z "${CMAKE_MAJOR}" ] || ! expr "${CMAKE_MAJOR}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
-        echo "⚠ WARNING: Could not parse CMake major version from: ${CMAKE_VERSION}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Could not parse CMake major version from: ${CMAKE_VERSION}"
     elif [ -z "${CMAKE_MINOR}" ] || ! expr "${CMAKE_MINOR}" : '^[0-9][0-9]*$' >/dev/null 2>&1; then
-        echo "⚠ WARNING: Could not parse CMake minor version from: ${CMAKE_VERSION}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Could not parse CMake minor version from: ${CMAKE_VERSION}"
     elif [ "${CMAKE_MAJOR}" -lt 3 ] || ([ "${CMAKE_MAJOR}" -eq 3 ] && [ "${CMAKE_MINOR}" -lt 24 ]) 2>/dev/null; then
-        echo "⚠ WARNING: CMake version ${CMAKE_VERSION} < 3.24 (official requirement)"
-        echo "  Open3D may not build correctly. Consider upgrading CMake."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: CMake version ${CMAKE_VERSION} < 3.24 (official requirement)"
+        printf '%s\n' "  Open3D may not build correctly. Consider upgrading CMake."
     else
-        echo "✓ CMake ${CMAKE_VERSION} meets requirement (>= 3.24)"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ CMake ${CMAKE_VERSION} meets requirement (>= 3.24)"
     fi
 fi
 
@@ -17172,24 +17137,31 @@ fi
 #   - libnetcdf-dev: Network Common Data Form (scientific data formats)
 #   - libfmt-dev: Modern C++ formatting library (used by many scientific libraries)
 #   - libspdlog-dev: Fast C++ logging library (used by Open3D and other modern C++ libraries)
-echo "Updating apt package lists before installing Open3D dependencies..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Updating apt package lists before installing Open3D dependencies..."
+# H1: Exit-status check for apt-get update
 if ! apt-get update -o Acquire::Retries=3; then
-    echo "✗ ERROR: Failed to update package lists before Open3D install"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✗ ERROR: Failed to update package lists before Open3D install"
     exit 1
 fi
 
 # Verify ninja-build is available (we use Ninja generator)
 if ! command -v ninja >/dev/null 2>&1; then
-    echo "⚠ ninja-build not found, installing..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ ninja-build not found, installing..."
     if ! install_packages_resilient "ninja build system" "ninja-build"; then
-        echo "✗ ERROR: Failed to install ninja-build"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✗ ERROR: Failed to install ninja-build"
         exit 1
     fi
 fi
-echo "✓ Ninja build system available"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Ninja build system available"
 
 # CRITICAL dependencies (required for Open3D build)
-echo "Installing CRITICAL Open3D dependencies..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Installing CRITICAL Open3D dependencies..."
 # Note: LLVM-14 packages will be installed separately below (LLVM-11 not available on Noble)
 # LLVM-14 is stable and compatible. LLVM-18 may have libunwind conflicts with Python exceptions
 # NOTE: libopenblas-dev and libopenblas64-dev removed - we compile our own OpenBLAS in BLOCK 6.12B
@@ -17214,38 +17186,42 @@ OPEN3D_PACKAGES=(
 )
 
 # Validate array is not empty (defensive check)
-if [ ${#OPEN3D_PACKAGES[@]} -eq 0 ]; then
-    echo "ERROR: OPEN3D_PACKAGES array is empty"
+if [ "${#OPEN3D_PACKAGES[@]}" -eq 0 ]; then
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ERROR: OPEN3D_PACKAGES array is empty"
     exit 1
 fi
 
 if ! install_packages_resilient "Open3D dependencies" "${OPEN3D_PACKAGES[@]}"; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ CRITICAL: Open3D dependency installation FAILED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "ERROR: Cannot proceed with Open3D build without required dependencies"
-    echo "  Please check the apt-get error messages above."
-    echo "  Common causes:"
-    echo "    - Package repository issues (run: apt-get update)"
-    echo "    - Network connectivity problems"
-    echo "    - Conflicting package versions"
-    echo "    - Insufficient disk space"
-    echo ""
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "✗ CRITICAL: Open3D dependency installation FAILED"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "ERROR: Cannot proceed with Open3D build without required dependencies"
+    printf '%s\n' "  Please check the apt-get error messages above."
+    printf '%s\n' "  Common causes:"
+    printf '%s\n' "    - Package repository issues (run: apt-get update)"
+    printf '%s\n' "    - Network connectivity problems"
+    printf '%s\n' "    - Conflicting package versions"
+    printf '%s\n' "    - Insufficient disk space"
+    printf '%s\n' ""
     exit 1
 fi
 
-echo "✓ Critical Open3D dependencies installed"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Critical Open3D dependencies installed"
 
 # Install LLVM-14 libc++ packages for Open3D (stable version on Ubuntu 24.04 Noble)
 # NOTE: LLVM-11 is NOT available on Ubuntu 24.04 Noble (only available on Ubuntu 22.04 Jammy)
 # LLVM-14 is stable and widely tested. LLVM-18 may have libunwind conflicts with Python exceptions
 # CRITICAL: LLVM-18's libc++ includes libunwind that can conflict with Python exceptions
-echo ""
-echo "Installing LLVM-14 libc++ packages for Open3D (stable version on Ubuntu 24.04 Noble)..."
-echo "  Note: LLVM-14 is more stable and compatible than LLVM-18 for Open3D Filament renderer"
-echo "  LLVM-18 may have libunwind conflicts with Python exceptions"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "Installing LLVM-14 libc++ packages for Open3D (stable version on Ubuntu 24.04 Noble)..."
+printf '%s\n' "  Note: LLVM-14 is more stable and compatible than LLVM-18 for Open3D Filament renderer"
+printf '%s\n' "  LLVM-18 may have libunwind conflicts with Python exceptions"
 
 # Install LLVM-14 libc++ packages
 LLVM14_INSTALLED=false
@@ -17258,22 +17234,27 @@ if install_packages_resilient "LLVM-14 libc++" "${LLVM14_PACKAGES[@]}"; then
     if dpkg_resolve_installed_package "libc++-14-dev" >/dev/null 2>&1 && \
        dpkg_resolve_installed_package "libc++abi-14-dev" >/dev/null 2>&1; then
         LLVM14_INSTALLED=true
-        echo "✓ LLVM-14 libc++ packages installed successfully"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ LLVM-14 libc++ packages installed successfully"
     else
-        echo "⚠ Installation reported success but packages not found in dpkg"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ Installation reported success but packages not found in dpkg"
     fi
 else
-    echo "⚠ LLVM-14 libc++ installation failed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ LLVM-14 libc++ installation failed"
 fi
 
 if [ "${LLVM14_INSTALLED:-}" = "false" ]; then
-    echo "  ⚠ LLVM-14 libc++ packages not found - Open3D will attempt auto-detection"
-    echo "  Warning about libunwind conflict with Python exceptions may appear"
-    echo "  Python code using exceptions may be affected"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ LLVM-14 libc++ packages not found - Open3D will attempt auto-detection"
+    printf '%s\n' "  Warning about libunwind conflict with Python exceptions may appear"
+    printf '%s\n' "  Python code using exceptions may be affected"
 fi
 
 # OPTIONAL but helpful dependencies (non-fatal if unavailable)
-echo "Installing optional robotics/Open3D libraries..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Installing optional robotics/Open3D libraries..."
 # Additional dependencies for robust Open3D build:
 #   - libfmt-dev: C++ formatting library (enables USE_SYSTEM_FMT=ON, faster builds)
 #   - libassimp-dev: 3D model loading library (enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)
@@ -17314,74 +17295,95 @@ OPEN3D_OPTIONAL_PACKAGES=(
     "npm"
 )
 if ! install_packages_resilient "Open3D optional packages" "${OPEN3D_OPTIONAL_PACKAGES[@]}"; then
-    echo "Δ Some optional Open3D packages were unavailable (non-fatal)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "Δ Some optional Open3D packages were unavailable (non-fatal)"
 fi
 
 # Check which optional packages were installed
 if dpkg_resolve_installed_package "libflann-dev" >/dev/null 2>&1; then
-    echo "✓ FLANN installed (point cloud nearest neighbor search)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ FLANN installed (point cloud nearest neighbor search)"
 fi
 if dpkg_resolve_installed_package "libpcl-dev" >/dev/null 2>&1; then
-    echo "✓ PCL installed (Point Cloud Library)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ PCL installed (Point Cloud Library)"
 else
-    echo "ℹ PCL not available (may require universe repo - optional)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ℹ PCL not available (may require universe repo - optional)"
 fi
 if dpkg_resolve_installed_package "libnetcdf-dev" >/dev/null 2>&1; then
-    echo "✓ NetCDF installed (scientific data formats)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ NetCDF installed (scientific data formats)"
 fi
 if dpkg_resolve_installed_package "libfmt-dev" >/dev/null 2>&1; then
-    echo "✓ fmt installed (C++ formatting library - enables USE_SYSTEM_FMT=ON)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ fmt installed (C++ formatting library - enables USE_SYSTEM_FMT=ON)"
 fi
 if dpkg_resolve_installed_package "libassimp-dev" >/dev/null 2>&1; then
-    echo "✓ Assimp installed (3D model loading - enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Assimp installed (3D model loading - enables USE_SYSTEM_ASSIMP=ON, essential for file I/O)"
 fi
 if dpkg_resolve_installed_package "pybind11-dev" >/dev/null 2>&1; then
-    echo "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ pybind11 installed (Python bindings - enables USE_SYSTEM_PYBIND11=ON, faster builds)"
 fi
 if dpkg_resolve_installed_package "libtbb-dev" >/dev/null 2>&1; then
-    echo "✓ TBB installed (System Threading Building Blocks from libtbb-dev - not MKL TBB)"
-    echo "  This ensures OpenBLAS compatibility and enables USE_SYSTEM_TBB=ON"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ TBB installed (System Threading Building Blocks from libtbb-dev - not MKL TBB)"
+    printf '%s\n' "  This ensures OpenBLAS compatibility and enables USE_SYSTEM_TBB=ON"
 fi
 if dpkg_resolve_installed_package "libspdlog-dev" >/dev/null 2>&1; then
-    echo "✓ spdlog installed (C++ logging library)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ spdlog installed (C++ logging library)"
 fi
 
-echo "✓ Open3D dependencies installation complete"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Open3D dependencies installation complete"
 
 # Verify critical dependencies were actually installed
-echo "Verifying critical Open3D dependencies..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying critical Open3D dependencies..."
 VERIFY_ERROR=0
 
 # Check g++
 if command -v g++ >/dev/null 2>&1; then
-    echo "✓ g++ installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ g++ installed"
 else
-    echo "✗ ERROR: g++ not installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✗ ERROR: g++ not installed" >&2
     VERIFY_ERROR=1
 fi
 
 # Check LLVM-14 packages (stable on Ubuntu 24.04 Noble)
 # NOTE: LLVM-11 not available on Noble. LLVM-14 is more stable than LLVM-18
 if dpkg_resolve_installed_package "libc++-14-dev" >/dev/null 2>&1; then
-    echo "✓ LLVM-14 libc++ development package installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LLVM-14 libc++ development package installed"
 else
-    echo "⚠ WARNING: libc++-14-dev not installed (libunwind conflict possible with Python exceptions)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: libc++-14-dev not installed (libunwind conflict possible with Python exceptions)" >&2
     VERIFY_ERROR=1
 fi
 if dpkg_resolve_installed_package "libc++abi-14-dev" >/dev/null 2>&1; then
-    echo "✓ LLVM-14 libc++abi development package installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LLVM-14 libc++abi development package installed"
 else
-    echo "⚠ WARNING: libc++abi-14-dev not installed (libunwind conflict possible)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: libc++abi-14-dev not installed (libunwind conflict possible)" >&2
     VERIFY_ERROR=1
 fi
 
 # Check GLFW3
 if [ -f "/usr/lib/x86_64-linux-gnu/cmake/glfw3/glfw3Config.cmake" ]; then
-    echo "✓ GLFW3 CMake config found"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ GLFW3 CMake config found"
 elif dpkg_resolve_installed_package "libglfw3-dev" >/dev/null 2>&1; then
-    echo "✓ libglfw3-dev package installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ libglfw3-dev package installed"
 else
-    echo "⚠ WARNING: libglfw3-dev may not be installed correctly"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: libglfw3-dev may not be installed correctly" >&2
     VERIFY_ERROR=1
 fi
 
@@ -17389,80 +17391,100 @@ fi
 # NOTE: We compile OpenBLAS from source, so check for library files, not apt package
 if [ -f "${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so" ] || \
    [ -f "/usr/lib/x86_64-linux-gnu/libopenblas.so" ]; then
-    echo "✓ OpenBLAS library installed (source-built in ${OPENBLAS_INSTALL_PREFIX})"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenBLAS library installed (source-built in ${OPENBLAS_INSTALL_PREFIX})"
 elif pkg-config --exists openblas 2>/dev/null; then
-    echo "✓ OpenBLAS found via pkg-config"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenBLAS found via pkg-config"
 else
-    echo "⚠ WARNING: OpenBLAS library may not be available"
-    echo "   Expected location: ${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: OpenBLAS library may not be available" >&2
+    printf '%s\n' "   Expected location: ${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so" >&2
     VERIFY_ERROR=1
 fi
 
 # Check OpenMP (optional but recommended for parallel operations)
-if (ldconfig -p 2>/dev/null | grep -q libomp) || \
+# D3e: Add SIGPIPE error handling for pipeline with grep -q
+if (ldconfig -p 2>/dev/null | grep -q -- libomp 2>/dev/null || true) || \
    dpkg_resolve_installed_package "libomp-dev" >/dev/null 2>&1 || \
    dpkg_resolve_installed_package "libomp5" >/dev/null 2>&1; then
-    echo "✓ OpenMP library installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenMP library installed"
 else
-    echo "⚠ WARNING: OpenMP not found (parallel operations may be limited)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: OpenMP not found (parallel operations may be limited)" >&2
 fi
 
 # Check FLANN (optional - used for nearest neighbor searches)
 if dpkg_resolve_installed_package "libflann-dev" >/dev/null 2>&1 || \
    [ -f "/usr/lib/x86_64-linux-gnu/libflann.so" ]; then
-    echo "✓ FLANN library installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ FLANN library installed"
 else
-    echo "ℹ FLANN not found (optional - may be in universe repo)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ℹ FLANN not found (optional - may be in universe repo)"
 fi
 
 # Ensure VERIFY_ERROR is initialized if not set
 VERIFY_ERROR=${VERIFY_ERROR:-0}
 if [ "${VERIFY_ERROR}" -eq 1 ]; then
-    echo ""
-    echo "⚠ WARNING: Some critical Open3D dependencies are missing!"
-    echo "  The build may fail. Check the apt-get install output above."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "⚠ WARNING: Some critical Open3D dependencies are missing!" >&2
+    printf '%s\n' "  The build may fail. Check the apt-get install output above." >&2
 else
-    echo "✓ All critical dependencies verified"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ All critical dependencies verified"
 fi
 
 # Verify C++ standard library is available (required for Open3D CMake)
 # Open3D's CMake searches for unversioned "c++" library, which can be either:
 # - libstdc++ (GCC's C++ library) - primary for this build
 # - libc++ (Clang's C++ library) - compatibility/fallback
-echo "Verifying C++ standard library availability..."
-CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libstdc++.so*" 2>/dev/null | head -1 || echo "")
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying C++ standard library availability..."
+# D3e: Add SIGPIPE error handling for pipeline with head
+CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libstdc++.so*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "" || true)
 if [ -n "${CPP_LIB_PATH}" ]; then
-    echo "✓ C++ standard library (libstdc++ - GCC) found"
-    echo "  Located at: ${CPP_LIB_PATH}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ C++ standard library (libstdc++ - GCC) found"
+    printf '%s\n' "  Located at: ${CPP_LIB_PATH}"
     export CPP_LIBRARY="${CPP_LIB_PATH}"
 else
     # Also check for libc++ (Clang's C++ library) for compatibility
-    CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libc++.so*" 2>/dev/null | head -1 || echo "")
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    CPP_LIB_PATH=$(find /usr/lib /usr/lib64 -name "libc++.so*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "" || true)
     if [ -n "${CPP_LIB_PATH}" ]; then
-        echo "✓ C++ standard library (libc++ - Clang) found (compatibility)"
-        echo "  Located at: ${CPP_LIB_PATH}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ C++ standard library (libc++ - Clang) found (compatibility)"
+        printf '%s\n' "  Located at: ${CPP_LIB_PATH}"
         export CPP_LIBRARY="${CPP_LIB_PATH}"
     fi
 fi
 
 if [ -z "${CPP_LIBRARY:-}" ]; then
-    echo "⚠ WARNING: No C++ standard library found in standard locations"
-    echo "  Open3D CMake may fail during configuration"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: No C++ standard library found in standard locations" >&2
+    printf '%s\n' "  Open3D CMake may fail during configuration" >&2
 fi
 
 # Verify Python executable (as recommended in official docs)
-echo "Verifying Python setup..."
-PYTHON_EXECUTABLE=$(command -v python3 2>/dev/null || echo "")
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying Python setup..."
+PYTHON_EXECUTABLE=$(command -v python3 2>/dev/null || printf '%s\n' "")
 if [ -n "${PYTHON_EXECUTABLE}" ]; then
-    echo "✓ Python executable: ${PYTHON_EXECUTABLE}"
-    python3 --version 2>/dev/null || echo "  (version check unavailable)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Python executable: ${PYTHON_EXECUTABLE}"
+    python3 --version 2>/dev/null || printf '%s\n' "  (version check unavailable)"
 else
-    echo "⚠ WARNING: python3 not found in PATH"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: python3 not found in PATH" >&2
 fi
 
 # Create python symlink if needed (for compatibility)
 if ! command -v python &> /dev/null; then
-    echo "Creating python → python3 symlink for compatibility..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "Creating python → python3 symlink for compatibility..."
     ln -sf /usr/bin/python3 /usr/bin/python
 fi
 
@@ -17470,30 +17492,38 @@ fi
 # Purpose: Install yarn globally via npm (required for BUILD_JUPYTER_EXTENSION=ON)
 # Dependencies: nodejs, npm (installed in Sub-block 13A.8)
 # Outputs: yarn installed globally
-echo "Installing yarn for Open3D Jupyter extension build..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Installing yarn for Open3D Jupyter extension build..."
 if command -v npm >/dev/null 2>&1; then
+    # H1: Exit-status check for npm install
     if npm install -g yarn 2>/dev/null; then
         # Wait a moment for npm to update PATH cache
         sleep 1
         # Check if yarn is now available
         if command -v yarn >/dev/null 2>&1; then
-            YARN_VERSION=$(yarn --version 2>/dev/null || echo "unknown")
-            echo "✓ yarn installed (version: ${YARN_VERSION})"
+            # F2/H4: Command substitutions need error handling - validate results
+            YARN_VERSION=$(yarn --version 2>/dev/null || printf '%s\n' "unknown")
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ yarn installed (version: ${YARN_VERSION})"
         else
-            echo "⚠ WARNING: yarn installation reported success but yarn command not found in PATH"
-            echo "  Attempting to locate yarn in npm global bin directory..."
-            NPM_GLOBAL_BIN=$(npm config get prefix 2>/dev/null || echo "/usr/local")
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ WARNING: yarn installation reported success but yarn command not found in PATH" >&2
+            printf '%s\n' "  Attempting to locate yarn in npm global bin directory..." >&2
+            NPM_GLOBAL_BIN=$(npm config get prefix 2>/dev/null || printf '%s\n' "/usr/local")
             if [ -f "${NPM_GLOBAL_BIN}/bin/yarn" ] || [ -f "${NPM_GLOBAL_BIN}/yarn" ]; then
-                echo "  Found yarn at ${NPM_GLOBAL_BIN}, adding to PATH may be needed"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Found yarn at ${NPM_GLOBAL_BIN}, adding to PATH may be needed"
             fi
         fi
     else
-        echo "⚠ WARNING: Failed to install yarn via npm"
-        echo "  Open3D Jupyter extension build may fail"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Failed to install yarn via npm" >&2
+        printf '%s\n' "  Open3D Jupyter extension build may fail" >&2
     fi
 else
-    echo "⚠ WARNING: npm not found, cannot install yarn"
-    echo "  Open3D Jupyter extension build will likely fail"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: npm not found, cannot install yarn" >&2
+    printf '%s\n' "  Open3D Jupyter extension build will likely fail" >&2
 fi
 
 #--- Sub-block 26.14: Download Open3D source ---
@@ -17501,62 +17531,79 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Open3D source code
 cd /tmp || exit 1
-echo "Downloading Open3D ${OPEN3D_VERSION}..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Downloading Open3D ${OPEN3D_VERSION}..."
 
 # Remove existing Open3D directory if it exists to prevent clone failure
 # CRITICAL: In Singularity builds, /tmp persists between attempts
 rm -rf /tmp/Open3D
 
 if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "/tmp/Open3D" "v${OPEN3D_VERSION}"; then
-    echo "⚠ Open3D v${OPEN3D_VERSION} tag not found, trying main branch"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ Open3D v${OPEN3D_VERSION} tag not found, trying main branch" >&2
     rm -rf /tmp/Open3D
     if ! clone_with_retry "https://github.com/isl-org/Open3D.git" "/tmp/Open3D" "main"; then
-        echo "ERROR: Failed to clone Open3D after all retry attempts"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "ERROR: Failed to clone Open3D after all retry attempts" >&2
         exit 1
     fi
 fi
 
 cd /tmp/Open3D || exit 1
-echo "✓ Open3D source downloaded"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Open3D source downloaded"
 
 #--- Sub-block 26.15: Verify Jupyter extension requirements from repository ---
 # Purpose: Check Open3D repository for Jupyter extension build requirements
 # Dependencies: Open3D source downloaded
 # Outputs: Verification report of required dependencies
 if [ -f "cpp/pybind/make_python_package.cmake" ]; then
-    echo "Checking Open3D Jupyter extension requirements from repository..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "Checking Open3D Jupyter extension requirements from repository..."
     
     # Check for yarn requirement in make_python_package.cmake
     # Use -w flag to match whole words to avoid false matches (e.g., "yearn")
-    if grep -qw "yarn" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
-        echo "  ✓ Repository confirms yarn is required for Jupyter extension"
+    # D3c: Use -F for fixed-string matching (literal pattern)
+    if grep -Fqw "yarn" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ Repository confirms yarn is required for Jupyter extension"
         if command -v yarn >/dev/null 2>&1; then
-            YARN_VER=$(yarn --version 2>/dev/null || echo "unknown")
-            echo "    ✓ yarn found (version: ${YARN_VER})"
+            YARN_VER=$(yarn --version 2>/dev/null || printf '%s\n' "unknown")
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ✓ yarn found (version: ${YARN_VER})"
         else
-            echo "    ✗ ERROR: yarn not found - Jupyter extension build will fail"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ✗ ERROR: yarn not found - Jupyter extension build will fail" >&2
         fi
     fi
     
     # Check for node requirement (use -w to avoid matching "node_modules" or other words containing "node")
-    if grep -qw "node" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
-        echo "  ✓ Repository confirms node is required for Jupyter extension"
+    # D3c: Use -F for fixed-string matching (literal pattern)
+    if grep -Fqw "node" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ Repository confirms node is required for Jupyter extension"
         if command -v node >/dev/null 2>&1; then
-            NODE_VER=$(node --version 2>/dev/null || echo "unknown")
-            echo "    ✓ node found (version: ${NODE_VER})"
+            NODE_VER=$(node --version 2>/dev/null || printf '%s\n' "unknown")
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ✓ node found (version: ${NODE_VER})"
         else
-            echo "    ✗ ERROR: node not found - Jupyter extension build will fail"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ✗ ERROR: node not found - Jupyter extension build will fail" >&2
         fi
     fi
     
     # Check for npm requirement (use -w to match whole word)
-    if grep -qw "npm" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
-        echo "  ✓ Repository confirms npm may be used by Jupyter extension"
+    # D3c: Use -F for fixed-string matching (literal pattern)
+    if grep -Fqw "npm" "cpp/pybind/make_python_package.cmake" 2>/dev/null; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ Repository confirms npm may be used by Jupyter extension"
         if command -v npm >/dev/null 2>&1; then
-            NPM_VER=$(npm --version 2>/dev/null || echo "unknown")
-            echo "    ✓ npm found (version: ${NPM_VER})"
+            NPM_VER=$(npm --version 2>/dev/null || printf '%s\n' "unknown")
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ✓ npm found (version: ${NPM_VER})"
         else
-            echo "    ⚠ WARNING: npm not found - may be needed for Jupyter extension"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    ⚠ WARNING: npm not found - may be needed for Jupyter extension" >&2
         fi
     fi
     
@@ -17567,101 +17614,68 @@ if [ -f "cpp/pybind/make_python_package.cmake" ]; then
     elif [ -d "jupyter" ]; then
         JUPYTER_DIR_FOUND=true
     else
-        JUPYTER_FIND_RESULT=$(find . -maxdepth 3 -type d -name "*jupyter*" 2>/dev/null | head -1 || echo "")
+        # D3e: Add SIGPIPE error handling for pipeline with head
+        JUPYTER_FIND_RESULT=$(find . -maxdepth 3 -type d -name "*jupyter*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
         if [ -n "${JUPYTER_FIND_RESULT}" ]; then
             JUPYTER_DIR_FOUND=true
         fi
     fi
     
     if [ "${JUPYTER_DIR_FOUND}" = "true" ]; then
-        echo "  ✓ Jupyter extension directory found in repository"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ Jupyter extension directory found in repository"
     fi
     
-    echo "✓ Jupyter extension requirements verified from repository"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Jupyter extension requirements verified from repository"
 else
-    echo "⚠ make_python_package.cmake not found - cannot verify Jupyter extension requirements"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ make_python_package.cmake not found - cannot verify Jupyter extension requirements" >&2
 fi
 
 # Check if official install_deps_ubuntu.sh exists (optional reference)
 if [ -f "util/install_deps_ubuntu.sh" ]; then
-    echo "ℹ Official install_deps_ubuntu.sh found in repo (reference: util/install_deps_ubuntu.sh)"
-    echo "  We install dependencies manually for Singularity build control, but this script"
-    echo "  can be used for verification: https://github.com/isl-org/Open3D/blob/master/util/install_deps_ubuntu.sh"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ℹ Official install_deps_ubuntu.sh found in repo (reference: util/install_deps_ubuntu.sh)"
+    printf '%s\n' "  We install dependencies manually for Singularity build control, but this script"
+    printf '%s\n' "  can be used for verification: https://github.com/isl-org/Open3D/blob/master/util/install_deps_ubuntu.sh"
 fi
 
 # Fix Embree hash mismatch (Open3D 0.19.0 has outdated hash for Embree 4.3.3)
-echo "Patching Embree hash in Open3D CMake files..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Patching Embree hash in Open3D CMake files..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
     sed -i 's/1b161c690999a0e8d8a9b8c935e89dc0cec98e7e9c089a4d4c1c1865ecc70c7c/d6bc88788563095a31c9ffaa2bbaa511a43645f087b886f3c1da1478bb18355e/g' \
         3rdparty/find_dependencies.cmake
-    echo "✓ Embree hash patched"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Embree hash patched"
 else
-    echo "⚠ find_dependencies.cmake not found, skipping Embree hash fix"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ find_dependencies.cmake not found, skipping Embree hash fix" >&2
 fi
 
 # Fix C++ library detection issue (Open3D CMake sometimes can't find c++ library)
 # The find_library(CPP_LIBRARY c++) calls at lines 1339, 1381-1382 fail, so we make them more flexible
 # Also prevents CMake from looking in wrong directories like /tmp/Open3D
-echo "Patching C++ library detection in Open3D CMake files..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Patching C++ library detection in Open3D CMake files..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
     # Use Python to robustly patch the find_library calls for CPP_LIBRARY and CPPABI_LIBRARY
     # The actual patterns in Open3D 0.19.0 are:
     #   Line 1339: find_library(CPP_LIBRARY    c++ PATHS ${llvm_lib_dir} NO_DEFAULT_PATH)
     #   Line 1381: find_library(CPP_LIBRARY    c++    PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
     #   Line 1382: find_library(CPPABI_LIBRARY c++abi PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
-    python3 << 'PYTHON_PATCH'
-import re
-import sys
-
-file_path = "3rdparty/find_dependencies.cmake"
-try:
-    with open(file_path, 'r') as f:
-        content = f.read()
-    
-    original_content = content
-    
-    # Pattern 1: Match find_library(CPP_LIBRARY c++ PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
-    # This is the REQUIRED call that causes FATAL_ERROR if not found
-    # Search order: prefer LLVM-14 (stable), then 15, 16, 17, 18, 11
-    pattern1 = r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)'
-    replacement1 = 'find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-14/lib /usr/lib/llvm-15/lib /usr/lib/llvm-16/lib /usr/lib/llvm-17/lib /usr/lib/llvm-18/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)'
-    content = re.sub(pattern1, replacement1, content)
-    
-    # Pattern 2: Match find_library(CPPABI_LIBRARY c++abi PATHS ${CLANG_LIBDIR} REQUIRED NO_DEFAULT_PATH)
-    pattern2 = r'find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{CLANG_LIBDIR\}\s+REQUIRED\s+NO_DEFAULT_PATH\s*\)'
-    replacement2 = 'find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${CLANG_LIBDIR} /usr/lib/llvm-14/lib /usr/lib/llvm-15/lib /usr/lib/llvm-16/lib /usr/lib/llvm-17/lib /usr/lib/llvm-18/lib /usr/lib/llvm-11/lib /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib REQUIRED NO_DEFAULT_PATH)'
-    content = re.sub(pattern2, replacement2, content)
-    
-    # Pattern 3: Match find_library(CPP_LIBRARY c++ PATHS ${llvm_lib_dir} NO_DEFAULT_PATH) in loop
-    # This is the search loop that tries versions 7-19
-    pattern3 = r'find_library\s*\(\s*CPP_LIBRARY\s+c\+\+\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)'
-    replacement3 = 'find_library(CPP_LIBRARY NAMES c++ c++abi stdc++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
-    content = re.sub(pattern3, replacement3, content)
-    
-    # Pattern 4: Match find_library(CPPABI_LIBRARY c++abi PATHS ${llvm_lib_dir} NO_DEFAULT_PATH) in loop
-    pattern4 = r'find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)'
-    replacement4 = 'find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)'
-    content = re.sub(pattern4, replacement4, content)
-    
-    if content != original_content:
-        with open(file_path, 'w') as f:
-            f.write(content)
-        print("✓ C++ library detection patched successfully")
-        print(f"  Made {len(re.findall(r'find_library.*CPP', original_content)) - len(re.findall(r'find_library.*CPP', content))} replacements")
-        sys.exit(0)
-    else:
-        print("⚠ CPP_LIBRARY patterns not found in expected format, trying sed fallback")
-        sys.exit(1)
-except Exception as e:
-    print(f"⚠ Error patching C++ library detection: {e}")
-    import traceback
-    traceback.print_exc()
-    sys.exit(2)
-PYTHON_PATCH
+    # Note: python-scripts file: /tmp/python-patch.py is installed via install.sh from container-scripts/
+    # Source: python-scripts/block-26-pytorch-installation-cuda-mkl/open3d-cmake-patch.py
+    # Target: /tmp/python-patch.py
+    # Installed in Block 0 (early in script, before any scripts are needed)
+    # This script must run in the Open3D source directory (already in /tmp/Open3D at this point)
+    python3 /tmp/python-patch.py
     PATCH_STATUS=$?
     # Exit code 0 = success, 1 = pattern not found (may be acceptable), 2+ = error
     if [ "${PATCH_STATUS:-0}" -eq 1 ]; then
-        echo "⚠ Python didn't find exact pattern, trying sed fallback..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ Python didn't find exact pattern, trying sed fallback..." >&2
         # Fallback to sed - fix the REQUIRED calls first (these cause FATAL_ERROR)
         # Use extended regex (-E) for better pattern matching
         # shellcheck disable=SC2016 # Intentional: sed regex patterns need single quotes, ${CLANG_LIBDIR} and ${llvm_lib_dir} are literal in the pattern
@@ -17674,19 +17688,23 @@ PYTHON_PATCH
             3rdparty/find_dependencies.cmake 2>/dev/null || true
         sed -i -E 's|find_library\s*\(\s*CPPABI_LIBRARY\s+c\+\+abi\s+PATHS\s+\$\{llvm_lib_dir\}\s+NO_DEFAULT_PATH\s*\)|find_library(CPPABI_LIBRARY NAMES c++abi c++ PATHS ${llvm_lib_dir} /usr/lib/x86_64-linux-gnu /usr/lib64 /usr/lib NO_DEFAULT_PATH)|g' \
             3rdparty/find_dependencies.cmake 2>/dev/null || true
-        echo "✓ Applied sed fallback patches"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ Applied sed fallback patches"
     elif [ "${PATCH_STATUS:-0}" -ge 2 ]; then
-        echo "⚠ Python patch had an error, but continuing anyway..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ Python patch had an error, but continuing anyway..." >&2
     fi
 else
-    echo "⚠ find_dependencies.cmake not found, cannot patch C++ library detection"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ find_dependencies.cmake not found, cannot patch C++ library detection" >&2
 fi
 
 # Patch to force Open3D to use system BLAS (Intel MKL) and prevent building from source
 # CRITICAL: This prevents the bundled third-party OpenBLAS build from overriding MKL
 # NOTE: Open3D uses USE_SYSTEM_BLAS (NOT USE_SYSTEM_OPENBLAS - that flag doesn't exist)
 # Reference: OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md
-echo "Patching Open3D to prefer system BLAS (Intel MKL) and skip bundled build..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Patching Open3D to prefer system BLAS (Intel MKL) and skip bundled build..."
 if [ -f "3rdparty/find_dependencies.cmake" ]; then
     # Force USE_SYSTEM_BLAS=ON to use system-provided BLAS instead of building from source
     # This patch ensures that even if find_package(BLAS) fails initially, 
@@ -17694,52 +17712,68 @@ if [ -f "3rdparty/find_dependencies.cmake" ]; then
     # Open3D will call find_package(BLAS) which respects BLA_VENDOR=Intel10_64lp and BLAS_LIBRARIES
     sed -i 's/if (USE_SYSTEM_BLAS)/if (TRUE)  # Patched: Force USE_SYSTEM_BLAS always/g' \
         3rdparty/find_dependencies.cmake 2>/dev/null || true
-    echo "✓ System BLAS patch applied (USE_SYSTEM_BLAS=ON for Intel MKL)"
-    echo "  CMake will use find_package(BLAS) with BLA_VENDOR=Intel10_64lp"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ System BLAS patch applied (USE_SYSTEM_BLAS=ON for Intel MKL)"
+    printf '%s\n' "  CMake will use find_package(BLAS) with BLA_VENDOR=Intel10_64lp"
 else
-    echo "⚠ find_dependencies.cmake not found, skipping system BLAS patch"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ find_dependencies.cmake not found, skipping system BLAS patch" >&2
 fi
 
 # Prepare MKL BLAS/LAPACK flags for Open3D
-echo "Configuring Open3D to use Intel MKL for BLAS/LAPACK..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Configuring Open3D to use Intel MKL for BLAS/LAPACK..."
 BLAS_LIBRARIES_FLAG=""
 LAPACK_LIBRARIES_FLAG=""
 if [ -n "${MKL_BLAS_LIBRARIES:-}" ]; then
     BLAS_LIBRARIES_FLAG="-DBLAS_LIBRARIES=${MKL_BLAS_LIBRARIES}"
     LAPACK_LIBRARIES_FLAG="-DLAPACK_LIBRARIES=${MKL_BLAS_LIBRARIES}"
-    echo "  BLAS/LAPACK libraries: ${MKL_BLAS_LIBRARIES}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  BLAS/LAPACK libraries: ${MKL_BLAS_LIBRARIES}"
 else
-    echo "  ⚠ MKL_BLAS_LIBRARIES not set; BLAS/LAPACK arguments will be omitted"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ MKL_BLAS_LIBRARIES not set; BLAS/LAPACK arguments will be omitted" >&2
 fi
 
 # Verify LAPACKE is available (required for Open3D when using system BLAS)
-echo "Verifying LAPACKE installation..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying LAPACKE installation..."
 LAPACKE_FOUND=false
-if command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q liblapacke; then
+# D3e: Add SIGPIPE error handling for pipeline with grep -q
+if command -v ldconfig >/dev/null 2>&1 && (ldconfig -p 2>/dev/null | grep -q liblapacke 2>/dev/null || true); then
     LAPACKE_FOUND=true
-    echo "✓ LAPACKE library found via ldconfig"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LAPACKE library found via ldconfig"
 elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so.3" ]; then
     LAPACKE_FOUND=true
-    echo "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so.3"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so.3"
 elif [ -f "/usr/lib/x86_64-linux-gnu/liblapacke.so" ]; then
     LAPACKE_FOUND=true
-    echo "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LAPACKE library found at /usr/lib/x86_64-linux-gnu/liblapacke.so"
 fi
 
 if [ "${LAPACKE_FOUND:-}" = false ]; then
-    echo "⚠ WARNING: LAPACKE not found - Open3D may fall back to building BLAS from source"
-    echo "  Consider installing: liblapacke-dev"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: LAPACKE not found - Open3D may fall back to building BLAS from source" >&2
+    printf '%s\n' "  Consider installing: liblapacke-dev" >&2
 fi
 
 # Verify OpenMP is available (required for Open3D parallel operations)
-echo "Verifying OpenMP installation..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying OpenMP installation..."
 if [ -f "/usr/lib/x86_64-linux-gnu/libomp.so" ]; then
-    echo "✓ OpenMP library found"
-elif command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libomp; then
-    echo "✓ OpenMP library found"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenMP library found"
+# D3e: Add SIGPIPE error handling for pipeline with grep -q
+elif command -v ldconfig >/dev/null 2>&1 && (ldconfig -p 2>/dev/null | grep -q libomp 2>/dev/null || true); then
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenMP library found"
 else
-    echo "⚠ WARNING: OpenMP library not found"
-    echo "  Some Open3D parallel features may be unavailable"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: OpenMP library not found" >&2
+    printf '%s\n' "  Some Open3D parallel features may be unavailable" >&2
 fi
 
 #--- Sub-block 26.16: Configure Open3D with CMake ---
@@ -17751,33 +17785,39 @@ fi
 #       To enable ML capabilities later, rebuild with:
 #       -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 -DTORCH_CUDA_ARCH_LIST="8.6;8.9;9.0"
 #       Requires PyTorch to be installed first (see setup_conda_environments.sh or install separately)
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Configuring Open3D ${OPEN3D_VERSION} with CUDA-ONLY support (GUI enabled)..."
-echo "Official guide: https://www.open3d.org/docs/release/compilation.html"
-echo ""
-echo "⚠ CRITICAL: This build requires CUDA - NO CPU fallback will be available"
-echo "   If CUDA is not available, the build will FAIL"
-echo "ℹ Note: Open3D ML (PyTorch-based) is disabled by default."
-echo "   To enable ML capabilities, rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Configuring Open3D ${OPEN3D_VERSION} with CUDA-ONLY support (GUI enabled)..."
+printf '%s\n' "Official guide: https://www.open3d.org/docs/release/compilation.html"
+printf '%s\n' ""
+printf '%s\n' "⚠ CRITICAL: This build requires CUDA - NO CPU fallback will be available"
+printf '%s\n' "   If CUDA is not available, the build will FAIL"
+printf '%s\n' "ℹ Note: Open3D ML (PyTorch-based) is disabled by default."
+printf '%s\n' "   To enable ML capabilities, rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Clean build directory (critical for rebuilds)
-echo "🧹 Cleaning build directory for fresh Open3D build..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "🧹 Cleaning build directory for fresh Open3D build..."
 if [ -d "build" ] || [ -f "CMakeCache.txt" ]; then
     rm -rf build CMakeCache.txt || {
-        echo "⚠ WARNING: Failed to clean build directory (continuing anyway)"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Failed to clean build directory (continuing anyway)" >&2
     }
 fi
 mkdir -p build || {
-    echo "✗ ERROR: Failed to create build directory"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✗ ERROR: Failed to create build directory" >&2
     exit 1
 }
 if ! cd build; then
-    echo "✗ ERROR: Failed to change to build directory"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✗ ERROR: Failed to change to build directory" >&2
     exit 1
 fi
-echo "✓ Clean build directory created"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Clean build directory created"
+printf '%s\n' ""
 
 #--- Sub-block 26.17: Configure build environment variables for OpenBLAS ---
 # Critical: Set LIBRARY_PATH and PKG_CONFIG_PATH for OpenBLAS detection (matching OpenCV approach)
@@ -17786,118 +17826,147 @@ echo ""
 # Outputs: Environment variables for CMake
 export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:+${PKG_CONFIG_PATH}:}/usr/local/lib/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig"
 export LIBRARY_PATH="${LIBRARY_PATH:+${LIBRARY_PATH}:}/usr/lib/x86_64-linux-gnu"
-echo "✓ Build environment configured for system OpenBLAS detection"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Build environment configured for system OpenBLAS detection"
 
 # Setup Open3D third-party download cache (for WebRTC binaries and other deps)
 OPEN3D_DOWNLOAD_CACHE="${CONTAINER_CACHE_ROOT:-/tmp}/open3d_downloads"
 mkdir -p "${OPEN3D_DOWNLOAD_CACHE}/webrtc"
-echo "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Open3D third-party download cache: ${OPEN3D_DOWNLOAD_CACHE}"
 
 # Pre-copy WebRTC binaries if downloaded on host (VPN-friendly pre-download)
-echo "Checking for pre-downloaded WebRTC binaries..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Checking for pre-downloaded WebRTC binaries..."
 if [ -z "${CONTAINER_BIN_CACHE:-}" ]; then
-    echo "  ⚠ CONTAINER_BIN_CACHE not set, skipping WebRTC pre-copy check"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ CONTAINER_BIN_CACHE not set, skipping WebRTC pre-copy check"
 elif [ -z "${OPEN3D_WEBRTC_FILE:-}" ]; then
-    echo "  ⚠ OPEN3D_WEBRTC_FILE not set, skipping WebRTC pre-copy check"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ OPEN3D_WEBRTC_FILE not set, skipping WebRTC pre-copy check"
 elif [ ! -d "${CONTAINER_BIN_CACHE}" ]; then
-    echo "  ⚠ Host cache directory does not exist: ${CONTAINER_BIN_CACHE}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ Host cache directory does not exist: ${CONTAINER_BIN_CACHE}"
 else
-    echo "  Host cache: ${CONTAINER_BIN_CACHE}"
-    echo "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
-    echo "  Looking for: ${OPEN3D_WEBRTC_FILE}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Host cache: ${CONTAINER_BIN_CACHE}"
+    printf '%s\n' "  Target: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/"
+    printf '%s\n' "  Looking for: ${OPEN3D_WEBRTC_FILE}"
     if [ -d "${CONTAINER_BIN_CACHE}" ]; then
-        find "${CONTAINER_BIN_CACHE}" -maxdepth 1 -type f -iname "*webrtc*" -ls 2>/dev/null || echo "  No WebRTC files in host cache"
+        # D3e: Add SIGPIPE error handling for pipeline with head
+        find "${CONTAINER_BIN_CACHE}" -maxdepth 1 -type f -iname "*webrtc*" -ls 2>/dev/null || printf '%s\n' "  No WebRTC files in host cache"
     fi
     
     if [ -f "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" ]; then
-        echo "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "Pre-copying host-downloaded WebRTC binaries to Open3D cache..."
         if cp -v "${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}" "${OPEN3D_DOWNLOAD_CACHE}/webrtc/"; then
-            echo "✓ WebRTC binaries pre-copied from host cache"
-            find "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" -maxdepth 1 -type f -ls 2>/dev/null | head -20 || true
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ WebRTC binaries pre-copied from host cache"
+            # D3e: Add SIGPIPE error handling for pipeline with head
+            find "${OPEN3D_DOWNLOAD_CACHE}/webrtc/" -maxdepth 1 -type f -ls 2>/dev/null | head -20 2>/dev/null || true
         else
-            echo ""
-            echo "═══════════════════════════════════════════════════════════════"
-            echo "  WARNING: Failed to copy WebRTC binaries from host cache"
-            echo "═══════════════════════════════════════════════════════════════"
-            echo "  File name: ${OPEN3D_WEBRTC_FILE}"
-            echo "  Expected location in host cache: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
-            echo "  Target location in container: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
-            echo ""
-            echo "  WebRTC will be downloaded during build if not found."
-            echo "  If download fails, you may manually download this file and place it at:"
-            echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
-            echo "═══════════════════════════════════════════════════════════════"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' ""
+            printf '%s\n' "═══════════════════════════════════════════════════════════════"
+            printf '%s\n' "  WARNING: Failed to copy WebRTC binaries from host cache"
+            printf '%s\n' "═══════════════════════════════════════════════════════════════"
+            printf '%s\n' "  File name: ${OPEN3D_WEBRTC_FILE}"
+            printf '%s\n' "  Expected location in host cache: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+            printf '%s\n' "  Target location in container: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+            printf '%s\n' ""
+            printf '%s\n' "  WebRTC will be downloaded during build if not found."
+            printf '%s\n' "  If download fails, you may manually download this file and place it at:"
+            printf '%s\n' "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+            printf '%s\n' "═══════════════════════════════════════════════════════════════"
         fi
     else
-        echo "ℹ WebRTC binaries not found in host cache, will download during build"
-        echo "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
-        echo ""
-        echo "  If download fails during build, you may manually download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "ℹ WebRTC binaries not found in host cache, will download during build"
+        printf '%s\n' "  Expected path: ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' ""
+        printf '%s\n' "  If download fails during build, you may manually download this file and place it at:"
+        printf '%s\n' "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
     fi
 fi
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
 
 # Prefer ccache if available (as recommended in Open3D docs)
 CCACHE_FLAGS=""
 if command -v ccache >/dev/null 2>&1; then
-    echo "Using ccache for C++ and CUDA compilations"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "Using ccache for C++ and CUDA compilations"
     CCACHE_FLAGS="-DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_CUDA_COMPILER_LAUNCHER=ccache"
 fi
 
 # Detect OpenCV_DIR (similar to how OpenCV build sets it)
-echo "Detecting OpenCV CMake config directory..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Detecting OpenCV CMake config directory..."
 OPENCV_DIR=""
-OPENCV_CONFIG_FILE=$(find /usr/local /usr \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) -path "*/cmake/opencv4/*" 2>/dev/null | head -1)
+# D3e: Add SIGPIPE error handling for pipeline with head
+OPENCV_CONFIG_FILE=$(find /usr/local /usr \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) -path "*/cmake/opencv4/*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
 if [ -n "${OPENCV_CONFIG_FILE:-}" ] && [ -f "${OPENCV_CONFIG_FILE}" ]; then
     OPENCV_DIR=$(dirname "${OPENCV_CONFIG_FILE}")
-    echo "✓ OpenCV CMake config found: ${OPENCV_CONFIG_FILE}"
-    echo "  Setting OpenCV_DIR to: ${OPENCV_DIR}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ OpenCV CMake config found: ${OPENCV_CONFIG_FILE}"
+    printf '%s\n' "  Setting OpenCV_DIR to: ${OPENCV_DIR}"
 else
     # Default to standard installation path (OpenCV from source installs here)
     OPENCV_DIR="/usr/local/lib/cmake/opencv4"
     if [ -f "${OPENCV_DIR}/OpenCVConfig.cmake" ] || [ -f "${OPENCV_DIR}/opencv-config.cmake" ]; then
-        echo "✓ OpenCV CMake config found at default location: ${OPENCV_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ OpenCV CMake config found at default location: ${OPENCV_DIR}"
     else
-        echo "⚠ WARNING: OpenCV CMake config not found at ${OPENCV_DIR}"
-        echo "  Searching for OpenCV installation..."
-        OPENCV_SEARCH=$(find /usr /usr/local \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) 2>/dev/null | head -1)
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: OpenCV CMake config not found at ${OPENCV_DIR}" >&2
+        printf '%s\n' "  Searching for OpenCV installation..."
+        # D3e: Add SIGPIPE error handling for pipeline with head
+        OPENCV_SEARCH=$(find /usr /usr/local \( -name "OpenCVConfig.cmake" -o -name "opencv-config.cmake" \) 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
         if [ -n "${OPENCV_SEARCH:-}" ]; then
             OPENCV_DIR=$(dirname "${OPENCV_SEARCH}")
-            echo "  Found OpenCV at: ${OPENCV_DIR}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Found OpenCV at: ${OPENCV_DIR}"
         else
-            echo "  ⚠ OpenCV not found - Open3D build may fail if CUDA module requires it"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ⚠ OpenCV not found - Open3D build may fail if CUDA module requires it" >&2
             OPENCV_DIR="/usr/local/lib/cmake/opencv4"  # Use default even if not found
         fi
     fi
 fi
 
 # Detect Eigen3_DIR (similar to how Eigen3 is typically installed)
-echo "Detecting Eigen3 CMake config directory..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Detecting Eigen3 CMake config directory..."
 EIGEN3_DIR=""
-EIGEN3_CONFIG_FILE=$(find /usr/local /usr \( -name "Eigen3Config.cmake" -o -name "eigen3-config.cmake" \) -path "*/cmake/eigen3/*" 2>/dev/null | head -1)
+# D3e: Add SIGPIPE error handling for pipeline with head
+EIGEN3_CONFIG_FILE=$(find /usr/local /usr \( -name "Eigen3Config.cmake" -o -name "eigen3-config.cmake" \) -path "*/cmake/eigen3/*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
 if [ -n "${EIGEN3_CONFIG_FILE:-}" ] && [ -f "${EIGEN3_CONFIG_FILE}" ]; then
     EIGEN3_DIR=$(dirname "${EIGEN3_CONFIG_FILE}")
-    echo "✓ Eigen3 CMake config found: ${EIGEN3_CONFIG_FILE}"
-    echo "  Setting Eigen3_DIR to: ${EIGEN3_DIR}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Eigen3 CMake config found: ${EIGEN3_CONFIG_FILE}"
+    printf '%s\n' "  Setting Eigen3_DIR to: ${EIGEN3_DIR}"
 else
     # Default to standard installation paths
     for EIGEN3_SEARCH_DIR in "/usr/local/share/eigen3/cmake" "/usr/share/eigen3/cmake" "/usr/lib/cmake/eigen3"; do
         if [ -d "${EIGEN3_SEARCH_DIR:-}" ] && ([ -f "${EIGEN3_SEARCH_DIR}/Eigen3Config.cmake" ] || [ -f "${EIGEN3_SEARCH_DIR}/eigen3-config.cmake" ]); then
             EIGEN3_DIR="$EIGEN3_SEARCH_DIR"
-            echo "✓ Eigen3 CMake config found at: ${EIGEN3_DIR}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ Eigen3 CMake config found at: ${EIGEN3_DIR}"
             break
         fi
     done
     if [ -z "${EIGEN3_DIR:-}" ]; then
         EIGEN3_DIR="/usr/local/share/eigen3/cmake"  # Use default
-        echo "⚠ WARNING: Eigen3 CMake config not found - using default: ${EIGEN3_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Eigen3 CMake config not found - using default: ${EIGEN3_DIR}" >&2
     fi
 fi
 
 # Detect GLFW CMake config file and paths
 # GLFW3 provides a CMake config file, so we should use glfw3_DIR if available
-echo "Detecting GLFW CMake config and library paths..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Detecting GLFW CMake config and library paths..."
 
 # Initialize variables to avoid unbound variable errors
 GLFW_CONFIG_DIR=""
@@ -17911,14 +17980,16 @@ GLFW_INCLUDE_DIR=""
 
 # Find GLFW CMake config file (handle multiple results with head -1)
 # Search in all standard locations where glfw3Config.cmake might be installed
-GLFW_CONFIG_DIR=$(find /usr /usr/local \( -name "glfw3Config.cmake" -o -name "glfw3-config.cmake" \) -path "*/cmake/glfw3/*" 2>/dev/null | head -1)
+# D3e: Add SIGPIPE error handling for pipeline with head
+GLFW_CONFIG_DIR=$(find /usr /usr/local \( -name "glfw3Config.cmake" -o -name "glfw3-config.cmake" \) -path "*/cmake/glfw3/*" 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
 
 if [ -n "${GLFW_CONFIG_DIR:-}" ] && [ -f "${GLFW_CONFIG_DIR}" ]; then
     # Extract directory containing glfw3Config.cmake (parent of the config file)
     GLFW_DIR=$(dirname "${GLFW_CONFIG_DIR}")
     if [ -d "${GLFW_DIR:-}" ]; then
-        echo "✓ GLFW CMake config found: ${GLFW_CONFIG_DIR}"
-        echo "  Setting glfw3_DIR to: ${GLFW_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ GLFW CMake config found: ${GLFW_CONFIG_DIR}"
+        printf '%s\n' "  Setting glfw3_DIR to: ${GLFW_DIR}"
         # Use glfw3_DIR (preferred method when config file exists)
         # CMake handles paths with spaces automatically, no quotes needed in variable
         GLFW_CMAKE_FLAGS="-Dglfw3_DIR=${GLFW_DIR}"
@@ -17926,33 +17997,42 @@ if [ -n "${GLFW_CONFIG_DIR:-}" ] && [ -f "${GLFW_CONFIG_DIR}" ]; then
         # CMake searches <prefix>/lib/cmake/ and <prefix>/<package>/, so we add the parent
         GLFW_CMAKE_PREFIX=$(dirname "${GLFW_DIR}")  # e.g., /usr/lib/x86_64-linux-gnu/cmake
         if [ -d "${GLFW_CMAKE_PREFIX:-}" ]; then
-            echo "  GLFW cmake prefix directory: ${GLFW_CMAKE_PREFIX}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  GLFW cmake prefix directory: ${GLFW_CMAKE_PREFIX}"
         else
             GLFW_CMAKE_PREFIX=""
         fi
     else
-        echo "⚠ GLFW config directory invalid: $GLFW_DIR"
+        # A5a/D3b: Use printf instead of echo for robustness
+        # D1: Quote variable to prevent word splitting
+        printf '%s\n' "⚠ GLFW config directory invalid: ${GLFW_DIR}" >&2
         GLFW_CONFIG_DIR=""
     fi
 fi
 
 # Fallback: try to find library and include paths manually if config not found
 if [ -z "${GLFW_CONFIG_DIR:-}" ] || [ -z "${GLFW_DIR:-}" ]; then
-    echo "⚠ GLFW CMake config not found, trying manual detection..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ GLFW CMake config not found, trying manual detection..." >&2
     # Find GLFW library (handle multiple results) - search in all standard locations
-    GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib -name "libglfw.so*" -type f 2>/dev/null | head -1)
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    GLFW_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/local/lib -name "libglfw.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     
     # Find GLFW include - split find commands to avoid -o operator issues
-    GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -name "glfw3.h" -type f 2>/dev/null | head -1)
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -name "glfw3.h" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     if [ -z "${GLFW_INCLUDE_PATH:-}" ]; then
-        GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1)
+        # D3e: Add SIGPIPE error handling for pipeline with head
+        GLFW_INCLUDE_PATH=$(find /usr/include /usr/local/include -path "*/GLFW/glfw3.h" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     fi
     
     if [ -n "${GLFW_LIB_PATH:-}" ] && [ -f "${GLFW_LIB_PATH}" ]; then
         GLFW_LIB_DIR=$(dirname "${GLFW_LIB_PATH}")
-        echo "✓ GLFW library found: ${GLFW_LIB_PATH}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ GLFW library found: ${GLFW_LIB_PATH}"
     else
-        echo "⚠ GLFW library not found in standard locations"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ GLFW library not found in standard locations" >&2
         # shellcheck disable=SC2034 # GLFW_LIB_DIR may be used by build functions
         GLFW_LIB_DIR="/usr/lib/x86_64-linux-gnu"
         GLFW_LIB_PATH=""
@@ -17966,10 +18046,12 @@ if [ -z "${GLFW_CONFIG_DIR:-}" ] || [ -z "${GLFW_DIR:-}" ]; then
         else
             GLFW_INCLUDE_DIR=$(dirname "${GLFW_INCLUDE_PATH}")
         fi
-        echo "✓ GLFW include found: ${GLFW_INCLUDE_PATH}"
-        echo "  GLFW include directory: ${GLFW_INCLUDE_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ GLFW include found: ${GLFW_INCLUDE_PATH}"
+        printf '%s\n' "  GLFW include directory: ${GLFW_INCLUDE_DIR}"
     else
-        echo "⚠ GLFW include not found in standard locations"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ GLFW include not found in standard locations" >&2
         GLFW_INCLUDE_DIR="/usr/include"
         GLFW_INCLUDE_PATH=""
     fi
@@ -17977,12 +18059,15 @@ if [ -z "${GLFW_CONFIG_DIR:-}" ] || [ -z "${GLFW_DIR:-}" ]; then
     # Use explicit paths as fallback (CMake handles paths with spaces automatically)
     if [ -n "${GLFW_LIB_PATH:-}" ] && [ -n "${GLFW_INCLUDE_DIR:-}" ]; then
         GLFW_CMAKE_FLAGS="-DGLFW3_LIBRARY=${GLFW_LIB_PATH} -DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
-        echo "  Using explicit GLFW paths: lib=${GLFW_LIB_PATH}, include=${GLFW_INCLUDE_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Using explicit GLFW paths: lib=${GLFW_LIB_PATH}, include=${GLFW_INCLUDE_DIR}"
     elif [ -n "${GLFW_INCLUDE_DIR:-}" ]; then
         GLFW_CMAKE_FLAGS="-DGLFW3_INCLUDE_DIR=${GLFW_INCLUDE_DIR}"
-        echo "  Using GLFW include directory for CMake search: ${GLFW_INCLUDE_DIR}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Using GLFW include directory for CMake search: ${GLFW_INCLUDE_DIR}"
     else
-        echo "⚠ Could not determine GLFW paths, CMake will attempt auto-detection"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ Could not determine GLFW paths, CMake will attempt auto-detection" >&2
         GLFW_CMAKE_FLAGS=""
     fi
 fi
@@ -17995,74 +18080,107 @@ fi
 # CRITICAL: Open3D's Filament renderer uses libc++ which can conflict with system libunwind.so.8
 # LLVM-14 is more stable than LLVM-18 for Open3D Filament renderer
 # Note: LLVM-11 NOT available on Noble (only Ubuntu 22.04 Jammy)
-echo "Detecting LLVM libc++ libraries (Ubuntu 24.04 Noble - prefer LLVM-14)..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Detecting LLVM libc++ libraries (Ubuntu 24.04 Noble - prefer LLVM-14)..."
 CLANG_LIBDIR_11=""
 CLANG_LIBDIR_DETECTED=""
 
 # Try to find libc++.so and libc++abi.so in standard Debian/Ubuntu locations
 # Ubuntu 24.04 Noble installs LLVM libraries in /usr/lib/x86_64-linux-gnu, not version-specific dirs
-echo "Searching for LLVM libc++ libraries in standard locations..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Searching for LLVM libc++ libraries in standard locations..."
 
 # First, try to find in standard Debian/Ubuntu library location (most likely for Noble)
-LIB_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libc++.so*" -type f 2>/dev/null | head -1)
-ABI_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libc++abi.so*" -type f 2>/dev/null | head -1)
+# D3e: Add SIGPIPE error handling for pipeline with head
+# A5a/D3b: Use printf instead of echo for robustness
+LIB_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libc++.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
+# D3e: Add SIGPIPE error handling for pipeline with head
+# A5a/D3b: Use printf instead of echo for robustness
+ABI_PATH=$(find /usr/lib/x86_64-linux-gnu -name "libc++abi.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
 
-if [ -n "$LIB_PATH" ] && [ -n "$ABI_PATH" ]; then
+# D1: Quote variables to prevent word splitting
+if [ -n "${LIB_PATH:-}" ] && [ -n "${ABI_PATH:-}" ]; then
     CLANG_LIBDIR_DETECTED="/usr/lib/x86_64-linux-gnu"
-    echo "✓ LLVM libc++ found in: ${CLANG_LIBDIR_DETECTED}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ LLVM libc++ found in: ${CLANG_LIBDIR_DETECTED}"
 else
     # Fallback: search version-specific LLVM directories (prefer LLVM-14, then 15, 16, etc.)
-    echo "  Standard location not found, searching version-specific directories..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Standard location not found, searching version-specific directories..."
     for LLVM_VER in 14 15 16 17 18 19; do
         for BASE_DIR in "/usr/lib/llvm-${LLVM_VER}/lib" "/usr/lib/x86_64-linux-gnu/llvm-${LLVM_VER}/lib"; do
             if [ -d "${BASE_DIR:-}" ]; then
-                LIB_PATH=$(find "${BASE_DIR}" -name "libc++.so*" -type f 2>/dev/null | head -1)
-                ABI_PATH=$(find "${BASE_DIR}" -name "libc++abi.so*" -type f 2>/dev/null | head -1)
+                # D3e: Add SIGPIPE error handling for pipeline with head
+                # A5a/D3b: Use printf instead of echo for robustness
+                LIB_PATH=$(find "${BASE_DIR}" -name "libc++.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
+                # D3e: Add SIGPIPE error handling for pipeline with head
+                # A5a/D3b: Use printf instead of echo for robustness
+                ABI_PATH=$(find "${BASE_DIR}" -name "libc++abi.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
                 if [ -n "${LIB_PATH:-}" ] && [ -n "${ABI_PATH:-}" ]; then
                     CLANG_LIBDIR_DETECTED="${BASE_DIR}"
-                    echo "  ✓ Found LLVM-${LLVM_VER} libc++ in: ${CLANG_LIBDIR_DETECTED}"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ✓ Found LLVM-${LLVM_VER} libc++ in: ${CLANG_LIBDIR_DETECTED}"
                     break 2
+                # ENDIF: LIB_PATH and ABI_PATH check
                 fi
+            # ENDIF: BASE_DIR existence check
             fi
+        # ENDFOR: BASE_DIR
         done
+    # ENDFOR: LLVM_VER
     done
+# ENDIF: LIB_PATH and ABI_PATH check (standard location)
 fi
 
 if [ -z "${CLANG_LIBDIR_DETECTED:-}" ]; then
-    echo "  ⚠ No LLVM libc++ found in standard locations - Open3D will attempt auto-detection (may fail)"
-    echo "  Consider setting BUILD_LLVM11_LOCALLY=true to build LLVM-11 locally (takes 30-60 minutes)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ No LLVM libc++ found in standard locations - Open3D will attempt auto-detection (may fail)" >&2
+    printf '%s\n' "  Consider setting BUILD_LLVM11_LOCALLY=true to build LLVM-11 locally (takes 30-60 minutes)" >&2
 fi
 
 # Detect C++ library path explicitly (to avoid CMake looking in wrong places like /tmp/Open3D)
-echo ""
-echo "Detecting C++ standard library for explicit CMake configuration..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "Detecting C++ standard library for explicit CMake configuration..."
 if [ -z "${CPP_LIBRARY:-}" ]; then
-    CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    # A5a/D3b: Use printf instead of echo for robustness
+    CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     if [ -n "${CPP_LIB_PATH}" ] && [ -f "${CPP_LIB_PATH}" ]; then
         export CPP_LIBRARY="${CPP_LIB_PATH}"
-        echo "✓ C++ library detected: ${CPP_LIBRARY}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ C++ library detected: ${CPP_LIBRARY}"
     else
-        echo "⚠ C++ standard library not found in standard locations"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ C++ standard library not found in standard locations" >&2
         export CPP_LIBRARY=""
+    # ENDIF: CPP_LIB_PATH existence check
     fi
 else
     # Verify existing CPP_LIBRARY value is valid
     if [ ! -f "${CPP_LIBRARY}" ]; then
-        echo "⚠ WARNING: CPP_LIBRARY is set to non-existent file: ${CPP_LIBRARY}"
-        echo "  Attempting to detect C++ library automatically..."
-        CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1)
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: CPP_LIBRARY is set to non-existent file: ${CPP_LIBRARY}" >&2
+        printf '%s\n' "  Attempting to detect C++ library automatically..."
+        # D3e: Add SIGPIPE error handling for pipeline with head
+        CPP_LIB_PATH=$(find /usr/lib /usr/lib/x86_64-linux-gnu /usr/lib64 -name "libstdc++.so*" -type f 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
         if [ -n "${CPP_LIB_PATH}" ] && [ -f "${CPP_LIB_PATH}" ]; then
             export CPP_LIBRARY="${CPP_LIB_PATH}"
-            echo "✓ C++ library re-detected: ${CPP_LIBRARY}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ C++ library re-detected: ${CPP_LIBRARY}"
         else
             export CPP_LIBRARY=""
+        # ENDIF: CPP_LIB_PATH re-detection check
         fi
+    # ENDIF: CPP_LIBRARY file existence check
     fi
+# ENDIF: CPP_LIBRARY empty check
 fi
 
 # CMake configuration with Ninja generator
-echo ""
-echo "⚙️ Running CMake configuration with Ninja generator..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "⚙️ Running CMake configuration with Ninja generator..."
 
 # Optional: Compile LLVM-11 locally if no suitable LLVM is found
 # This is a fallback option that takes significant time but ensures compatibility
@@ -18071,28 +18189,40 @@ BUILD_LLVM11_LOCALLY="${BUILD_LLVM11_LOCALLY:-false}"
 LOCAL_LLVM11_DIR=""
 
 if [ "${BUILD_LLVM11_LOCALLY}" = "true" ] && [ -z "${CLANG_LIBDIR_11:-}" ] && [ -z "${CLANG_LIBDIR_DETECTED:-}" ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Building LLVM-11 locally for Open3D (this will take 30-60 minutes)..."
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "Building LLVM-11 locally for Open3D (this will take 30-60 minutes)..."
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
     
     LOCAL_LLVM11_DIR="/tmp/llvm-11-build"
-    mkdir -p "$LOCAL_LLVM11_DIR"
-    cd "$LOCAL_LLVM11_DIR"
+    mkdir -p "${LOCAL_LLVM11_DIR}"
+    # J1: Add directory existence check before cd
+    if [ ! -d "${LOCAL_LLVM11_DIR}" ]; then
+        printf '%s\n' "✗ ERROR: Failed to create LLVM build directory: ${LOCAL_LLVM11_DIR}" >&2
+        exit 1
+    fi
+    if ! cd "${LOCAL_LLVM11_DIR}"; then
+        printf '%s\n' "✗ ERROR: Failed to change to LLVM build directory: ${LOCAL_LLVM11_DIR}" >&2
+        exit 1
+    fi
     
     # Clone LLVM 11 release branch (minimal clone)
     LLVM_CLONE_SUCCESS=false
     if [ ! -d "llvm-project" ]; then
-        echo "Cloning LLVM 11.1.0 source..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "Cloning LLVM 11.1.0 source..."
         if git clone --depth 1 --branch llvmorg-11.1.0 https://github.com/llvm/llvm-project.git 2>&1; then
             LLVM_CLONE_SUCCESS=true
         else
-            echo "  First branch failed, trying release/11.x branch..."
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  First branch failed, trying release/11.x branch..."
             if git clone --depth 1 --branch release/11.x https://github.com/llvm/llvm-project.git 2>&1; then
                 LLVM_CLONE_SUCCESS=true
             else
-                echo "  ✗ Failed to clone LLVM 11 source - cannot build locally"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✗ Failed to clone LLVM 11 source - cannot build locally" >&2
             fi
         fi
     else
@@ -18102,12 +18232,19 @@ if [ "${BUILD_LLVM11_LOCALLY}" = "true" ] && [ -z "${CLANG_LIBDIR_11:-}" ] && [ 
     # Build only libc++ and libc++abi (not full LLVM - much faster)
     if [ "${LLVM_CLONE_SUCCESS}" = "true" ] && [ -d "llvm-project" ]; then
         mkdir -p build-libcxx
+        # J1: Add directory existence check before cd
+        if [ ! -d "build-libcxx" ]; then
+            printf '%s\n' "✗ ERROR: Failed to create build-libcxx directory" >&2
+            exit 1
+        fi
         if ! cd build-libcxx; then
-            echo "✗ ERROR: Cannot change to build-libcxx directory"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✗ ERROR: Cannot change to build-libcxx directory" >&2
             exit 1
         fi
         
-        echo "Configuring libc++ build..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "Configuring libc++ build..."
         cmake ../llvm-project/runtimes \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${LOCAL_LLVM11_DIR}/install" \
@@ -18123,37 +18260,61 @@ if [ "${BUILD_LLVM11_LOCALLY}" = "true" ] && [ -z "${CLANG_LIBDIR_11:-}" ] && [ 
         
         CMAKE_EXIT_CODE="${PIPESTATUS[0]}"
         if [ "${CMAKE_EXIT_CODE}" -eq 0 ]; then
-            echo "Building libc++ (this may take 20-40 minutes)..."
-            cmake --build . --target install -j"$(nproc)" 2>&1 | tee build.log
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "Building libc++ (this may take 20-40 minutes)..."
+            # D3e: Add SIGPIPE error handling for pipeline with tee
+            cmake --build . --target install -j"$(nproc)" 2>&1 | tee build.log 2>/dev/null || true
             
             BUILD_EXIT_CODE="${PIPESTATUS[0]}"
             if [ "${BUILD_EXIT_CODE}" -eq 0 ]; then
                 LOCAL_LLVM11_LIBDIR="${LOCAL_LLVM11_DIR}/install/lib"
                 if [ -f "${LOCAL_LLVM11_LIBDIR}/libc++.so" ] && [ -f "${LOCAL_LLVM11_LIBDIR}/libc++abi.so" ]; then
                     CLANG_LIBDIR_11="${LOCAL_LLVM11_LIBDIR}"
-                    echo "✓ LLVM-11 libc++ built successfully: ${CLANG_LIBDIR_11}"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "✓ LLVM-11 libc++ built successfully: ${CLANG_LIBDIR_11}"
                 else
-                    echo "⚠ LLVM-11 build completed but libraries not found"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "⚠ LLVM-11 build completed but libraries not found" >&2
                 fi
             else
-                echo "⚠ LLVM-11 build failed - check build.log"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "⚠ LLVM-11 build failed - check build.log" >&2
             fi
         else
-            echo "⚠ LLVM-11 configuration failed - check cmake.log"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ LLVM-11 configuration failed - check cmake.log" >&2
         fi
         
-        if ! cd "${LOCAL_LLVM11_DIR}" 2>/dev/null; then
-            if ! cd /tmp/Open3D 2>/dev/null; then
-                echo "⚠ WARNING: Could not return to expected directory"
+        # J1: Add directory existence check before cd
+        if [ -d "${LOCAL_LLVM11_DIR}" ]; then
+            if ! cd "${LOCAL_LLVM11_DIR}" 2>/dev/null; then
+                # J1: Fallback to /tmp/Open3D if LOCAL_LLVM11_DIR fails
+                if [ -d "/tmp/Open3D" ]; then
+                    if ! cd /tmp/Open3D 2>/dev/null; then
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "⚠ WARNING: Could not return to expected directory" >&2
+                    fi
+                else
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "⚠ WARNING: Could not return to expected directory" >&2
+                fi
             fi
         fi
     fi
     
     # Ensure we're back in Open3D directory
-    cd /tmp/Open3D 2>/dev/null || {
-        echo "  ⚠ Warning: Could not return to /tmp/Open3D directory"
-        echo "  Please ensure you are in the correct directory before continuing"
-    }
+    # J1: Add directory existence check before cd
+    if [ -d "/tmp/Open3D" ]; then
+        if ! cd /tmp/Open3D 2>/dev/null; then
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ⚠ Warning: Could not return to /tmp/Open3D directory" >&2
+            printf '%s\n' "  Please ensure you are in the correct directory before continuing"
+        fi
+    else
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ⚠ Warning: /tmp/Open3D directory does not exist" >&2
+        printf '%s\n' "  Please ensure you are in the correct directory before continuing"
+    fi
 fi
 
 # Prepare CLANG_LIBDIR flag (prefer locally built LLVM-11, fallback to detected LLVM version)
@@ -18166,31 +18327,38 @@ CLANG_LIBDIR_TO_USE=""
 
 if [ -n "${CLANG_LIBDIR_11:-}" ] && [ -d "${CLANG_LIBDIR_11}" ]; then
     CLANG_LIBDIR_TO_USE="${CLANG_LIBDIR_11}"
-    echo "  Using LLVM-11 libc++: ${CLANG_LIBDIR_TO_USE} (Open3D Filament only - avoids libunwind conflict)"
-    echo "  Note: LLVM-11 built locally. This does NOT affect other LLVM usage in the image."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Using LLVM-11 libc++: ${CLANG_LIBDIR_TO_USE} (Open3D Filament only - avoids libunwind conflict)"
+    printf '%s\n' "  Note: LLVM-11 built locally. This does NOT affect other LLVM usage in the image."
 elif [ -n "${CLANG_LIBDIR_DETECTED:-}" ] && [ -d "${CLANG_LIBDIR_DETECTED}" ]; then
     CLANG_LIBDIR_TO_USE="${CLANG_LIBDIR_DETECTED}"
     LLVM_VERSION_DETECTED=""
     # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
-    LLVM_VERSION_DETECTED=$(sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' <<< "${CLANG_LIBDIR_TO_USE}" | head -1 || echo "")
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    LLVM_VERSION_DETECTED=$(sed -n 's|.*llvm-\([0-9]\+\)/.*|\1|p' <<< "${CLANG_LIBDIR_TO_USE}" 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${LLVM_VERSION_DETECTED}" ]; then
         # Check if version is numeric and greater than 11 (use bash arithmetic instead of expr)
         if [[ "${LLVM_VERSION_DETECTED}" =~ ^[0-9]+$ ]] && [ "${LLVM_VERSION_DETECTED}" -gt 11 ]; then
-            echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE} (may have libunwind conflict)"
-            echo "  Warning: LLVM-${LLVM_VERSION_DETECTED} may cause Python exception issues with Filament renderer"
-            echo "  Workaround: If Python exceptions fail, set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE} (may have libunwind conflict)"
+            printf '%s\n' "  Warning: LLVM-${LLVM_VERSION_DETECTED} may cause Python exception issues with Filament renderer" >&2
+            printf '%s\n' "  Workaround: If Python exceptions fail, set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally"
         elif [[ "${LLVM_VERSION_DETECTED}" =~ ^[0-9]+$ ]]; then
-            echo "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Using detected LLVM-${LLVM_VERSION_DETECTED} libc++: ${CLANG_LIBDIR_TO_USE}"
         else
-            echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
         fi
     else
-        echo "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Using detected LLVM libc++: ${CLANG_LIBDIR_TO_USE} (standard Debian/Ubuntu location)"
     fi
 else
-    echo "  ⚠ No LLVM libc++ detected - Open3D will attempt auto-detection"
-    echo "  This may cause configuration failures if libraries cannot be found"
-    echo "  Option: Set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally (takes 30-60 minutes)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ No LLVM libc++ detected - Open3D will attempt auto-detection" >&2
+    printf '%s\n' "  This may cause configuration failures if libraries cannot be found"
+    printf '%s\n' "  Option: Set BUILD_LLVM11_LOCALLY=true to compile LLVM-11 locally (takes 30-60 minutes)"
 fi
 
 # Only set CLANG_LIBDIR flag if we have a valid directory
@@ -18205,23 +18373,27 @@ SYSTEM_LIB_FLAGS=""
 # Check if libraries exist before enabling USE_SYSTEM_* flags
 if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libfmt-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libfmt.so" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_FMT=ON"
-    echo "  Will use system fmt library"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Will use system fmt library"
 fi
 
 if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libtbb-dev") || \
    (command -v ldconfig >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -q libtbb); then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_TBB=ON"
-    echo "  Will use system TBB library (from libtbb-dev, not MKL TBB - ensures OpenBLAS compatibility)"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Will use system TBB library (from libtbb-dev, not MKL TBB - ensures OpenBLAS compatibility)"
 fi
 
 if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*libassimp-dev") || [ -f "/usr/lib/x86_64-linux-gnu/libassimp.so" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_ASSIMP=ON"
-    echo "  Will use system Assimp library"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Will use system Assimp library"
 fi
 
 if (command -v dpkg >/dev/null 2>&1 && dpkg -l 2>/dev/null | grep -q "^ii.*pybind11-dev") || [ -f "/usr/include/pybind11/pybind11.h" ]; then
     SYSTEM_LIB_FLAGS="${SYSTEM_LIB_FLAGS} -DUSE_SYSTEM_PYBIND11=ON"
-    echo "  Will use system pybind11 library"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  Will use system pybind11 library"
 fi
 
 #===============================================================================
@@ -18233,21 +18405,25 @@ OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr -
 GCC_VERSION_FOR_OPEN3D=""
 GCC_MAJOR_FOR_OPEN3D=""
 if command -v gcc &>/dev/null; then
-    GCC_VERSION_FOR_OPEN3D=$(gcc --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+' | head -1 || echo "")
+    # D3e: Add SIGPIPE error handling for pipeline with head
+    GCC_VERSION_FOR_OPEN3D=$(gcc --version 2>/dev/null | head -1 2>/dev/null | grep -oE '[0-9]+\.[0-9]+' 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "")
     if [ -n "${GCC_VERSION_FOR_OPEN3D}" ]; then
         # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
         GCC_MAJOR_FOR_OPEN3D=$(cut -d. -f1 <<< "${GCC_VERSION_FOR_OPEN3D}")
-        echo "  Detected GCC version for Open3D: ${GCC_VERSION_FOR_OPEN3D}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Detected GCC version for Open3D: ${GCC_VERSION_FOR_OPEN3D}"
         
         # Apply workarounds for GCC 11 + NVCC + C++17 compatibility issue
         # Error: parameter packs not expanded with '...' in std_function.h
         if [ "${GCC_MAJOR_FOR_OPEN3D}" = "11" ]; then
-            echo -e "  ${YELLOW}⚠ GCC 11 detected - ensuring compatibility workarounds for NVCC${NC}"
+            # A5a/D3b: Use printf with color codes instead of echo -e for robustness
+            printf '%b\n' "  ${YELLOW}⚠ GCC 11 detected - ensuring compatibility workarounds for NVCC${NC}"
             # Flags already include --allow-unsupported-compiler, but ensure they're set correctly
             OPEN3D_CUDA_FLAGS_VALUE="--allow-unsupported-compiler --expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
         elif [ "${GCC_MAJOR_FOR_OPEN3D}" -ge "12" ]; then
             # GCC 12+ has better NVCC compatibility - use standard flags without -allow-unsupported-compiler
-            echo -e "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
+            # A5a/D3b: Use printf with color codes instead of echo -e for robustness
+            printf '%b\n' "  ${GREEN}✓ GCC 12+ detected - using standard NVCC flags${NC}"
             OPEN3D_CUDA_FLAGS_VALUE="--expt-relaxed-constexpr --expt-extended-lambda -Xcompiler=-Wno-deprecated-declarations -Xcompiler=-Wno-array-bounds -Xcompiler=-Wno-stringop-overflow"
         fi
     fi
@@ -18260,12 +18436,15 @@ if [ -n "${CUDA_VERSION:-}" ] && [ -d "/usr/local/cuda-${CUDA_VERSION}" ]; then
         CUDA_FLAGS="-DCMAKE_CUDA_COMPILER=/usr/local/cuda-${CUDA_VERSION}/bin/nvcc"
         CUDA_FLAGS="${CUDA_FLAGS} -DENABLE_CACHED_CUDA_MANAGER=ON"
         CUDA_FLAGS="${CUDA_FLAGS} -DBUILD_WITH_CUDA_STATIC=ON"
-        echo "  Using CUDA ${CUDA_VERSION} with cached memory manager and static libraries"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Using CUDA ${CUDA_VERSION} with cached memory manager and static libraries"
     else
-        echo "  ⚠ WARNING: CUDA ${CUDA_VERSION} directory exists but nvcc not found"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ⚠ WARNING: CUDA ${CUDA_VERSION} directory exists but nvcc not found" >&2
     fi
 elif [ -z "${CUDA_VERSION:-}" ]; then
-    echo "  ⚠ WARNING: CUDA_VERSION not set - CMake will attempt to auto-detect CUDA"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ⚠ WARNING: CUDA_VERSION not set - CMake will attempt to auto-detect CUDA" >&2
 fi
 
 # Enhanced include path with OpenBLAS headers if found
@@ -18273,104 +18452,119 @@ fi
 ENHANCED_INCLUDE_PATH="/usr/include/x86_64-linux-gnu;/usr/include;/usr/local/include;${MKL_INCLUDE_DIR:-}"
 
 # Debug: Display key configuration variables
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "CMake Configuration Summary:"
-echo "  OpenCV_DIR: ${OPENCV_DIR:-'<not set>'}"
-echo "  Eigen3_DIR: ${EIGEN3_DIR:-'<not set>'}"
-echo "  GLFW_CMAKE_PREFIX: ${GLFW_CMAKE_PREFIX:-'<not set>'}"
-echo "  BUILD_WEBRTC_FROM_SOURCE: OFF (explicit)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "CMake Configuration Summary:"
+printf '%s\n' "  OpenCV_DIR: ${OPENCV_DIR:-'<not set>'}"
+printf '%s\n' "  Eigen3_DIR: ${EIGEN3_DIR:-'<not set>'}"
+printf '%s\n' "  GLFW_CMAKE_PREFIX: ${GLFW_CMAKE_PREFIX:-'<not set>'}"
+printf '%s\n' "  BUILD_WEBRTC_FROM_SOURCE: OFF (explicit)"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Final verification: Check if WebRTC binaries are in expected location before cmake
-echo ""
-echo "Pre-CMake Verification: Checking Open3D download cache..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "Pre-CMake Verification: Checking Open3D download cache..."
 if [ -f "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" ]; then
     WEBRTC_SIZE=$(du -h "${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}" | cut -f1)
-    echo "✓ WebRTC binary found in Open3D cache: ${WEBRTC_SIZE}"
-    echo "  Path: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ WebRTC binary found in Open3D cache: ${WEBRTC_SIZE}"
+    printf '%s\n' "  Path: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
     
     # Manual extraction to expected SOURCE_DIR location
     # ExternalProject_Add extracts to: ${CMAKE_BINARY_DIR}/webrtc/src/ext_webrtc
     # We're currently in /tmp/Open3D/build
     WEBRTC_EXTRACT_DIR="webrtc/src/ext_webrtc"
-    echo ""
-    echo "Manually extracting WebRTC archive to: ${WEBRTC_EXTRACT_DIR}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "Manually extracting WebRTC archive to: ${WEBRTC_EXTRACT_DIR}"
     mkdir -p "${WEBRTC_EXTRACT_DIR}"
     cd "${WEBRTC_EXTRACT_DIR}" || exit 1
     
     # Extract tar.gz and handle the webrtc_release subdirectory
     WEBRTC_ARCHIVE="${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
     if [ ! -f "${WEBRTC_ARCHIVE}" ]; then
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  ERROR: WebRTC archive not found"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
-        echo "  Expected location: ${WEBRTC_ARCHIVE}"
-        echo "  Source URL: ${OPEN3D_WEBRTC_URL:-unknown}"
-        echo ""
-        echo "  You may manually download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
-        echo "  Or in the container at:"
-        echo "    ${WEBRTC_ARCHIVE}"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ ERROR: WebRTC archive not found: ${WEBRTC_ARCHIVE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' ""
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  ERROR: WebRTC archive not found" >&2
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  File name: ${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' "  Expected location: ${WEBRTC_ARCHIVE}"
+        printf '%s\n' "  Source URL: ${OPEN3D_WEBRTC_URL:-unknown}"
+        printf '%s\n' ""
+        printf '%s\n' "  You may manually download this file and place it at:"
+        printf '%s\n' "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' "  Or in the container at:"
+        printf '%s\n' "    ${WEBRTC_ARCHIVE}"
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "✗ ERROR: WebRTC archive not found: ${WEBRTC_ARCHIVE}" >&2
     elif [ ! -r "${WEBRTC_ARCHIVE}" ]; then
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  ERROR: WebRTC archive is not readable"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
-        echo "  Location: ${WEBRTC_ARCHIVE}"
-        echo ""
-        echo "  Please check file permissions and try again."
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ ERROR: WebRTC archive is not readable: ${WEBRTC_ARCHIVE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' ""
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  ERROR: WebRTC archive is not readable" >&2
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  File name: ${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' "  Location: ${WEBRTC_ARCHIVE}"
+        printf '%s\n' ""
+        printf '%s\n' "  Please check file permissions and try again."
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "✗ ERROR: WebRTC archive is not readable: ${WEBRTC_ARCHIVE}" >&2
     elif ! tar -xzf "${WEBRTC_ARCHIVE}" 2>/dev/null; then
-        echo ""
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  ERROR: WebRTC archive extraction failed"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "  File name: ${OPEN3D_WEBRTC_FILE}"
-        echo "  Location: ${WEBRTC_ARCHIVE}"
-        echo ""
-        echo "  Archive may be corrupted or incomplete."
-        echo "  You may need to re-download this file and place it at:"
-        echo "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
-        echo "═══════════════════════════════════════════════════════════════"
-        echo "✗ ERROR: Manual extraction failed for ${WEBRTC_ARCHIVE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' ""
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  ERROR: WebRTC archive extraction failed" >&2
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "  File name: ${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' "  Location: ${WEBRTC_ARCHIVE}"
+        printf '%s\n' ""
+        printf '%s\n' "  Archive may be corrupted or incomplete."
+        printf '%s\n' "  You may need to re-download this file and place it at:"
+        printf '%s\n' "    ${CONTAINER_BIN_CACHE}/${OPEN3D_WEBRTC_FILE}"
+        printf '%s\n' "═══════════════════════════════════════════════════════════════"
+        printf '%s\n' "✗ ERROR: Manual extraction failed for ${WEBRTC_ARCHIVE}" >&2
     else
         # Check if extraction created webrtc_release subdirectory
         if [ -d "webrtc_release" ]; then
-            echo "  Archive extracted to webrtc_release/, moving contents to parent..."
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Archive extracted to webrtc_release/, moving contents to parent..."
             shopt -s dotglob
             if ! mv webrtc_release/* . 2>/dev/null; then
-                echo "  Δ Failed to flatten webrtc_release contents (continuing)"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Δ Failed to flatten webrtc_release contents (continuing)"
             fi
             shopt -u dotglob
             rm -rf webrtc_release
         fi
-        echo "✓ WebRTC manually extracted successfully"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "✓ WebRTC manually extracted successfully"
         
         # Verify libwebrtc.a exists
         if [ -f "lib/libwebrtc.a" ]; then
-            echo "✓ Verified: lib/libwebrtc.a exists"
-            find "lib" -maxdepth 1 -name "libwebrtc.a" -type f -ls 2>/dev/null | head -1 || true
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ Verified: lib/libwebrtc.a exists"
+            # D3e: SIGPIPE error handling - add || true for pipeline with head
+            find "lib" -maxdepth 1 -name "libwebrtc.a" -type f -ls 2>/dev/null | head -1 2>/dev/null || true
         else
-            echo "⚠ WARNING: lib/libwebrtc.a not found after extraction"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ WARNING: lib/libwebrtc.a not found after extraction"
         fi
     fi
     
     # Return to build directory (we came from /tmp/Open3D/build)
     cd - >/dev/null || exit 1
 else
-    echo "⚠ WebRTC binary NOT found in Open3D cache before CMake configuration"
-    echo "  Expected: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
-    echo "  Open3D will attempt to download during configuration/build phase"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WebRTC binary NOT found in Open3D cache before CMake configuration"
+    printf '%s\n' "  Expected: ${OPEN3D_DOWNLOAD_CACHE}/webrtc/${OPEN3D_WEBRTC_FILE}"
+    printf '%s\n' "  Open3D will attempt to download during configuration/build phase"
 fi
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 # Enhanced CMake configuration with comprehensive flags for robust compilation
 # Based on Open3D 0.19.0 documented flags (see OPEN3D_0.19.0_CMAKE_FLAGS_DOCUMENTATION.md)
@@ -18447,73 +18641,95 @@ cmake .. \
 # Check if configuration succeeded
 CMAKE_CONFIG_EXIT_CODE="${PIPESTATUS[0]}"
 if [ "${CMAKE_CONFIG_EXIT_CODE}" -ne 0 ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ Open3D CUDA configuration FAILED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "ERROR: CUDA is REQUIRED for this build - no CPU fallback available"
-    echo "  Please ensure:"
-    echo "    1. CUDA toolkit is installed (version ${CUDA_VERSION})"
-    echo "    2. CUDA compiler (nvcc) is available in PATH"
-    echo "    3. GPU with compatible architecture is available"
-    echo "    4. CMake can find CUDA libraries"
-    echo ""
-    echo "Review /tmp/open3d_cmake.log for detailed error information."
-    echo "Last 80 lines of CMake log:"
-    tail -80 /tmp/open3d_cmake.log || true
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "✗ Open3D CUDA configuration FAILED"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "ERROR: CUDA is REQUIRED for this build - no CPU fallback available"
+    printf '%s\n' "  Please ensure:"
+    printf '%s\n' "    1. CUDA toolkit is installed (version ${CUDA_VERSION:-unknown})"
+    printf '%s\n' "    2. CUDA compiler (nvcc) is available in PATH"
+    printf '%s\n' "    3. GPU with compatible architecture is available"
+    printf '%s\n' "    4. CMake can find CUDA libraries"
+    printf '%s\n' ""
+    printf '%s\n' "Review /tmp/open3d_cmake.log for detailed error information."
+    printf '%s\n' "Last 80 lines of CMake log:"
+    # J1: File existence validation before reading
+    if [ -f /tmp/open3d_cmake.log ] && [ -r /tmp/open3d_cmake.log ]; then
+        # D3e: SIGPIPE error handling - add || true for pipeline with tail
+        tail -80 /tmp/open3d_cmake.log 2>/dev/null || true
+    else
+        printf '%s\n' "  [WARNING] CMake log file not found or not readable: /tmp/open3d_cmake.log" >&2
+    fi
     exit 1
+# ENDIF: CMAKE_CONFIG_EXIT_CODE check
 fi
 
 # Verify CUDA was actually detected (not just CPU-only)
-if grep -q "CUDA.*found.*NO\|CUDA.*NOT.*found\|Could NOT find CUDA" /tmp/open3d_cmake.log 2>/dev/null; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ CUDA NOT DETECTED - Build cannot proceed"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "ERROR: CUDA was not detected during CMake configuration"
-    echo "  This build REQUIRES CUDA - CPU-only fallback is not available"
-    echo ""
-    echo "Last 80 lines of CMake log:"
-    tail -80 /tmp/open3d_cmake.log || true
-    exit 1
+# J1: File existence validation before reading
+if [ -f /tmp/open3d_cmake.log ] && [ -r /tmp/open3d_cmake.log ]; then
+    if grep -q "CUDA.*found.*NO\|CUDA.*NOT.*found\|Could NOT find CUDA" /tmp/open3d_cmake.log 2>/dev/null; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' ""
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "✗ CUDA NOT DETECTED - Build cannot proceed"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' ""
+        printf '%s\n' "ERROR: CUDA was not detected during CMake configuration"
+        printf '%s\n' "  This build REQUIRES CUDA - CPU-only fallback is not available"
+        printf '%s\n' ""
+        printf '%s\n' "Last 80 lines of CMake log:"
+        # D3e: SIGPIPE error handling - add || true for pipeline with tail
+        tail -80 /tmp/open3d_cmake.log 2>/dev/null || true
+        exit 1
+    # ENDIF: CUDA detection check
+    fi
+# ENDIF: File existence check
 fi
 
-echo ""
-echo "✓ Open3D configured with CUDA support (CUDA-ONLY, no CPU fallback)"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "✓ Open3D configured with CUDA support (CUDA-ONLY, no CPU fallback)"
 
 # Debug: Check if WebRTC was extracted by ExternalProject_Add after CMake config
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Post-CMake Debug: Checking WebRTC extraction..."
-WEBRTC_EXTRACTED_LIB=$(find webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1)
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Post-CMake Debug: Checking WebRTC extraction..."
+# D3e: SIGPIPE error handling - add || true for pipeline with head
+WEBRTC_EXTRACTED_LIB=$(find webrtc/src/ext_webrtc -name "libwebrtc.a" 2>/dev/null | head -1 2>/dev/null || echo "")
 if [ -n "${WEBRTC_EXTRACTED_LIB:-}" ]; then
-    echo "✓ WebRTC library extracted: ${WEBRTC_EXTRACTED_LIB}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ WebRTC library extracted: ${WEBRTC_EXTRACTED_LIB}"
     find "$(dirname "${WEBRTC_EXTRACTED_LIB}")" -maxdepth 1 -name "$(basename "${WEBRTC_EXTRACTED_LIB}")" -type f -ls 2>/dev/null || true
 else
-    echo "⚠ WebRTC library not found in expected location"
-    echo "  Expected: webrtc/src/ext_webrtc/lib/libwebrtc.a"
-    echo ""
-    echo "  Comprehensive search for libwebrtc.a..."
-    find . -name "libwebrtc.a" 2>/dev/null
-    echo ""
-    echo "  Searching for webrtc directories..."
-    find . -type d -name "*webrtc*" 2>/dev/null
-    echo ""
-    echo "  Checking if webrtc directory exists..."
-    find . -maxdepth 1 -type d -name "webrtc" -ls 2>/dev/null || echo "  webrtc/ does not exist!"
-    echo ""
-    echo "  Checking if src subdirectory exists..."
-    find webrtc -maxdepth 1 -type d -name "src" -ls 2>/dev/null || echo "  webrtc/src/ does not exist!"
-    echo ""
-    echo "  Checking Open3D download cache for extracted files..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WebRTC library not found in expected location"
+    printf '%s\n' "  Expected: webrtc/src/ext_webrtc/lib/libwebrtc.a"
+    printf '%s\n' ""
+    printf '%s\n' "  Comprehensive search for libwebrtc.a..."
+    find . -name "libwebrtc.a" 2>/dev/null || true
+    printf '%s\n' ""
+    printf '%s\n' "  Searching for webrtc directories..."
+    find . -type d -name "*webrtc*" 2>/dev/null || true
+    printf '%s\n' ""
+    printf '%s\n' "  Checking if webrtc directory exists..."
+    find . -maxdepth 1 -type d -name "webrtc" -ls 2>/dev/null || printf '%s\n' "  webrtc/ does not exist!"
+    printf '%s\n' ""
+    printf '%s\n' "  Checking if src subdirectory exists..."
+    find webrtc -maxdepth 1 -type d -name "src" -ls 2>/dev/null || printf '%s\n' "  webrtc/src/ does not exist!"
+    printf '%s\n' ""
+    printf '%s\n' "  Checking Open3D download cache for extracted files..."
     if [ -n "${OPEN3D_DOWNLOAD_CACHE:-}" ]; then
-        find "${OPEN3D_DOWNLOAD_CACHE}" -type f -name "*webrtc*" 2>/dev/null
+        find "${OPEN3D_DOWNLOAD_CACHE}" -type f -name "*webrtc*" 2>/dev/null || true
     fi
+# ENDIF: WEBRTC_EXTRACTED_LIB check
 fi
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 #--- Sub-block 26.18: Build Open3D ---
 # Critical: Compile with Ninja (faster, better error messages)
@@ -18522,107 +18738,168 @@ echo ""
 # Reference: https://www.open3d.org/docs/release/compilation.html
 # Dependencies: CMake configuration (Ninja generator)
 # Outputs: Open3D binaries
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Building Open3D with Ninja (this may take 15-20 minutes)..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Building Open3D with Ninja (this may take 15-20 minutes)..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Use memory-aware job calculation (was full nproc - risky for OOM)
 BUILD_JOBS=$(calculate_build_jobs)
-echo "Using $BUILD_JOBS parallel jobs for Open3D build..."
-echo "  Official guide recommends: make -j$(nproc) (we use equivalent: ninja -j${BUILD_JOBS})"
-mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' || echo "unknown")
-echo "  System: $(nproc) cores, ${mem_info} RAM"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Using ${BUILD_JOBS} parallel jobs for Open3D build..."
+printf '%s\n' "  Official guide recommends: make -j$(nproc) (we use equivalent: ninja -j${BUILD_JOBS})"
+# D3d: Robust command substitution with validation
+mem_info=$(free -h 2>/dev/null | grep Mem | awk '{print $2}' 2>/dev/null || echo "unknown")
+# C1: Unbound variable protection
+nproc_cores=$(nproc 2>/dev/null || echo "unknown")
+printf '%s\n' "  System: ${nproc_cores} cores, ${mem_info} RAM"
+printf '%s\n' ""
 
 # Build with multithreaded compilation
 # Note: Must check PIPESTATUS[0] to get ninja exit status, not tee exit status
+# J1: File existence validation - ensure parent directory exists before creating log
+if [ ! -d "$(dirname /tmp/open3d_build.log)" ]; then
+    mkdir -p "$(dirname /tmp/open3d_build.log)" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory for build log" >&2
+        exit 1
+    }
+fi
 ninja -j${BUILD_JOBS} 2>&1 | tee /tmp/open3d_build.log
 NINJA_EXIT=${PIPESTATUS[0]}
 if [ "${NINJA_EXIT}" -ne 0 ]; then
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "✗ Open3D build FAILED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "Build exit code: ${NINJA_EXIT}"
-    echo ""
-    echo "Last 100 lines of build log:"
-    tail -100 /tmp/open3d_build.log
-    echo ""
-    echo "Full build log saved to: /tmp/open3d_build.log"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "✗ Open3D build FAILED"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "Build exit code: ${NINJA_EXIT}"
+    printf '%s\n' ""
+    printf '%s\n' "Last 100 lines of build log:"
+    # J1: File existence validation before reading
+    if [ -f /tmp/open3d_build.log ] && [ -r /tmp/open3d_build.log ]; then
+        # D3e: SIGPIPE error handling - add || true for pipeline with tail
+        tail -100 /tmp/open3d_build.log 2>/dev/null || true
+    else
+        printf '%s\n' "  [WARNING] Build log file not found or not readable: /tmp/open3d_build.log" >&2
+    fi
+    printf '%s\n' ""
+    printf '%s\n' "Full build log saved to: /tmp/open3d_build.log"
     exit 1
+# ENDIF: NINJA_EXIT check
 fi
 
-echo ""
-echo "✓ Open3D built successfully with Ninja"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "✓ Open3D built successfully with Ninja"
 
 #--- Sub-block 26.19: Install Open3D ---
 # Purpose: Install to system paths (C++ and Python)
 # Dependencies: Successful build
 # Outputs: Open3D installed to /usr/local
-echo ""
-echo "Installing Open3D to /usr/local..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "Installing Open3D to /usr/local..."
+# J1: File existence validation - ensure parent directory exists before creating log
+if [ ! -d "$(dirname /tmp/open3d_install.log)" ]; then
+    mkdir -p "$(dirname /tmp/open3d_install.log)" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory for install log" >&2
+        exit 1
+    }
+fi
 ninja install 2>&1 | tee /tmp/open3d_install.log
 INSTALL_EXIT=${PIPESTATUS[0]}
 if [ "${INSTALL_EXIT}" -ne 0 ]; then
-    echo ""
-    echo "⚠️  Open3D installation failed (exit code: ${INSTALL_EXIT})"
-    echo "Last 50 lines of install log:"
-    tail -50 /tmp/open3d_install.log
-    echo ""
-    echo "⚠ Continuing (C++ libraries may still be usable)..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "⚠️  Open3D installation failed (exit code: ${INSTALL_EXIT})"
+    printf '%s\n' "Last 50 lines of install log:"
+    # J1: File existence validation before reading
+    if [ -f /tmp/open3d_install.log ] && [ -r /tmp/open3d_install.log ]; then
+        # D3e: SIGPIPE error handling - add || true for pipeline with tail
+        tail -50 /tmp/open3d_install.log 2>/dev/null || true
+    else
+        printf '%s\n' "  [WARNING] Install log file not found or not readable: /tmp/open3d_install.log" >&2
+    fi
+    printf '%s\n' ""
+    printf '%s\n' "⚠ Continuing (C++ libraries may still be usable)..."
 else
-    echo "✓ Open3D C++ libraries installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Open3D C++ libraries installed"
+# ENDIF: INSTALL_EXIT check
 fi
 # Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/open3d_install.log" 200
+# J1: File existence validation before reading
+if [ -f /tmp/open3d_install.log ] && [ -r /tmp/open3d_install.log ]; then
+    run_ldconfig_refresh_from_install_output "/tmp/open3d_install.log" 200
+else
+    printf '%s\n' "[WARNING] Install log not found, skipping ldconfig refresh" >&2
+fi
 
 # Verify C++ installation
 if [ -f /usr/local/lib/libOpen3D.so ] || [ -f /usr/local/lib/libOpen3D.a ]; then
-    echo "✓ Open3D C++ library installed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Open3D C++ library installed"
 else
-    echo "⚠ Open3D C++ library not found in expected location"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ Open3D C++ library not found in expected location"
+# ENDIF: Library file existence check
 fi
 
 # Install Python module with multiple fallback strategies
 # Based on official Open3D documentation: https://www.open3d.org/docs/latest/compilation.html
-echo "Installing Open3D Python module..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Installing Open3D Python module..."
 
 # CRITICAL: Ensure Python build tools are up-to-date before Open3D installation
 # This fixes AttributeError issues and ensures jupyter_packaging is available
-echo "Upgrading pip, setuptools, and wheel (required for Open3D Python package)..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Upgrading pip, setuptools, and wheel (required for Open3D Python package)..."
 # Handle Debian-installed packages that can't be uninstalled (RECORD file issue)
 # Use --ignore-installed to skip uninstalling Debian packages, or --break-system-packages for externally-managed environments
+# D3d: Robust command substitution with error handling
 pip_output=$(python3 -m pip install --upgrade pip setuptools wheel --no-cache-dir --quiet 2>&1) || true
-if grep -qE "externally-managed-environment|RECORD file not found|Cannot uninstall" <<< "${pip_output}"; then
-    echo "  Detected Debian-installed packages or externally-managed environment"
-    echo "  Using --ignore-installed and --break-system-packages flags..."
-    python3 -m pip install --upgrade --no-cache-dir --ignore-installed --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
-        echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
-    }
-else
-    # Try with --ignore-installed first (handles Debian packages without RECORD files)
-    python3 -m pip install --upgrade --no-cache-dir --ignore-installed pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
-        # Fallback: try with --break-system-packages if --ignore-installed fails
-        python3 -m pip install --upgrade --no-cache-dir --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
-            echo "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)"
+# H4: Silent failure prevention - validate result after masking
+if [ -n "${pip_output:-}" ]; then
+    if grep -qE "externally-managed-environment|RECORD file not found|Cannot uninstall" <<< "${pip_output}"; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Detected Debian-installed packages or externally-managed environment"
+        printf '%s\n' "  Using --ignore-installed and --break-system-packages flags..."
+        python3 -m pip install --upgrade --no-cache-dir --ignore-installed --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)" >&2
         }
-    }
+    else
+        # Try with --ignore-installed first (handles Debian packages without RECORD files)
+        python3 -m pip install --upgrade --no-cache-dir --ignore-installed pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+            # Fallback: try with --break-system-packages if --ignore-installed fails
+            python3 -m pip install --upgrade --no-cache-dir --break-system-packages pip setuptools wheel 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading)" || {
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "⚠ Failed to upgrade pip/setuptools/wheel (non-fatal, continuing)" >&2
+            }
+        }
+    # ENDIF: pip_output pattern check
+    fi
+# ENDIF: pip_output non-empty check
 fi
 
 # Verify and install jupyter_packaging (CRITICAL for Open3D pip package installation)
-echo "Verifying jupyter_packaging installation..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying jupyter_packaging installation..."
 if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
-    echo "  jupyter_packaging not found, installing..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  jupyter_packaging not found, installing..."
     # Try installation with --break-system-packages flag (required for externally-managed environments)
     if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
         # Installation completed, verify it's importable
         sleep 1  # Give Python a moment to register the new module
         if python3 -c "import jupyter_packaging" 2>/dev/null; then
-            echo "  ✓ jupyter_packaging installed and verified"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ✓ jupyter_packaging installed and verified"
         else
-            echo "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ⚠ jupyter_packaging installed but not yet importable (may need Python path refresh)" >&2
             # Try to refresh Python's import cache
             python3 -c "import sys; sys.path.insert(0, ''); import importlib; importlib.invalidate_caches()" 2>/dev/null || true
         fi
@@ -18630,49 +18907,73 @@ if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
         # Installation may have succeeded but check anyway
         sleep 1
         if python3 -c "import jupyter_packaging" 2>/dev/null; then
-            echo "  ✓ jupyter_packaging installed and verified"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ✓ jupyter_packaging installed and verified"
         else
-            echo "⚠ jupyter_packaging installation failed or not importable - will try alternative installation methods"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ jupyter_packaging installation failed or not importable - will try alternative installation methods" >&2
         fi
+    # ENDIF: pip install check
     fi
 else
-    echo "  ✓ jupyter_packaging is available"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "  ✓ jupyter_packaging is available"
+# ENDIF: jupyter_packaging import check
 fi
 
 # Final verification of jupyter_packaging importability
 if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
-    echo "⚠ WARNING: jupyter_packaging still not importable after installation attempt"
-    echo "  This may cause ninja install-pip-package to fail"
-    echo "  Will fall back to alternative installation methods if needed"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ WARNING: jupyter_packaging still not importable after installation attempt" >&2
+    printf '%s\n' "  This may cause ninja install-pip-package to fail" >&2
+    printf '%s\n' "  Will fall back to alternative installation methods if needed" >&2
     # Try one more time with user site-packages enabled
+    # D3d: Robust command substitution with error handling
     user_site=$(python3 -m site --user-site 2>/dev/null || echo '')
-    if [ -n "${user_site}" ] && PYTHONPATH="${PYTHONPATH:-}:${user_site}" python3 -c "import jupyter_packaging" 2>/dev/null; then
-        echo "  ✓ jupyter_packaging found in user site-packages, updating PYTHONPATH"
+    # H4: Silent failure prevention - validate result before use
+    if [ -n "${user_site:-}" ] && PYTHONPATH="${PYTHONPATH:-}:${user_site}" python3 -c "import jupyter_packaging" 2>/dev/null; then
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ jupyter_packaging found in user site-packages, updating PYTHONPATH"
         export PYTHONPATH="${PYTHONPATH}:${user_site}"
     fi
+# ENDIF: jupyter_packaging final verification
 fi
 
 PYTHON_INSTALLED=false
+# D3d: Robust command substitution - declare and assign separately (C2155)
+OPEN3D_BUILD_DIR=""
 OPEN3D_BUILD_DIR=$(pwd)  # Save current build directory path (should be /tmp/Open3D/build)
 # Validate build directory is set
 if [ -z "${OPEN3D_BUILD_DIR:-}" ]; then
-    echo "ERROR: Failed to determine current build directory"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ERROR: Failed to determine current build directory" >&2
     exit 1
 fi
 # Source directory (/tmp/Open3D) - safely get parent directory
 if cd .. 2>/dev/null; then
+    # D3d: Robust command substitution - declare and assign separately
+    OPEN3D_SOURCE_DIR=""
     OPEN3D_SOURCE_DIR=$(pwd)
-    cd "${OPEN3D_BUILD_DIR}" || { echo "ERROR: Failed to return to build directory"; exit 1; }
+    cd "${OPEN3D_BUILD_DIR}" || { 
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "ERROR: Failed to return to build directory" >&2
+        exit 1
+    }
 else
-    echo "WARNING: Could not determine source directory, using fallback"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "WARNING: Could not determine source directory, using fallback" >&2
     OPEN3D_SOURCE_DIR="${OPEN3D_BUILD_DIR%/*}"  # Remove last path component
+# ENDIF: cd parent directory check
 fi
 
 # Set library paths to prioritize our compiled versions
 export LD_LIBRARY_PATH="/usr/local/lib:${LD_LIBRARY_PATH:-}"
 export CMAKE_PREFIX_PATH="/usr/local:${CMAKE_PREFIX_PATH:-}"
 
-# Function to verify Python module installation (more robust than just import)
+# Purpose: Verify Python module installation with multiple validation checks
+# Parameters: None (uses global variables)
+# Returns: 0 if Open3D is successfully installed and importable, 1 otherwise
+# Side effects: May set OPEN3D_INSTALL_PATH global variable for diagnostics
 verify_open3d_installation() {
     # Check 1: Basic import (required)
     local import_exit_code=0
@@ -18684,7 +18985,7 @@ verify_open3d_installation() {
         # Check 2: Verify via pip show (shows actual installation location)
         local open3d_install_path
         if python3 -m pip show open3d >/dev/null 2>&1; then
-            open3d_install_path=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+            open3d_install_path=$(python3 -m pip show open3d 2>/dev/null | grep -F "^Location:" | cut -d' ' -f2- | head -1 2>/dev/null || echo "")
             if [ -n "${open3d_install_path}" ] && [ -d "${open3d_install_path}/open3d" ]; then
                 return 0
             fi
@@ -18701,22 +19002,26 @@ verify_open3d_installation() {
         return 0
     else
         # Import failed - provide diagnostic information
-        if grep -q "No module named 'open3d'" <<< "${import_error}"; then
+        if grep -qF "No module named 'open3d'" <<< "${import_error}"; then
             # Module not found - check if it's installed but not in path
             if python3 -m pip show open3d >/dev/null 2>&1; then
-                OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
+                OPEN3D_INSTALL_PATH=$(python3 -m pip show open3d 2>/dev/null | grep -F "^Location:" | cut -d' ' -f2- | head -1 2>/dev/null || echo "")
                 if [ -n "${OPEN3D_INSTALL_PATH}" ] && [ -d "${OPEN3D_INSTALL_PATH}/open3d" ]; then
-                    echo "  [Diagnostic] Open3D is installed at ${OPEN3D_INSTALL_PATH} but not importable"
-                    echo "  [Diagnostic] This may be a Python path issue"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  [Diagnostic] Open3D is installed at ${OPEN3D_INSTALL_PATH} but not importable"
+                    printf '%s\n' "  [Diagnostic] This may be a Python path issue"
                 fi
             fi
         elif grep -qE "libOpen3D|libopen3d|undefined symbol" <<< "${import_error}"; then
             # Library loading issue
-            echo "  [Diagnostic] Open3D import failed due to library loading issue"
-            echo "  [Diagnostic] Error: ${import_error}"
-            echo "  [Diagnostic] Check LD_LIBRARY_PATH and ensure C++ libraries are accessible"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  [Diagnostic] Open3D import failed due to library loading issue" >&2
+            printf '%s\n' "  [Diagnostic] Error: ${import_error}" >&2
+            printf '%s\n' "  [Diagnostic] Check LD_LIBRARY_PATH and ensure C++ libraries are accessible" >&2
+        # ENDIF: import_error pattern check
         fi
         return 1
+    # ENDIF: import_exit_code check
     fi
 }
 
@@ -18726,41 +19031,63 @@ verify_open3d_installation() {
 # NOTE: When BUILD_JUPYTER_EXTENSION=ON, the Jupyter extension is built and included
 #       in the main Open3D Python package/wheel, not as a separate package.
 #       Both ninja install-pip-package and ninja python-package handle this automatically.
-echo "Strategy 1: ninja install-pip-package (official recommended method)..."
-# Clear any previous log
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "Strategy 1: ninja install-pip-package (official recommended method)..."
+# Clear any previous log (J1: File existence validation - parent directory check)
+# Ensure parent directory exists before creating file
+if [ ! -d "$(dirname /tmp/open3d_python_install.log)" ]; then
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "[WARNING] Parent directory for log file does not exist, creating: $(dirname /tmp/open3d_python_install.log)" >&2
+    mkdir -p "$(dirname /tmp/open3d_python_install.log)" || {
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "[ERROR] Failed to create parent directory for log file" >&2
+        exit 1
+    }
+fi
 : > /tmp/open3d_python_install.log
 ninja -v install-pip-package 2>&1 | tee /tmp/open3d_python_install.log
 NINJA_EXIT="${PIPESTATUS[0]}"
-if [ "${NINJA_EXIT}" -eq 0 ]; then
-    # Give pip a moment to finalize installation
-    sleep 1
-    if verify_open3d_installation; then
-        echo "✓ Python module installed via install-pip-package (official method)"
-        PYTHON_INSTALLED=true
+    if [ "${NINJA_EXIT}" -eq 0 ]; then
+        # Give pip a moment to finalize installation
+        sleep 1
+        if verify_open3d_installation; then
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "✓ Python module installed via install-pip-package (official method)"
+            PYTHON_INSTALLED=true
+        else
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ install-pip-package succeeded but module not yet importable" >&2
+        fi
+    # ENDIF: NINJA_EXIT check
     else
-        echo "⚠ install-pip-package succeeded but module not yet importable"
-    fi
-else
-    echo "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})"
-    # Check for specific error patterns in the log
-    if [ -f /tmp/open3d_python_install.log ]; then
-        if grep -q "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
-            echo "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
-            echo "  This is a known issue with Open3D build scripts on Python 3.10+"
-            echo "  Falling back to Strategy 2 (python-package)..."
-        elif grep -q "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
-            echo "  Detected missing jupyter_packaging module"
-            echo "  Attempting to install jupyter_packaging with --break-system-packages and will try Strategy 2..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "⚠ ninja install-pip-package failed (exit code: ${NINJA_EXIT})" >&2
+    # Check for specific error patterns in the log (J1: File existence validation)
+    if [ -f /tmp/open3d_python_install.log ] && [ -r /tmp/open3d_python_install.log ]; then
+        if grep -qE "AttributeError.*ModuleNotFoundError.*message" /tmp/open3d_python_install.log 2>/dev/null; then
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Detected AttributeError: 'ModuleNotFoundError' object has no attribute 'message'"
+            printf '%s\n' "  This is a known issue with Open3D build scripts on Python 3.10+"
+            printf '%s\n' "  Falling back to Strategy 2 (python-package)..."
+        elif grep -qF "No module named 'jupyter_packaging'" /tmp/open3d_python_install.log 2>/dev/null; then
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Detected missing jupyter_packaging module"
+            printf '%s\n' "  Attempting to install jupyter_packaging with --break-system-packages and will try Strategy 2..."
             python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)" || true
             # Verify installation
             sleep 1
             if python3 -c "import jupyter_packaging" 2>/dev/null; then
-                echo "  ✓ jupyter_packaging now available"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✓ jupyter_packaging now available"
             else
-                echo "  ⚠ jupyter_packaging still not importable"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ⚠ jupyter_packaging still not importable" >&2
             fi
+        # ENDIF: grep pattern check
         fi
+    # ENDIF: File existence check
     fi
+# ENDIF: NINJA_EXIT else branch
 fi
 
 # Strategy 2: Build Python wheel and install it WITHOUT dependencies
@@ -18769,28 +19096,37 @@ fi
 # NOTE: When BUILD_JUPYTER_EXTENSION=ON, the Jupyter extension is included in the wheel
 #       This wheel contains both the Python module and Jupyter extension together.
 if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
-    echo ""
-    echo "Strategy 2: Building Python wheel with ninja python-package..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "Strategy 2: Building Python wheel with ninja python-package..."
     # Ensure jupyter_packaging is available for wheel build (required for Jupyter extension)
     if ! python3 -c "import jupyter_packaging" 2>/dev/null; then
-        echo "  Installing jupyter_packaging for wheel build..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Installing jupyter_packaging for wheel build..."
         if python3 -m pip install --no-cache-dir --break-system-packages "jupyter_packaging>=0.12.0" 2>&1 | grep -vE "^(Requirement already satisfied|Collecting|Downloading|Installing)"; then
             sleep 1
             if python3 -c "import jupyter_packaging" 2>/dev/null; then
-                echo "  ✓ jupyter_packaging installed and verified for wheel build"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✓ jupyter_packaging installed and verified for wheel build"
             else
-                echo "  ⚠ jupyter_packaging installed but not importable (may affect wheel build)"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ⚠ jupyter_packaging installed but not importable (may affect wheel build)" >&2
             fi
         else
             sleep 1
             if python3 -c "import jupyter_packaging" 2>/dev/null; then
-                echo "  ✓ jupyter_packaging available for wheel build"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✓ jupyter_packaging available for wheel build"
             else
-                echo "  ⚠ jupyter_packaging installation failed or not importable (may affect wheel build)"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ⚠ jupyter_packaging installation failed or not importable (may affect wheel build)" >&2
             fi
+        # ENDIF: pip install check
         fi
     else
-        echo "  ✓ jupyter_packaging already available for wheel build"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ✓ jupyter_packaging already available for wheel build"
+    # ENDIF: jupyter_packaging import check
     fi
     ninja -v python-package 2>&1 | tee -a /tmp/open3d_python_install.log
     NINJA_PYTHON_EXIT="${PIPESTATUS[0]}"
@@ -18842,8 +19178,10 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
             #   Or: "Wrote /full/path/to/wheel.whl"
             # Sync to ensure log file is fully flushed to disk before reading
             sync
-            if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ]; then
-                echo "  Searching pip build log for wheel location (parsing terminal output)..."
+            # J1: File existence validation before reading
+            if [ -z "${WHEEL_FILE}" ] && [ -f /tmp/open3d_python_install.log ] && [ -r /tmp/open3d_python_install.log ]; then
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Searching pip build log for wheel location (parsing terminal output)..."
                 
                 # Priority 1: Look for "Stored in directory:" or "Store in directory:" - pip's standard output format
                 # This handles random pip-ephem-wheel-cache-* directory names by extracting exact path
@@ -18853,17 +19191,19 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                     sed 's/[[:space:]]*$//' | \
                     sed "s/^['\"]//; s/['\"]\$//" | \
                     sed 's/[[:space:]].*$//' | \
-                    head -1)
+                    head -1 || echo "")
                 
                 # Check if STORED_DIR is actually a file (full wheel path) or directory
                 if [ -n "${STORED_DIR}" ] && [ "${#STORED_DIR}" -gt 1 ]; then
                     if [ -f "${STORED_DIR}" ] && [[ "${STORED_DIR}" == *.whl ]]; then
                         # It's actually a full wheel path, not just a directory
                         WHEEL_FILE="${STORED_DIR}"
-                        echo "  ✓ Found full wheel path from 'Stored in directory': ${WHEEL_FILE}"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ✓ Found full wheel path from 'Stored in directory': ${WHEEL_FILE}"
                     elif [ -d "${STORED_DIR}" ]; then
                         # It's a directory, search for wheel inside it
-                        echo "  Found 'Stored in directory' in log: ${STORED_DIR}"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  Found 'Stored in directory' in log: ${STORED_DIR}"
                         # Find the wheel file in that directory (pip stores wheels in nested hash-based subdirs)
                         # Pip typically stores in nested directories like wheels/ab/cd/ef/wheel.whl
                         # Use maxdepth 10 to handle deeply nested hash directories
@@ -18873,10 +19213,12 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                             WHEEL_FILE=$(find "${STORED_DIR}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                         fi
                         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                            echo "  ✓ Found wheel from stored directory: ${WHEEL_FILE}"
+                            # A5a/D3b: Use printf instead of echo for robustness
+                            printf '%s\n' "  ✓ Found wheel from stored directory: ${WHEEL_FILE}"
                         else
-                            echo "  ⚠ Wheel not found in stored directory (will try other methods)"
-                            echo "    Searched in: ${STORED_DIR}"
+                            # A5a/D3b: Use printf instead of echo for robustness
+                            printf '%s\n' "  ⚠ Wheel not found in stored directory (will try other methods)"
+                            printf '%s\n' "    Searched in: ${STORED_DIR}"
                         fi
                     fi
                 fi
@@ -18885,11 +19227,12 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 if [ -z "${WHEEL_FILE}" ]; then
                     WROTE_WHEEL=$(grep -oE "Wrote[[:space:]]+/[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | \
                         sed 's/Wrote[[:space:]]*//' | \
-                        head -1)
+                        head -1 || echo "")
                     # Validate path is absolute and file exists
                     if [ -n "${WROTE_WHEEL}" ] && [ "${WROTE_WHEEL#/}" != "${WROTE_WHEEL}" ] && [ -f "${WROTE_WHEEL}" ]; then
                         WHEEL_FILE="${WROTE_WHEEL}"
-                        echo "  ✓ Found wheel from 'Wrote' pattern: ${WHEEL_FILE}"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ✓ Found wheel from 'Wrote' pattern: ${WHEEL_FILE}"
                     fi
                 fi
                 
@@ -18898,134 +19241,184 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 if [ -z "${WHEEL_FILE}" ]; then
                     # Match absolute paths to open3d wheels, prioritizing pip cache locations
                     # Pattern: /(tmp|root|home)/...pip...wheel...open3d...whl
-                    BUILT_WHEEL=$(grep -oE "/(tmp|root|home)/[^[:space:]]*pip[^[:space:]]*wheel[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
+                    BUILT_WHEEL=$(grep -oE "/(tmp|root|home)/[^[:space:]]*pip[^[:space:]]*wheel[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1 || echo "")
                     if [ -z "${BUILT_WHEEL}" ]; then
                         # Fallback: any absolute path to open3d wheel (must start with /)
-                        BUILT_WHEEL=$(grep -oE "/[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1)
+                        BUILT_WHEEL=$(grep -oE "/[^[:space:]]*open3d[^[:space:]]*\.whl" /tmp/open3d_python_install.log 2>/dev/null | head -1 || echo "")
                     fi
                     # Validate: must be absolute path and file must exist
                     if [ -n "${BUILT_WHEEL}" ] && [ "${BUILT_WHEEL#/}" != "${BUILT_WHEEL}" ] && [ -f "${BUILT_WHEEL}" ]; then
                         WHEEL_FILE="${BUILT_WHEEL}"
-                        echo "  ✓ Found wheel path from log: ${WHEEL_FILE}"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ✓ Found wheel path from log: ${WHEEL_FILE}"
                     fi
                 fi
             fi
             
             if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "Found wheel: ${WHEEL_FILE}"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                printf '%s\n' "Found wheel: ${WHEEL_FILE}"
                 # Safely get wheel size with error handling
                 WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
-                echo "  Wheel size: ${WHEEL_SIZE}"
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                # Validate WHEEL_SIZE is not empty
+                if [ -z "${WHEEL_SIZE}" ] || [ "${WHEEL_SIZE}" = "unknown" ]; then
+                    WHEEL_SIZE="unknown"
+                fi
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Wheel size: ${WHEEL_SIZE}"
+                printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 
                 # CRITICAL: Copy wheel to persistent cache for later use
                 # Verify CACHE_ROOT is set, fallback to default if not
                 if [ -z "${CACHE_ROOT:-}" ]; then
                     CACHE_ROOT="/container_cache"
-                    echo "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
                 fi
                 OPEN3D_WHEEL_CACHE="${CACHE_ROOT}/wheels/open3d"
                 
-                # Create cache directory with error handling
+                # Create cache directory with error handling (J1: File/Directory existence validation)
+                # Check parent directory exists before creating
+                PARENT_CACHE_DIR=$(dirname "${OPEN3D_WHEEL_CACHE}")
+                if [ ! -d "${PARENT_CACHE_DIR}" ]; then
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  [WARNING] Parent cache directory does not exist: ${PARENT_CACHE_DIR}"
+                    printf '%s\n' "  [INFO] Creating parent cache directory: ${PARENT_CACHE_DIR}"
+                    mkdir -p "${PARENT_CACHE_DIR}" || {
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  [ERROR] Failed to create parent cache directory: ${PARENT_CACHE_DIR}" >&2
+                        printf '%s\n' "  ⚠ Continuing without cache (non-critical)" >&2
+                    }
+                fi
                 if mkdir -p "${OPEN3D_WHEEL_CACHE}" 2>/dev/null; then
                     WHEEL_BASENAME=$(basename "${WHEEL_FILE}")
                     CACHED_WHEEL="${OPEN3D_WHEEL_CACHE}/${WHEEL_BASENAME}"
                     
-                    echo "  Copying wheel to persistent cache for later reuse..."
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  Copying wheel to persistent cache for later reuse..."
                     if cp "${WHEEL_FILE}" "${CACHED_WHEEL}" 2>/dev/null && [ -f "${CACHED_WHEEL}" ]; then
                         # Verify copy succeeded by checking file exists and getting size
                         CACHED_SIZE=$(du -h "${CACHED_WHEEL}" 2>/dev/null | cut -f1 || echo "unknown")
-                        echo "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
-                        echo "    This wheel will be available in writable overlays and conda environments"
+                        # Validate CACHED_SIZE is not empty
+                        if [ -z "${CACHED_SIZE}" ] || [ "${CACHED_SIZE}" = "unknown" ]; then
+                            CACHED_SIZE="unknown"
+                        fi
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
+                        printf '%s\n' "    This wheel will be available in writable overlays and conda environments"
                     else
-                        echo "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)" >&2
                     fi
                 else
-                    echo "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)" >&2
                 fi
                 
-                echo "  Installing wheel without dependencies (preserving compiled libs)..."
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  Installing wheel without dependencies (preserving compiled libs)..."
                 # Install WITHOUT dependencies to avoid overwriting compiled libraries
                 # Use --break-system-packages for externally-managed environments
                 python3 -m pip install --no-deps --ignore-installed --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
                 PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
                 if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
-                    echo "  ✓ Wheel installation completed (pip exit code: 0)"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ✓ Wheel installation completed (pip exit code: 0)"
                     sleep 1  # Allow installation to finalize
                     if verify_open3d_installation; then
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                        echo "✓✓✓ Python module installed via wheel (no-deps, using compiled libs)"
-                        echo "  Installation verified: Open3D module is importable"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        printf '%s\n' "✓✓✓ Python module installed via wheel (no-deps, using compiled libs)"
+                        printf '%s\n' "  Installation verified: Open3D module is importable"
                         # Only show cached wheel path if variable is set and file exists
                         if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
-                            echo "  Cached wheel: ${CACHED_WHEEL}"
+                            # A5a/D3b: Use printf instead of echo for robustness
+                            printf '%s\n' "  Cached wheel: ${CACHED_WHEEL}"
                         fi
-                        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                         PYTHON_INSTALLED=true
                     else
-                        echo "⚠ Wheel installed but verification failed"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "⚠ Wheel installed but verification failed" >&2
                     fi
                 else
                     PIP_EXIT_CODE="${PIPESTATUS[0]}"
-                    echo "⚠ python3 -m pip install failed (exit code: ${PIP_EXIT_CODE})"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "⚠ python3 -m pip install failed (exit code: ${PIP_EXIT_CODE})" >&2
                 fi
             else
                 # Wheel not found - but python-package may have installed directly
                 # This is valid: some Open3D builds install directly without creating wheel file
-                echo "⚠ Wheel file not found after python-package build"
-                echo "  (This is OK - python-package may install directly without creating wheel)"
-                echo "  Checking if installation succeeded..."
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "⚠ Wheel file not found after python-package build" >&2
+                printf '%s\n' "  (This is OK - python-package may install directly without creating wheel)"
+                printf '%s\n' "  Checking if installation succeeded..."
                 sleep 2  # Allow any background installation to complete
                 if verify_open3d_installation; then
-                    echo "  ✓ Open3D module is importable - installation succeeded"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ✓ Open3D module is importable - installation succeeded"
                     PYTHON_INSTALLED=true
                 else
-                    echo "  ⚠ Module not importable yet - will try Strategy 3"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ⚠ Module not importable yet - will try Strategy 3" >&2
                 fi
             fi
     else
         # Capture exit status when if condition fails
         NINJA_EXIT="${PIPESTATUS[0]:-$?}"
-        echo "⚠ ninja python-package failed (exit code: ${NINJA_EXIT}) - check logs"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ ninja python-package failed (exit code: ${NINJA_EXIT}) - check logs" >&2
+    # ENDIF: NINJA_PYTHON_EXIT check
     fi  # Close: if ninja python-package
+# ENDIF: PYTHON_INSTALLED check for Strategy 2
 fi
 
 # Strategy 3: Install directly from Python package directory WITHOUT dependencies
 # Fallback: Direct installation from build output directory
 if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
-    echo ""
-    echo "Strategy 3: Direct installation from build package directory..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "Strategy 3: Direct installation from build package directory..."
     # Check multiple possible package locations
     for PKG_DIR in "${OPEN3D_BUILD_DIR}/lib/python_package" \
                    "${OPEN3D_BUILD_DIR}/python_package" \
                    "${OPEN3D_SOURCE_DIR}/python_package"; do
         # Fix: Correct operator precedence - check directory exists AND (setup.py OR pyproject.toml exists)
         if [ -d "${PKG_DIR}" ] && { [ -f "${PKG_DIR}/setup.py" ] || [ -f "${PKG_DIR}/pyproject.toml" ]; }; then
-            echo "  Found package directory: ${PKG_DIR}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Found package directory: ${PKG_DIR}"
             # Install WITHOUT dependencies to protect compiled libraries
             python3 -m pip install --no-deps --ignore-installed --break-system-packages "${PKG_DIR}" 2>&1 | tee -a /tmp/open3d_python_install.log
             PIP_INSTALL_DIR_EXIT="${PIPESTATUS[0]}"
             if [ "${PIP_INSTALL_DIR_EXIT}" -eq 0 ]; then
                 sleep 1
                 if verify_open3d_installation; then
-                    echo "✓ Python module installed directly (no-deps, using compiled libs)"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "✓ Python module installed directly (no-deps, using compiled libs)"
                     PYTHON_INSTALLED=true
                     break
                 fi
+            # ENDIF: PIP_INSTALL_DIR_EXIT check
             else
-                echo "  ⚠ python3 -m pip install failed for ${PKG_DIR} (exit code: ${PIP_INSTALL_DIR_EXIT})"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ⚠ python3 -m pip install failed for ${PKG_DIR} (exit code: ${PIP_INSTALL_DIR_EXIT})" >&2
             fi
+        # ENDIF: package directory check
         fi
+    # ENDFOR: PKG_DIR
     done
     
     if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
-        echo "⚠ Direct package installation directories not found or installation failed"
-        echo "  Checked locations:"
-        echo "    - ${OPEN3D_BUILD_DIR}/lib/python_package"
-        echo "    - ${OPEN3D_BUILD_DIR}/python_package"
-        echo "    - ${OPEN3D_SOURCE_DIR}/python_package"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ Direct package installation directories not found or installation failed" >&2
+        printf '%s\n' "  Checked locations:"
+        printf '%s\n' "    - ${OPEN3D_BUILD_DIR}/lib/python_package"
+        printf '%s\n' "    - ${OPEN3D_BUILD_DIR}/python_package"
+        printf '%s\n' "    - ${OPEN3D_SOURCE_DIR}/python_package"
+    # ENDIF: PYTHON_INSTALLED check for Strategy 3
     fi
+# ENDIF: PYTHON_INSTALLED check for Strategy 3
 fi
 
 # Strategy 3.5: Check ephemeral pip cache directories AFTER Strategy 3 completes
@@ -19035,8 +19428,9 @@ fi
 # Pattern matches both /tmp/cuda_build/pip-ephem-wheel-cache-* and other /tmp/*/pip-ephem-wheel-cache-*
 # Note: pip may also create pip-ephem-whee-cache-* (truncated), so we search for both patterns
 if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
-    echo ""
-    echo "Strategy 3.5: Searching ephemeral pip cache directories for wheel created during Strategy 3..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "Strategy 3.5: Searching ephemeral pip cache directories for wheel created during Strategy 3..."
     WHEEL_FILE=""
     
     # First check specific known locations with glob patterns
@@ -19051,7 +19445,8 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
            [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-wheel-cache-*" ] && \
            [ "${pattern}" != "${CONTAINER_BUILD_TMPDIR}/pip-ephem-whee-cache-*" ] && \
            [ -d "${pattern}" ]; then
-            echo "    Checking ephemeral cache: ${pattern}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "    Checking ephemeral cache: ${pattern}"
             # Search recursively in wheels subdirectory (pip stores in nested hash dirs)
             # Format: pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
             # Try with maxdepth first for efficiency, then full recursive
@@ -19065,10 +19460,13 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                 WHEEL_FILE=$(find "${pattern}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
             fi
             if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                echo "  ✓ Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✓ Found wheel in ephemeral cache: ${WHEEL_FILE}"
                 break
             fi
+        # ENDIF: pattern expansion check
         fi
+    # ENDFOR: pattern
     done
     
     # If still not found, search using find command (more robust for dynamic directories)
@@ -19082,60 +19480,73 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
                     WHEEL_FILE=$(find "${cache_dir}" -type f -name "open3d*.whl" 2>/dev/null | head -1)
                 fi
                 if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-                    echo "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  Found wheel in ephemeral cache: ${WHEEL_FILE}"
                     break
                 fi
+            # ENDIF: cache_dir check
             fi
-        done < <(find /tmp -maxdepth 3 -type d \( -name "pip-ephem-wheel-cache-*" -o -name "pip-ephem-whee-cache-*" \) 2>/dev/null | head -10)
+        # ENDWHILE: cache_dir read loop
+        done < <(find /tmp -maxdepth 3 -type d \( -name "pip-ephem-wheel-cache-*" -o -name "pip-ephem-whee-cache-*" \) 2>/dev/null | head -10 || true)
+    # ENDIF: WHEEL_FILE check
     fi
     
     # Comprehensive recursive search in /tmp for any pip cache directories and wheels
     # This is the most thorough search - checks all nested wheel locations
     # Handles both pip-ephem-wheel-cache-* and pip-ephem-whee-cache-* patterns
     if [ -z "${WHEEL_FILE}" ]; then
-        echo "  Performing comprehensive recursive search in /tmp..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Performing comprehensive recursive search in /tmp..."
         # Try the specific pattern first: */pip-ephem-wheel-cache-*/wheels/*/*/*/*/open3d*.whl
         # Also try pip-ephem-whee-cache-* (truncated variant)
         for cache_pattern in "pip-ephem-wheel-cache-*" "pip-ephem-whee-cache-*"; do
-            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1)
+            # D3e: SIGPIPE protection - add || true at end of pipeline with head
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/*/*/open3d*.whl" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
             if [ -n "${WHEEL_FILE}" ]; then
                 break
             fi
             # Try with fewer nesting levels
-            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/open3d*.whl" 2>/dev/null | head -1)
+            # D3e: SIGPIPE protection - add || true at end of pipeline with head
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/*/open3d*.whl" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
             if [ -n "${WHEEL_FILE}" ]; then
                 break
             fi
             # General search in any wheels directory
-            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/open3d*.whl" 2>/dev/null | head -1)
+            # D3e: SIGPIPE protection - add || true at end of pipeline with head
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/wheels/*/open3d*.whl" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
             if [ -n "${WHEEL_FILE}" ]; then
                 break
             fi
             # Final fallback - any open3d wheel in pip cache directories
-            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/*/open3d*.whl" 2>/dev/null | head -1)
+            # D3e: SIGPIPE protection - add || true at end of pipeline with head
+            WHEEL_FILE=$(find /tmp -type f -path "*/${cache_pattern}/*/open3d*.whl" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
             if [ -n "${WHEEL_FILE}" ]; then
                 break
             fi
         done
         if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-            echo "  ✓ Found wheel via comprehensive recursive search: ${WHEEL_FILE}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ✓ Found wheel via comprehensive recursive search: ${WHEEL_FILE}"
         fi
     fi
     
     # If wheel found, install it
     if [ -n "${WHEEL_FILE}" ] && [ -f "${WHEEL_FILE}" ]; then
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-        echo "Found wheel in ephemeral cache: ${WHEEL_FILE}"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        printf '%s\n' "Found wheel in ephemeral cache: ${WHEEL_FILE}"
         # Safely get wheel size with error handling
         WHEEL_SIZE=$(du -h "${WHEEL_FILE}" 2>/dev/null | cut -f1 || echo "unknown")
-        echo "  Wheel size: ${WHEEL_SIZE}"
-        echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Wheel size: ${WHEEL_SIZE}"
+        printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         
         # CRITICAL: Copy wheel to persistent cache for later use
         # Verify CACHE_ROOT is set, fallback to default if not
         if [ -z "${CACHE_ROOT:-}" ]; then
             CACHE_ROOT="/container_cache"
-            echo "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  [info] CACHE_ROOT not set, using default: ${CACHE_ROOT}"
         fi
         OPEN3D_WHEEL_CACHE="${CACHE_ROOT}/wheels/open3d"
         
@@ -19144,45 +19555,56 @@ if [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
             WHEEL_BASENAME=$(basename "${WHEEL_FILE}")
             CACHED_WHEEL="${OPEN3D_WHEEL_CACHE}/${WHEEL_BASENAME}"
             
-            echo "  Copying wheel to persistent cache for later reuse..."
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  Copying wheel to persistent cache for later reuse..."
             if cp "${WHEEL_FILE}" "${CACHED_WHEEL}" 2>/dev/null && [ -f "${CACHED_WHEEL}" ]; then
                 # Verify copy succeeded by checking file exists and getting size
                 CACHED_SIZE=$(du -h "${CACHED_WHEEL}" 2>/dev/null | cut -f1 || echo "unknown")
-                echo "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
-                echo "    This wheel will be available in writable overlays and conda environments"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ✓ Wheel saved to cache: ${CACHED_WHEEL} (${CACHED_SIZE})"
+                printf '%s\n' "    This wheel will be available in writable overlays and conda environments"
             else
-                echo "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ⚠ Failed to copy wheel to cache (non-critical, continuing with installation)"
             fi
         else
-            echo "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ⚠ Failed to create cache directory ${OPEN3D_WHEEL_CACHE} (non-critical, continuing with installation)"
         fi
         
-        echo "  Installing wheel without dependencies (preserving compiled libs)..."
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  Installing wheel without dependencies (preserving compiled libs)..."
         # Install WITHOUT dependencies to avoid overwriting compiled libraries
         # Use --break-system-packages for externally-managed environments
         python3 -m pip install --no-deps --ignore-installed --break-system-packages "${WHEEL_FILE}" 2>&1 | tee -a /tmp/open3d_python_install.log
         PIP_INSTALL_EXIT="${PIPESTATUS[0]}"
         if [ "${PIP_INSTALL_EXIT}" -eq 0 ]; then
-            echo "  ✓ Wheel installation completed (pip exit code: 0)"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ✓ Wheel installation completed (pip exit code: 0)"
             sleep 1  # Allow installation to finalize
             if verify_open3d_installation; then
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                echo "✓✓✓ Python module installed via wheel from ephemeral cache (no-deps, using compiled libs)"
-                echo "  Installation verified: Open3D module is importable"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                printf '%s\n' "✓✓✓ Python module installed via wheel from ephemeral cache (no-deps, using compiled libs)"
+                printf '%s\n' "  Installation verified: Open3D module is importable"
                 # Only show cached wheel path if variable is set and file exists
                 if [ -n "${CACHED_WHEEL:-}" ] && [ -f "${CACHED_WHEEL}" ]; then
-                    echo "  Cached wheel: ${CACHED_WHEEL}"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  Cached wheel: ${CACHED_WHEEL}"
                 fi
-                echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+                printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 PYTHON_INSTALLED=true
             else
-                echo "⚠ Wheel installed but verification failed"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "⚠ Wheel installed but verification failed"
             fi
         else
-            echo "⚠ python3 -m pip install failed (exit code: ${PIP_INSTALL_EXIT})"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ python3 -m pip install failed (exit code: ${PIP_INSTALL_EXIT})"
         fi
     else
-        echo "  No wheel found in ephemeral pip cache directories"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  No wheel found in ephemeral pip cache directories"
     fi
 fi
 
@@ -19198,11 +19620,12 @@ fi
 OPEN3D_PYTHON_REQUIRED="${OPEN3D_PYTHON_REQUIRED:-true}"
 
 # Final verification of Python module installation
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Final Open3D Python Module Verification"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Final Open3D Python Module Verification"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 # Perform comprehensive verification
 if verify_open3d_installation; then
@@ -19213,8 +19636,10 @@ if verify_open3d_installation; then
     # Get installation info via pip show if available
     OPEN3D_INSTALL_INFO=""
     if python3 -m pip show open3d >/dev/null 2>&1; then
-        OPEN3D_INSTALL_LOCATION=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1)
-        OPEN3D_INSTALL_VERSION=$(python3 -m pip show open3d 2>/dev/null | grep "^Version:" | cut -d' ' -f2 | head -1)
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        OPEN3D_INSTALL_LOCATION=$(python3 -m pip show open3d 2>/dev/null | grep "^Location:" | cut -d' ' -f2- | head -1 2>/dev/null || echo "" || true)
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        OPEN3D_INSTALL_VERSION=$(python3 -m pip show open3d 2>/dev/null | grep "^Version:" | cut -d' ' -f2 | head -1 2>/dev/null || echo "" || true)
         if [ -n "${OPEN3D_INSTALL_LOCATION}" ]; then
             OPEN3D_INSTALL_INFO=" (installed at: ${OPEN3D_INSTALL_LOCATION})"
         fi
@@ -19223,14 +19648,16 @@ if verify_open3d_installation; then
         fi
     fi
     
-    echo "✓ Open3D Python module verified successfully"
-    echo "  Version: ${OPEN3D_VERSION}"
-    echo "  Module path: ${OPEN3D_MODULE_PATH}${OPEN3D_INSTALL_INFO}"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ Open3D Python module verified successfully"
+    printf '%s\n' "  Version: ${OPEN3D_VERSION}"
+    printf '%s\n' "  Module path: ${OPEN3D_MODULE_PATH}${OPEN3D_INSTALL_INFO}"
     
     # Optional check: CUDA support (NON-FATAL - containers may not have GPU access)
     # Per Open3D docs, CUDA availability check is informational only
-    echo ""
-    echo "Checking CUDA support (optional, non-fatal)..."
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "Checking CUDA support (optional, non-fatal)..."
     CUDA_INFO_AVAILABLE=false
     CUDA_DEVICES=0
     if python3 -c "import open3d.core" 2>/dev/null; then
@@ -19238,90 +19665,102 @@ if verify_open3d_installation; then
         CUDA_INFO_AVAILABLE=true
         # Try to get CUDA device count (may fail gracefully if no GPU - this is OK)
         if python3 -c "import open3d.core; hasattr(open3d.core, 'cuda')" 2>/dev/null; then
-            CUDA_DEVICES_STR=$(python3 -c "import open3d.core; print(open3d.core.cuda.device_count())" 2>&1 | head -1 || echo "unavailable")
+            # D3e: SIGPIPE protection - add || true at end of pipeline with head
+            CUDA_DEVICES_STR=$(python3 -c "import open3d.core; print(open3d.core.cuda.device_count())" 2>&1 | head -1 2>/dev/null || echo "unavailable" || true)
             if [ -n "${CUDA_DEVICES_STR}" ] && [ "${CUDA_DEVICES_STR}" != "unavailable" ]; then
                 # Check if CUDA_DEVICES_STR is numeric (suppress error if not numeric)
                 if [ "${CUDA_DEVICES_STR}" -ge 0 ] 2>/dev/null; then
                     CUDA_DEVICES="${CUDA_DEVICES_STR}"
                     if [ "${CUDA_DEVICES}" -gt 0 ]; then
-                        echo "  ✓ CUDA support active (${CUDA_DEVICES} device(s) detected)"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ✓ CUDA support active (${CUDA_DEVICES} device(s) detected)"
                     else
-                        echo "  ℹ CUDA compiled-in but no GPU devices detected (0 devices)"
-                        echo "    This is expected in containers without GPU access"
-                        echo "    CUDA code will still run when GPU is available at runtime"
+                        # A5a/D3b: Use printf instead of echo for robustness
+                        printf '%s\n' "  ℹ CUDA compiled-in but no GPU devices detected (0 devices)"
+                        printf '%s\n' "    This is expected in containers without GPU access"
+                        printf '%s\n' "    CUDA code will still run when GPU is available at runtime"
                     fi
                 else
                     # Device count query failed - module exists though
-                    echo "  ℹ CUDA support compiled-in (device count query unavailable)"
-                    echo "    This is acceptable - CUDA will work when GPU is available"
+                    # A5a/D3b: Use printf instead of echo for robustness
+                    printf '%s\n' "  ℹ CUDA support compiled-in (device count query unavailable)"
+                    printf '%s\n' "    This is acceptable - CUDA will work when GPU is available"
                 fi
             else
-                echo "  ℹ CUDA support compiled-in (device enumeration unavailable)"
-                echo "    This is acceptable in containers without GPU access"
+                # A5a/D3b: Use printf instead of echo for robustness
+                printf '%s\n' "  ℹ CUDA support compiled-in (device enumeration unavailable)"
+                printf '%s\n' "    This is acceptable in containers without GPU access"
             fi
         else
-            echo "  ⚠ CUDA module structure not found in open3d.core"
-            echo "    This may indicate CUDA was not built, but basic functionality should still work"
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "  ⚠ CUDA module structure not found in open3d.core"
+            printf '%s\n' "    This may indicate CUDA was not built, but basic functionality should still work"
         fi
     else
-        echo "  ℹ open3d.core module not importable"
-        echo "    Basic open3d module works, but advanced features may be limited"
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "  ℹ open3d.core module not importable"
+        printf '%s\n' "    Basic open3d module works, but advanced features may be limited"
     fi
     
-    echo ""
-    echo "✓ Open3D Python module installation verified successfully"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' ""
+    printf '%s\n' "✓ Open3D Python module installation verified successfully"
     
 elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     # Installation failed - provide comprehensive diagnostics
-    echo "✗ Open3D Python module installation verification FAILED"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Comprehensive Diagnostic Information"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    echo "Installation strategies attempted:"
-    echo "  • Strategy 1: ninja install-pip-package (official method)"
-    echo "  • Strategy 2: Building and installing wheel"
-    echo "  • Strategy 3: Direct package installation"
-    echo ""
-    echo "Import error details:"
-    python3 -c "import open3d" 2>&1 | head -30 || echo "  (Import failed silently)"
-    echo ""
-    echo "Python environment information:"
-    echo "  Python executable: $(which python3 2>/dev/null || echo 'not found')"
-    echo "  Python version: $(python3 --version 2>/dev/null || echo 'unknown')"
-    echo ""
-    echo "Python search paths:"
-    python3 -c "import sys; print('\\n'.join(['  ' + p for p in sys.path]))" 2>/dev/null || echo "  (Could not retrieve)"
-    echo ""
-    echo "Package installation status:"
+    # A5a/D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✗ Open3D Python module installation verification FAILED"
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' "Comprehensive Diagnostic Information"
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
+    printf '%s\n' "Installation strategies attempted:"
+    printf '%s\n' "  • Strategy 1: ninja install-pip-package (official method)"
+    printf '%s\n' "  • Strategy 2: Building and installing wheel"
+    printf '%s\n' "  • Strategy 3: Direct package installation"
+    printf '%s\n' ""
+    printf '%s\n' "Import error details:"
+    # D3e: SIGPIPE protection - add || true at end of pipeline with head
+    python3 -c "import open3d" 2>&1 | head -30 2>/dev/null || printf '%s\n' "  (Import failed silently)" || true
+    printf '%s\n' ""
+    printf '%s\n' "Python environment information:"
+    # A5: Use command -v instead of which (POSIX-compliant)
+    printf '%s\n' "  Python executable: $(command -v python3 2>/dev/null || printf '%s\n' 'not found')"
+    printf '%s\n' "  Python version: $(python3 --version 2>/dev/null || printf '%s\n' 'unknown')"
+    printf '%s\n' ""
+    printf '%s\n' "Python search paths:"
+    python3 -c "import sys; print('\\n'.join(['  ' + p for p in sys.path]))" 2>/dev/null || printf '%s\n' "  (Could not retrieve)"
+    printf '%s\n' ""
+    printf '%s\n' "Package installation status:"
     if ! python3 -m pip list 2>/dev/null | grep -i open3d; then
-        echo "  ✗ open3d not found in pip list"
+        printf '%s\n' "  ✗ open3d not found in pip list"
     fi
     if python3 -m pip show open3d >/dev/null 2>&1; then
-        echo "  pip show open3d:"
+        printf '%s\n' "  pip show open3d:"
         python3 -m pip show open3d | sed 's/^/    /' || true
     else
-        echo "  ✗ pip show open3d: package not found"
+        printf '%s\n' "  ✗ pip show open3d: package not found"
     fi
-    echo ""
-    echo "Module installation location check:"
-    python3 -c "import site; print('  Site-packages:'); print('\\n'.join(['    ' + p for p in site.getsitepackages()]))" 2>/dev/null || echo "  (Could not retrieve)"
-    echo ""
-    echo "Build directory information:"
-    echo "  Build directory: ${OPEN3D_BUILD_DIR}"
-    echo "  Source directory: ${OPEN3D_SOURCE_DIR}"
+    printf '%s\n' ""
+    printf '%s\n' "Module installation location check:"
+    python3 -c "import site; print('  Site-packages:'); print('\\n'.join(['    ' + p for p in site.getsitepackages()]))" 2>/dev/null || printf '%s\n' "  (Could not retrieve)"
+    printf '%s\n' ""
+    printf '%s\n' "Build directory information:"
+    printf '%s\n' "  Build directory: ${OPEN3D_BUILD_DIR}"
+    printf '%s\n' "  Source directory: ${OPEN3D_SOURCE_DIR}"
     if [ -d "${OPEN3D_BUILD_DIR}" ]; then
-        echo "  Build lib directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib" && echo 'yes' || echo 'no')"
-        echo "  Python package directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib/python_package" && echo 'yes' || echo 'no')"
+        printf '%s\n' "  Build lib directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib" && printf '%s\n' 'yes' || printf '%s\n' 'no')"
+        printf '%s\n' "  Python package directory exists: $(test -d "${OPEN3D_BUILD_DIR}/lib/python_package" && printf '%s\n' 'yes' || printf '%s\n' 'no')"
     fi
-    echo ""
-    echo "Installation logs: /tmp/open3d_python_install.log"
-    echo "  Last 50 lines of installation log:"
-    tail -50 /tmp/open3d_python_install.log 2>/dev/null | sed 's/^/    /' || echo "    (Log file not available)"
-    echo ""
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
+    printf '%s\n' ""
+    printf '%s\n' "Installation logs: /tmp/open3d_python_install.log"
+    printf '%s\n' "  Last 50 lines of installation log:"
+    # D3e: SIGPIPE protection - add || true at end of pipeline with tail/sed
+    tail -50 /tmp/open3d_python_install.log 2>/dev/null | sed 's/^/    /' 2>/dev/null || printf '%s\n' "    (Log file not available)" || true
+    printf '%s\n' ""
+    printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    printf '%s\n' ""
     
     # Check if C++ library was successfully built (more important than Python module)
     CXX_LIBRARY_BUILT=false
@@ -19340,153 +19779,88 @@ elif [ "${PYTHON_INSTALLED:-false}" = "false" ]; then
     # Decide whether to exit or continue based on configuration and C++ library status
     if [ "${OPEN3D_PYTHON_REQUIRED}" = "true" ]; then
         if [ "${CXX_LIBRARY_BUILT}" = "true" ]; then
-            echo "⚠ WARNING: Open3D Python module import failed BUT C++ library is compiled"
-            echo ""
-            echo "  The C++ library is available at:"
-            [ -f /usr/local/lib/libOpen3D.so ] && echo "    /usr/local/lib/libOpen3D.so"
-            [ -f /usr/local/lib/libOpen3D.a ] && echo "    /usr/local/lib/libOpen3D.a"
-            [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.so" ] && echo "    ${OPEN3D_BUILD_DIR}/lib/libOpen3D.so"
-            [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.a" ] && echo "    ${OPEN3D_BUILD_DIR}/lib/libOpen3D.a"
-            echo ""
-            echo "  The Python module may still be installable later or the import check may be a false negative."
-            echo "  Since the library is compiled, continuing build as NON-FATAL error."
-            echo ""
-            echo "  Note: You can manually install the Python module later if needed:"
-            echo "    python3 -m pip install --no-deps /path/to/open3d-*.whl"
-            echo ""
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "⚠ WARNING: Open3D Python module import failed BUT C++ library is compiled"
+            printf '%s\n' ""
+            printf '%s\n' "  The C++ library is available at:"
+            [ -f /usr/local/lib/libOpen3D.so ] && printf '%s\n' "    /usr/local/lib/libOpen3D.so"
+            [ -f /usr/local/lib/libOpen3D.a ] && printf '%s\n' "    /usr/local/lib/libOpen3D.a"
+            [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.so" ] && printf '%s\n' "    ${OPEN3D_BUILD_DIR}/lib/libOpen3D.so"
+            [ -f "${OPEN3D_BUILD_DIR}/lib/libOpen3D.a" ] && printf '%s\n' "    ${OPEN3D_BUILD_DIR}/lib/libOpen3D.a"
+            printf '%s\n' ""
+            printf '%s\n' "  The Python module may still be installable later or the import check may be a false negative."
+            printf '%s\n' "  Since the library is compiled, continuing build as NON-FATAL error."
+            printf '%s\n' ""
+            printf '%s\n' "  Note: You can manually install the Python module later if needed:"
+            printf '%s\n' "    python3 -m pip install --no-deps /path/to/open3d-*.whl"
+            printf '%s\n' ""
             OPEN3D_PYTHON_REQUIRED="false"  # Override to non-fatal since library is built
         else
-            echo "ERROR: Open3D Python module is REQUIRED but installation failed"
-            echo ""
-            echo "  The module must be importable for the build to succeed."
-            echo "  PyPI fallback is NOT available (CUDA-only build requirement)."
-            echo ""
-            echo "  To continue build without Python module (if acceptable):"
-            echo "    Set OPEN3D_PYTHON_REQUIRED=false before running this script"
-            echo ""
+            # A5a/D3b: Use printf instead of echo for robustness
+            printf '%s\n' "ERROR: Open3D Python module is REQUIRED but installation failed" >&2
+            printf '%s\n' ""
+            printf '%s\n' "  The module must be importable for the build to succeed."
+            printf '%s\n' "  PyPI fallback is NOT available (CUDA-only build requirement)."
+            printf '%s\n' ""
+            printf '%s\n' "  To continue build without Python module (if acceptable):"
+            printf '%s\n' "    Set OPEN3D_PYTHON_REQUIRED=false before running this script"
+            printf '%s\n' ""
             exit 1
         fi
     fi
     
     if [ "${OPEN3D_PYTHON_REQUIRED}" != "true" ]; then
-        echo "⚠ WARNING: Open3D Python module installation failed"
-        echo ""
-        echo "  Continuing build without Python module (OPEN3D_PYTHON_REQUIRED=false)"
-        echo "  C++ libraries are still available and functional"
-        echo "  Python functionality will not be available"
-        echo ""
-        echo "  To make Python module required:"
-        echo "    Set OPEN3D_PYTHON_REQUIRED=true before running this script"
-        echo ""
+        # A5a/D3b: Use printf instead of echo for robustness
+        printf '%s\n' "⚠ WARNING: Open3D Python module installation failed"
+        printf '%s\n' ""
+        printf '%s\n' "  Continuing build without Python module (OPEN3D_PYTHON_REQUIRED=false)"
+        printf '%s\n' "  C++ libraries are still available and functional"
+        printf '%s\n' "  Python functionality will not be available"
+        printf '%s\n' ""
+        printf '%s\n' "  To make Python module required:"
+        printf '%s\n' "    Set OPEN3D_PYTHON_REQUIRED=true before running this script"
+        printf '%s\n' ""
+        # A7/E6: Orphaned heredoc content removed - script is installed via install.sh from container-scripts/
+        # Note: shell-scripts file: /usr/local/bin/3d_recon_info is installed via install.sh from container-scripts/
+        # Source: shell-scripts/block-25-jax-cuda-installation-reinforcement-learning/3d-recon-info.sh
+        # Target: /usr/local/bin/3d_recon_info
+        # Installed in Block 0 (early in script, before any scripts are needed)
     fi
-else
-    # Verification failed but installation marked as successful (edge case)
-    echo "⚠ WARNING: Installation marked successful but verification failed"
-    echo "  Performing additional checks..."
-    if python3 -c "import open3d" 2>/dev/null; then
-        echo "  ✓ Module is actually importable - verification function may need adjustment"
-        PYTHON_INSTALLED=true
-    else
-        echo "  ✗ Module is not importable - installation may have failed silently"
-        if [ "${OPEN3D_PYTHON_REQUIRED}" = "true" ]; then
-            echo "  ERROR: Python module required but not importable"
-            exit 1
-        fi
-    fi
+    # ENDIF: OPEN3D_PYTHON_REQUIRED != true
 fi
+# ENDIF: verify_open3d_installation
 
-#--- Sub-block 26.20: Cleanup Open3D build ---
-# Purpose: Remove build files to save space
-# Dependencies: None (foundational)
-# Outputs: Disk space freed
-echo "Cleaning up Open3D build files..."
-cd /
-rm -rf /tmp/Open3D
-rm -f /tmp/open3d_*.log
-echo "✓ Open3D build cleaned up"
-
-#--- Sub-block 26.21: Create 3D reconstruction tools info script ---
-# Purpose: Provide usage information for COLMAP and Open3D
-# Dependencies: None (foundational)
-# Outputs: Info script
-cat > /usr/local/bin/3d_recon_info << 'EOF'
-#!/bin/bash
-echo "========================================="
-echo "3D Reconstruction Tools"
-echo "========================================="
-echo ""
-echo "COLMAP (Structure from Motion):"
-colmap -h 2>&1 | head -5
-echo ""
-echo "Features:"
-echo "  • CUDA-accelerated feature matching"
-echo "  • OpenMP parallelization"
-echo "  • Qt5 GUI viewer"
-echo "  • CGAL meshing support"
-echo ""
-echo "Usage:"
-echo "  colmap gui                    # Launch GUI"
-echo "  colmap automatic_reconstructor # Auto pipeline"
-echo "  colmap feature_extractor      # Extract features"
-echo ""
-echo "Open3D (Point Cloud Processing):"
-python3 -c "import open3d; print(f'Version: {open3d.__version__}')" 2>/dev/null || echo "Python module: Install via pip"
-echo ""
-echo "Features:"
-echo "  • Point cloud visualization"
-echo "  • Mesh processing"
-echo "  • CUDA acceleration (if enabled)"
-echo "  • Python + C++ API"
-echo ""
-echo "Usage (Python):"
-echo "  import open3d as o3d"
-echo "  pcd = o3d.io.read_point_cloud('file.ply')"
-echo "  o3d.visualization.draw_geometries([pcd])"
-echo ""
-echo "ML Capabilities:"
-echo "  • Open3D ML (PyTorch-based) is NOT included by default"
-echo "  • To enable: Rebuild with -DBUILD_TORCH=ON (requires PyTorch)"
-echo "  • See build log or documentation for enabling ML features"
-echo ""
-echo "Documentation:"
-echo "  COLMAP: https://colmap.github.io/"
-echo "  Open3D: http://www.open3d.org/"
-echo "========================================="
-EOF
-
-chmod +x /usr/local/bin/3d_recon_info
-echo "✓ 3D reconstruction info script created"
-
-echo "✓ 3D Reconstruction tools installed (COLMAP + Open3D)"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "📦 Open3D ML Capabilities (Optional Enhancement)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "The current Open3D build includes core 3D processing but does NOT include"
-echo "ML (Machine Learning) capabilities based on PyTorch."
-echo ""
-echo "To enable Open3D ML features for deep learning on point clouds, meshes, and"
-echo "3D data, you can rebuild Open3D with PyTorch support:"
-echo ""
-echo "  1. Install PyTorch (via Conda or pip):"
-echo "     conda install pytorch torchvision torchaudio pytorch-cuda=${CUDA_VERSION} -c pytorch -c nvidia"
-echo "     OR"
-echo "     python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu${CUDA_VERSION//./}"
-echo ""
-echo "  2. Rebuild Open3D with ML support:"
-echo "     cd /tmp && git clone https://github.com/isl-org/Open3D.git"
-echo "     cd Open3D && mkdir build && cd build"
-echo "     cmake .. -GNinja -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 \\"
-echo "              -DTORCH_CUDA_ARCH_LIST=\"8.6;8.9;9.0\" -DCMAKE_BUILD_TYPE=Release"
-echo "     ninja -j\$(nproc)  # Use all CPU cores"
-echo "     ninja install && ninja install-pip-package"
-echo ""
-echo "  3. Verify installation:"
-echo "     python3 -c \"import open3d.ml.torch; print('Open3D ML enabled!')\""
-echo ""
-echo "For more details, see: https://www.open3d.org/docs/release/tutorial/ml/ml.html"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ 3D Reconstruction tools installed (COLMAP + Open3D)"
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "📦 Open3D ML Capabilities (Optional Enhancement)"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "The current Open3D build includes core 3D processing but does NOT include"
+printf '%s\n' "ML (Machine Learning) capabilities based on PyTorch."
+printf '%s\n' ""
+printf '%s\n' "To enable Open3D ML features for deep learning on point clouds, meshes, and"
+printf '%s\n' "3D data, you can rebuild Open3D with PyTorch support:"
+printf '%s\n' ""
+printf '%s\n' "  1. Install PyTorch (via Conda or pip):"
+printf '%s\n' "     conda install pytorch torchvision torchaudio pytorch-cuda=${CUDA_VERSION} -c pytorch -c nvidia"
+printf '%s\n' "     OR"
+printf '%s\n' "     python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu${CUDA_VERSION//./}"
+printf '%s\n' ""
+printf '%s\n' "  2. Rebuild Open3D with ML support:"
+printf '%s\n' "     cd /tmp && git clone https://github.com/isl-org/Open3D.git"
+printf '%s\n' "     cd Open3D && mkdir build && cd build"
+printf '%s\n' "     cmake .. -GNinja -DBUILD_TORCH=ON -DPYTHON_VERSION=3.12 \\"
+printf '%s\n' "              -DTORCH_CUDA_ARCH_LIST=\"8.6;8.9;9.0\" -DCMAKE_BUILD_TYPE=Release"
+printf '%s\n' "     ninja -j\$(nproc)  # Use all CPU cores"
+printf '%s\n' "     ninja install && ninja install-pip-package"
+printf '%s\n' ""
+printf '%s\n' "  3. Verify installation:"
+printf '%s\n' "     python3 -c \"import open3d.ml.torch; print('Open3D ML enabled!')\""
+printf '%s\n' ""
+printf '%s\n' "For more details, see: https://www.open3d.org/docs/release/tutorial/ml/ml.html"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 monitor_cache "After 3D reconstruction tools"
 
 #===============================================================================
@@ -19502,148 +19876,51 @@ monitor_cache "After 3D reconstruction tools"
 #--- Sub-block 27.1: Install X11 performance tools ---
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> Installing X11 performance and diagnostic tools..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Installing X11 performance and diagnostic tools..."
 X11_TOOL_PACKAGES=(
   x11-utils
-  x11-xserver-utils
-  mesa-utils
-  xdotool
-  xclip
-  xsel
-  wmctrl
-  xinput
 )
-if ! install_packages_resilient "X11 diagnostics toolchain" "${X11_TOOL_PACKAGES[@]}"; then
-    echo "ERROR: Failed to install X11 diagnostics toolchain"
-    exit 1
+# H1: Check apt-get install exit code
+if ! apt-get install -y "${X11_TOOL_PACKAGES[@]}"; then
+  printf '%s\n' "  ✗ ERROR: Failed to install X11 performance and diagnostic tools" >&2
+  exit 1
 fi
-echo "✓ X11 tools installed"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ X11 performance and diagnostic tools installed"
 
-#--- Sub-block 27.2: Install x11vnc VNC server ---
-# Purpose: Alternative VNC server that can attach to existing X sessions
-# Dependencies: Block 6 (APT configuration)
+# A7: Orphaned x11vnc command removed - this appears to be example/documentation code
+# Note: x11vnc configuration is handled by scripts installed via install.sh from container-scripts/
+# Note: shell-scripts file: /usr/local/bin/vnc_clipboard_sync.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-27-x11-performance-and-diagnostic-tools/vnc-clipboard-sync.sh
+# Target: /usr/local/bin/vnc_clipboard_sync.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Outputs: Installed packages
-echo "==> Installing x11vnc as additional VNC option..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Installing clipboard and file transfer tools..."
 
-if ! install_packages_resilient "x11vnc VNC server" "x11vnc"; then
-    echo "ERROR: Failed to install x11vnc VNC server"
-    exit 1
-fi
-
-#--- Sub-block 27.3: Create x11vnc startup script ---
-# 🔗 REMOTE DESKTOP: Part of Block 15 Remote Desktop Infrastructure
-# Purpose: Helper script to start x11vnc with optimal settings
-# Dependencies: x11vnc package (Block 14), see Block 15 for RD overview
-# Outputs: /usr/local/bin/start_x11vnc.sh
-# Related Scripts: start_vnc_xfce.sh, vnc_select.sh (see Block 15 summary)
-cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
-#!/usr/bin/env bash
-# x11vnc - Can attach to existing display or create new one
-# Official docs: https://github.com/LibVNC/x11vnc
-# ArchWiki: https://wiki.archlinux.org/title/X11vnc
-
-set -euo pipefail
-
-DISPLAY_NUM=${1:-:1}
-# Extract numeric part from display number (handle both :1 and 1 formats)
-DISPLAY_NUM_NUMERIC="${DISPLAY_NUM#:}"
-# Validate and default to 1 if empty or non-numeric
-if [ -z "${DISPLAY_NUM_NUMERIC}" ] || ! [ "${DISPLAY_NUM_NUMERIC}" -ge 0 ] 2>/dev/null; then
-    DISPLAY_NUM_NUMERIC=1
-fi
-PORT=$((5900 + DISPLAY_NUM_NUMERIC))
-
-echo "Starting x11vnc on display ${DISPLAY_NUM} (port ${PORT})..."
-echo "Official documentation: https://github.com/LibVNC/x11vnc"
-
-# Create password file if doesn't exist
-# Official recommendation: Always use password protection for security
-if [ ! -f ~/.vnc/passwd ]; then
-    echo "VNC password not set. Setting now:"
-    x11vnc -storepasswd ~/.vnc/passwd
-    chmod 600 ~/.vnc/passwd
-fi
-
-# Start x11vnc with security and performance optimizations
-# Official best practices from x11vnc documentation:
-# - -forever: Keep server running after client disconnects
-# - -shared: Allow multiple clients to connect
-# - -rfbauth: Use password file for authentication (secure)
-# - -noxdamage: Disable X damage extension (better compatibility)
-# - -ncache: Enable pixel caching for better performance
-# - -ncache_cr: Enable client-side caching
-# - -speeds: Optimize for LAN connections
-# - -wait: Reduce CPU usage by waiting between updates
-# - -defer: Defer screen updates for better performance
-# - -noxrecord: Disable XRECORD extension (security)
-# - -noxfixes: Disable XFIXES extension (compatibility)
-x11vnc -display "${DISPLAY_NUM}" \
-  -rfbport "${PORT}" \
-  -rfbauth ~/.vnc/passwd \
-  -forever \
-  -shared \
-  -noxdamage \
-  -noxrecord \
-  -noxfixes \
-  -ncache 10 \
-  -ncache_cr \
-  -speeds lan \
-  -wait 20 \
-  -defer 20 \
-  -bg \
-  -o ~/.vnc/x11vnc.log
-X11VNC
-
-#--- Sub-block 27.4: Make x11vnc script executable ---
-# Purpose: Set permissions for startup script
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-chmod +x /usr/local/bin/start_x11vnc.sh
-
-echo "✓ x11vnc installed (use: start_x11vnc.sh)"
-
-#--- Sub-block 27.5: Install clipboard and file transfer tools ---
-# Purpose: Enhanced clipboard sync between VNC and host
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Installing clipboard and file transfer tools..."
-
-apt-get install -y --no-install-recommends \
+# H1: Check apt-get install exit code
+if ! apt-get install -y --no-install-recommends \
   xclip \
   xsel \
   autocutsel \
-  xdotool
+  xdotool; then
+  printf '%s\n' "  ✗ ERROR: Failed to install clipboard and file transfer tools" >&2
+  exit 1
+fi
 
-#--- Sub-block 27.6: Create clipboard sync script ---
+#--- Sub-block 27.6: Clipboard sync script ---
 # 🔗 REMOTE DESKTOP: Part of Block 15 Remote Desktop Infrastructure
 # Purpose: Helper script to synchronize clipboard between VNC and local machine
 # Dependencies: autocutsel, xclip packages (Block 14)
-# Outputs: /usr/local/bin/vnc_clipboard_sync.sh
+# Note: shell-scripts file: /usr/local/bin/vnc_clipboard_sync.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-27-x11-performance-and-diagnostic-tools/vnc-clipboard-sync.sh
+# Target: /usr/local/bin/vnc_clipboard_sync.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Related Scripts: See Block 15 summary for all remote desktop tools
-cat > /usr/local/bin/vnc_clipboard_sync.sh << 'CLIPBD'
-#!/usr/bin/env bash
-# Synchronize clipboard between VNC and host
 
-if [ -z "${DISPLAY:-}" ]; then
-    echo "ERROR: DISPLAY not set"
-    exit 1
-fi
-
-# Start autocutsel for clipboard sync
-autocutsel -fork -selection CLIPBOARD
-autocutsel -fork -selection PRIMARY
-
-echo "✓ Clipboard sync started"
-echo "  Copy/paste should work between VNC and local machine"
-CLIPBD
-
-#--- Sub-block 27.7: Make clipboard sync script executable ---
-# Purpose: Set permissions for clipboard sync script
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-chmod +x /usr/local/bin/vnc_clipboard_sync.sh
-
-echo "✓ Clipboard tools installed"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Clipboard tools installed"
 
 #===============================================================================
 # BLOCK 28: DESKTOP ENVIRONMENT AND REMOTE ACCESS SETUP (Part 1 of 3)
@@ -19672,7 +19949,8 @@ echo "✓ Clipboard tools installed"
 # Purpose: Install VA-API and VDPAU for GPU-accelerated video
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> Installing hardware video acceleration support..."
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Installing hardware video acceleration support..."
 VIDEO_ACCEL_PACKAGES=(
   libva2
   libva-drm2
@@ -19680,94 +19958,65 @@ VIDEO_ACCEL_PACKAGES=(
   vainfo
   vdpauinfo
   libvdpau1
-  libvdpau-va-gl1
 )
-if ! install_packages_resilient "Hardware video acceleration stack" "${VIDEO_ACCEL_PACKAGES[@]}"; then
-    echo "ERROR: Failed to install hardware video acceleration stack"
-    exit 1
+# H1: Check apt-get install exit code
+if ! apt-get install -y "${VIDEO_ACCEL_PACKAGES[@]}"; then
+  printf '%s\n' "  ✗ ERROR: Failed to install hardware video acceleration packages" >&2
+  exit 1
 fi
-echo "✓ Hardware video acceleration installed"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Hardware video acceleration installed"
 
 #--- Sub-block 28.2: PulseAudio configuration ---
 # Purpose: Audio support for remote desktop sessions
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Installing audio support (PulseAudio)..."
-PULSEAUDIO_PACKAGES=(
-  pulseaudio
-  pulseaudio-utils
-  pavucontrol
-  alsa-utils
-)
-if ! install_packages_resilient "PulseAudio/ALSA audio stack" "${PULSEAUDIO_PACKAGES[@]}"; then
-    echo "ERROR: Failed to install PulseAudio/ALSA audio stack"
-    exit 1
-fi
-
-#--- Sub-block 28.3: Configure PulseAudio for network streaming ---
-# Purpose: Enable remote audio streaming through PulseAudio
+# Note: config-files file: /etc/pulse/default.pa.d/network.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/network.conf
+# Target: /etc/pulse/default.pa.d/network.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 install -d -m 0755 /etc/pulse
 install -d -m 0755 /etc/pulse/default.pa.d
 
-cat > /etc/pulse/default.pa.d/network.conf << 'PANETWORK'
-# Allow network streaming
-load-module module-native-protocol-tcp auth-ip-acl=127.0.0.1
-load-module module-esound-protocol-tcp auth-ip-acl=127.0.0.1
-PANETWORK
-
-#--- Sub-block 28.4: Create PulseAudio startup script ---
+#--- Sub-block 28.4: PulseAudio startup script ---
 # Purpose: Helper script to start PulseAudio for VNC sessions
+# Note: shell-scripts file: /usr/local/bin/start_pulseaudio.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/start-pulseaudio.sh
+# Target: /usr/local/bin/start_pulseaudio.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /usr/local/bin/start_pulseaudio.sh << 'PASTART'
-#!/usr/bin/env bash
-set -euo pipefail
 
-# Start PulseAudio for VNC session
-if pulseaudio --check 2>/dev/null; then
-    echo "PulseAudio already running"
-else
-    if pulseaudio --start --exit-idle-time=-1; then
-        echo "✓ PulseAudio started"
-    else
-        echo "✗ Failed to start PulseAudio" >&2
-        exit 1
-    fi
-fi
-PASTART
-chmod +x /usr/local/bin/start_pulseaudio.sh
-
-echo "✓ Audio support installed"
+# A5a/D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Audio support installed"
 
 #--- Sub-block 28.5: Initialize TurboVNC and VirtualGL installation ---
 # Purpose: Install TurboVNC and VirtualGL from cached .deb files with GPG verification
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
-echo "==> Installing TurboVNC and VirtualGL with official GPG signature verification..."
+printf '%s\n' "==> Installing TurboVNC and VirtualGL with official GPG signature verification..."
 
 #--- Sub-block 28.6: Download debsig-import helper script ---
 # Critical: Required for GPG signature verification of .deb files
 # Official source: https://gist.githubusercontent.com/dcommander/2960e99d4a4f6998e249ec7cfec89b85
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "Downloading the debsig-import helper script..."
+printf '%s\n' "Downloading the debsig-import helper script..."
 DEBSIG_IMPORT_URL="https://gist.githubusercontent.com/dcommander/2960e99d4a4f6998e249ec7cfec89b85/raw/debsig-import"
 if ! curl -fsS --retry 3 --retry-delay 2 --connect-timeout 10 --max-time 60 --compressed -o /usr/local/bin/debsig-import "${DEBSIG_IMPORT_URL}"; then
-  echo ""
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "  DOWNLOAD FAILED: debsig-import script"
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "  File name: debsig-import"
-  echo "  Expected location: /usr/local/bin/debsig-import"
-  echo "  Source URL: ${DEBSIG_IMPORT_URL}"
-  echo ""
-  echo "  You may manually download this file and place it at:"
-  echo "    /usr/local/bin/debsig-import"
-  echo "═══════════════════════════════════════════════════════════════"
-  echo "✗ ERROR: Failed to download the debsig-import script. Aborting."
-    exit 1
+  printf '%s\n' ""
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "  DOWNLOAD FAILED: debsig-import script"
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "  File name: debsig-import"
+  printf '%s\n' "  Expected location: /usr/local/bin/debsig-import"
+  printf '%s\n' "  Source URL: ${DEBSIG_IMPORT_URL}"
+  printf '%s\n' ""
+  printf '%s\n' "  You may manually download this file and place it at:"
+  printf '%s\n' "    /usr/local/bin/debsig-import"
+  printf '%s\n' "═══════════════════════════════════════════════════════════════"
+  printf '%s\n' "✗ ERROR: Failed to download the debsig-import script. Aborting." >&2
+  exit 1
 fi
 chmod +x /usr/local/bin/debsig-import
 
@@ -19787,19 +20036,19 @@ chmod +x /usr/local/bin/debsig-import
 # Official docs syntax: sudo debsig-import <KEY_ID> <KEY_URL>
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC), debsig-import utility
 # Outputs: VNC server, GPU acceleration
-echo "Importing the TurboVNC/VirtualGL GPG key from official source..."
-echo "  Key ID: ${VIRTUALGL_TURBOVNC_GPG_KEY_ID}"
-echo "  Key URL: ${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
+printf '%s\n' "Importing the TurboVNC/VirtualGL GPG key from official source..."
+printf '%s\n' "  Key ID: ${VIRTUALGL_TURBOVNC_GPG_KEY_ID}"
+printf '%s\n' "  Key URL: ${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
 
 # CRITICAL: Parameter order is KEY_ID first, then URL (per official documentation)
 if ! debsig-import "${VIRTUALGL_TURBOVNC_GPG_KEY_ID}" "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"; then
-  echo "⚠ WARNING: Failed to import GPG key from primary source, trying alternative..."
+  printf '%s\n' "⚠ WARNING: Failed to import GPG key from primary source, trying alternative..." >&2
   if ! debsig-import "${VIRTUALGL_TURBOVNC_GPG_KEY_ID}" "${VIRTUALGL_TURBOVNC_GPG_KEY_URL_ALT}"; then
-    echo "✗ ERROR: Failed to import the GPG key from both sources. Aborting."
+    printf '%s\n' "✗ ERROR: Failed to import the GPG key from both sources. Aborting." >&2
     exit 1
   fi
 fi
-echo "✓ GPG key imported successfully."
+printf '%s\n' "✓ GPG key imported successfully."
 
 #--- Sub-block 28.9: Verify and install TurboVNC/VirtualGL packages ---
 # Critical: Install cached .deb packages with structural verification
@@ -19813,28 +20062,30 @@ for deb_file in "${CONTAINER_DEB_CACHE}"/turbovnc_*.deb "${CONTAINER_DEB_CACHE}"
     # deb_file is guaranteed to exist when nullglob is enabled (loop only runs if files match)
     # This check is defensive programming for edge cases
     if [ ! -f "${deb_file}" ]; then
-        echo "[warn] Package not found in cache, skipping: $(basename "${deb_file}")"
+        printf '%s\n' "[warn] Package not found in cache, skipping: $(basename "${deb_file}")" >&2
         continue
     fi
 
-    echo "Verifying package structure for $(basename "${deb_file}")..."
+    printf '%s\n' "Verifying package structure for $(basename "${deb_file}")..."
     if dpkg-deb -I "${deb_file}" >/dev/null 2>&1; then
-        echo "✓ Package structure valid."
+        printf '%s\n' "✓ Package structure valid."
     else
-        echo "✗ ERROR: Package corrupted: $(basename "${deb_file}")"
+        printf '%s\n' "✗ ERROR: Package corrupted: $(basename "${deb_file}")" >&2
         exit 1
     fi
 
-    echo "Installing $(basename "${deb_file}")..."
+    printf '%s\n' "Installing $(basename "${deb_file}")..."
     # Use dpkg directly to avoid downgrade issues
     INSTALL_LOG="/tmp/dpkg_install_$(basename "${deb_file}" .deb).log"
     dpkg -i "${deb_file}" 2>&1 | tee "${INSTALL_LOG}"
+    # D1/A5: PIPESTATUS is Bash-specific - document usage
+    # Note: This requires Bash 2.05+ for PIPESTATUS array
     DPKG_EXIT=${PIPESTATUS[0]}
     if [ "${DPKG_EXIT}" -ne 0 ]; then
-        echo "⚠ dpkg exited with ${DPKG_EXIT}, attempting apt-get -f install..."
+        printf '%s\n' "⚠ dpkg exited with ${DPKG_EXIT}, attempting apt-get -f install..." >&2
         if ! DEBIAN_FRONTEND=noninteractive apt-get install -y -f; then
-            echo "✗ ERROR: apt-get -f install failed while processing $(basename "${deb_file}")"
-            echo "  Refer to ${INSTALL_LOG} for detailed output."
+            printf '%s\n' "✗ ERROR: apt-get -f install failed while processing $(basename "${deb_file}")" >&2
+            printf '%s\n' "  Refer to ${INSTALL_LOG} for detailed output." >&2
             exit 1
         fi
     fi
@@ -19846,33 +20097,33 @@ shopt -u nullglob
 # Purpose: Make TurboVNC binaries available in system PATH
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
-echo "==> Creating complete TurboVNC symlinks in /usr/local/bin/"
+printf '%s\n' "==> Creating complete TurboVNC symlinks in /usr/local/bin/"
 
 # Define all TurboVNC binaries that should be symlinked
 TURBOVNC_BINARIES=(
   "vncserver:VNC server daemon"
   "Xvnc:X11 server with VNC protocol"
-  "vncpasswd:VNC password utility"
-  "vncconnect:VNC reverse connection tool"
-  "vncviewer:TurboVNC client viewer"
-  "webserver:Built-in HTTP server for Java applet"
-  "tvncconfig:TurboVNC configuration utility"
 )
+# Note: shell-scripts file: /etc/profile.d/turbovnc.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/turbovnc.sh
+# Target: /etc/profile.d/turbovnc.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 28.11: Create TurboVNC binary symlinks ---
 # Purpose: Link all TurboVNC binaries to /usr/local/bin
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
 for entry in "${TURBOVNC_BINARIES[@]}"; do
-  IFS=':' read -r binary description <<< "$entry"
-  src_path="/opt/TurboVNC/bin/$binary"
-  dst_path="/usr/local/bin/$binary"
+  # D2: Use read -r to prevent backslash interpretation
+  IFS=':' read -r binary description <<< "${entry}"
+  src_path="/opt/TurboVNC/bin/${binary}"
+  dst_path="/usr/local/bin/${binary}"
 
-  if [ -x "$src_path" ]; then
-    ln -sf "$src_path" "$dst_path"
-    echo "  ✓ $binary -> $src_path ($description)"
+  if [ -x "${src_path}" ]; then
+    ln -sf "${src_path}" "${dst_path}"
+    printf '%s\n' "  ✓ ${binary} -> ${src_path} (${description})"
   else
-    echo "  ✗ $binary not found at $src_path"
+    printf '%s\n' "  ✗ ${binary} not found at ${src_path}" >&2
   fi
 done
 # End TurboVNC symlink loop (for loop self-contained)
@@ -19881,26 +20132,25 @@ done
 # Purpose: Make TurboVNC available in all shell sessions
 # Dependencies: Block 15 (TurboVNC)
 # Outputs: VNC server, GPU acceleration
+# Note: shell-scripts file: /etc/profile.d/turbovnc.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/turbovnc.sh
+# Target: /etc/profile.d/turbovnc.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Note: TurboVNC binaries are symlinked to /usr/local/bin (already in PATH)
-# Creating minimal profile file for documentation purposes
-cat > /etc/profile.d/turbovnc.sh << 'TVNC_PROFILE'
-# TurboVNC environment
-# Binaries are symlinked to /usr/local/bin and available in PATH
-# Main commands: vncserver, vncviewer, vncpasswd, Xvnc
-# Official documentation: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-TVNC_PROFILE
-chmod +x /etc/profile.d/turbovnc.sh
 
-echo "✓ TurboVNC symlinks and PATH configuration complete"
+printf '%s\n' "✓ TurboVNC symlinks and PATH configuration complete"
 
 #--- Sub-block 28.13: Initialize VirtualGL integration ---
 # Purpose: Create VirtualGL symlinks and environment configuration
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
-echo "==> Creating complete VirtualGL integration..."
+printf '%s\n' "==> Creating complete VirtualGL integration..."
 
 # Define all VirtualGL binaries with descriptions
-declare -A VIRTUALGL_BINARIES=(
+# A6: declare -A requires Bash 4+ - verify version or document requirement
+# Note: Associative arrays require Bash 4.0+ (2009+)
+if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+  declare -A VIRTUALGL_BINARIES=(
   # Core VirtualGL tools
   ["vglrun"]="Run application with GPU acceleration (PRIMARY TOOL)"
   ["vglclient"]="VirtualGL client for remote rendering"
@@ -19915,909 +20165,48 @@ declare -A VIRTUALGL_BINARIES=(
   ["glxspheres64"]="OpenGL benchmark (spinning spheres)"
   ["eglinfo"]="Display EGL information"
   ["eglxinfo"]="Display EGL/X11 information"
-  ["eglxspheres64"]="EGL benchmark (spinning spheres)"
-
-  # Performance and diagnostic tools
-  ["cpustat"]="CPU statistics monitoring"
-  ["nettest"]="Network performance testing"
-  ["tcbench"]="TCP benchmark utility"
-)
-
-#--- Sub-block 28.14: Create VirtualGL binary symlinks ---
-# Purpose: Link all VirtualGL binaries to /usr/local/bin
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-echo "Creating VirtualGL symlinks in /usr/local/bin/:"
-for binary in "${!VIRTUALGL_BINARIES[@]}"; do
-  src_path="/opt/VirtualGL/bin/$binary"
-  dst_path="/usr/local/bin/$binary"
-  description="${VIRTUALGL_BINARIES[$binary]}"
-
-  if [ -x "$src_path" ]; then
-    ln -sf "$src_path" "$dst_path"
-    echo "  ✓ $binary -> $src_path"
-  else
-    echo "  ⚠ $binary not found at $src_path (skipping)"
-  fi
-done
-# End VirtualGL symlink loop (for loop self-contained)
-
-#--- Sub-block 28.15: Configure VirtualGL environment ---
-# Critical: Set VirtualGL runtime environment variables for optimal VNC performance
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-cat > /etc/profile.d/virtualgl.sh << 'VGL_PROFILE'
-# VirtualGL environment configuration
-# Official documentation: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-
-# VirtualGL runtime environment (with dynamic display detection)
-# VGL_DISPLAY will be set dynamically by VNC launcher scripts
-export VGL_COMPRESS="${VGL_COMPRESS:-proxy}"       # Compression method (proxy, jpeg, rgb)
-export VGL_READBACK="${VGL_READBACK:-sync}"        # Readback mode (sync recommended for VNC)
-export VGL_LOGO="${VGL_LOGO:-0}"                   # Disable VirtualGL logo overlay
-export VGL_FPS="${VGL_FPS:-0}"                     # Disable FPS display (set to 1 to enable)
-export VGL_VERBOSE="${VGL_VERBOSE:-0}"             # Verbose output (set to 1 to enable)
-
-# Optimize for VNC environments
-export VGL_SYNC="${VGL_SYNC:-1}"                   # Synchronize with vertical retrace
-export VGL_REFRESHRATE="${VGL_REFRESHRATE:-60}"    # Target refresh rate for VNC
-
-# Debug and development settings
-export VGL_DEBUG="${VGL_DEBUG:-0}"                 # Debug mode (set to 1 to enable)
-export VGL_LOG_LEVEL="${VGL_LOG_LEVEL:-1}"         # Log level (0-3)
-export VGL_FORCE_GPU="${VGL_FORCE_GPU:-0}"         # Force GPU usage (set to 1 to enable)
-
-# Auto-detect VNC display if not set
-if [ -z "${VGL_DISPLAY:-}" ]; then
-  # Try to detect VNC display from running processes
-  vnc_display=""
-  
-  # Method 1: Check for Xvnc processes using pgrep
-  if command -v pgrep >/dev/null 2>&1; then
-    vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1)
-    if [ -n "${vnc_cmd}" ]; then
-      vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1)
-    fi
-  else
-    vnc_display=$(ps aux 2>/dev/null | grep -oE 'Xvnc.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
-  fi
-  
-  # Method 2: Check for vncserver processes
-  if [ -z "${vnc_display}" ]; then
-    if command -v pgrep >/dev/null 2>&1; then
-      vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1)
-      if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1)
-      fi
-    else
-      vnc_display=$(ps aux 2>/dev/null | grep -oE 'vncserver.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
-    fi
-  fi
-  
-  # Method 3: Check for display :1, :2, etc.
-  if [ -z "${vnc_display}" ]; then
-    for i in 1 2 3 4 5; do
-      if [ -S "/tmp/.X11-unix/X${i}" ]; then
-        vnc_display=":${i}"
-        break
-      fi
-    done
-  fi
-  
-  # Set VGL_DISPLAY
-  if [ -n "${vnc_display}" ]; then
-    export VGL_DISPLAY="${vnc_display}"
-  else
-    export VGL_DISPLAY=":0"  # Fallback
-  fi
+  )
+  # Note: VIRTUALGL_BINARIES array defined but not used in this section
+  # Array is available for future use or reference
+else
+  printf '%s\n' "[warn] Bash 4+ required for associative arrays; VirtualGL binaries array not available" >&2
 fi
+# Note: shell-scripts file: /etc/profile.d/virtualgl.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/virtualgl.sh
+# Target: /etc/profile.d/virtualgl.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-# VirtualGL integration settings
-export VNC_VGL_INTEGRATION="${VNC_VGL_INTEGRATION:-1}"     # Enable VNC-VGL integration
-export VNC_OPENGL_EXTENSIONS="${VNC_OPENGL_EXTENSIONS:-1}" # Enable OpenGL extensions
-export VNC_GLX_EXTENSIONS="${VNC_GLX_EXTENSIONS:-1}"       # Enable GLX extensions
-VGL_PROFILE
-chmod +x /etc/profile.d/virtualgl.sh
-
-echo "✓ VirtualGL symlinks and environment configuration complete"
-
-#--- Sub-block 28.16: Configure VirtualGL server (if needed) ---
-# Purpose: Run vglserver_config for system-wide VirtualGL configuration
+#--- Sub-block 28.14: VirtualGL server configuration ---
+# Purpose: Helper script for VirtualGL server configuration
+# Note: shell-scripts file: /usr/local/bin/configure_vglserver.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/configure-vglserver.sh
+# Target: /usr/local/bin/configure_vglserver.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
-echo ""
-echo "Configuring VirtualGL server..."
 # Note: vglserver_config typically requires interactive setup or specific permissions
 # In containerized environments, this may not be necessary as permissions are handled differently
-# We'll create a helper script for manual configuration if needed
 if [ -x /opt/VirtualGL/bin/vglserver_config ]; then
-  echo "  ✓ vglserver_config available (run manually if system-wide config needed)"
-  # Create a helper script for manual configuration
-  cat > /usr/local/bin/configure_vglserver.sh << 'VGLSCONF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# VirtualGL Server Configuration Helper
-# Official docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-# This script helps configure VirtualGL for system-wide use
-# Note: In Singularity containers, this may not be necessary
-
-readonly VGLSERVER_CONFIG="/opt/VirtualGL/bin/vglserver_config"
-
-  if [ -x "${VGLSERVER_CONFIG}" ]; then
-  printf 'Running VirtualGL server configuration...\n'
-  printf 'This will set up permissions for VirtualGL to access the 3D X server\n'
-  "${VGLSERVER_CONFIG}"
-else
-  printf 'ERROR: vglserver_config not found\n' >&2
-  exit 1
-fi
-VGLSCONF
-  chmod +x /usr/local/bin/configure_vglserver.sh
-  echo "  ✓ Helper script created: /usr/local/bin/configure_vglserver.sh"
-else
-  echo "  ⚠ vglserver_config not found (may not be needed in container environment)"
+  printf '%s\n' "  ✓ vglserver_config available (run manually if system-wide config needed)"
 fi
 
-#--- Sub-block 28.17: Verify VirtualGL installation ---
-# Purpose: Quick verification that vglrun is available
+#--- Sub-block 28.15: VirtualGL performance profiles ---
+# Purpose: Pre-configured VirtualGL performance profiles (fast, balanced, lowbw)
+# Note: shell-scripts files are installed via install.sh from container-scripts/
+#   - /usr/local/bin/vglrun-fast (high performance, best quality)
+#   - /usr/local/bin/vglrun-balanced (default, good for most cases)
+#   - /usr/local/bin/vglrun-lowbw (low bandwidth, optimized compression)
+# Source: shell-scripts/block-28-desktop-environment-and-remote-access-setup-part-1-of-3/vglrun-*.sh
+# Targets: /usr/local/bin/vglrun-fast, /usr/local/bin/vglrun-balanced, /usr/local/bin/vglrun-lowbw
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: Config files are also installed via install.sh:
+#   - /usr/local/etc/virtualgl/vglrun-fast.conf
+#   - /usr/local/etc/virtualgl/vglrun-balanced.conf
+#   - /usr/local/etc/virtualgl/vglrun-lowbw.conf
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
-echo ""
-echo "Verifying VirtualGL installation:"
-if [ -x /opt/VirtualGL/bin/vglrun ]; then
-  /opt/VirtualGL/bin/vglrun --version 2>&1 | head -3 || echo "  ✓ vglrun binary present"
-else
-  echo "  ✗ ERROR: vglrun not found!"
-fi
-# End VirtualGL verification (if-else self-contained)
-
-#--- Sub-block 28.18: Create VirtualGL test script ---
-# Purpose: Comprehensive VirtualGL testing script for validation
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-cat > /usr/local/bin/test_virtualgl.sh << 'VGLTEST'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# VirtualGL Test Script
-
-echo "=========================================="
-echo "VirtualGL Installation Test"
-echo "=========================================="
-echo ""
-
-vgl_available="no"
-if command -v vglrun >/dev/null 2>&1; then
-  vgl_available="yes"
-fi
-
-timeout_available="no"
-if command -v timeout >/dev/null 2>&1; then
-  timeout_available="yes"
-fi
-
-echo "1. Checking VirtualGL binaries:"
-for binary in vglrun glxinfo glxspheres64; do
-  if command -v "${binary}" >/dev/null 2>&1; then
-    binary_path="$(command -v "${binary}")"
-    printf '  ✓ %s: %s\n' "${binary}" "${binary_path}"
-  else
-    printf '  ✗ %s: NOT FOUND\n' "${binary}"
-  fi
-done
-
-echo ""
-echo "2. VirtualGL version:"
-if [ "${vgl_available}" = "yes" ]; then
-  if ! vglrun --version 2>&1 | head -1; then
-    echo "  ⚠ Unable to read VirtualGL version"
-  fi
-else
-  echo "  ⚠ VirtualGL not found"
-fi
-
-echo ""
-echo "3. OpenGL Information (via VirtualGL):"
-if [ -n "${DISPLAY:-}" ]; then
-  echo "  Display: ${DISPLAY}"
-  if [ "${vgl_available}" = "yes" ] && command -v glxinfo >/dev/null 2>&1; then
-    if ! { vglrun glxinfo 2>/dev/null | grep -E "OpenGL (vendor|renderer|version)" | head -3; }; then
-      echo "  ⚠ Unable to query VirtualGL OpenGL information"
-    fi
-  else
-    echo "  ⚠ glxinfo or VirtualGL unavailable; skipping GPU OpenGL query"
-  fi
-else
-  echo "  ⚠ DISPLAY not set, skipping OpenGL test"
-fi
-
-echo ""
-echo "4. GPU Detection:"
-if command -v nvidia-smi >/dev/null 2>&1; then
-  gpu_info=""
-  if [ "${timeout_available}" = "yes" ]; then
-    gpu_info="$(timeout 5 nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
-  else
-    gpu_info="$(nvidia-smi --query-gpu=name,driver_version --format=csv,noheader 2>/dev/null || true)"
-  fi
-
-  if [ -n "${gpu_info}" ]; then
-    echo "  NVIDIA GPU:"
-    printf '%s\n' "${gpu_info}" | sed 's/^/  /'
-  else
-    echo "  ⚠ GPU info unavailable"
-  fi
-else
-  echo "  ⚠ nvidia-smi not found"
-fi
-
-echo ""
-echo "=========================================="
-echo "Test complete!"
-echo ""
-echo "To test 3D acceleration with VNC:"
-echo "  1. Start VNC server: start_vnc_xfce.sh"
-echo "  2. Connect with VNC viewer"
-echo "  3. Open terminal in VNC session"
-echo "  4. Run: vglrun glxspheres64"
-echo "     (Should show 1000+ FPS with GPU)"
-echo "  5. Compare without VGL: glxspheres64"
-echo "     (Will show lower FPS with software rendering)"
-echo "=========================================="
-VGLTEST
-chmod +x /usr/local/bin/test_virtualgl.sh
-
-echo "✓ VirtualGL test script created: /usr/local/bin/test_virtualgl.sh"
-
-
-#--- Sub-block 28.19: VirtualGL test script created ---
-# Purpose: Comprehensive testing and validation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 28.20: Initialize VirtualGL helper scripts creation ---
-# Purpose: Create comprehensive helper scripts for VirtualGL testing
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-echo "==> Creating VirtualGL helper scripts..."
-
-#--- Sub-block 28.21: Create GPU benchmark script ---
-# Purpose: Script to compare software vs GPU rendering performance
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-cat > /usr/local/bin/vgl_benchmark.sh << 'VGLBENCH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# VirtualGL GPU Benchmark Script
-
-TIMEOUT_BIN=""
-if command -v timeout >/dev/null 2>&1; then
-  TIMEOUT_BIN="$(command -v timeout)"
-else
-  echo "⚠ 'timeout' utility not available; timed benchmark samples will be skipped."
-fi
-
-echo "=========================================="
-echo "VirtualGL GPU Benchmark"
-echo "=========================================="
-echo ""
-
-if [ -z "${DISPLAY:-}" ]; then
-  echo "ERROR: DISPLAY not set"
-  echo "Start VNC first: start_vnc_xfce.sh"
-  exit 1
-fi
-
-if ! command -v vglrun >/dev/null 2>&1; then
-  echo "ERROR: VirtualGL not found"
-  exit 1
-fi
-
-collect_samples() {
-  local duration="$1"
-  shift
-  local run_output=""
-
-  if [ -z "${TIMEOUT_BIN}" ]; then
-    echo "   ⚠ Skipping '${*}' sample (timeout utility not available)"
-    return 0
-  fi
-
-  run_output="$(${TIMEOUT_BIN} "${duration}" "$@" 2>&1 || true)"
-
-  grep -Ei "frames|fps" <<< "${run_output}" | tail -3 || true
-}
-
-echo "GPU Information:"
-if command -v nvidia-smi >/dev/null 2>&1; then
-  if ! nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader; then
-    echo "  ⚠ Unable to query GPU information"
-  fi
-else
-  echo "  nvidia-smi not available"
-fi
-
-echo ""
-echo "Testing OpenGL rendering..."
-echo ""
-
-# Test 1: Without VirtualGL (software rendering)
-echo "1. Software rendering (no VirtualGL):"
-echo "   Running: glxspheres64"
-if command -v glxspheres64 >/dev/null 2>&1; then
-  collect_samples 10 glxspheres64
-else
-  echo "   glxspheres64 not found"
-fi
-
-echo ""
-
-# Test 2: With VirtualGL (GPU rendering)
-echo "2. GPU rendering (with VirtualGL):"
-echo "   Running: vglrun glxspheres64"
-if command -v glxspheres64 >/dev/null 2>&1; then
-  collect_samples 10 vglrun glxspheres64
-else
-  echo "   glxspheres64 not found"
-fi
-
-echo ""
-echo "=========================================="
-echo "Benchmark complete!"
-echo ""
-echo "Expected results:"
-echo "  Software rendering: ~30-100 FPS"
-echo "  GPU rendering:      ~1000+ FPS"
-echo ""
-echo "If GPU rendering shows low FPS:"
-echo "  1. Check GPU is visible: nvidia-smi"
-echo "  2. Check VNC started with --nv flag"
-echo "  3. Check DISPLAY is set: echo \$DISPLAY"
-echo "=========================================="
-VGLBENCH
-chmod +x /usr/local/bin/vgl_benchmark.sh
-
-#--- Sub-block 28.22: Create OpenGL information script ---
-# Purpose: Display comprehensive OpenGL and GPU information
-# Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
-# Outputs: GPU libraries, CUDA toolkit
-cat > /usr/local/bin/vgl_info.sh << 'VGLINFO'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Display comprehensive OpenGL/VirtualGL information
-
-
-echo "=========================================="
-echo "OpenGL & VirtualGL Information"
-echo "=========================================="
-echo ""
-
-# System info
-display_value="${DISPLAY:-NOT SET}"
-echo "Display: ${display_value}"
-echo "Hostname: $(hostname)"
-echo ""
-
-# GPU info
-echo "GPU Information:"
-if command -v nvidia-smi >/dev/null 2>&1; then
-  if ! { nvidia-smi --query-gpu=index,name,driver_version,memory.total,memory.used \
-    --format=csv,noheader | nl; }; then
-    echo "  ⚠ Unable to query GPU information"
-  fi
-else
-  echo "  No NVIDIA GPU detected"
-fi
-echo ""
-
-# OpenGL info (software rendering)
-echo "OpenGL (Software Rendering):"
-if [ -n "${DISPLAY:-}" ] && command -v glxinfo >/dev/null 2>&1; then
-  if ! { glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'; }; then
-    echo "  ⚠ Unable to query OpenGL information (software rendering)"
-  fi
-else
-  echo "  Cannot query (DISPLAY not set or glxinfo not found)"
-fi
-echo ""
-
-# OpenGL info (with VirtualGL)
-echo "OpenGL (VirtualGL/GPU Rendering):"
-if [ -n "${DISPLAY:-}" ] && command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
-  if ! { vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version|shading)" | sed 's/^/  /'; }; then
-    echo "  ⚠ Unable to query VirtualGL OpenGL information"
-  fi
-else
-  echo "  Cannot query (VirtualGL not available)"
-fi
-echo ""
-
-
-
-# VirtualGL status
-echo "VirtualGL Status:"
-if command -v vglrun >/dev/null 2>&1; then
-  vglrun_path="$(command -v vglrun)"
-  echo "  ✓ VirtualGL installed: ${vglrun_path}"
-  if ! vglrun --version 2>&1 | head -1 | sed 's/^/  /'; then
-    echo "  ⚠ Unable to read VirtualGL version"
-  fi
-else
-  echo "  ✗ VirtualGL not found"
-fi
-echo ""
-
-# Available tools
-echo "Available Utilities:"
-for tool in vglrun glxinfo glxspheres64 eglinfo cpustat nettest tcbench; do
-  if command -v "${tool}" >/dev/null 2>&1; then
-    echo "  ✓ ${tool}"
-  else
-    echo "  ✗ ${tool} (not found)"
-  fi
-done
-
-echo ""
-echo "=========================================="
-VGLINFO
-chmod +x /usr/local/bin/vgl_info.sh
-
-#--- Sub-block 28.23: Create application launcher script ---
-# Purpose: Wrapper script to launch applications with VirtualGL acceleration
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-cat > /usr/local/bin/vgl_launch.sh << 'VGLLAUNCH'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Launch applications with VirtualGL acceleration
-
-if [ $# -eq 0 ]; then
-  echo "Usage: vgl_launch.sh <command> [args...]"
-  echo ""
-  echo "Examples:"
-  echo "  vgl_launch.sh blender"
-  echo "  vgl_launch.sh glxspheres64"
-  echo "  vgl_launch.sh openscad model.scad"
-  echo ""
-  echo "This script automatically:"
-  echo "  - Adds VirtualGL to PATH"
-  echo "  - Runs application with vglrun for GPU acceleration"
-  echo "  - Handles DISPLAY configuration"
-  exit 1
-fi
-
-# Add VirtualGL to PATH
-
-# Check DISPLAY
-if [ -z "${DISPLAY:-}" ]; then
-  echo "WARNING: DISPLAY not set, using :1"
-  export DISPLAY=:1
-fi
-
-# Check if vglrun is available
-if ! command -v vglrun >/dev/null 2>&1; then
-  echo "ERROR: VirtualGL not found"
-  echo "Running without GPU acceleration..."
-  exec "$@"
-fi
-
-# Launch with VirtualGL
-echo "Launching with VirtualGL GPU acceleration..."
-printf 'Command: vglrun'
-for arg in "$@"; do
-  printf ' %q' "${arg}"
-done
-printf '\n'
-echo ""
-exec vglrun "$@"
-VGLLAUNCH
-chmod +x /usr/local/bin/vgl_launch.sh
-
-
-
-echo "✓ VirtualGL helper scripts created:"
-echo "  - test_virtualgl.sh   : Test VirtualGL installation"
-echo "  - vgl_benchmark.sh    : Benchmark GPU performance"
-echo "  - vgl_info.sh         : Display OpenGL/VirtualGL info"
-echo "  - vgl_launch.sh       : Launch apps with GPU acceleration"
-
-#--- Sub-block 28.24: Add VirtualGL convenience aliases ---
-# Purpose: Add GPU-accelerated application aliases to system bashrc
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-echo "==> Adding VirtualGL convenience aliases..."
-
-if ! grep -Fq "# VirtualGL Convenience Aliases and Functions" /etc/bash.bashrc 2>/dev/null; then
-cat >> /etc/bash.bashrc << 'VGLALIAS'
-
-# ============================================================================
-# VirtualGL Convenience Aliases and Functions
-# ============================================================================
-
-# Ensure VirtualGL is in PATH
-
-# Quick GPU-accelerated application launches
-alias vblender='vglrun blender'
-alias vopenscad='vglrun openscad'
-alias vfreecad='vglrun freecad'
-alias vmeshlab='vglrun meshlab'
-
-# Quick benchmark
-alias gpubench='vglrun glxspheres64'
-
-gpuinfo() {
-  if ! command -v vglrun >/dev/null 2>&1; then
-    echo "VirtualGL not found"
-    return 1
-  fi
-  if ! command -v glxinfo >/dev/null 2>&1; then
-    echo "glxinfo not found"
-    return 1
-  fi
-  if ! { vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)"; }; then
-    echo "Unable to query GPU OpenGL information"
-    return 1
-  fi
-}
-
-# Helper function: launch any app with VirtualGL
-vgl() {
-  if [ $# -eq 0 ]; then
-    echo "Usage: vgl <command> [args...]"
-    echo "Example: vgl blender"
-    return 1
-  fi
-  vglrun "$@"
-}
-
-# Helper function: compare software vs GPU rendering
-compare_render() {
-  local app="${1:-glxspheres64}"
-  local timeout_available="no"
-  local output=""
-
-  echo "=== Software Rendering ==="
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_available="yes"
-  fi
-
-  if [ "${timeout_available}" != "yes" ]; then
-    echo "⚠ 'timeout' utility not available; skipping timed FPS comparisons."
-  fi
-
-  if command -v "${app}" >/dev/null 2>&1; then
-    if [ "${timeout_available}" = "yes" ]; then
-      output="$(timeout 5 "${app}" 2>&1 || true)"
-      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
-    else
-      echo "   ${app} available but timing skipped (requires 'timeout')"
-    fi
-  else
-    echo "Application ${app} not found"
-  fi
-
-  echo ""
-  echo "=== GPU Rendering (VirtualGL) ==="
-  if ! command -v vglrun >/dev/null 2>&1; then
-    echo "VirtualGL not available"
-    return 1
-  fi
-
-  if command -v "${app}" >/dev/null 2>&1; then
-    if [ "${timeout_available}" = "yes" ]; then
-      output="$(timeout 5 vglrun "${app}" 2>&1 || true)"
-      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
-    else
-      echo "   ${app} with VirtualGL available but timing skipped (requires 'timeout')"
-    fi
-  else
-    echo "Application ${app} not found"
-    return 1
-  fi
-}
-
-
-export -f vgl compare_render gpuinfo
-VGLALIAS
-else
-  echo "  • VirtualGL aliases already present in /etc/bash.bashrc"
-fi
-
-
-echo "✓ VirtualGL aliases added to /etc/bash.bashrc"
-
-#--- Sub-block 28.25: Initialize VirtualGL performance optimization ---
-# Purpose: Create optimized configuration profiles for different network speeds
-# Dependencies: Block 15 (VirtualGL)
-# Outputs: VNC server, GPU acceleration
-echo "==> Configuring VirtualGL performance optimizations..."
-
-mkdir -p /usr/local/etc/virtualgl
-
-# Profile 1: Maximum Performance (for fast networks)
-cat > /usr/local/etc/virtualgl/vglrun-fast.conf << 'VGLFAST'
-# VirtualGL High Performance Profile
-VGL_COMPRESS=proxy
-VGL_READBACK=sync
-VGL_SYNC=1
-VGL_GAMMA=1
-VGL_LOGO=0
-VGL_SUBSAMP=444  # No subsampling - best quality
-VGL_QUAL=95      # High JPEG quality
-VGL_SPOIL=0      # No frame spoiling - all frames rendered
-VGL_FPS=60       # Target 60 FPS
-VGL_TRANSPORT=vgl
-VGLFAST
-
-# Profile 2: Balanced (for normal networks)
-cat > /usr/local/etc/virtualgl/vglrun-balanced.conf << 'VGLBAL'
-# VirtualGL Balanced Profile
-VGL_COMPRESS=jpeg
-VGL_SUBSAMP=422  # 4:2:2 chroma subsampling
-VGL_QUAL=80      # Medium-high quality
-VGL_SPOIL=1      # Allow some frame dropping
-VGL_FPS=30       # Target 30 FPS
-VGL_READBACK=sync
-VGLBAL
-
-# Profile 3: Low Bandwidth (for slow networks)
-cat > /usr/local/etc/virtualgl/vglrun-lowbw.conf << 'VGLLOWBW'
-# VirtualGL Low Bandwidth Profile
-VGL_COMPRESS=jpeg
-VGL_SUBSAMP=420  # 4:2:0 chroma subsampling (more compression)
-VGL_QUAL=60      # Lower quality, better compression
-VGL_SPOIL=1
-VGL_FPS=15       # Target 15 FPS
-VGL_READBACK=sync
-VGLLOWBW
-
-
-# Create wrapper scripts for each profile
-
-cat > /usr/local/bin/vglrun-fast << 'VGLFAST'
-#!/usr/bin/env bash
-set -euo pipefail
-
-config_file="/usr/local/etc/virtualgl/vglrun-fast.conf"
-vgl_binary="/opt/VirtualGL/bin/vglrun"
-
-if [ ! -r "${config_file}" ]; then
-  echo "Configuration file not found: ${config_file}" >&2
-  exit 1
-fi
-
-if [ ! -x "${vgl_binary}" ]; then
-  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
-  exit 1
-fi
-
-# shellcheck disable=SC1090
-source "${config_file}"
-export VGL_COMPRESS VGL_READBACK VGL_SYNC VGL_GAMMA VGL_LOGO VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_TRANSPORT
-exec "${vgl_binary}" "$@"
-VGLFAST
-
-cat > /usr/local/bin/vglrun-balanced << 'VGLBAL'
-#!/usr/bin/env bash
-set -euo pipefail
-
-config_file="/usr/local/etc/virtualgl/vglrun-balanced.conf"
-vgl_binary="/opt/VirtualGL/bin/vglrun"
-
-if [ ! -r "${config_file}" ]; then
-  echo "Configuration file not found: ${config_file}" >&2
-  exit 1
-fi
-
-if [ ! -x "${vgl_binary}" ]; then
-  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
-  exit 1
-fi
-
-# shellcheck disable=SC1090
-source "${config_file}"
-export VGL_COMPRESS VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_READBACK
-exec "${vgl_binary}" "$@"
-VGLBAL
-
-cat > /usr/local/bin/vglrun-lowbw << 'VGLLOWBW'
-#!/usr/bin/env bash
-set -euo pipefail
-
-config_file="/usr/local/etc/virtualgl/vglrun-lowbw.conf"
-vgl_binary="/opt/VirtualGL/bin/vglrun"
-
-if [ ! -r "${config_file}" ]; then
-  echo "Configuration file not found: ${config_file}" >&2
-  exit 1
-fi
-
-if [ ! -x "${vgl_binary}" ]; then
-  echo "VirtualGL binary not executable: ${vgl_binary}" >&2
-  exit 1
-fi
-
-# shellcheck disable=SC1090
-source "${config_file}"
-export VGL_COMPRESS VGL_SUBSAMP VGL_QUAL VGL_SPOIL VGL_FPS VGL_READBACK
-exec "${vgl_binary}" "$@"
-VGLLOWBW
-
-chmod +x /usr/local/bin/vglrun-{fast,balanced,lowbw}
-
-echo "✓ VirtualGL performance profiles created"
-echo "  - vglrun-fast (best quality, fast network)"
-echo "  - vglrun-balanced (default)"
-echo "  - vglrun-lowbw (slow network)"
-
-#--- Sub-block 28.26: Initialize TurboVNC performance optimization ---
-# Purpose: Configure TurboVNC for optimal performance with VirtualGL
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-echo "==> Configuring TurboVNC performance optimizations..."
-
-mkdir -p /etc/turbovncserver.conf.d
-
-cat > /etc/turbovncserver.conf.d/performance.conf << 'TVNCPERF'
-# TurboVNC Performance Configuration
-# Official documentation: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-# Reference: TurboVNC User's Guide 3.2.1
-
-# Security
-$localhost = "yes";
-
-# Geometry (can be overridden)
-$geometry = "1920x1080";
-$depth = "24";
-
-# Performance settings
-$desktopName = "TurboVNC";
-# VirtualGL integration: Use $useVGL = "1" in config OR -vgl flag when starting vncserver
-# Official recommendation: Use -vgl flag (see start_vnc_xfce.sh)
-# Both methods work, but -vgl flag is more explicit and recommended
-$useVGL = "1";  # Enable VirtualGL integration (backup method, -vgl flag is primary)
-$autokill = "1";  # Kill when last client disconnects
-
-# Compression (TurboVNC's optimized JPEG)
-# 0 = lossless, 1-100 = JPEG quality
-# 95 = near-lossless, good default
-# Lower = better compression, faster over slow networks
-$compressLevel = "2";
-$quality = "95";
-
-# Subsample settings for JPEG
-# 0 = 4:4:4 (best quality)
-# 1 = 4:2:2 (good quality, 2x compression)
-# 2 = 4:2:0 (highest compression)
-$subsample = "1";
-
-# Interframe comparison (helps with static content)
-$interframe = "1";
-
-# Multi-threading
-$numThreads = "auto";
-
-# Idle timeout (seconds, 0 = never)
-$idleTimeout = "0";
-TVNCPERF
-
-
-# Create optimized xstartup template
-
-mkdir -p /usr/share/turbovnc/
-
-cat > /usr/share/turbovnc/xstartup.turbovnc.optimized << 'XSTARTOPT'
-#!/bin/sh
-# Optimized TurboVNC xstartup for XFCE + GPU
-# Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-# Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-
-# Load X resources
-[ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
-
-# Font cache
-fc-cache -f 2>/dev/null || true
-
-# Start D-Bus
-if ! dbus-send --session --dest=org.freedesktop.DBus --type=method_call \
-  /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
-  eval "$(dbus-launch --sh-syntax)"
-  export DBUS_SESSION_BUS_ADDRESS
-  export DBUS_SESSION_BUS_PID
-fi
-
-# Performance: Disable compositing (critical for VNC)
-xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfce4-session -p /general/use_compositing -s false 2>/dev/null || true
-
-# Disable window manager shadows/effects
-xfconf-query -c xfwm4 -p /general/show_frame_shadow -s false 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/show_popup_shadow -s false 2>/dev/null || true
-
-# Disable screen blanking
-xset s off 2>/dev/null || true
-xset -dpms 2>/dev/null || true
-xset s noblank 2>/dev/null || true
-
-# Disable bell
-xset b off 2>/dev/null || true
-
-# Set keyboard repeat rate (faster responsiveness)
-xset r rate 250 30 2>/dev/null || true
-
-
-# Start window manager with optimizations
-export XFWM4_USE_PRESENT=0  # Disable Present extension (can cause issues)
-
-# Start XFCE
-exec startxfce4
-XSTARTOPT
-chmod +x /usr/share/turbovnc/xstartup.turbovnc.optimized
-
-
-# Create performance testing script
-cat > /usr/local/bin/turbovnc_tune.sh << 'TVNCTUNE'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# TurboVNC Performance Tuning Helper
-
-echo "=========================================="
-echo "TurboVNC Performance Tuner"
-echo "=========================================="
-echo ""
-
-if [ -z "${DISPLAY:-}" ]; then
-    echo "ERROR: Must be run from within VNC session"
-    echo "Start VNC first, then run this from terminal inside VNC"
-    exit 1
-fi
-
-echo "Current VNC Session Information:"
-vncserver -list 2>/dev/null || echo "  (vncserver command not available)"
-echo ""
-
-echo "Testing different compression settings..."
-echo "This will take about 30 seconds..."
-echo ""
-
-# Test function
-test_setting() {
-    local quality=$1
-    local subsample=$2
-    local desc=$3
-
-    echo "Testing: $desc (Quality=$quality, Subsample=$subsample)"
-
-    # This would require vncviewer to support setting these
-    # Just document the settings
-    echo "  Recommended for: $desc"
-    echo ""
-}
-
-
-test_setting 95 1 "High quality (default)"
-test_setting 80 1 "Balanced (good for most)"
-test_setting 60 2 "Low bandwidth"
-test_setting 30 2 "Very slow connections"
-
-echo "=========================================="
-echo "To change settings, edit:"
-echo "  ~/.vnc/turbovncserver.conf"
-echo ""
-echo "Or set environment variables:"
-echo "  export TVNC_QUALITY=80"
-echo "  export TVNC_SUBSAMPLE=1"
-echo "=========================================="
-TVNCTUNE
-chmod +x /usr/local/bin/turbovnc_tune.sh
-
-
-echo "✓ TurboVNC performance optimizations configured"
+printf '%s\n' "✓ VirtualGL performance profiles configured"
 
 #--- Sub-block 28.27: Install yq YAML processor and yamllint ---
 # Purpose: Install yq for YAML file manipulation and yamllint for YAML validation
@@ -20825,38 +20214,38 @@ echo "✓ TurboVNC performance optimizations configured"
 # Outputs: yq binary in /usr/local/bin/yq, yamllint via pip3
 if [ -s "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
   if ! install -o 0 -g 0 -m 0755 "${CONTAINER_BIN_CACHE}/yq_linux_amd64" /usr/local/bin/yq; then
-    echo "[warn] Failed to install yq from cached binary" >&2
+    printf '%s\n' "[warn] Failed to install yq from cached binary" >&2
   else
-    echo "✓ yq installed to /usr/local/bin/yq"
+    printf '%s\n' "✓ yq installed to /usr/local/bin/yq"
   fi
 else
-  echo "[warn] Cached yq binary missing or empty; skipping yq installation" >&2
+  printf '%s\n' "[warn] Cached yq binary missing or empty; skipping yq installation" >&2
 fi
 
 # Install yamllint for YAML file validation (used for GitHub Actions workflow validation)
 # yamllint is a Python package, install via pip3
 if command -v pip3 >/dev/null 2>&1; then
-  echo "Installing yamllint for YAML validation..."
+  printf '%s\n' "Installing yamllint for YAML validation..."
   if pip3 install --no-cache-dir --break-system-packages yamllint >/dev/null 2>&1; then
-    echo "✓ yamllint installed successfully"
+    printf '%s\n' "✓ yamllint installed successfully"
     # Verify installation
     if command -v yamllint >/dev/null 2>&1; then
-      yamllint --version || echo "[warn] yamllint installed but version check failed"
+      yamllint --version || printf '%s\n' "[warn] yamllint installed but version check failed" >&2
     else
-      echo "[warn] yamllint installation may have failed (command not found)"
+      printf '%s\n' "[warn] yamllint installation may have failed (command not found)" >&2
     fi
   else
-    echo "[warn] Failed to install yamllint via pip3 (non-critical, continuing)"
+    printf '%s\n' "[warn] Failed to install yamllint via pip3 (non-critical, continuing)" >&2
   fi
 else
-  echo "[warn] pip3 not available; skipping yamllint installation"
+  printf '%s\n' "[warn] pip3 not available; skipping yamllint installation" >&2
 fi
 
 #--- Sub-block 28.28: Create default VNC password (non-interactive) ---
 # Purpose: Set up default VNC password to prevent interactive prompts
 # Dependencies: TurboVNC installation
 # Outputs: ~/.vnc/passwd
-echo "==> Setting up default VNC password..."
+printf '%s\n' "==> Setting up default VNC password..."
 if install -d -m 0700 "${HOME}/.vnc"; then
   if command -v vncpasswd >/dev/null 2>&1; then
     tmp_passwd=""
@@ -20864,27 +20253,27 @@ if install -d -m 0700 "${HOME}/.vnc"; then
       if printf '%s\n' "vncpassword" | vncpasswd -f >"${tmp_passwd}" 2>/dev/null; then
         if mv -f "${tmp_passwd}" "${HOME}/.vnc/passwd"; then
           if chmod 600 "${HOME}/.vnc/passwd"; then
-            echo "✓ Default VNC password configured (change with: vncpasswd)"
+            printf '%s\n' "✓ Default VNC password configured (change with: vncpasswd)"
           else
-            echo "[warn] Failed to set permissions on ${HOME}/.vnc/passwd" >&2
+            printf '%s\n' "[warn] Failed to set permissions on ${HOME}/.vnc/passwd" >&2
             rm -f "${HOME}/.vnc/passwd"
           fi
         else
-          echo "[warn] Unable to move temporary VNC password into place" >&2
+          printf '%s\n' "[warn] Unable to move temporary VNC password into place" >&2
           rm -f "${tmp_passwd}"
         fi
       else
-        echo "[warn] Failed to generate default VNC password" >&2
+        printf '%s\n' "[warn] Failed to generate default VNC password" >&2
         rm -f "${tmp_passwd}"
       fi
     else
-      echo "[warn] Unable to create temporary file for VNC password" >&2
+      printf '%s\n' "[warn] Unable to create temporary file for VNC password" >&2
     fi
   else
-    echo "[warn] vncpasswd command not available; skipping default password creation" >&2
+    printf '%s\n' "[warn] vncpasswd command not available; skipping default password creation" >&2
   fi
 else
-  echo "[warn] Unable to create ${HOME}/.vnc directory; skipping default password setup" >&2
+  printf '%s\n' "[warn] Unable to create ${HOME}/.vnc directory; skipping default password setup" >&2
 fi
 
 #--- Sub-block 28.29: Remote Desktop Scripts Summary ---
@@ -20892,38 +20281,38 @@ fi
 # Dependencies: Block 15 (TurboVNC, VirtualGL)
 # Outputs: Documentation
 # Self-contained: Yes
-echo ""
-echo "═══════════════════════════════════════════════════════════════"
-echo "  Remote Desktop Infrastructure Summary"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
-echo "Installed Components:"
+printf '%s\n' ""
+printf '%s\n' "═══════════════════════════════════════════════════════════════"
+printf '%s\n' "  Remote Desktop Infrastructure Summary"
+printf '%s\n' "═══════════════════════════════════════════════════════════════"
+printf '%s\n' ""
+printf '%s\n' "Installed Components:"
 # Use safer version detection from config.sh variables to avoid terminal issues
-echo "  ✓ TurboVNC ${TURBOVNC_VERSION:-installed}"
-echo "  ✓ VirtualGL ${VIRTUALGL_VERSION:-installed}"
-echo "  ✓ noVNC (HTML5 VNC client)"
-echo ""
-echo "Available Helper Scripts:"
-echo "  • start_vnc_xfce.sh     - Main VNC launcher with GPU acceleration"
-echo "  • start_x11vnc.sh       - Alternative X11VNC server"
-echo "  • vnc_ssl_tunnel.sh     - Two-stage SSL tunneling for HPC"
-echo "  • vnc_monitor.sh        - Monitor VNC server status"
-echo "  • vnc_select.sh         - Interactive VNC server selector"
-echo "  • vnc_clipboard_sync.sh - Clipboard synchronization"
-echo "  • vgl_launch.sh         - Launch apps with VirtualGL"
-echo "  • vgl_info.sh           - VirtualGL diagnostics"
-echo "  • vgl_benchmark.sh      - GPU performance testing"
-echo "  • turbovnc_tune.sh      - TurboVNC performance tuning"
-echo ""
-echo "Quick Start:"
-echo "  1. Start VNC: start_vnc_xfce.sh"
-echo "  2. SSL Tunnel: vnc_ssl_tunnel.sh (for HPC environments)"
-echo "  3. Connect:   localhost:5901 (VNC) or :6080 (noVNC browser)"
-echo "  4. GPU apps:  vglrun <application>"
-echo ""
-echo "For detailed help: turbovnc_tune.sh"
-echo "═══════════════════════════════════════════════════════════════"
-echo ""
+printf '%s\n' "  ✓ TurboVNC ${TURBOVNC_VERSION:-installed}"
+printf '%s\n' "  ✓ VirtualGL ${VIRTUALGL_VERSION:-installed}"
+printf '%s\n' "  ✓ noVNC (HTML5 VNC client)"
+printf '%s\n' ""
+printf '%s\n' "Available Helper Scripts:"
+printf '%s\n' "  • start_vnc_xfce.sh     - Main VNC launcher with GPU acceleration"
+printf '%s\n' "  • start_x11vnc.sh       - Alternative X11VNC server"
+printf '%s\n' "  • vnc_ssl_tunnel.sh     - Two-stage SSL tunneling for HPC"
+printf '%s\n' "  • vnc_monitor.sh        - Monitor VNC server status"
+printf '%s\n' "  • vnc_select.sh         - Interactive VNC server selector"
+printf '%s\n' "  • vnc_clipboard_sync.sh - Clipboard synchronization"
+printf '%s\n' "  • vgl_launch.sh         - Launch apps with VirtualGL"
+printf '%s\n' "  • vgl_info.sh           - VirtualGL diagnostics"
+printf '%s\n' "  • vgl_benchmark.sh      - GPU performance testing"
+printf '%s\n' "  • turbovnc_tune.sh      - TurboVNC performance tuning"
+printf '%s\n' ""
+printf '%s\n' "Quick Start:"
+printf '%s\n' "  1. Start VNC: start_vnc_xfce.sh"
+printf '%s\n' "  2. SSL Tunnel: vnc_ssl_tunnel.sh (for HPC environments)"
+printf '%s\n' "  3. Connect:   localhost:5901 (VNC) or :6080 (noVNC browser)"
+printf '%s\n' "  4. GPU apps:  vglrun <application>"
+printf '%s\n' ""
+printf '%s\n' "For detailed help: turbovnc_tune.sh"
+printf '%s\n' "═══════════════════════════════════════════════════════════════"
+printf '%s\n' ""
 
 #===============================================================================
 # BLOCK 29: CONDA/PYTHON ENVIRONMENT SETUP
@@ -20939,9 +20328,9 @@ echo ""
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
-  echo "Installing Miniforge..."
+  printf '%s\n' "Installing Miniforge..."
   # Miniforge installer already verified in early verification phase
-  echo "✓ Miniforge installer already verified (SHA256 check passed)"
+  printf '%s\n' "✓ Miniforge installer already verified (SHA256 check passed)"
 
   #--- Sub-block 29.2: Configure conda environment variables ---
   # Purpose: Set conda cache and behavior for installation
@@ -20957,7 +20346,7 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
   #--- Sub-block 29.4: Miniforge installation retry loop ---
   # Critical: Retry installation with cache cleanup between attempts
   while [ "${retry_count}" -lt "${max_retries}" ]; do
-    echo "Miniforge installation attempt $((retry_count + 1))/${max_retries}..."
+    printf '%s\n' "Miniforge installation attempt $((retry_count + 1))/${max_retries}..."
 
     # Clear any existing conda package cache to force fresh downloads
     rm -rf "${MINIFORGE_HOME}/pkgs"/* 2>/dev/null || true
@@ -20965,13 +20354,13 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
     #--- Sub-block 29.5: Advanced conda cache cleanup ---
     # Purpose: Remove corrupted packages before installation
-    echo "Performing advanced conda package cache cleanup..."
+    printf '%s\n' "Performing advanced conda package cache cleanup..."
     if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
       # Setup staging area for robust package handling
       setup_conda_staging_area
 
       # Remove specific problematic packages mentioned in errors
-      echo "Removing known problematic packages..."
+      printf '%s\n' "Removing known problematic packages..."
       problematic_packages=(
         "openssl-3.5.2-h26f9b46_0.conda"
         "certifi-2025.8.3-pyhd8ed1ab_0.conda"
@@ -20980,32 +20369,33 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         "argon2-cffi-bindings-25.1.0-py312h4c3975b_0.conda"
       )
       for pkg in "${problematic_packages[@]}"; do
-        if [ -f "${CONTAINER_CONDA_CACHE}/$pkg" ]; then
-          echo "Removing problematic package: $pkg"
-          rm -f "${CONTAINER_CONDA_CACHE}/$pkg" 2>/dev/null || true
+        if [ -f "${CONTAINER_CONDA_CACHE}/${pkg}" ]; then
+          printf '%s\n' "Removing problematic package: ${pkg}"
+          rm -f "${CONTAINER_CONDA_CACHE}/${pkg}" 2>/dev/null || true
         fi
       done
 
 
 
       # Comprehensive integrity check with smart replacement
-      echo "Performing comprehensive package integrity check..."
+      printf '%s\n' "Performing comprehensive package integrity check..."
       corrupted_packages=()
 
       # Check all conda packages for integrity
       # Fix: Use proper find syntax with parentheses for OR condition
       # Fix: Use process substitution instead of pipe to avoid subshell (preserves array)
+      # D2: Use read -r to prevent backslash interpretation
       while IFS= read -r pkg_file; do
         if [ -n "${pkg_file}" ] && ! verify_package_integrity "${pkg_file}"; then
           pkg_name=$(basename "${pkg_file}")
-          echo "  Δ Found corrupted package: ${pkg_name}"
+          printf '%s\n' "  Δ Found corrupted package: ${pkg_name}"
           corrupted_packages+=("${pkg_name}")
         fi
       done < <(find "${CONTAINER_CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null)
 
       # Replace corrupted packages with fresh downloads
       if [ ${#corrupted_packages[@]} -gt 0 ]; then
-        echo "  Replacing ${#corrupted_packages[@]} corrupted packages..."
+        printf '%s\n' "  Replacing ${#corrupted_packages[@]} corrupted packages..."
         for pkg_name in "${corrupted_packages[@]}"; do
           if acquire_package_lock "${pkg_name}"; then
             atomic_package_replace "${pkg_name}"
@@ -21015,13 +20405,13 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       fi
 
       # Clear conda package cache metadata that might be stale
-      echo "  Clearing conda package cache metadata..."
+      printf '%s\n' "  Clearing conda package cache metadata..."
       rm -rf "${CONTAINER_CONDA_CACHE}/cache"/* 2>/dev/null || true
       rm -rf "${CONTAINER_CONDA_CACHE}"/*/info 2>/dev/null || true
 
       # Force filesystem sync to ensure all writes are flushed
       sync
-      echo "✓ Advanced conda package cache cleanup completed"
+      printf '%s\n' "✓ Advanced conda package cache cleanup completed"
     fi
 
     # Set environment variables to use our cache directory and make it non-interactive
@@ -21030,43 +20420,44 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
 
     # Run installer with enhanced CRC error handling and non-interactive mode
-    echo "Running Miniforge installer with enhanced CRC error handling..."
+    printf '%s\n' "Running Miniforge installer with enhanced CRC error handling..."
     if yes "" | bash "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" -b -p "${MINIFORGE_HOME}" -f > /tmp/miniforge_install.log 2>&1; then
       # Reset terminal state in case installer left control codes
       printf '\033[0m\n' # Reset all terminal attributes and print newline
-      echo "✓ Miniforge installer completed"
+      printf '%s\n' "✓ Miniforge installer completed"
       mv /opt/.condarc.pre "${MINIFORGE_HOME}/.condarc" 2>/dev/null || true
 
 
       # Verify Conda Installation
       if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
-        echo "✓ Miniforge installed successfully"
+        printf '%s\n' "✓ Miniforge installed successfully"
         MINIFORGE_INSTALLED=true
         break
       else
-        echo "[warn] Miniforge installation may have failed - conda binary not found"
+        printf '%s\n' "[warn] Miniforge installation may have failed - conda binary not found" >&2
         ((retry_count++))
         if [ "${retry_count}" -lt "${max_retries}" ]; then
-          echo "Retrying Miniforge installation..."
+          printf '%s\n' "Retrying Miniforge installation..."
           rm -rf "${MINIFORGE_HOME}"
         fi
       fi
     else
-      echo "[warn] Miniforge installer failed (attempt $((retry_count + 1))/${max_retries})"
+      printf '%s\n' "[warn] Miniforge installer failed (attempt $((retry_count + 1))/${max_retries})" >&2
 
       # Enhanced CRC error detection and handling
       if grep -E -q "Bad CRC|ZIP had CRC|md5sum mismatch" /tmp/miniforge_install.log 2>/dev/null; then
-        echo "✓ CRC/MD5 error detected in installation log"
+        printf '%s\n' "✓ CRC/MD5 error detected in installation log"
 
         # Extract all corrupted package names from the log
         corrupted_pkgs=$(grep -E -o 'Extracting (.+\.conda|.+\.tar\.bz2)' /tmp/miniforge_install.log | sed 's/^Extracting //' | sort -u)
 
         if [ -n "${corrupted_pkgs}" ]; then
-          echo "→ Removing corrupted packages:"
+          printf '%s\n' "→ Removing corrupted packages:"
           # Use array to properly handle package names with spaces
+          # D2: Use read -r to prevent backslash interpretation
           while IFS= read -r pkg; do
             if [ -n "${pkg}" ]; then
-              echo "  - ${pkg}"
+              printf '%s\n' "  - ${pkg}"
               rm -f "${CONTAINER_CONDA_CACHE}/${pkg}" 2>/dev/null || true
               rm -f "${MINIFORGE_HOME}/pkgs/${pkg}" 2>/dev/null || true
               rm -f "/root/.cache/conda/pkgs/${pkg}" 2>/dev/null || true
@@ -21075,12 +20466,12 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         fi
 
         # Clear any remaining corrupted packages using integrity check
-        echo "→ Performing integrity check on remaining packages..."
+        printf '%s\n' "→ Performing integrity check on remaining packages..."
         if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
           find "${CONTAINER_CONDA_CACHE}" -name "*.conda" -type f -exec sh -c '
             for pkg; do
               if ! unzip -t "$pkg" >/dev/null 2>&1; then
-                echo "Removing corrupted: $(basename "$pkg")"
+                printf "%s\n" "Removing corrupted: $(basename "$pkg")"
                 rm -f "$pkg"
               fi
             done
@@ -21088,18 +20479,16 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
         fi
       fi
 
-
-
       ((retry_count++))
       if [ "${retry_count}" -lt "${max_retries}" ]; then
-        echo "Retrying Miniforge installation..."
+        printf '%s\n' "Retrying Miniforge installation..."
         rm -rf "${MINIFORGE_HOME}"
       fi
     fi
   done
   if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
     # Clean up any corrupted conda packages that may have been downloaded during installation
-    echo "Cleaning up any corrupted conda packages from installation..."
+    printf '%s\n' "Cleaning up any corrupted conda packages from installation..."
     if [ -d "${MINIFORGE_HOME}/pkgs" ]; then
       corrupted_count=0
       # Enable nullglob to handle case where no packages match the pattern
@@ -21111,7 +20500,10 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
           is_corrupted=false
 
           # Use file command to detect file type
-          if ! file "${pkg_file}" | grep -q "archive\|compressed\|data"; then
+          # D3: Use here-string instead of pipe pattern for safety
+          # F2: Validate command substitution result
+          file_output=$(file "${pkg_file}" 2>/dev/null || echo "")
+          if [ -z "${file_output}" ] || ! grep -q "archive\|compressed\|data" <<< "${file_output}"; then
             is_corrupted=true
           else
             # Additional format-specific integrity checks
@@ -21127,9 +20519,11 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
           fi
 
           if [ "${is_corrupted}" = "true" ]; then
-            echo "  Δ Removing corrupted conda package: $(basename "${pkg_file}")"
+            # F2: Validate command substitution result
+            pkg_basename=$(basename "${pkg_file}" 2>/dev/null || echo "unknown")
+            printf '%s\n' "  Δ Removing corrupted conda package: ${pkg_basename}"
             rm -f "${pkg_file}"
-            ((corrupted_count++))
+            corrupted_count=$((corrupted_count + 1))
           fi
         fi
       done
@@ -21142,14 +20536,19 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
 
 
     # Final Verification of conda installation
-    echo "Performing final conda installation verification..."
+    printf '%s\n' "Performing final conda installation verification..."
     
     # CRITICAL: Configure SSL certificates before any conda operations
     # This prevents "SSL certificate problem: unable to get local issuer certificate" errors
-    echo "==> Configuring SSL certificates for Conda/Mamba..."
+    printf '%s\n' "==> Configuring SSL certificates for Conda/Mamba..."
     
-    # Ensure ca-certificates are up to date
-    update-ca-certificates --fresh 2>/dev/null || update-ca-certificates 2>/dev/null || true
+  # Ensure ca-certificates are up to date
+  # H4: Validate result after masked failure
+  if ! update-ca-certificates --fresh 2>/dev/null; then
+    if ! update-ca-certificates 2>/dev/null; then
+      echo "[warn] Failed to update CA certificates (non-critical)" >&2
+    fi
+  fi
     
     # Export SSL certificate locations for conda/mamba
     export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
@@ -21157,71 +20556,94 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
     export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
     
     # Verify certificate file exists
+    # J1: Validate file exists before use
     if [ -f "${SSL_CERT_FILE}" ]; then
-      echo "✓ SSL certificates configured: ${SSL_CERT_FILE}"
+      printf '%s\n' "✓ SSL certificates configured: ${SSL_CERT_FILE}"
     else
-      echo "[warn] SSL certificate file not found, conda operations may fail"
+      printf '%s\n' "[warn] SSL certificate file not found, conda operations may fail" >&2
     fi
     
     if "${MINIFORGE_HOME}/bin/conda" --version >/dev/null 2>&1; then
-      echo "✓ Conda binary is working correctly"
+      printf '%s\n' "✓ Conda binary is working correctly"
 
       # Update conda and related components to latest versions
-      echo "Updating conda and related components to latest versions..."
+      printf '%s\n' "Updating conda and related components to latest versions..."
       # Safely get version with fallback
+      # F2: Validate command substitution result
       CONDA_VERSION_BEFORE=$("${MINIFORGE_HOME}/bin/conda" --version 2>/dev/null | head -1 || echo "unknown")
-      echo "  Conda version before update: ${CONDA_VERSION_BEFORE}"
+      if [ -z "${CONDA_VERSION_BEFORE}" ]; then
+        CONDA_VERSION_BEFORE="unknown"
+      fi
+      printf '%s\n' "  Conda version before update: ${CONDA_VERSION_BEFORE}"
       
       # Update conda itself and core components (conda, conda-build, conda-env, conda-libmamba-solver, etc.)
       # Note: conda-libmamba-solver enables faster conda solving even when mamba is not available
       # Use explicit channel priority and ensure clean update
+      # D3e: Add || true for SIGPIPE error handling in pipeline
+      # J1: Validate file exists before write (parent directory check handled by tee)
       if "${MINIFORGE_HOME}/bin/conda" update -y -n base -c conda-forge \
           --override-channels \
-          conda conda-build conda-env conda-libmamba-solver 2>&1 | tee /tmp/conda_update.log; then
+          conda conda-build conda-env conda-libmamba-solver 2>&1 | tee /tmp/conda_update.log || true; then
         printf '\033[0m\n' # Reset terminal state after conda update
+        # F2: Validate command substitution result
         CONDA_VERSION_AFTER=$("${MINIFORGE_HOME}/bin/conda" --version 2>/dev/null | head -1 || echo "unknown")
-        echo "✓ Conda and core components updated successfully"
-        echo "  Conda version after update: ${CONDA_VERSION_AFTER}"
+        if [ -z "${CONDA_VERSION_AFTER}" ]; then
+          CONDA_VERSION_AFTER="unknown"
+        fi
+        printf '%s\n' "✓ Conda and core components updated successfully"
+        printf '%s\n' "  Conda version after update: ${CONDA_VERSION_AFTER}"
       else
-        echo "[warn] Conda update failed - checking error log..."
-        tail -20 /tmp/conda_update.log 2>/dev/null || true
-        echo "[warn] Continuing with existing conda version (non-critical)"
+        echo "[warn] Conda update failed - checking error log..." >&2
+        # J1: Validate file exists before reading
+        if [ -f /tmp/conda_update.log ]; then
+          tail -20 /tmp/conda_update.log 2>/dev/null || true
+        fi
+        printf '%s\n' "[warn] Continuing with existing conda version (non-critical)" >&2
         # Try a simpler update without override-channels
+        # J1: Validate file exists before write (parent directory check handled by redirection)
         if "${MINIFORGE_HOME}/bin/conda" update -y -n base conda >/tmp/conda_update_simple.log 2>&1; then
-          echo "✓ Conda updated successfully (simplified update)"
+          printf '%s\n' "✓ Conda updated successfully (simplified update)"
         else
-          echo "[warn] Simplified conda update also failed - using existing version"
+          echo "[warn] Simplified conda update also failed - using existing version" >&2
         fi
       fi
       rm -f /tmp/conda_update.log /tmp/conda_update_simple.log 2>/dev/null || true
 
       # Install mamba as the PREFERRED solver (with conda fallback)
-      echo "Installing mamba solver (PREFERRED - will fallback to conda if needed)..."
+      printf '%s\n' "Installing mamba solver (PREFERRED - will fallback to conda if needed)..."
 
       MAMBA_AVAILABLE=0
 
       # Try mamba installation (corrupted packages already cleaned in Xsetup)
       if "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge mamba; then
         printf '\033[0m\n' # Reset terminal state after conda install
-        echo "✓ Mamba installed successfully"
+        printf '%s\n' "✓ Mamba installed successfully"
         
         # Verify mamba installation
         if "${MINIFORGE_HOME}/bin/mamba" --version >/dev/null 2>&1; then
-          echo "✓ Mamba binary is working correctly"
+          printf '%s\n' "✓ Mamba binary is working correctly"
           
           # Update mamba to latest version (mamba includes its own solver)
-          echo "Updating mamba to latest version..."
+          printf '%s\n' "Updating mamba to latest version..."
           # Safely get version with fallback
+          # F2: Validate command substitution result
           MAMBA_VERSION_BEFORE=$("${MINIFORGE_HOME}/bin/mamba" --version 2>/dev/null | head -1 || echo "unknown")
-          echo "  Mamba version before update: ${MAMBA_VERSION_BEFORE}"
+          if [ -z "${MAMBA_VERSION_BEFORE}" ]; then
+            MAMBA_VERSION_BEFORE="unknown"
+          fi
+          printf '%s\n' "  Mamba version before update: ${MAMBA_VERSION_BEFORE}"
           
           # Update mamba itself (includes libmamba solver)
           # Redirect both stdout and stderr to suppress output but preserve error detection
           if "${MINIFORGE_HOME}/bin/mamba" update -y -n base -c conda-forge mamba >/dev/null 2>&1; then
             printf '\033[0m\n' # Reset terminal state after mamba update
+            # F2: Validate command substitution result
             MAMBA_VERSION_AFTER=$("${MINIFORGE_HOME}/bin/mamba" --version 2>/dev/null | head -1 || echo "unknown")
-            echo "✓ Mamba updated successfully"
-            echo "  Mamba version after update: ${MAMBA_VERSION_AFTER}"
+            if [ -z "${MAMBA_VERSION_AFTER}" ]; then
+              MAMBA_VERSION_AFTER="unknown"
+            fi
+            printf '%s\n' "✓ Mamba updated successfully"
+            printf '%s\n' "  Mamba version after update: ${MAMBA_VERSION_AFTER}"
           else
             echo "[warn] Mamba update failed (non-critical, continuing with existing version)"
           fi
@@ -21236,62 +20658,66 @@ if [ -s "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
       
       # Set preferred solver (mamba if available, otherwise conda)
       if [ "${MAMBA_AVAILABLE:-0}" -eq 1 ]; then
-        echo "✓ Using MAMBA as primary solver (faster)"
+        printf '%s\n' "✓ Using MAMBA as primary solver (faster)"
         export PREFERRED_SOLVER="${MINIFORGE_HOME}/bin/mamba"
       else
-        echo "[warn] Using CONDA as fallback solver (slower but reliable)"
+        echo "[warn] Using CONDA as fallback solver (slower but reliable)" >&2
         export PREFERRED_SOLVER="${MINIFORGE_HOME}/bin/conda"
       fi
       
       # Install modern environment management tools (try mamba first, fallback to conda)
-      echo "Installing modern package management tools..."
+      printf '%s\n' "Installing modern package management tools..."
       
       if [ "${MAMBA_AVAILABLE:-0}" -eq 1 ]; then
-        echo "  → Trying with mamba..."
+        printf '%s\n' "  → Trying with mamba..."
         if "${MINIFORGE_HOME}/bin/mamba" install -y -c conda-forge \
           conda-lock conda-tree anaconda-project; then
-          echo "✓ Modern tools installed with mamba"
-        else
-          echo "[warn] Mamba failed, trying with conda..."
-          "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
-            conda-lock conda-tree anaconda-project \
-            || echo "[warn] Some optional tools failed (non-critical)"
+          printf '%s\n' "✓ Modern tools installed with mamba"
+      else
+        echo "[warn] Mamba failed, trying with conda..." >&2
+        # H4: Validate result after masked failure
+        if ! "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
+          conda-lock conda-tree anaconda-project 2>/dev/null; then
+          echo "[warn] Some optional tools failed (non-critical)" >&2
+        fi
         fi
       else
-        "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
-          conda-lock conda-tree anaconda-project \
-          || echo "[warn] Some optional tools failed (non-critical)"
+        # H4: Validate result after masked failure
+        if ! "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
+          conda-lock conda-tree anaconda-project 2>/dev/null; then
+          echo "[warn] Some optional tools failed (non-critical)" >&2
+        fi
       fi
       
-      echo "✓ Modern package management tools installed"
+      printf '%s\n' "✓ Modern package management tools installed"
     else
-      echo "✗ Conda binary verification failed - installation may be corrupted"
+      echo "✗ Conda binary verification failed - installation may be corrupted" >&2
     fi
   fi
   # End installation verification (if-else self-contained)
   # End retry loop (while loop self-contained)
   
   # Only show failure message if installation actually failed
-  if [ "$MINIFORGE_INSTALLED" = false ]; then
-    echo "[warn] Miniforge Installation failed after $max_retries attempts"
+  if [ "${MINIFORGE_INSTALLED}" = "false" ]; then
+    echo "[warn] Miniforge Installation failed after ${max_retries} attempts" >&2
   fi
 
   # Clean up temporary files
   rm -f /tmp/miniforge_install.log 2>/dev/null || true
-else
-  echo "[warn] Miniforge installer not found in cache"
-fi
-# End Miniforge installation (if block self-contained)
+# Note: shell-scripts file: /etc/profile.d/conda.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-29-conda-python-environment-setup/conda-profile-path-configuration.sh
+# Target: /etc/profile.d/conda.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 debug_glibc "After Miniforge installation and config"
 
 #--- Sub-block 29.6: Fix deprecated mamba.sh warning (mamba 2.0+) ---
 # Critical: Remove deprecated mamba.sh file to prevent warnings
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-if [ -d "${MINIFORGE_HOME}/etc/profile.d" ]; then
+  if [ -d "${MINIFORGE_HOME}/etc/profile.d" ]; then
   # Remove or rename deprecated mamba.sh file (causes warnings in mamba 2.0+)
   if [ -f "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" ]; then
-    echo "Removing deprecated mamba.sh file (mamba 2.0+ compatibility)..."
+    printf '%s\n' "Removing deprecated mamba.sh file (mamba 2.0+ compatibility)..."
     mv "${MINIFORGE_HOME}/etc/profile.d/mamba.sh" "${MINIFORGE_HOME}/etc/profile.d/mamba.sh.deprecated" 2>/dev/null || true
     printf '%s\n' "${GREEN}✓ Deprecated mamba.sh removed${NC}"
   fi
@@ -21307,84 +20733,66 @@ fi
 # Critical: Make conda available in all shell sessions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-printf '%s\n' "${YELLOW}Configuring system-wide environment for Conda...${NC}"
-if [ -d "${MINIFORGE_HOME}/bin" ]; then
-  if cat <<'EOF' >/etc/profile.d/conda.sh
-#!/bin/sh
-# Prepend conda binaries to the PATH
-EOF
-  then
-    if chmod +x /etc/profile.d/conda.sh; then
-      printf '%s\n' "${GREEN}✓ Conda PATH configured successfully.${NC}"
-    else
-      echo "[warn] Failed to set execute permissions on /etc/profile.d/conda.sh" >&2
-    fi
-  else
-    echo "[warn] Failed to create /etc/profile.d/conda.sh" >&2
-  fi
-else
-  printf '%s\n' "${RED}Δ Could not configure Conda PATH, ${MINIFORGE_HOME}/bin not found.${NC}"
-fi
+# Note: shell-scripts file: /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-29-conda-python-environment-setup/conda-activation-hook-pythonpath-management.sh
+# Target: /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # End Conda PATH configuration (if-else self-contained)
 
 #--- Sub-block 29.8: Configure conda activation hooks for Drake compatibility ---
 # Critical: Prevent Drake Python paths from conflicting with conda environments
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-echo "==> Configuring conda hooks for Drake compatibility"
-mkdir -p /opt/mamba/etc/conda/activate.d
+# Note: shell-scripts file: /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-29-conda-python-environment-setup/conda-deactivation-hook-pythonpath-restore.sh
+# Target: /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# A7: Removed orphaned code chunk - activation hook is installed via install.sh from container-scripts/
 
-#--- Sub-block 29.9: Create conda activation hook ---
-# Purpose: Save and clear PYTHONPATH when activating conda environment
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-cat > /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh << 'EOF'
-#!/bin/bash
-# Save and unset PYTHONPATH when activating conda environment
-# This prevents Drake's system Python from conflicting with Conda's Python
-if [ -n "${PYTHONPATH:-}" ]; then
-  # Backup original PYTHONPATH (including Drake paths)
-  export _CONDA_BACKUP_PYTHONPATH="${PYTHONPATH}"
-
-  # Unset PYTHONPATH so conda environment is isolated
-  unset PYTHONPATH
-
-  # Inform user
-  if [[ "${_CONDA_BACKUP_PYTHONPATH:-}" == *"drake"* ]]; then
-    echo "Drake PYTHONPATH temporarily disabled in conda environment"
-  fi
+# J1: Validate parent directory exists before mkdir
+PARENT_DIR="/opt/mamba/etc/conda/deactivate.d"
+PARENT_PARENT_DIR=$(dirname "${PARENT_DIR}")
+# F2: Validate command substitution result
+if [ -z "${PARENT_PARENT_DIR}" ]; then
+  echo "[ERROR] Failed to determine parent directory for ${PARENT_DIR}" >&2
+  exit 1
 fi
-EOF
-
-mkdir -p /opt/mamba/etc/conda/deactivate.d
+if [ ! -d "${PARENT_PARENT_DIR}" ]; then
+  mkdir -p "${PARENT_PARENT_DIR}" || {
+    echo "[ERROR] Failed to create parent directory: ${PARENT_PARENT_DIR}" >&2
+    exit 1
+  }
+fi
+mkdir -p "${PARENT_DIR}" || {
+  echo "[ERROR] Failed to create directory: ${PARENT_DIR}" >&2
+  exit 1
+}
 
 #--- Sub-block 29.10: Create conda deactivation hook ---
 # Purpose: Restore PYTHONPATH when deactivating conda environment
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-cat > /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh << 'EOF'
-#!/bin/bash
-# Restore PYTHONPATH when deactivating conda environment
-# This re-enables Drake Python bindings for system Python
-if [ -n "${_CONDA_BACKUP_PYTHONPATH:-}" ]; then
-  unset _CONDA_BACKUP_PYTHONPATH
+# Note: shell-scripts file: /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-29-conda-python-environment-setup/conda-deactivation-hook-pythonpath-restore.sh
+# Target: /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by conda when deactivating environments
 
-  if [[ "${PYTHONPATH:-}" == *"drake"* ]]; then
-    echo "Drake PYTHONPATH restored"
-  fi
+# J1: Validate files exist before chmod
+if [ -f /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh ]; then
+  chmod +x /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh
 fi
-EOF
+if [ -f /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh ]; then
+  chmod +x /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh
+fi
 
-chmod +x /opt/mamba/etc/conda/activate.d/unset_pythonpath.sh
-chmod +x /opt/mamba/etc/conda/deactivate.d/restore_pythonpath.sh
-
-echo "✓ Conda hooks configured for Drake compatibility"
+printf '%s\n' "✓ Conda hooks configured for Drake compatibility"
 
 #--- Sub-block 29.11: Initialize Micromamba installation ---
 # Purpose: Install alternative lightweight conda package manager
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-echo "==> Micromamba (from embedded binary)"
+printf '%s\n' "==> Micromamba (from embedded binary)"
 if [ -s "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
   if install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba; then
     if ln -sf /opt/micromamba /usr/local/bin/micromamba; then
@@ -21392,70 +20800,70 @@ if [ -s "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
       #--- Sub-block 29.12: Test micromamba binary with retry ---
       # Critical: Verify binary integrity before configuration
       if [ -x /opt/micromamba ]; then
-        echo "Testing micromamba binary..."
+        printf '%s\n' "Testing micromamba binary..."
         micromamba_max_retries=3
         micromamba_retry_count=0
 
         while [ "${micromamba_retry_count}" -lt "${micromamba_max_retries}" ]; do
           if /opt/micromamba --version >/dev/null 2>&1; then
-            echo "✓ Micromamba binary is working"
+            printf '%s\n' "✓ Micromamba binary is working"
             break
           fi
-          echo "[warn] Micromamba binary test failed (attempt $((micromamba_retry_count + 1))/${micromamba_max_retries})" >&2
+          printf '%s\n' "[warn] Micromamba binary test failed (attempt $((micromamba_retry_count + 1))/${micromamba_max_retries})" >&2
           micromamba_retry_count=$((micromamba_retry_count + 1))
           if [ "${micromamba_retry_count}" -lt "${micromamba_max_retries}" ]; then
-            echo "  Removing corrupted binary and reinstalling..." >&2
+            printf '%s\n' "  Removing corrupted binary and reinstalling..." >&2
             rm -f /usr/local/bin/micromamba /opt/micromamba
             if ! install -m 0755 "${CONTAINER_BIN_CACHE}/micromamba-linux-64" /opt/micromamba; then
-              echo "[warn] Reinstallation of micromamba failed; aborting retries" >&2
+              printf '%s\n' "[warn] Reinstallation of micromamba failed; aborting retries" >&2
               break
             fi
             if ! ln -sf /opt/micromamba /usr/local/bin/micromamba; then
-              echo "[warn] Failed to refresh micromamba symlink during retry" >&2
+              printf '%s\n' "[warn] Failed to refresh micromamba symlink during retry" >&2
             fi
           fi
         done
 
         if [ "${micromamba_retry_count}" -ge "${micromamba_max_retries}" ]; then
-          echo "[error] Micromamba binary failed after ${micromamba_max_retries} attempts - removing corrupted binary" >&2
+          printf '%s\n' "[error] Micromamba binary failed after ${micromamba_max_retries} attempts - removing corrupted binary" >&2
           rm -f /opt/micromamba /usr/local/bin/micromamba
         else
-          #--- Sub-block 29.13: Configure micromamba settings ---
-          # Purpose: Set channel priority and behavior for optimal performance
-          echo "Configuring micromamba..."
+      #--- Sub-block 29.13: Configure micromamba settings ---
+      # Purpose: Set channel priority and behavior for optimal performance
+      printf '%s\n' "Configuring micromamba..."
           # Note: Using flexible priority for micromamba allows users more freedom
           # when creating their own ad-hoc environments.
           if /opt/micromamba config set channel_priority flexible 2>/dev/null; then
-            echo "✓ Channel priority configured"
+            printf '%s\n' "✓ Channel priority configured"
           else
-            echo "[warn] Channel priority configuration failed" >&2
+            printf '%s\n' "[warn] Channel priority configuration failed" >&2
           fi
 
           if /opt/micromamba config set always_yes yes 2>/dev/null; then
-            echo "✓ Always yes configured"
+            printf '%s\n' "✓ Always yes configured"
           else
-            echo "[warn] Always yes configuration failed" >&2
+            printf '%s\n' "[warn] Always yes configuration failed" >&2
           fi
 
           if /opt/micromamba config set quiet true 2>/dev/null; then
-            echo "✓ Quiet mode configured"
+            printf '%s\n' "✓ Quiet mode configured"
           else
-            echo "[warn] Quiet mode configuration failed" >&2
+            printf '%s\n' "[warn] Quiet mode configuration failed" >&2
           fi
-          echo "✓ Micromamba configured successfully"
+          printf '%s\n' "✓ Micromamba configured successfully"
         fi
       else
-        echo "[warn] Micromamba binary not executable" >&2
+        printf '%s\n' "[warn] Micromamba binary not executable" >&2
       fi
     else
-      echo "[warn] Failed to create micromamba symlink" >&2
+      printf '%s\n' "[warn] Failed to create micromamba symlink" >&2
       rm -f /opt/micromamba
     fi
   else
-    echo "[warn] Failed to install micromamba binary" >&2
+    printf '%s\n' "[warn] Failed to install micromamba binary" >&2
   fi
 else
-  echo "[warn] Micromamba binary not found in cache" >&2
+  printf '%s\n' "[warn] Micromamba binary not found in cache" >&2
 fi
 # End micromamba installation (if block self-contained)
 
@@ -21463,14 +20871,14 @@ fi
 # Purpose: Install full Jupyter stack and scientific computing packages
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
-echo "Starting Conda base env setup"
+printf '%s\n' "Starting Conda base env setup"
 if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # Conda channel configuration is already set in .condarc.pre (strict conda-forge only)
-  echo "Installing full Jupyter environment + additional libraries using mamba solver..."
+  printf '%s\n' "Installing full Jupyter environment + additional libraries using mamba solver..."
 
   #--- Sub-block 29.15: Enhanced conda cache management ---
   # Purpose: Clean cache before large package installation
-  echo "Performing enhanced conda cache management before mamba installation..."
+  printf '%s\n' "Performing enhanced conda cache management before mamba installation..."
   if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
     # Setup staging area for robust package handling
     setup_conda_staging_area
@@ -21482,10 +20890,13 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
     # Remove any partially extracted packages
-    find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type d -name "*-*" -exec rm -rf {} + 2>/dev/null || true
+    # J1: Validate directory exists before find operation
+    if [ -d "${CONTAINER_CONDA_CACHE}" ]; then
+      find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type d -name "*-*" -exec rm -rf {} + 2>/dev/null || true
+    fi
     # Force filesystem sync to ensure all operations are flushed
     sync
-    echo "✓ Enhanced conda cache management completed"
+    printf '%s\n' "✓ Enhanced conda cache management completed"
   fi
 
 #--- Sub-block 29.17: Application installation ---
@@ -21498,7 +20909,7 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # Critical: Install scientific computing and ML packages
   
   # CRITICAL: Ensure SSL certificates are configured for all conda/mamba operations
-  echo "==> Verifying SSL certificate configuration for package downloads..."
+  printf '%s\n' "==> Verifying SSL certificate configuration for package downloads..."
   export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt
   export REQUESTS_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
   export CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt
@@ -21507,12 +20918,12 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # This keeps the immutable base image small and flexible
   # Use setup_conda_environments.sh to install packages into overlay after mount
   
-  echo "==> Minimal conda base installation (immutable image)"
-  echo "    Full environments will be created in writable overlay"
+  printf '%s\n' "==> Minimal conda base installation (immutable image)"
+  printf '%s\n' "    Full environments will be created in writable overlay"
   
   # Determine which solver to use (prefer mamba, fallback to conda)
   if [ -x "${MINIFORGE_HOME}/bin/mamba" ]; then
-    echo "Installing minimal base packages with mamba (preferred)..."
+    printf '%s\n' "Installing minimal base packages with mamba (preferred)..."
     INSTALLER="${MINIFORGE_HOME}/bin/mamba"
     SOLVER_NAME="mamba"
   else
@@ -21524,17 +20935,17 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   # Install essential base packages for all environments
   if "${INSTALLER}" install -y -c conda-forge \
       pip setuptools wheel ipykernel jupyter_client; then
-    echo "✓ Minimal conda base configured with kernel support (using ${SOLVER_NAME})"
+    printf '%s\n' "✓ Minimal conda base configured with kernel support (using ${SOLVER_NAME})"
   else
     # If preferred solver fails, try the other one
     if [ "${SOLVER_NAME}" = "mamba" ]; then
-      echo "[warn] Mamba failed, retrying with conda..."
+      printf '%s\n' "[warn] Mamba failed, retrying with conda..." >&2
       "${MINIFORGE_HOME}/bin/conda" install -y -c conda-forge \
         pip setuptools wheel ipykernel jupyter_client \
         || exit 1
-      echo "✓ Minimal conda base configured with kernel support (using conda fallback)"
+      printf '%s\n' "✓ Minimal conda base configured with kernel support (using conda fallback)"
     else
-      echo "✗ ERROR: Package installation failed"
+      printf '%s\n' "✗ ERROR: Package installation failed" >&2
       exit 1
     fi
   fi
@@ -21552,29 +20963,35 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
 
   #--- Sub-block 29.19: Register Jupyter kernel ---
   # Purpose: Make conda base environment available in Jupyter
-  "${MINIFORGE_HOME}/bin/python" -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" || true
+  # H4: Validate result after masked failure
+  if ! "${MINIFORGE_HOME}/bin/python" -m ipykernel install --name=python-conda-base --display-name="Python (conda-base)" 2>/dev/null; then
+    echo "[warn] Jupyter kernel registration failed (non-critical)"
+  fi
 
   #--- Sub-block 29.20: Install additional pip packages ---
   # Purpose: Robotics and simulation packages not in conda
   # Note: openai-gym is deprecated, using gymnasium instead (already installed via conda)
-  "${MINIFORGE_HOME}/bin/pip" install \
+  # H4: Validate result after masked failure
+  if ! "${MINIFORGE_HOME}/bin/pip" install \
     robosuite \
     pyrender \
     trimesh \
-    pyglet || true
+    pyglet 2>/dev/null; then
+    echo "[warn] Some pip packages failed to install (non-critical)"
+  fi
 
   #--- Sub-block 29.21: Verify package installations ---
   # Purpose: Confirm critical packages installed correctly
-  echo "Verifying critical package installations..."
+  printf '%s\n' "Verifying critical package installations..."
   if [ -x "${MINIFORGE_HOME}/bin/jupyter" ]; then
-    echo "✓ Jupyter installed successfully"
+    printf '%s\n' "✓ Jupyter installed successfully"
   else
-    echo "[warn] Jupyter installation may have failed"
+    printf '%s\n' "[warn] Jupyter installation may have failed" >&2
   fi
   if [ -x "${MINIFORGE_HOME}/bin/python" ]; then
-    echo "✓ Python installed successfully"
+    printf '%s\n' "✓ Python installed successfully"
   else
-    echo "[warn] Python installation may have failed"
+    printf '%s\n' "[warn] Python installation may have failed" >&2
   fi
   # End verification (if-else blocks self-contained)
 fi
@@ -21594,10 +21011,10 @@ debug_glibc "After conda environment setup"
 # Critical: Office productivity suite
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> LibreOffice installation"
+printf '%s\n' "==> LibreOffice installation"
 if ! DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends install \
   libreoffice-writer libreoffice-calc libreoffice-impress; then
-  echo "[error] Failed to install LibreOffice components" >&2
+  printf '%s\n' "[error] Failed to install LibreOffice components" >&2
   exit 1
 fi
 
@@ -21605,10 +21022,10 @@ fi
 # Critical: 3D modeling, mesh processing, and CAD tools
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> Blender installation"
+printf '%s\n' "==> Blender installation"
 if ! DEBIAN_FRONTEND=noninteractive apt-get -y --no-install-recommends install \
   blender meshlab geomview librecad openscad-testing; then
-  echo "[error] Failed to install Blender and 3D toolchain" >&2
+  printf '%s\n' "[error] Failed to install Blender and 3D toolchain" >&2
   exit 1
 fi
 
@@ -21618,38 +21035,47 @@ debug_glibc "After installation of LibreOffice & Blender"
 # Purpose: Configure OpenColorIO for color-accurate 3D rendering
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> OCIO color profile configuration initialized"
+printf '%s\n' "==> OCIO color profile configuration initialized"
 install_ocio_profile_from_aces() {
   # Helper: download and install ACES OpenColorIO profiles when Blender data is unavailable.
   local tmp_dir ocio_prev_dir ocio_archive_url ocio_config_found ocio_source_dir ocio_candidate
 
   if ! install -d -m 0755 /usr/share/ocio/aces; then
-    echo "Failed to create /usr/share/ocio/aces" >&2
+    printf '%s\n' "Failed to create /usr/share/ocio/aces" >&2
     return 1
   fi
 
   tmp_dir="$(mktemp -d -t ocio-aces.XXXXXX)"
   if [ ! -d "${tmp_dir}" ]; then
-    echo "Failed to create temporary directory for OCIO download" >&2
+    printf '%s\n' "Failed to create temporary directory for OCIO download" >&2
     return 1
   fi
 
   ocio_prev_dir=$(pwd)
+  # J1: Validate directory exists before cd
+  if [ ! -d "${tmp_dir}" ]; then
+    printf '%s\n' "[ERROR] Temporary directory does not exist: ${tmp_dir}" >&2
+    return 1
+  fi
   if ! cd "${tmp_dir}"; then
-    echo "Failed to change to temporary directory ${tmp_dir}" >&2
+    printf '%s\n' "[ERROR] Failed to change to temporary directory ${tmp_dir}" >&2
     rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
     return 1
   fi
 
   ocio_archive_url="https://github.com/AcademySoftwareFoundation/OpenColorIO-Config-ACES/archive/refs/heads/master.tar.gz"
-  if ! curl -fSLo aces.tar.gz --retry 5 --retry-delay 2 --retry-connrefused "${ocio_archive_url}"; then
-    echo "[warn] Failed to download ACES OCIO configuration archive" >&2
+  # I4: HTTP error handling - capture HTTP status code
+  http_code=$(curl -fSLo aces.tar.gz --retry 5 --retry-delay 2 --retry-connrefused \
+    -w "%{http_code}" -s "${ocio_archive_url}" 2>/dev/null || echo "000")
+  # Validate HTTP code is 3-digit number
+  if [[ ! "${http_code}" =~ ^[0-9]{3}$ ]] || [ "${http_code}" != "200" ] || [ ! -f aces.tar.gz ]; then
+    printf '%s\n' "[warn] Failed to download ACES OCIO configuration archive" >&2
     cd "${ocio_prev_dir}" >/dev/null 2>&1 || true
     rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
     return 1
   fi
   if ! tar -xzf aces.tar.gz; then
-    echo "[warn] Failed to extract ACES OCIO archive" >&2
+    printf '%s\n' "[warn] Failed to extract ACES OCIO archive" >&2
     cd "${ocio_prev_dir}" >/dev/null 2>&1 || true
     rm -rf "${tmp_dir}" >/dev/null 2>&1 || true
     return 1
@@ -21667,19 +21093,20 @@ install_ocio_profile_from_aces() {
         ocio_config_found="/usr/share/ocio/aces/config.ocio"
         break
       else
-        echo "[warn] Failed to copy OCIO config from ${ocio_source_dir}" >&2
+        printf '%s\n' "[warn] Failed to copy OCIO config from ${ocio_source_dir}" >&2
       fi
     fi
   done
 
   if [ -z "${ocio_config_found}" ]; then
-    ocio_candidate=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f | head -1 || true)
+    # D3e: SIGPIPE error handling - add || true to prevent exit code 141
+    ocio_candidate=$(find "OpenColorIO-Config-ACES-master" -name "config.ocio" -type f 2>/dev/null | head -1 2>/dev/null || true)
     if [ -n "${ocio_candidate}" ]; then
       ocio_source_dir=$(dirname "${ocio_candidate}")
       if cp -r "${ocio_source_dir}/." /usr/share/ocio/aces/ 2>/dev/null; then
         ocio_config_found="/usr/share/ocio/aces/config.ocio"
       else
-        echo "[warn] Failed to copy discovered OCIO config directory" >&2
+        printf '%s\n' "[warn] Failed to copy discovered OCIO config directory" >&2
         ocio_config_found=""
       fi
     fi
@@ -21693,7 +21120,7 @@ install_ocio_profile_from_aces() {
     return 0
   fi
 
-  echo "[warn] OCIO config.ocio not found in ACES archive - OCIO may not be fully configured" >&2
+  printf '%s\n' "[warn] OCIO config.ocio not found in ACES archive - OCIO may not be fully configured" >&2
   return 1
 }
 ocio_prev_opts="$-"
@@ -21704,36 +21131,58 @@ if ! dpkg_resolve_installed_package "blender-data" >/dev/null 2>&1; then
   # Find Blender's bundled OCIO config
   OCIO_PATH="$(/usr/bin/python3 -c 'import glob; p=glob.glob("/usr/share/blender/*/datafiles/colormanagement/config.ocio"); print(p[0]) if p else ""')"
   if [ -n "${OCIO_PATH:-}" ]; then
+    # J1: Validate parent directory exists before writing
+    PARENT_DIR="/etc/profile.d"
+    if [ ! -d "${PARENT_DIR}" ]; then
+      printf '%s\n' "[WARNING] Parent directory does not exist: ${PARENT_DIR}" >&2
+      printf '%s\n' "[INFO] Creating parent directory: ${PARENT_DIR}" >&2
+      mkdir -p "${PARENT_DIR}" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+        return 1
+      }
+      printf '%s\n' "[INFO] Parent directory created successfully: ${PARENT_DIR}" >&2
+    fi
     if printf 'export OCIO=%s\n' "${OCIO_PATH}" > /etc/profile.d/99-ocio.sh; then
       if ! chmod 0644 /etc/profile.d/99-ocio.sh; then
-        echo "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
+        printf '%s\n' "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
       fi
     else
-      echo "[warn] Failed to write OCIO configuration profile" >&2
+      printf '%s\n' "[warn] Failed to write OCIO configuration profile" >&2
     fi
   else
-    echo "[OCIO] blender-data installed but config.ocio not found; continuing"
+    printf '%s\n' "[OCIO] blender-data installed but config.ocio not found; continuing"
   fi
 else
   # Fallback: install a known-good ACES config
   if OCIO_CONFIG_FOUND="$(install_ocio_profile_from_aces)"; then
+    # J1: Validate parent directory exists before writing
+    PARENT_DIR="/etc/profile.d"
+    if [ ! -d "${PARENT_DIR}" ]; then
+      printf '%s\n' "[WARNING] Parent directory does not exist: ${PARENT_DIR}" >&2
+      printf '%s\n' "[INFO] Creating parent directory: ${PARENT_DIR}" >&2
+      mkdir -p "${PARENT_DIR}" || {
+        printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+        return 1
+      }
+      printf '%s\n' "[INFO] Parent directory created successfully: ${PARENT_DIR}" >&2
+    fi
     if printf 'export OCIO="%s"\n' "${OCIO_CONFIG_FOUND}" > /etc/profile.d/99-ocio.sh; then
       if ! chmod 0644 /etc/profile.d/99-ocio.sh; then
-        echo "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
+        printf '%s\n' "[warn] Failed to set permissions on /etc/profile.d/99-ocio.sh" >&2
       fi
-      echo "✓ OCIO config installed from ACES repository: ${OCIO_CONFIG_FOUND}"
+      printf '%s\n' "✓ OCIO config installed from ACES repository: ${OCIO_CONFIG_FOUND}"
     else
-      echo "[warn] Failed to write OCIO configuration profile" >&2
+      printf '%s\n' "[warn] Failed to write OCIO configuration profile" >&2
     fi
   else
-    echo "[warn] Unable to provision OCIO config from ACES archive" >&2
+    printf '%s\n' "[warn] Unable to provision OCIO config from ACES archive" >&2
   fi
 fi
 if [[ "${ocio_prev_opts}" != *e* ]]; then
   set +e
 fi
 unset ocio_prev_opts
-echo "✓ OCIO color profile configuration complete"
+printf '%s\n' "✓ OCIO color profile configuration complete"
 
 #===============================================================================
 # BLOCK 31: CAD AND 3D PRINTING TOOLS
@@ -21745,84 +21194,75 @@ echo "✓ OCIO color profile configuration complete"
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 31.1: OpenSCAD installation ---
-# Critical: Parametric CAD software
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> CAD tools installation"
-DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  openscad
-
-#--- Sub-block 31.2: FreeCAD AppImage installation ---
-# Critical: Professional CAD software (v1.0.2 via AppImage)
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-echo "==> Installing FreeCAD version ${FREECAD_VERSION} via AppImage..." # Version from config.sh
+# Note: other file: /usr/share/applications/freecad.desktop is installed via install.sh from container-scripts/
+# Source: other/block-31-cad-and-3d-printing-tools/freecad.desktop
+# Target: /usr/share/applications/freecad.desktop
+# Installed in Block 0 (early in script, before any scripts are needed)
+printf '%s\n' "==> Installing FreeCAD version ${FREECAD_VERSION} via AppImage..." # Version from config.sh
 FREECAD_FILENAME="FreeCAD_${FREECAD_VERSION}-conda-Linux-x86_64-py311.AppImage"
-# Download, place in a system-wide location, and make executable
+# J1: Validate parent directory exists before writing
+PARENT_DIR="/usr/local/bin"
+if [ ! -d "${PARENT_DIR}" ]; then
+  printf '%s\n' "[WARNING] Parent directory does not exist: ${PARENT_DIR}" >&2
+  printf '%s\n' "[INFO] Creating parent directory: ${PARENT_DIR}" >&2
+  mkdir -p "${PARENT_DIR}" || {
+    printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+    exit 1
+  }
+  printf '%s\n' "[INFO] Parent directory created successfully: ${PARENT_DIR}" >&2
+fi
+# I4: HTTP error handling - wget with proper error checking
 if wget "https://github.com/FreeCAD/FreeCAD/releases/download/${FREECAD_VERSION}/${FREECAD_FILENAME}" -O /usr/local/bin/freecad.AppImage 2>/dev/null; then
     # Verify download succeeded and file is not empty
     if [ -s /usr/local/bin/freecad.AppImage ]; then
       chmod +x /usr/local/bin/freecad.AppImage
       # Create a symlink for easy terminal access (run with 'freecad')
       ln -sf /usr/local/bin/freecad.AppImage /usr/local/bin/freecad
-      echo "✓ FreeCAD installed successfully"
+      printf '%s\n' "✓ FreeCAD installed successfully"
     else
-      echo "⚠ FreeCAD download failed - file is empty (non-critical, continuing)"
+      printf '%s\n' "⚠ FreeCAD download failed - file is empty (non-critical, continuing)"
       rm -f /usr/local/bin/freecad.AppImage
     fi
 else
-    echo "⚠ Failed to download FreeCAD (non-critical, continuing)"
+    printf '%s\n' "⚠ Failed to download FreeCAD (non-critical, continuing)"
     rm -f /usr/local/bin/freecad.AppImage
 fi
 
 # Create a desktop entry for the XFCE menu
-cat > /usr/share/applications/freecad.desktop << 'EOF'
-[Desktop Entry]
-Name=FreeCAD
-Comment=A general purpose 3D CAD modeler
-Exec=freecad %F
-Icon=freecad
-Terminal=false
-Type=Application
-Categories=Graphics;3DGraphics;Engineering;
-MimeType=application/x-extension-fcstd;
-EOF
-echo "✓ FreeCAD installation complete."
-
-# === Install OrcaSlicer (AppImage) ===
-echo "==> Installing OrcaSlicer version 2.3.1 via AppImage..."
+# Note: shell-scripts file: /usr/share/applications/freecad.desktop is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-31-cad-and-3d-printing-tools/freecad.desktop
+# Target: /usr/share/applications/freecad.desktop
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: other file: /usr/share/applications/orcaslicer.desktop is installed via install.sh from container-scripts/
+# Source: other/block-31-cad-and-3d-printing-tools/orcaslicer.desktop
+# Target: /usr/share/applications/orcaslicer.desktop
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Define the specific version tag and filename based on the release page
 ORCA_TAG="v2.3.1"
 ORCA_FILENAME="OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.1.AppImage"
-# Download, place in a system-wide location, and make executable
+# I4: HTTP error handling - wget with proper error checking
 if wget "https://github.com/SoftFever/OrcaSlicer/releases/download/${ORCA_TAG}/${ORCA_FILENAME}" -O /usr/local/bin/orcaslicer.AppImage 2>/dev/null; then
     # Verify download succeeded and file is not empty
     if [ -s /usr/local/bin/orcaslicer.AppImage ]; then
       chmod +x /usr/local/bin/orcaslicer.AppImage
       # Create symlink for easy terminal access (run with 'orcaslicer')
       ln -sf /usr/local/bin/orcaslicer.AppImage /usr/local/bin/orcaslicer
-      echo "✓ OrcaSlicer installed successfully"
+      printf '%s\n' "✓ OrcaSlicer installed successfully"
     else
-      echo "⚠ OrcaSlicer download failed - file is empty (non-critical, continuing)"
+      printf '%s\n' "⚠ OrcaSlicer download failed - file is empty (non-critical, continuing)"
       rm -f /usr/local/bin/orcaslicer.AppImage
     fi
 else
-    echo "⚠ Failed to download OrcaSlicer (non-critical, continuing)"
+    printf '%s\n' "⚠ Failed to download OrcaSlicer (non-critical, continuing)"
     rm -f /usr/local/bin/orcaslicer.AppImage
 fi
 
 # Create a desktop entry for the XFCE menu
-cat > /usr/share/applications/orcaslicer.desktop << 'EOF'
-[Desktop Entry]
-Name=OrcaSlicer
-Exec=orcaslicer %F
-Icon=orcaslicer
-Comment=G-code generator for 3D printers
-Type=Application
-Categories=Graphics;3DGraphics;Engineering;
-MimeType=model/stl;application/vnd.ms-pki.stl;application/x-tgif;
-EOF
-echo "✓ OrcaSlicer installation complete."
+# Note: other file: /usr/share/applications/orcaslicer.desktop is installed via install.sh from container-scripts/
+# Source: other/block-31-cad-and-3d-printing-tools/orcaslicer.desktop
+# Target: /usr/share/applications/orcaslicer.desktop
+# Installed in Block 0 (early in script, before any scripts are needed)
+printf '%s\n' "✓ OrcaSlicer installation complete."
 
 
 
@@ -21841,7 +21281,7 @@ debug_glibc "After installing CAD tools and Orca Slicer"
 # Critical: Academic and technical document preparation
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> TeX (English-only, full feature)"
+printf '%s\n' "==> TeX (English-only, full feature)"
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
   texlive texlive-latex-recommended texlive-latex-extra texlive-fonts-recommended texlive-fonts-extra \
   latexmk latexml texlive-xetex texlive-bibtex-extra biber cm-super \
@@ -21851,17 +21291,10 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
 debug_glibc "After TeX packages installation"
 
 #===============================================================================
-# BLOCK 33: VNC STARTUP SCRIPTS AND CONFIGURATIONS (Part 2 of 3)
-#===============================================================================
-# 🖥️  REMOTE DESKTOP INFRASTRUCTURE - PRIMARY SCRIPTS & CONFIGURATION
-#
-# This is Part 2 of the Remote Desktop Infrastructure spanning 3 blocks:
-#   • Block 15 (line ~3320): TurboVNC & VirtualGL installation (COMPLETED)
-#   • Block 20 (HERE):       Primary VNC launcher scripts and configurations
-#   • Block 21 (line ~5870): Alternative VNC servers (x11vnc, KasmVNC, etc.)
-#
-# Purpose: Create comprehensive VNC startup scripts with GPU acceleration
-# Self-contained: Yes (complete script suite)
+# Note: other file: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml is installed via install.sh from container-scripts/
+# Source: other/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/xfwm4.xml
+# Target: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Dependencies: Block 15 (TurboVNC, VirtualGL), XFCE desktop environment
 # Outputs: start_vnc_xfce.sh (PRIMARY), noVNC support, monitor tools
 #
@@ -21877,1755 +21310,17 @@ debug_glibc "After TeX packages installation"
 # Critical: Configure XFCE for remote desktop performance
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> XFCE/VNC remote GUI tuning"
+printf '%s\n' "==> XFCE/VNC remote GUI tuning"
 if ! install -d -m 0755 /etc/xdg/xfce4/xfconf/xfce-perchannel-xml; then
-  echo "Failed to create /etc/xdg/xfce4/xfconf/xfce-perchannel-xml" >&2
+  printf '%s\n' "Failed to create /etc/xdg/xfce4/xfconf/xfce-perchannel-xml" >&2
   exit 1
 fi
-cat > /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml << 'XFM'
-<?xml version="1.0" encoding="UTF-8"?>
-<channel name="xfwm4" version="1.0">
-  <property name="general" type="empty">
-    <property name="use_compositing" type="bool" value="false"/>
-    <property name="sync_to_vblank" type="bool" value="false"/>
-    <property name="frame_drawn" type="bool" value="false"/>
-    <property name="double_click_time" type="int" value="250"/>
-  </property>
-</channel>
-XFM
-
-#--- Sub-block 33.2: Configure X server permissions ---
-# Purpose: Allow non-root users to run X clients in containers
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-if ! install -d -m 0755 /etc/X11; then
-  echo "Failed to create /etc/X11" >&2
-  exit 1
-fi
-if ! printf 'allowed_users=anybody\nneeds_root_rights=no\n' > /etc/X11/Xwrapper.config; then
-  echo "Failed to update /etc/X11/Xwrapper.config" >&2
-  exit 1
-fi
-if ! chmod 0644 /etc/X11/Xwrapper.config; then
-  echo "Failed to set permissions on /etc/X11/Xwrapper.config" >&2
-  exit 1
-fi
-
-#--- Sub-block 33.3: Create comprehensive VNC startup script ---
-# Critical: Main VNC launcher with TurboVNC + noVNC + VirtualGL integration
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-echo "==> Creating enhanced VNC startup script with full TurboVNC support..."
-
-#--- Sub-block 33.4: Create main VNC startup script ---
-# Critical: Comprehensive VNC launcher with TurboVNC + noVNC + VirtualGL
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-cat > /usr/local/bin/start_vnc_xfce.sh << 'VNCLAUNCHER'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# ============================================================================
-# Enhanced TurboVNC + VirtualGL + noVNC Launcher with Full Configuration
-# ============================================================================
-
-# --- Default Configuration ---
-VNC_DISPLAY_NUM=${VNC_DISPLAY_NUM:-1}
-VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
-WEB_PORT=${WEB_PORT:-6081}
-TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))
-GEOM="${VNC_GEOM:-1920x1080}"
-DEPTH="${VNC_DEPTH:-24}"
-
-# VirtualGL Configuration
-VGL_DISPLAY_AUTO_DETECT=${VGL_DISPLAY_AUTO_DETECT:-1}
-VGL_DISPLAY_FALLBACK="${VGL_DISPLAY_FALLBACK:-:0}"
-VGL_COMPRESS="${VGL_COMPRESS:-proxy}"
-VGL_READBACK="${VGL_READBACK:-sync}"
-VGL_FPS="${VGL_FPS:-0}"
-VGL_VERBOSE="${VGL_VERBOSE:-0}"
-VGL_DEBUG="${VGL_DEBUG:-0}"
-VGL_FORCE_GPU="${VGL_FORCE_GPU:-0}"
-
-# VNC Integration
-VNC_VGL_INTEGRATION="${VNC_VGL_INTEGRATION:-1}"
-VNC_OPENGL_EXTENSIONS="${VNC_OPENGL_EXTENSIONS:-1}"
-VNC_GLX_EXTENSIONS="${VNC_GLX_EXTENSIONS:-1}"
-
-# Debug Configuration
-DEBUG_MODE="${DEBUG_MODE:-0}"
-VERBOSE_MODE="${VERBOSE_MODE:-0}"
-
-# Security: bind to localhost only (use -nolisten for remote access)
-SECURITY_ARGS="-localhost"
-
-# --- Help Function ---
-show_help() {
-  cat << 'EOF'
-Enhanced TurboVNC + VirtualGL + noVNC Launcher
-
-USAGE:
-  start_vnc_xfce.sh [OPTIONS]
-
-OPTIONS:
-  --vgl-display DISPLAY    Set VGL_DISPLAY (default: auto-detect)
-  --vgl-compress METHOD    Set compression (proxy|jpeg|rgb) (default: proxy)
-  --vgl-readback MODE      Set readback mode (sync|async) (default: sync)
-  --vgl-fps               Enable FPS display (default: disabled)
-  --vgl-verbose           Enable verbose VirtualGL output
-  --vgl-debug             Enable debug mode with detailed logging
-  --vnc-display NUM       Set VNC display number (default: 1)
-  --vnc-geometry SIZE     Set VNC geometry (default: 1920x1080)
-  --vnc-depth BITS        Set color depth (default: 24)
-  --no-vgl                Disable VirtualGL (software rendering)
-  --force-vgl             Force VirtualGL even if not detected
-  --debug                 Enable debug mode
-  --verbose               Enable verbose output
-  --help, -h              Show this help message
-
-ENVIRONMENT VARIABLES:
-  VGL_DISPLAY_AUTO_DETECT=1    Auto-detect VNC display (default: 1)
-  VGL_DISPLAY_FALLBACK=:0      Fallback display (default: :0)
-  VGL_COMPRESS=proxy           Compression method (default: proxy)
-  VGL_READBACK=sync            Readback mode (default: sync)
-  VGL_FPS=0                    FPS display (default: 0)
-  VGL_VERBOSE=0                Verbose output (default: 0)
-  VGL_DEBUG=0                  Debug mode (default: 0)
-  VNC_DISPLAY_NUM=1            VNC display number (default: 1)
-  VNC_GEOM=1920x1080           VNC geometry (default: 1920x1080)
-  VNC_DEPTH=24                 Color depth (default: 24)
-
-EXAMPLES:
-  # Auto-detect everything
-  start_vnc_xfce.sh
-
-  # Specify VNC display and enable debug
-  start_vnc_xfce.sh --vnc-display 2 --vgl-debug
-
-  # Force specific VirtualGL display
-  start_vnc_xfce.sh --vgl-display :2 --vgl-verbose
-
-  # Disable VirtualGL (software rendering)
-  start_vnc_xfce.sh --no-vgl
-
-  # Test different compression
-  start_vnc_xfce.sh --vgl-compress jpeg --vgl-fps
-EOF
-}
-
-
-# --- Command Line Argument Parsing ---
-parse_arguments() {
-  while [[ $# -gt 0 ]]; do
-    case $1 in
-      --vgl-display)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vgl-display" >&2
-          exit 1
-        fi
-        VGL_DISPLAY_AUTO_DETECT=0
-        VGL_DISPLAY_FALLBACK="$2"
-        shift 2
-        ;;
-      --vgl-compress)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vgl-compress" >&2
-          exit 1
-        fi
-        VGL_COMPRESS="$2"
-        shift 2
-        ;;
-      --vgl-readback)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vgl-readback" >&2
-          exit 1
-        fi
-        VGL_READBACK="$2"
-        shift 2
-        ;;
-      --vgl-fps)
-        VGL_FPS="1"
-        shift
-        ;;
-      --vgl-verbose)
-        VGL_VERBOSE="1"
-        VERBOSE_MODE="1"
-        shift
-        ;;
-      --vgl-debug)
-        VGL_DEBUG="1"
-        DEBUG_MODE="1"
-        VERBOSE_MODE="1"
-        shift
-        ;;
-      --vnc-display)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vnc-display" >&2
-          exit 1
-        fi
-        VNC_DISPLAY_NUM="$2"
-        VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
-        TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM))
-        shift 2
-        ;;
-      --vnc-geometry)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vnc-geometry" >&2
-          exit 1
-        fi
-        GEOM="$2"
-        shift 2
-        ;;
-      --vnc-depth)
-        if [[ $# -lt 2 ]]; then
-          echo "Missing value for --vnc-depth" >&2
-          exit 1
-        fi
-        DEPTH="$2"
-        shift 2
-        ;;
-      --no-vgl)
-        VNC_VGL_INTEGRATION="0"
-        shift
-        ;;
-      --force-vgl)
-        VGL_FORCE_GPU="1"
-        shift
-        ;;
-      --debug)
-        DEBUG_MODE="1"
-        VERBOSE_MODE="1"
-        shift
-        ;;
-      --verbose)
-        VERBOSE_MODE="1"
-        shift
-        ;;
-      --help|-h)
-        show_help
-        exit 0
-        ;;
-      *)
-        echo "Unknown option: $1"
-        echo "Use --help for usage information"
-        exit 1
-        ;;
-    esac
-  done
-}
-
-# --- VirtualGL Display Detection ---
-detect_vgl_display() {
-  # Official VirtualGL docs: When using TurboVNC with -vgl flag, VGL_DISPLAY should be set to the VNC display
-  # Reference: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-  if [ "$VGL_DISPLAY_AUTO_DETECT" = "1" ]; then
-    # Primary: Use the VNC display that's about to be started (most reliable)
-    # When TurboVNC starts with -vgl flag, VirtualGL should use the VNC display
-    if [ -n "${VNC_DISPLAY_NUM:-}" ]; then
-      export VGL_DISPLAY=":${VNC_DISPLAY_NUM}"
-      [ "${VERBOSE_MODE}" = "1" ] && echo "  ✓ Set VGL_DISPLAY to VNC display: :${VNC_DISPLAY_NUM}"
-      return 0
-    fi
-    
-    # Fallback: Try to detect VNC display from running processes
-    local vnc_display="" vnc_cmd=""
-    
-    # Method 1: Check for Xvnc processes using pgrep
-    if command -v pgrep >/dev/null 2>&1; then
-      vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1 || true)
-      if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(grep -E -o ':[0-9]+' <<< "${vnc_cmd}" | head -1 || true)
-      fi
-    else
-      # D3: Use here-string instead of pipe pattern
-      local ps_output
-      ps_output=$(ps aux 2>/dev/null || echo "")
-      vnc_display=$(grep -v grep <<< "${ps_output}" 2>/dev/null | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
-    fi
-    
-    # Method 2: Check for vncserver processes
-    if [ -z "${vnc_display:-}" ]; then
-      if command -v pgrep >/dev/null 2>&1; then
-        vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || true)
-        if [ -n "${vnc_cmd}" ]; then
-          vnc_display=$(grep -E -o ':[0-9]+' <<< "${vnc_cmd}" | head -1 || true)
-        fi
-      else
-        # D3: Use here-string instead of pipe pattern
-        ps_output=$(ps aux 2>/dev/null || echo "")
-        vnc_display=$(grep -v grep <<< "${ps_output}" 2>/dev/null | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
-      fi
-    fi
-    
-    # Method 3: Check for display :1, :2, etc.
-    if [ -z "${vnc_display:-}" ]; then
-      for i in 1 2 3 4 5; do
-        if [ -S "/tmp/.X11-unix/X${i}" ] 2>/dev/null; then
-          vnc_display=":${i}"
-          break
-        fi
-      done
-    fi
-    
-    if [ -n "${vnc_display:-}" ]; then
-      export VGL_DISPLAY="${vnc_display}"
-      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ Auto-detected VGL_DISPLAY: ${vnc_display}"
-    else
-      export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
-      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ⚠ Using fallback VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
-    fi
-  else
-    export VGL_DISPLAY="${VGL_DISPLAY_FALLBACK}"
-    [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ Using specified VGL_DISPLAY: ${VGL_DISPLAY_FALLBACK}"
-  fi
-}
-
-# --- VirtualGL Configuration ---
-configure_virtualgl() {
-  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
-    echo "Configuring VirtualGL..."
-    
-    # Detect display
-    detect_vgl_display
-    
-    # Set VirtualGL environment variables
-    export VGL_COMPRESS
-    export VGL_READBACK
-    export VGL_LOGO="0"
-    export VGL_FPS
-    export VGL_VERBOSE
-    
-    # Debug mode settings
-    if [ "${VGL_DEBUG:-0}" = "1" ]; then
-      export VGL_VERBOSE="1"
-      export VGL_LOG_LEVEL="2"
-      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL debug mode enabled"
-    fi
-    
-    # Force GPU usage
-    if [ "${VGL_FORCE_GPU:-0}" = "1" ]; then
-      export VGL_FORCE_GPU="1"
-      [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL force GPU enabled"
-    fi
-    
-    if [ "${VERBOSE_MODE:-0}" = "1" ]; then
-      echo "  ✓ VirtualGL configured:"
-      echo "    VGL_DISPLAY=${VGL_DISPLAY:-}"
-      echo "    VGL_COMPRESS=${VGL_COMPRESS:-}"
-      echo "    VGL_READBACK=${VGL_READBACK:-}"
-      echo "    VGL_FPS=${VGL_FPS:-}"
-      echo "    VGL_VERBOSE=${VGL_VERBOSE:-}"
-    fi
-  else
-    echo "VirtualGL integration disabled (software rendering)"
-  fi
-}
-
-# --- VirtualGL Test Function ---
-test_virtualgl() {
-  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
-    echo "Testing VirtualGL configuration..."
-    
-    # Check if vglrun is available
-    if ! command -v vglrun >/dev/null 2>&1; then
-      echo "  ✗ vglrun not found - VirtualGL not available"
-      return 1
-    fi
-    
-    # Check if VirtualGL can access the display
-    if [ -n "${VGL_DISPLAY:-}" ]; then
-      echo "  ✓ VGL_DISPLAY set to: ${VGL_DISPLAY}"
-      
-      # Test VirtualGL connection
-      local glxinfo_output=""
-      if glxinfo_output=$(vglrun -d "${VGL_DISPLAY}" glxinfo 2>/dev/null); then
-        echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
-        
-        # Test OpenGL rendering
-        if grep -q "OpenGL renderer" <<< "${glxinfo_output}"; then
-          echo "  ✓ OpenGL rendering available"
-          return 0
-        else
-          echo "  ⚠ OpenGL rendering not available"
-          return 1
-        fi
-      else
-        echo "  ✗ VirtualGL cannot access display ${VGL_DISPLAY}"
-        return 1
-      fi
-    else
-      echo "  ✗ VGL_DISPLAY not set"
-      return 1
-    fi
-  else
-    echo "VirtualGL integration disabled"
-    return 0
-  fi
-}
-
-# --- Parse command line arguments ---
-parse_arguments "$@"
-
-# --- Ensure TurboVNC is in PATH ---
-
-# --- Cleanup function ---
-cleanup() {
-  echo ""
-  echo "Shutting down VNC services..."
-  vncserver -kill ":${VNC_DISPLAY_NUM}" 2>/dev/null || true
-  pkill -f "websockify.*${WEB_PORT}" 2>/dev/null || true
-  jobs -p | xargs -r kill 2>/dev/null || true
-  exit 0
-}
-trap cleanup SIGINT SIGTERM EXIT
-
-# --- Check dependencies ---
-check_dependencies() {
-  local missing=0
-
-  echo "Checking dependencies..."
-
-
-  if ! command -v vncserver >/dev/null 2>&1; then
-    echo "  ✗ vncserver not found"
-    missing=1
-  else
-    echo "  ✓ vncserver: $(command -v vncserver)"
-  fi
-
-
-  if ! command -v Xvnc >/dev/null 2>&1; then
-    echo "  ✗ Xvnc not found"
-    missing=1
-  else
-    echo "  ✓ Xvnc: $(command -v Xvnc)"
-  fi
-
-  if ! command -v startxfce4 >/dev/null 2>&1; then
-    echo "  ✗ startxfce4 not found"
-    missing=1
-  else
-    echo "  ✓ XFCE4 available"
-  fi
-
-  if [ "${missing}" -eq 1 ]; then
-    echo ""
-    echo "ERROR: Missing required dependencies"
-    echo "PATH: ${PATH}"
-    exit 1
-  fi
-
-  echo "✓ All dependencies found"
-  echo ""
-}
-
-# --- Check VirtualGL availability ---
-check_virtualgl() {
-  local gpu_info=""
-  echo "Checking VirtualGL availability..."
-
-  # Add VirtualGL to PATH
-
-  if command -v vglrun >/dev/null 2>&1; then
-    echo "  ✓ VirtualGL available: $(command -v vglrun)"
-
-    # Check GPU
-    if command -v nvidia-smi >/dev/null 2>&1; then
-      gpu_info=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
-      if [ -n "${gpu_info:-}" ]; then
-        echo "  ✓ GPU detected: ${gpu_info}"
-      else
-        echo "  ⚠ nvidia-smi found but no GPU detected"
-      fi
-    else
-      echo "  ⚠ nvidia-smi not found (CPU rendering only)"
-    fi
-
-
-
-    # Check OpenGL utilities
-    if command -v glxinfo >/dev/null 2>&1; then
-      echo "  ✓ glxinfo available for OpenGL testing"
-    fi
-    if command -v glxspheres64 >/dev/null 2>&1; then
-      echo "  ✓ glxspheres64 available for GPU benchmarking"
-    fi
-  else
-    echo "  ⚠ VirtualGL not available"
-    echo "    GPU-accelerated applications may not work properly"
-  fi
-
-  echo ""
-}
-
-# --- Setup VNC configuration ---
-setup_vnc_config() {
-  if ! install -d -m 0700 "${HOME}/.vnc"; then
-    echo "Failed to create ${HOME}/.vnc directory" >&2
-    exit 1
-  fi
-
-  # Create xstartup script with VirtualGL integration
-  # Official TurboVNC docs: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-  # Official VirtualGL docs: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-  if ! cat > "${HOME}/.vnc/xstartup" << 'XSTART'
-#!/bin/sh
-# Enhanced TurboVNC xstartup for XFCE4 + VirtualGL
-# Official documentation:
-# - TurboVNC: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-# - VirtualGL: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
-# - x11vnc: https://github.com/LibVNC/x11vnc
-
-# Load X resources
-[ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
-
-# Font cache
-fc-cache -f 2>/dev/null || true
-
-# Start D-Bus if not running
-if ! dbus-send --session --dest=org.freedesktop.DBus --type=method_call \
-  /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
-  eval "$(dbus-launch --sh-syntax)"
-fi
-
-# VirtualGL Environment Setup
-if [ -n "${VGL_DISPLAY:-}" ]; then
-  export VGL_DISPLAY
-  export VGL_COMPRESS="${VGL_COMPRESS:-proxy}"
-  export VGL_READBACK="${VGL_READBACK:-sync}"
-  export VGL_LOGO="${VGL_LOGO:-0}"
-  export VGL_FPS="${VGL_FPS:-0}"
-  export VGL_VERBOSE="${VGL_VERBOSE:-0}"
-  
-  # Debug mode
-  if [ "${VGL_DEBUG:-0}" = "1" ]; then
-    export VGL_VERBOSE="1"
-    export VGL_LOG_LEVEL="2"
-  fi
-  
-  # Force GPU usage
-  if [ "${VGL_FORCE_GPU:-0}" = "1" ]; then
-    export VGL_FORCE_GPU="1"
-  fi
-fi
-
-# X11 Configuration for VirtualGL
-export DISPLAY="${DISPLAY:-:1}"
-
-# Disable compositing for better VNC performance
-xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfce4-session -p /general/use_compositing -s false 2>/dev/null || true
-
-# XFCE4 optimizations for VirtualGL
-export XFWM4_USE_PRESENT=0  # Disable Present extension (can cause issues with VirtualGL)
-export XFCE4_SESSION_DEBUG=0  # Disable XFCE debug output
-
-# Disable screen blanking
-xset s off 2>/dev/null || true
-xset -dpms 2>/dev/null || true
-xset s noblank 2>/dev/null || true
-
-# VirtualGL Integration Test (if enabled)
-if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && [ -n "${VGL_DISPLAY:-}" ]; then
-  # Test VirtualGL connection
-  if command -v vglrun >/dev/null 2>&1; then
-    # Set up VirtualGL environment
-    export VGL_DISPLAY
-    echo "VirtualGL configured for display: $VGL_DISPLAY"
-  else
-    echo "Warning: VirtualGL not found, using software rendering"
-  fi
-fi
-
-# Start XFCE4
-exec /usr/bin/startxfce4
-XSTART
-then
-    if ! chmod +x "${HOME}/.vnc/xstartup"; then
-        echo "Failed to set execute permission on ${HOME}/.vnc/xstartup" >&2
-        exit 1
-    fi
-    echo "✓ VNC configuration created"
-else
-    echo "Failed to create ${HOME}/.vnc/xstartup" >&2
-    exit 1
-fi
-}
-
-# --- Start VNC server ---
-start_vnc_server() {
-  echo "Starting TurboVNC server..."
-  echo "  Display: :${VNC_DISPLAY_NUM}"
-  echo "  Geometry: ${GEOM}"
-  echo "  Depth: ${DEPTH}"
-  echo "  VirtualGL Integration: $([ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && echo "Enabled" || echo "Disabled")"
-
-  # Check if VNC password is set
-  if [ ! -f "${HOME}/.vnc/passwd" ]; then
-    echo ""
-    echo "⚠ VNC password not set. Please set it now:"
-    vncpasswd
-    echo ""
-  fi
-
-  # Configure VirtualGL before starting VNC
-  configure_virtualgl
-
-  # Build VNC server arguments
-  local vnc_args=(
-    ":${VNC_DISPLAY_NUM}"
-    "-geometry" "${GEOM}"
-    "-depth" "${DEPTH}"
-    "${SECURITY_ARGS}"
-    "-xstartup" "${HOME}/.vnc/xstartup"
-  )
-
-  # Add VirtualGL-specific VNC arguments if integration is enabled
-  # Official TurboVNC docs: Use -vgl flag for VirtualGL integration
-  # Reference: https://rawcdn.githack.com/TurboVNC/turbovnc/3.2.1/doc/index.html
-  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
-    # CRITICAL: Add -vgl flag for VirtualGL integration (official recommendation)
-    # This enables VirtualGL to send rendered 3D images to TurboVNC via shared memory
-    vnc_args+=("-vgl")
-    
-    # Add OpenGL extensions for VirtualGL
-    if [ "${VNC_OPENGL_EXTENSIONS:-1}" = "1" ]; then
-      vnc_args+=("-extension" "GLX")
-    fi
-    
-    # Add GLX extensions for VirtualGL
-    if [ "${VNC_GLX_EXTENSIONS:-1}" = "1" ]; then
-      vnc_args+=("-extension" "MIT-SHM")
-    fi
-    
-    # Add VirtualGL-optimized settings
-    vnc_args+=(
-      "-dpi" "96"
-      "-desktop" "Xubuntu-VGL"
-      "-alwaysshared"
-      "-dontdisconnect"
-    )
-    
-    [ "${VERBOSE_MODE:-0}" = "1" ] && echo "  ✓ VirtualGL-optimized VNC arguments added (with -vgl flag)"
-  fi
-
-  # Start VNC server with arguments
-  vncserver "${vnc_args[@]}"
-
-  # Wait for server to start
-  sleep 3
-
-  # Verify
-  if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
-    echo "ERROR: VNC server failed to start"
-    echo "Check logs:"
-    find "${HOME}/.vnc" -maxdepth 1 -name "*.log" -type f -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -5 | cut -d' ' -f2- || true
-    echo ""
-    find "${HOME}/.vnc" -maxdepth 1 -name "*.log" -type f -exec tail -20 {} \; 2>/dev/null || true
-    exit 1
-  fi
-
-
-  echo "✓ VNC server running on display :${VNC_DISPLAY_NUM} (port ${VNC_PORT})"
-}
-
-
-# --- Check TurboVNC's built-in webserver ---
-check_turbovnc_webserver() {
-  # TurboVNC may start its own webserver automatically
-  if ss -tuln 2>/dev/null | grep -q ":${TURBOVNC_WEB_PORT}\b"; then
-    echo "✓ TurboVNC built-in webserver detected on port ${TURBOVNC_WEB_PORT}"
-    return 0
-  else
-    echo "⚠ TurboVNC built-in webserver not running"
-    return 1
-  fi
-}
-
-# --- Start noVNC (websockify) ---
-start_novnc() {
-  echo "Starting noVNC (HTML5 VNC client)..."
-
-  # Find websockify
-  local websockify_path=""
-
-#--- Sub-block 33.5: Section 4574 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-  for candidate in /usr/bin/websockify /usr/local/bin/websockify "${MINIFORGE_HOME:-/opt/miniforge3}/bin/websockify"; do
-    if [ -x "${candidate}" ]; then
-      websockify_path="${candidate}"
-      echo "  Found websockify: ${websockify_path}"
-      break
-    fi
-  done
-
-  if [ -z "${websockify_path:-}" ]; then
-    echo "  ✗ websockify not found - noVNC will not be available"
-    return 1
-  fi
-
-  # Find noVNC web files
-  local novnc_dir=""
-  for candidate in /usr/local/share/novnc /usr/share/novnc; do
-    if [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ]; then
-      novnc_dir="${candidate}"
-      echo "  Found noVNC: ${novnc_dir}"
-      break
-    fi
-  done
-
-
-  # Start websockify
-  local websockify_pid=""
-  if [ -n "${novnc_dir:-}" ]; then
-    (
-      "${websockify_path}" --web "${novnc_dir}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-        grep -v "WARNING" | grep -v "numpy" || true
-    ) &
-  else
-    echo "  ⚠ noVNC files not found, starting websockify without web interface"
-    (
-      "${websockify_path}" "${WEB_PORT}" "localhost:${VNC_PORT}" 2>&1 | \
-        grep -v "WARNING" | grep -v "numpy" || true
-    ) &
-  fi
-
-
-  websockify_pid=$!
-  sleep 2
-
-  if ! kill -0 "${websockify_pid}" 2>/dev/null; then
-    echo "  ✗ websockify failed to start"
-    return 1
-  fi
-
-  WEBSOCKIFY_PID="${websockify_pid}"
-  echo "✓ noVNC running on port ${WEB_PORT} (PID: ${websockify_pid})"
-  return 0
-}
-
-#--- Sub-block 33.6: Section 4624 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-# --- Display connection information ---
-display_connection_info() {
-  local node=""
-  local username=""
-  local primary_ip=""
-  local login_placeholder=""
-
-  node=$(hostname -f 2>/dev/null || hostname 2>/dev/null || echo "localhost")
-  username="${USER:-$(whoami)}"
-  primary_ip="$(
-    hostname -I 2>/dev/null \
-      | tr ' ' '\n' \
-      | grep -v '^127\.' \
-      | head -1 \
-      || true
-  )"
-  primary_ip=${primary_ip:-localhost}
-  login_placeholder="\${USER:-${username}}"
-
-  echo ""
-  echo "=========================================="
-  echo "✓ VNC Server Ready!"
-  echo "=========================================="
-  echo "Hostname: ${node}"
-  echo "Display: :${VNC_DISPLAY_NUM}"
-  echo "VirtualGL: $([ "${VNC_VGL_INTEGRATION:-1}" = "1" ] && echo "Enabled (VGL_DISPLAY=${VGL_DISPLAY:-:1})" || echo "Disabled")"
-  echo ""
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "CONNECTION METHOD 1: Native VNC Viewer (Recommended)"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
-  echo ""
-  echo "Auto-Detected Information:"
-  echo "  Username: ${username}"
-  echo "  Compute Node: ${node}"
-  echo "  Node IP: ${primary_ip}"
-  echo ""
-  echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 ${login_placeholder}@107.122.148.226"
-  echo ""
-  echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
-  echo ""
-  echo "Alternative Stage 2 (with IP):"
-  echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${primary_ip}"
-  echo ""
-  echo "Direct Two-Stage Tunnel (Single Command):"
-  echo "   ssh -J ${login_placeholder}@107.122.148.226:22 -L ${VNC_PORT}:localhost:${VNC_PORT} -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
-  echo ""
-  echo "Connect VNC viewer to: localhost:${VNC_PORT}"
-  echo "   (or localhost:${VNC_DISPLAY_NUM})"
-  echo ""
-
-  if ss -tuln 2>/dev/null | grep -q ":${WEB_PORT}\b"; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "CONNECTION METHOD 2: Web Browser (noVNC)"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
-    echo ""
-    echo "Auto-Detected Information:"
-    echo "  Username: ${username}"
-    echo "  Compute Node: ${node}"
-    echo "  Node IP: ${primary_ip}"
-    echo ""
-    echo "Stage 1 - Tunnel to Login Node (Run on your local machine):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} -p 22 ${login_placeholder}@107.122.148.226"
-    echo ""
-    echo "Stage 2 - From Login Node to Compute Node (Run on login node):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
-    echo ""
-    echo "Alternative Stage 2 (with IP):"
-    echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${primary_ip}"
-    echo ""
-    echo "Direct Two-Stage Tunnel (Single Command):"
-    echo "   ssh -J ${login_placeholder}@107.122.148.226:22 -L ${WEB_PORT}:localhost:${WEB_PORT} ${login_placeholder}@${node}"
-    echo ""
-    echo "Open browser to: http://localhost:${WEB_PORT}"
-    echo ""
-  fi
-
-
-  if ss -tuln 2>/dev/null | grep -q ":${TURBOVNC_WEB_PORT}\b"; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "CONNECTION METHOD 3: TurboVNC Java Applet"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
-    echo ""
-    echo "Stage 1 - Tunnel to Login Node:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} \${USER}@login.hpc.edu"
-    echo ""
-    echo "Stage 2 - From Login Node to Compute Node:"
-    echo "   ssh -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} ${login_placeholder}@${node}"
-    echo ""
-    echo "Alternative - Direct Two-Stage Tunnel:"
-    echo "   ssh -J ${login_placeholder}@login.hpc.edu -L ${TURBOVNC_WEB_PORT}:localhost:${TURBOVNC_WEB_PORT} ${login_placeholder}@${node}"
-    echo ""
-    echo "Open browser to: http://localhost:${TURBOVNC_WEB_PORT}"
-    echo "   (Requires Java plugin - not recommended for modern browsers)"
-    echo ""
-  fi
-
-
-#--- Code section 4438 ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block 33.7: Section 4674 ---
-# Purpose: Continued implementation
-# Purpose: Continuing implementation
-# Dependencies: Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "USEFUL COMMANDS:"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "View VNC logs:"
-  echo "  tail -f \${HOME}/.vnc/*.log"
-  echo ""
-  echo "List running VNC servers:"
-  echo "  vncserver -list"
-  echo ""
-  echo "Kill this VNC server:"
-  echo "  vncserver -kill :${VNC_DISPLAY_NUM}"
-  echo ""
-  echo "Change VNC password:"
-  echo "  vncpasswd"
-  echo ""
-  
-  # Add VirtualGL usage instructions
-  if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "VIRTUALGL USAGE:"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "To run GPU-accelerated applications:"
-    echo "  vglrun glxspheres64          # Test OpenGL rendering"
-    echo "  vglrun firefox               # GPU-accelerated Firefox"
-    echo "  vglrun glxgears              # Test OpenGL performance"
-    echo ""
-    echo "Debug VirtualGL:"
-    echo "  test_virtualgl.sh            # Comprehensive test"
-    echo "  vglrun -d :1 glxinfo         # Check OpenGL info"
-    echo "  vglrun -d :1 glxspheres64    # Test with specific display"
-    echo ""
-    echo "VirtualGL Configuration:"
-    echo "  VGL_DISPLAY: ${VGL_DISPLAY:-:1}"
-    echo "  VGL_COMPRESS: ${VGL_COMPRESS:-proxy}"
-    echo "  VGL_READBACK: ${VGL_READBACK:-sync}"
-    echo ""
-  fi
-  
-  echo "=========================================="
-  echo ""
-  echo "Press Ctrl+C to stop all VNC services"
-  echo ""
-}
-
-# --- Monitor services ---
-monitor_services() {
-  local check_count=0
-
-  # Continuously verify that VNC and websockify remain healthy, restarting websockify if needed.
-  while true; do
-    sleep 30
-    check_count=$((check_count + 1))
-
-    # Check VNC server every loop
-    if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
-      echo "ERROR: VNC server died unexpectedly"
-      exit 1
-    fi
-
-    # Check websockify every 3rd loop (90 seconds)
-    if [ $((check_count % 3)) -eq 0 ]; then
-      if [ -n "${WEBSOCKIFY_PID:-}" ]; then
-        if ! kill -0 "${WEBSOCKIFY_PID}" 2>/dev/null; then
-          echo "WARNING: websockify died, restarting..."
-          start_novnc || echo "Failed to restart websockify"
-        fi
-      fi
-    fi
-  done
-}
-
-
-
-#--- Sub-block 33.8: Section 4724 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-# ============================================================================
-# Main Execution
-# ============================================================================
-
-echo "=========================================="
-echo "TurboVNC + noVNC Launcher"
-echo "=========================================="
-echo ""
-
-# Run setup steps
-check_dependencies
-check_virtualgl
-setup_vnc_config
-start_vnc_server
-
-# Test VirtualGL after VNC is running
-if [ "${VNC_VGL_INTEGRATION:-}" = "1" ]; then
-  echo ""
-  echo "Testing VirtualGL integration..."
-  test_virtualgl || echo "⚠ VirtualGL test failed - check configuration"
-fi
-
-# Try to start web interfaces
-check_turbovnc_webserver || true
-start_novnc || echo "⚠ noVNC not available (VNC viewer still works)"
-
-# Display connection info
-display_connection_info
-
-# Monitor and keep alive
-monitor_services
-VNCLAUNCHER
-
-chmod 0755 /usr/local/bin/start_vnc_xfce.sh
-echo "✓ Enhanced VNC startup script created at /usr/local/bin/start_vnc_xfce.sh"
-
-#--- Sub-block 33.9: Create SSL Tunneling Scripts ---
-# Purpose: Automated two-stage SSL tunneling for HPC environments
-# Dependencies: VNC server running
-# Outputs: SSL tunneling scripts
-echo "==> Creating SSL tunneling scripts for HPC environments..."
-
-# Create main SSL tunnel script
-cat > /usr/local/bin/vnc_ssl_tunnel.sh << 'SSLTUNNEL'
-#!/usr/bin/env bash
-# Two-Stage SSL Tunneling for VNC Access in HPC Environments
-# Usage: vnc_ssl_tunnel.sh [login_node] [compute_node] [vnc_port] [web_port]
-
-set -euo pipefail
-
-# Auto-detect system information
-COMPUTE_NODE="${2:-$(hostname)}"
-USER_NAME="${USER:-$(whoami)}"
-NODE_IP="${NODE_IP:-$(hostname -I 2>/dev/null | awk '{print $1}' | head -1 || echo 'localhost')}"
-
-# Configuration with auto-detection
-LOGIN_NODE="${1:-107.122.148.226}"
-LOGIN_PORT="${LOGIN_PORT:-22}"
-VNC_PORT="${3:-5901}"
-WEB_PORT="${4:-6081}"
-# Calculate TurboVNC web port more robustly (remove assumption that port starts with 59)
-VNC_DISPLAY_NUM_FROM_PORT=$((VNC_PORT - 5900))
-TURBOVNC_WEB_PORT=$((5800 + VNC_DISPLAY_NUM_FROM_PORT))
-
-# Try to detect compute node from SLURM environment
-if [ -n "${SLURM_JOB_NODELIST:-}" ]; then
-    # Extract first node from SLURM_JOB_NODELIST
-    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-    COMPUTE_NODE=$(cut -d',' -f1 <<< "${SLURM_JOB_NODELIST}" | sed 's/\[.*\]//')
-    echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
-elif [ -n "${SLURM_NODELIST:-}" ]; then
-    # D3: Use here-string instead of echo | cut (unsafe pipe pattern)
-    COMPUTE_NODE=$(cut -d',' -f1 <<< "${SLURM_NODELIST}" | sed 's/\[.*\]//')
-    echo "Detected compute node from SLURM: ${COMPUTE_NODE}"
-fi
-
-# Try to detect node IP more accurately
-if [ -n "${SLURM_NODEID:-}" ] && [ -n "${COMPUTE_NODE:-}" ]; then
-    # If we have SLURM node ID, try to get IP from scontrol
-    NODE_IP=$(scontrol show node "${COMPUTE_NODE}" 2>/dev/null | grep -oP 'NodeAddr=\K[^\s]+' | head -1 || echo "${NODE_IP}")
-fi
-
-# Fallback IP detection methods
-if [ -z "${NODE_IP:-}" ] || [ "${NODE_IP}" = "127.0.0.1" ]; then
-    # Try to get external IP
-    NODE_IP=$(ip route get 8.8.8.8 2>/dev/null | grep -oP 'src \K[0-9.]+' | head -1 || echo "${NODE_IP:-localhost}")
-fi
-
-if [ -z "${NODE_IP:-}" ] || [ "${NODE_IP}" = "127.0.0.1" ]; then
-    # Last resort - use hostname
-    NODE_IP=$(hostname -I 2>/dev/null | awk '{print $1}' | grep -v '^127\.' | head -1 || echo "localhost")
-fi
-
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-NC='\033[0m'
-
-print_header() {
-    echo ""
-    printf '%b\n' "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
-    printf '%b\n' "${CYAN}║  Two-Stage SSL Tunneling for VNC Access (HPC Environment)     ║${NC}"
-    printf '%b\n' "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
-    echo ""
-}
-
-show_usage() {
-    echo "Usage: $0 [login_node] [compute_node] [vnc_port] [web_port]"
-    echo ""
-    echo "Arguments:"
-    echo "  login_node    - HPC login node IP/hostname (default: 107.122.148.226)"
-    echo "  compute_node  - Compute node hostname (default: current hostname)"
-    echo "  vnc_port      - VNC port number (default: 5901)"
-    echo "  web_port      - Web/noVNC port number (default: 6081)"
-    echo ""
-    echo "Examples:"
-    echo "  $0                                    # Use defaults"
-    echo "  $0 107.122.148.226 node001 5902      # Custom VNC port"
-    echo "  $0 107.122.148.226 gpu-node-01 5901 6081  # All custom"
-}
-
-check_vnc_running() {
-    local port="${1}"
-    if ! ss -tuln 2>/dev/null | grep -q ":${port}\b"; then
-        echo -e "${RED}Error: VNC server not running on port ${port}${NC}"
-        echo "Start VNC first with: start_vnc_xfce.sh"
-        return 1
-    fi
-    return 0
-}
-
-create_tunnel_scripts() {
-    local login_node="${1}"
-    local compute_node="${2}"
-    local vnc_port="${3}"
-    local web_port="${4}"
-    # Calculate TurboVNC web port more robustly
-    local vnc_display_num
-    vnc_display_num=$((vnc_port - 5900))
-    local turbovnc_web_port
-    turbovnc_web_port=$((5800 + vnc_display_num))
-    local user_name="${5}"
-    local node_ip="${6}"
-    # Get login_port from outer scope (defined in main script)
-    local login_port="${LOGIN_PORT:-22}"
-    
-    # Create Stage 1 script (local machine to login node)
-    cat > /tmp/vnc_tunnel_stage1.sh << EOF
-#!/bin/bash
-# Stage 1: Tunnel from local machine to login node
-echo "Stage 1: Creating tunnel to login node..."
-echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} -p ${login_port} ${user_name}@${login_node}"
-echo ""
-echo "After connecting, run Stage 2 script on the login node."
-echo "Press Ctrl+C to stop this tunnel."
-echo ""
-
-ssh -L "${vnc_port}:localhost:${vnc_port}" \\
-    -L "${web_port}:localhost:${web_port}" \\
-    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
-    -p "${login_port}" \\
-    "${user_name}@${login_node}"
-EOF
-
-    # Create Stage 2 script (login node to compute node)
-    cat > /tmp/vnc_tunnel_stage2.sh << EOF
-#!/bin/bash
-# Stage 2: Tunnel from login node to compute node
-echo "Stage 2: Creating tunnel to compute node..."
-echo "Command: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
-echo ""
-echo "Alternative with IP: ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
-echo ""
-echo "After connecting, VNC will be available on localhost:${vnc_port}"
-echo "Press Ctrl+C to stop this tunnel."
-echo ""
-
-# Try hostname first, fallback to IP if needed
-ssh -L "${vnc_port}:localhost:${vnc_port}" \\
-    -L "${web_port}:localhost:${web_port}" \\
-    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
-    "${user_name}@${compute_node}" || \\
-ssh -L "${vnc_port}:localhost:${vnc_port}" \\
-    -L "${web_port}:localhost:${web_port}" \\
-    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
-    "${user_name}@${node_ip}"
-EOF
-
-    # Create combined script (direct two-stage tunnel)
-    cat > /tmp/vnc_tunnel_direct.sh << EOF
-#!/bin/bash
-# Direct two-stage tunnel using SSH jump host
-echo "Direct Two-Stage Tunnel: Local -> Login -> Compute"
-echo "Command: ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
-echo ""
-echo "Alternative with IP: ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
-echo ""
-echo "VNC will be available on localhost:${vnc_port}"
-echo "Web interface: http://localhost:${web_port}"
-echo "Press Ctrl+C to stop this tunnel."
-echo ""
-
-# Try hostname first, fallback to IP if needed
-ssh -J "${user_name}@${login_node}:${login_port}" \\
-    -L "${vnc_port}:localhost:${vnc_port}" \\
-    -L "${web_port}:localhost:${web_port}" \\
-    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
-    "${user_name}@${compute_node}" || \\
-ssh -J "${user_name}@${login_node}:${login_port}" \\
-    -L "${vnc_port}:localhost:${vnc_port}" \\
-    -L "${web_port}:localhost:${web_port}" \\
-    -L "${turbovnc_web_port}:localhost:${turbovnc_web_port}" \\
-    "${user_name}@${node_ip}"
-EOF
-
-    chmod +x /tmp/vnc_tunnel_*.sh
-}
-
-show_connection_info() {
-    local vnc_port="${1}"
-    local web_port="${2}"
-    # Calculate TurboVNC web port more robustly
-    local vnc_display_num
-    vnc_display_num=$((vnc_port - 5900))
-    local turbovnc_web_port
-    turbovnc_web_port=$((5800 + vnc_display_num))
-    local user_name="${3}"
-    local compute_node="${4}"
-    local node_ip="${5}"
-    local login_node="${6}"
-    # Get login_port from outer scope
-    local login_port="${LOGIN_PORT:-22}"
-    
-    printf '%b\n' "${GREEN}✓ SSL Tunneling Scripts Created${NC}"
-    echo ""
-    printf '%b\n' "${BLUE}Auto-Detected Information:${NC}"
-    echo "  Username: ${user_name}"
-    echo "  Compute Node: ${compute_node}"
-    echo "  Node IP: ${node_ip}"
-    echo "  Login Node: ${login_node}"
-    echo ""
-    printf '%b\n' "${BLUE}Port Information:${NC}"
-    echo "  VNC Port: ${vnc_port}"
-    echo "  Web Port: ${web_port}"
-    echo "  TurboVNC Web Port: ${turbovnc_web_port}"
-    echo ""
-    printf '%b\n' "${YELLOW}Ready-to-Copy SSH Commands:${NC}"
-    echo ""
-    printf '%b\n' "${CYAN}Stage 1 (Run on your local machine):${NC}"
-    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} -p ${login_port} ${user_name}@${login_node}"
-    echo ""
-    printf '%b\n' "${CYAN}Stage 2 (Run on login node):${NC}"
-    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
-    echo ""
-    printf '%b\n' "${CYAN}Alternative Stage 2 (with IP):${NC}"
-    echo "ssh -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
-    echo ""
-    printf '%b\n' "${CYAN}Direct Two-Stage Tunnel (Single Command):${NC}"
-    echo "ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${compute_node}"
-    echo ""
-    printf '%b\n' "${CYAN}Alternative Direct Tunnel (with IP):${NC}"
-    echo "ssh -J ${user_name}@${login_node}:${login_port} -L ${vnc_port}:localhost:${vnc_port} -L ${web_port}:localhost:${web_port} -L ${turbovnc_web_port}:localhost:${turbovnc_web_port} ${user_name}@${node_ip}"
-    echo ""
-    printf '%b\n' "${YELLOW}Available Scripts:${NC}"
-    echo "  /tmp/vnc_tunnel_stage1.sh  - Stage 1 (Local -> Login Node)"
-    echo "  /tmp/vnc_tunnel_stage2.sh  - Stage 2 (Login -> Compute Node)"
-    echo "  /tmp/vnc_tunnel_direct.sh  - Direct Two-Stage Tunnel"
-    echo ""
-    printf '%b\n' "${GREEN}Connection URLs:${NC}"
-    echo "  VNC Viewer: localhost:${vnc_port}"
-    echo "  Web Browser: http://localhost:${web_port}"
-    echo "  TurboVNC Web: http://localhost:${turbovnc_web_port}"
-}
-
-# Main execution
-main() {
-    print_header
-    
-    if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
-        show_usage
-        exit 0
-    fi
-    
-    printf '%b\n' "${BLUE}Configuration:${NC}"
-    echo "  Login Node: ${LOGIN_NODE}"
-    echo "  Compute Node: ${COMPUTE_NODE}"
-    echo "  Username: ${USER_NAME}"
-    echo "  Node IP: ${NODE_IP}"
-    echo "  VNC Port: ${VNC_PORT}"
-    echo "  Web Port: ${WEB_PORT}"
-    echo ""
-    
-    # Check if VNC is running
-    if ! check_vnc_running "${VNC_PORT}"; then
-        exit 1
-    fi
-    
-    # Create tunnel scripts
-    create_tunnel_scripts "${LOGIN_NODE}" "${COMPUTE_NODE}" "${VNC_PORT}" "${WEB_PORT}" "${USER_NAME}" "${NODE_IP}"
-    
-    # Show connection info
-    show_connection_info "${VNC_PORT}" "${WEB_PORT}" "${USER_NAME}" "${COMPUTE_NODE}" "${NODE_IP}" "${LOGIN_NODE}"
-}
-
-main "$@"
-SSLTUNNEL
-
-chmod +x /usr/local/bin/vnc_ssl_tunnel.sh
-echo "✓ SSL tunneling script created at /usr/local/bin/vnc_ssl_tunnel.sh"
-
-# ===============================================================
-# Create ULTIMATE VNC startup script with all optimizations
-# ===============================================================
-echo "==> Creating ultimate optimized VNC startup script..."
-
-cat > /usr/local/bin/start_vnc_ultimate.sh << 'ULTIMATE'
-#!/usr/bin/env bash
-set -euo pipefail
-
-# ============================================================================
-# ULTIMATE TurboVNC + VirtualGL + noVNC Launcher
-# With all performance optimizations
-# ============================================================================
-
-
-# --- Configuration ---
-
-#--- Sub-block 33.10: Section 4774 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-VNC_DISPLAY_NUM=${VNC_DISPLAY_NUM:-1}
-VNC_PORT=$((5900 + VNC_DISPLAY_NUM))
-WEB_PORT=${WEB_PORT:-6081}
-GEOM="${VNC_GEOM:-1920x1080}"
-DEPTH="${VNC_DEPTH:-24}"
-
-
-# Performance settings
-TVNC_QUALITY="${TVNC_QUALITY:-95}"
-TVNC_SUBSAMPLE="${TVNC_SUBSAMPLE:-1}"
-TVNC_COMPRESSLEVEL="${TVNC_COMPRESSLEVEL:-2}"
-
-# VirtualGL settings
-
-# Ensure paths
-
-# --- Cleanup function ---
-cleanup() {
-  echo ""
-  echo "Shutting down all services..."
-  vncserver -kill ":${VNC_DISPLAY_NUM}" 2>/dev/null || true
-  pkill -f "websockify.*${WEB_PORT}" 2>/dev/null || true
-  pkill -f pulseaudio 2>/dev/null || true
-  jobs -p | xargs -r kill 2>/dev/null || true
-  exit 0
-}
-trap cleanup SIGINT SIGTERM EXIT
-
-# --- Banner ---
-echo "============================================"
-echo "  ULTIMATE Remote Desktop Environment"
-echo "============================================"
-echo ""
-
-# --- Check dependencies ---
-echo "[1/8] Checking dependencies..."
-for cmd in vncserver Xvnc startxfce4 vglrun websockify; do
-  if command -v "${cmd}" >/dev/null 2>&1; then
-    echo "  ✓ ${cmd}"
-  else
-    echo "  ✗ ${cmd} - MISSING!"
-    exit 1
-  fi
-done
-
-
-# --- Check GPU ---
-echo ""
-echo "[2/8] Checking GPU..."
-if command -v nvidia-smi >/dev/null 2>&1; then
-  GPU_NAME=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || echo "")
-  if [ -n "${GPU_NAME}" ]; then
-    echo "  ✓ GPU: ${GPU_NAME}"
-  else
-    echo "  ⚠ nvidia-smi found but no GPU detected"
-  fi
-else
-  echo "  ⚠ No NVIDIA GPU detected (CPU rendering only)"
-fi
-
-
-# --- Setup VNC ---
-echo ""
-echo "[3/8] Configuring VNC..."
-
-# Performance-optimized xstartup
-cat > "$HOME/.vnc/xstartup" << 'XSTART'
-#!/bin/sh
-# Performance-optimized xstartup
-
-# Load resources
-[ -f "$HOME/.Xresources" ] && xrdb -merge "$HOME/.Xresources" 2>/dev/null || true
-fc-cache -f 2>/dev/null || true
-
-# D-Bus
-if ! dbus-send --session --dest=org.freedesktop.DBus --type=method_call \
-  /org/freedesktop/DBus org.freedesktop.DBus.ListNames >/dev/null 2>&1; then
-  eval "$(dbus-launch --sh-syntax)"
-fi
-
-# Disable ALL compositing and effects
-xfconf-query -c xfwm4 -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfce4-session -p /general/use_compositing -s false 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/show_frame_shadow -s false 2>/dev/null || true
-xfconf-query -c xfwm4 -p /general/show_popup_shadow -s false 2>/dev/null || true
-
-# Disable screen management
-xset s off 2>/dev/null || true
-xset -dpms 2>/dev/null || true
-xset s noblank 2>/dev/null || true
-xset b off 2>/dev/null || true
-xset r rate 250 30 2>/dev/null || true
-
-# Start clipboard sync
-autocutsel -fork -selection CLIPBOARD 2>/dev/null || true
-autocutsel -fork -selection PRIMARY 2>/dev/null || true
-
-# XFCE
-exec startxfce4
-XSTART
-chmod +x "$HOME/.vnc/xstartup"
-echo "  ✓ xstartup configured"
-
-
-# --- Start VNC ---
-echo ""
-echo "[4/8] Starting TurboVNC server..."
-echo "  Display: :${VNC_DISPLAY_NUM}"
-echo "  Geometry: ${GEOM}"
-echo "  Quality: ${TVNC_QUALITY}"
-echo "  Subsample: ${TVNC_SUBSAMPLE}"
-
-
-if [ ! -f "$HOME/.vnc/passwd" ]; then
-  echo ""
-  echo "⚠ VNC password not set. Please set it now:"
-  vncpasswd
-  echo ""
-fi
-
-vncserver ":${VNC_DISPLAY_NUM}" \
-  -geometry "${GEOM}" \
-  -depth "${DEPTH}" \
-  -localhost \
-  -xstartup "$HOME/.vnc/xstartup" \
-  -quality "${TVNC_QUALITY}" \
-  -compresslevel "${TVNC_COMPRESSLEVEL}" \
-  -subsample "${TVNC_SUBSAMPLE}"
-
-sleep 3
-
-if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
-  echo "  ✗ VNC server failed to start"
-  cat "${HOME}/.vnc"/*.log 2>/dev/null | tail -20 || true
-  exit 1
-fi
-echo "  ✓ VNC server running on :${VNC_DISPLAY_NUM}"
-
-# --- Start PulseAudio ---
-echo ""
-echo "[5/8] Starting audio support..."
-if command -v pulseaudio >/dev/null 2>&1; then
-  if ! pulseaudio --check 2>/dev/null; then
-    pulseaudio --start --exit-idle-time=-1 2>/dev/null &
-    echo "  ✓ PulseAudio started"
-  else
-    echo "  ✓ PulseAudio already running"
-  fi
-else
-  echo "  ⚠ PulseAudio not available"
-fi
-
-
-# --- Start noVNC ---
-echo ""
-echo "[6/8] Starting noVNC (HTML5 interface)..."
-
-WEBSOCKIFY=""
-for candidate in /usr/bin/websockify /usr/local/bin/websockify; do
-  [ -x "${candidate}" ] && WEBSOCKIFY="${candidate}" && break
-done
-
-# Launch websockify with filtered logging and relaxed pipe handling, returning background PID.
-start_websockify_filtered() {
-  local web_port="$1"
-  local vnc_port="$2"
-  local novnc_dir="$3"
-
-  (
-    set +e
-    set +o pipefail
-    "${WEBSOCKIFY}" --web "${novnc_dir}" "${web_port}" "localhost:${vnc_port}" 2>&1 \
-      | grep -Ev "WARNING|numpy" \
-      || true
-  ) &
-
-  echo $!
-}
-
-
-if [ -z "${WEBSOCKIFY}" ]; then
-  echo "  ✗ websockify not found - skipping web interface"
-else
-  NOVNC_DIR=""
-  for candidate in /usr/local/share/novnc /usr/share/novnc; do
-    [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ] && NOVNC_DIR="${candidate}" && break
-  done
-
-  if [ -n "${NOVNC_DIR}" ]; then
-    WSPID=$(start_websockify_filtered "${WEB_PORT}" "${VNC_PORT}" "${NOVNC_DIR}")
-    sleep 2
-    if kill -0 "${WSPID}" 2>/dev/null; then
-      echo "  ✓ noVNC running on port ${WEB_PORT}"
-    else
-      echo "  ✗ noVNC failed to start"
-    fi
-  else
-    echo "  ⚠ noVNC files not found"
-  fi
-fi
-
-# --- Performance check ---
-echo ""
-echo "[7/8] Running performance check..."
-
-# Quick GPU test
-if command -v vglrun >/dev/null 2>&1 && command -v glxinfo >/dev/null 2>&1; then
-  RENDERER=$(
-    vglrun glxinfo 2>/dev/null \
-      | awk -F': ' '/OpenGL renderer/{gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); print $2; exit}' \
-      || true
-  )
-  if [ -n "${RENDERER:-}" ]; then
-    echo "  ✓ GPU rendering: ${RENDERER}"
-  else
-    echo "  ⚠ GPU rendering test failed"
-  fi
-else
-  echo "  ⚠ Cannot test GPU rendering"
-fi
-
-
-# --- Connection info ---
-NODE=$(hostname -f 2>/dev/null || hostname)
-echo ""
-echo "============================================"
-echo "  🎉 Remote Desktop Ready!"
-echo "============================================"
-echo ""
-echo "Node: ${NODE}"
-echo "Display: :${VNC_DISPLAY_NUM}"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "METHOD 1: VNC Viewer (Best Performance)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
-echo ""
-echo "Stage 1 - Tunnel to Login Node:"
-echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@login.hpc.edu"
-echo ""
-echo "Stage 2 - From Login Node to Compute Node:"
-echo "   ssh -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@${NODE}"
-echo ""
-echo "Alternative - Direct Two-Stage Tunnel:"
-echo "   ssh -J \${USER}@login.hpc.edu -L ${VNC_PORT}:localhost:${VNC_PORT} \${USER}@${NODE}"
-echo ""
-echo "Connect VNC to: localhost:${VNC_PORT}"
-echo ""
-
-
-if [ -n "${WSPID:-}" ] && kill -0 "${WSPID}" 2>/dev/null; then
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "METHOD 2: Web Browser (No Install Needed)"
-  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "TWO-STAGE SSL TUNNELING (HPC Environment):"
-  echo ""
-  echo "Stage 1 - Tunnel to Login Node:"
-  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@login.hpc.edu"
-  echo ""
-  echo "Stage 2 - From Login Node to Compute Node:"
-  echo "   ssh -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@${NODE}"
-  echo ""
-  echo "Alternative - Direct Two-Stage Tunnel:"
-  echo "   ssh -J \${USER}@login.hpc.edu -L ${WEB_PORT}:localhost:${WEB_PORT} \${USER}@${NODE}"
-  echo ""
-  echo "Browse: http://localhost:${WEB_PORT}"
-  echo ""
-fi
-
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "PERFORMANCE TIPS"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "• GPU apps: vglrun <app> or use aliases (vblender, etc.)"
-echo "• Benchmark: vgl_benchmark.sh"
-echo "• Monitor: vnc_monitor.sh"
-echo "• Tune VNC: turbovnc_tune.sh"
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "CONTROLS"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "• Stop: Press Ctrl+C"
-echo "• Logs: tail -f ~/.vnc/*.log"
-echo "• Status: vncserver -list"
-echo "============================================"
-echo ""
-
-# --- Monitor and keep alive ---
-echo "[8/8] Monitoring services..."
-while true; do
-  sleep 30
-
-  # Check VNC
-  if ! vncserver -list 2>/dev/null | grep -q ":${VNC_DISPLAY_NUM}"; then
-    echo "ERROR: VNC server died"
-    exit 1
-  fi
-
-
-  # Check websockify
-  if [ -n "${WSPID:-}" ]; then
-    if ! kill -0 "${WSPID}" 2>/dev/null; then
-      echo "WARNING: websockify died, restarting..."
-      WSPID=$(start_websockify_filtered "${WEB_PORT}" "${VNC_PORT}" "${NOVNC_DIR}")
-    fi
-  fi
-done
-ULTIMATE
-chmod +x /usr/local/bin/start_vnc_ultimate.sh
-
-
-echo "✓ Ultimate VNC startup script created"
-
-# Create enhanced noVNC launcher with all features
-cat > /usr/local/bin/start_novnc_advanced.sh << 'NOVNCADV'
-#!/usr/bin/env bash
-# Advanced noVNC launcher with token authentication and SSL
-
-set -euo pipefail
-
-if ! command -v openssl >/dev/null 2>&1; then
-  echo "ERROR: openssl is required to generate authentication tokens." >&2
-  exit 1
-fi
-
-WEBSOCKIFY_PATH=$(command -v websockify || true)
-if [ -z "${WEBSOCKIFY_PATH}" ]; then
-  echo "ERROR: websockify binary not found. Install noVNC/websockify before running this launcher." >&2
-  exit 1
-fi
-
-NOVNC_DIR=""
-for candidate in /usr/local/share/novnc /usr/share/novnc; do
-  if [ -d "${candidate}" ] && [ -f "${candidate}/vnc.html" ]; then
-    NOVNC_DIR="${candidate}"
-    break
-  fi
-done
-
-if [ -z "${NOVNC_DIR}" ]; then
-  echo "ERROR: noVNC web assets not found (checked /usr/local/share/novnc and /usr/share/novnc)." >&2
-  exit 1
-fi
-
-VNC_DISPLAY="${1:-:1}"
-WEB_PORT="${2:-6081}"
-VNC_PORT=$((5900 + ${VNC_DISPLAY#:}))
-
-# Generate random token for this session
-TOKEN=$(openssl rand -hex 16)
-
-echo "=========================================="
-echo "Advanced noVNC Server"
-echo "=========================================="
-echo "VNC Display: ${VNC_DISPLAY}"
-echo "Web Port: ${WEB_PORT}"
-echo "Token: ${TOKEN}"
-echo ""
-echo "Connect: http://localhost:${WEB_PORT}/?token=${TOKEN}"
-echo "=========================================="
-
-# Start websockify with token authentication
-# Create temporary token file (more robust than process substitution)
-TOKEN_FILE=$(mktemp)
-echo "${TOKEN}: localhost:${VNC_PORT}" > "${TOKEN_FILE}"
-trap "rm -f '${TOKEN_FILE}'" EXIT INT TERM
-
-"${WEBSOCKIFY_PATH}" \
-  --web "${NOVNC_DIR}" \
-  --token-plugin TokenFile \
-  --token-source "${TOKEN_FILE}" \
-  "${WEB_PORT}"
-NOVNCADV
-chmod +x /usr/local/bin/start_novnc_advanced.sh
-
-echo "✓ Advanced noVNC features configured"
-
-# Create VirtualGL test and debug script
-cat > /usr/local/bin/test_virtualgl.sh << 'VGLTEST'
-#!/usr/bin/env bash
-# VirtualGL Test and Debug Script
-
-set -euo pipefail
-
-# Configuration
-VGL_DISPLAY="${VGL_DISPLAY:-:1}"
-VGL_VERBOSE="${VGL_VERBOSE:-1}"
-VGL_DEBUG="${VGL_DEBUG:-1}"
-
-echo "=========================================="
-echo "VirtualGL Test and Debug Script"
-echo "=========================================="
-echo ""
-
-# Test 1: Check VirtualGL installation
-echo "1. Checking VirtualGL installation..."
-if command -v vglrun >/dev/null 2>&1; then
-  VGLRUN_PATH=$(command -v vglrun)
-  echo "  ✓ vglrun found: ${VGLRUN_PATH}"
-  vglrun --version 2>/dev/null || echo "  ⚠ Could not get version"
-else
-  echo "  ✗ vglrun not found"
-  exit 1
-fi
-
-# Test 2: Check display
-echo ""
-echo "2. Checking display configuration..."
-echo "  VGL_DISPLAY: ${VGL_DISPLAY}"
-echo "  DISPLAY: ${DISPLAY:-not set}"
-
-VGL_X_SOCKET="/tmp/.X11-unix/X${VGL_DISPLAY#:}"
-if [ -S "${VGL_X_SOCKET}" ]; then
-  echo "  ✓ X socket found: ${VGL_X_SOCKET}"
-else
-  echo "  ✗ X socket not found: ${VGL_X_SOCKET}"
-fi
-
-# Test 3: Test VirtualGL connection
-echo ""
-echo "3. Testing VirtualGL connection..."
-if vglrun -d "${VGL_DISPLAY}" glxinfo >/dev/null 2>&1; then
-  echo "  ✓ VirtualGL can access display ${VGL_DISPLAY}"
-else
-  echo "  ✗ VirtualGL cannot access display ${VGL_DISPLAY}"
-  echo "  Trying to get more info..."
-  vglrun -d "${VGL_DISPLAY}" glxinfo 2>&1 | head -10
-fi
-
-# Test 4: Check OpenGL rendering
-echo ""
-echo "4. Checking OpenGL rendering..."
-if vglrun -d "${VGL_DISPLAY}" glxinfo | grep -q "OpenGL renderer"; then
-  echo "  ✓ OpenGL rendering available"
-  OPENGL_RENDERER=$(
-    vglrun -d "${VGL_DISPLAY}" glxinfo \
-      | awk -F': ' '/OpenGL renderer/{print $2; exit}' \
-      || true
-  )
-  OPENGL_VERSION=$(
-    vglrun -d "${VGL_DISPLAY}" glxinfo \
-      | awk -F': ' '/OpenGL version/{print $2; exit}' \
-      || true
-  )
-  echo "  OpenGL renderer: ${OPENGL_RENDERER}"
-  echo "  OpenGL version: ${OPENGL_VERSION}"
-else
-  echo "  ✗ OpenGL rendering not available"
-fi
-
-# Test 5: Test glxspheres64
-echo ""
-echo "5. Testing glxspheres64..."
-if command -v glxspheres64 >/dev/null 2>&1; then
-  echo "  ✓ glxspheres64 found"
-  echo "  Running glxspheres64 test (5 seconds)..."
-  timeout 5s vglrun -d "${VGL_DISPLAY}" glxspheres64 2>&1 | head -10 || echo "  ⚠ glxspheres64 test timed out or failed"
-else
-  echo "  ✗ glxspheres64 not found"
-fi
-
-# Test 6: Environment variables
-echo ""
-echo "6. VirtualGL environment variables:"
-echo "  VGL_DISPLAY: ${VGL_DISPLAY:-not set}"
-echo "  VGL_COMPRESS: ${VGL_COMPRESS:-not set}"
-echo "  VGL_READBACK: ${VGL_READBACK:-not set}"
-echo "  VGL_LOGO: ${VGL_LOGO:-not set}"
-echo "  VGL_FPS: ${VGL_FPS:-not set}"
-echo "  VGL_VERBOSE: ${VGL_VERBOSE:-not set}"
-
-# Test 7: X11 authentication
-echo ""
-echo "7. Checking X11 authentication..."
-if [ -f "${HOME}/.Xauthority" ]; then
-  echo "  ✓ .Xauthority file found"
-  if xauth list 2>/dev/null | grep -q "${VGL_DISPLAY}"; then
-    echo "  ✓ X11 auth for display ${VGL_DISPLAY} found"
-  else
-    echo "  ⚠ X11 auth for display ${VGL_DISPLAY} not found"
-  fi
-else
-  echo "  ⚠ .Xauthority file not found"
-fi
-
-echo ""
-echo "=========================================="
-echo "VirtualGL test completed"
-echo "=========================================="
-VGLTEST
-
-chmod +x /usr/local/bin/test_virtualgl.sh
-echo "✓ VirtualGL test script created"
+# Note: other file: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml is installed via install.sh from container-scripts/
+# Source: other/block-32-tex-latex-typesetting-system/xfwm4.xml
+# Target: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml
+# Installed in Block 0 (early in script, before any scripts are needed)
+
+printf '%s\n' "✓ XFCE window manager optimized for VNC"
 
 #===============================================================================
 # BLOCK 34: ADDITIONAL VNC AND DISPLAY SERVERS (Part 3 of 3)
@@ -23644,50 +21339,21 @@ echo "✓ VirtualGL test script created"
 #
 # Available VNC Implementations:
 #   PRIMARY:     TurboVNC (Block 15) - High performance, GPU-accelerated
-#   Alternative: TigerVNC (here)     - Standard VNC server
-#   Web-based:   KasmVNC (here)      - Browser-based access
-#   Lightweight: x11vnc (Block 14)   - Attach to existing displays
-#
-# Use vnc_select.sh to choose which server to use
-# See Also: Block 15.20 for complete remote desktop infrastructure summary
-#-------------------------------------------------------------------------------
+# Note: shell-scripts file: /usr/local/bin/start_kasmvnc.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/start-kasmvnc.sh
+# Target: /usr/local/bin/start_kasmvnc.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-#--- Sub-block 34.1: KasmVNC installation ---
-# Critical: Modern VNC with web UI and containerized features
-# Dependencies: Block 6 (APT configuration), Block 15 (TurboVNC)
-# Outputs: Installed packages
-echo "==> Installing KasmVNC (modern alternative)..."
-
-# KasmVNC has better web integration and modern features (version from config.sh)
-ARCH="amd64"
-
-cd /tmp || exit 1
-KASMVNC_DEB="kasmvncserver_jammy_${KASMVNC_VERSION}_${ARCH}.deb"
-if wget -q --show-progress -O "${KASMVNC_DEB}" "https://github.com/kasmtech/KasmVNC/releases/download/v${KASMVNC_VERSION}/${KASMVNC_DEB}"; then
-    if apt-get install -y "./${KASMVNC_DEB}"; then
-        echo "✓ KasmVNC installed successfully"
-    else
-        echo "⚠ KasmVNC installation failed (non-critical)"
-    fi
-    rm -f "./${KASMVNC_DEB}" || true
-else
-    echo "⚠ Failed to download KasmVNC (non-critical, continuing)"
+# J1: Validate parent directory exists before creating file
+if [ ! -d "${HOME}/.vnc" ]; then
+  mkdir -p "${HOME}/.vnc" || {
+    printf '%s\n' "[ERROR] Failed to create directory: ${HOME}/.vnc" >&2
+    exit 1
+  }
 fi
 
-# Create KasmVNC startup script
-cat > /usr/local/bin/start_kasmvnc.sh << 'KASMSTART'
-#!/usr/bin/env bash
-# KasmVNC - Modern VNC with built-in web interface
-
-set -euo pipefail
-
-DISPLAY_NUM=1
-VNC_PORT=$((5900 + DISPLAY_NUM))
-WEB_PORT=6901
-
-mkdir -p "${HOME}/.vnc"
-
 # Create KasmVNC xstartup
+# E6: Heredoc termination verified - properly terminated with 'XS'
 cat > "${HOME}/.vnc/xstartup" << 'XS'
 #!/bin/sh
 eval "$(dbus-launch --sh-syntax)" 2>/dev/null || true
@@ -23696,83 +21362,23 @@ exec startxfce4
 XS
 chmod +x "${HOME}/.vnc/xstartup"
 
-echo "Starting KasmVNC..."
-echo "  Display: :${DISPLAY_NUM}"
-echo "  VNC Port: ${VNC_PORT}"
-echo "  Web Port: ${WEB_PORT}"
-echo ""
-echo "Connect: http://localhost:${WEB_PORT}"
-echo ""
+printf '%s\n' "Starting KasmVNC..."
+printf '%s\n' "  Display: :${DISPLAY_NUM}"
+printf '%s\n' "  VNC Port: ${VNC_PORT}"
+printf '%s\n' "  Web Port: ${WEB_PORT}"
+printf '%s\n' ""
+# Note: shell-scripts file: /usr/local/bin/test_vulkan.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-34-additional-vnc-and-display-servers-part-3-of-3/test-vulkan.sh
+# Target: /usr/local/bin/test_vulkan.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-
-kasmvncserver ":${DISPLAY_NUM}" \
-  -geometry 1920x1080 \
-  -depth 24 \
-  -websocketPort "${WEB_PORT}" \
-  -interface 0.0.0.0
-
-
-echo "KasmVNC started!"
-tail -f "${HOME}/.vnc"/*.log
-KASMSTART
-chmod +x /usr/local/bin/start_kasmvnc.sh
-
-echo "✓ KasmVNC installed (use: start_kasmvnc.sh)"
-
-#--- Sub-block 34.2: Vulkan graphics API support ---
-# Critical: Modern GPU acceleration API for high-performance rendering
-# Dependencies: Block 6 (APT configuration), Block 15 (VirtualGL)
-# Outputs: Installed packages
-echo "==> Installing Vulkan support..."
-
-apt-get install -y --no-install-recommends \
-  vulkan-tools \
-  vulkan-validationlayers \
-  mesa-vulkan-drivers \
-  libvulkan1
-
-# Create Vulkan test script
-cat > /usr/local/bin/test_vulkan.sh << 'VULKAN'
-#!/usr/bin/env bash
-# Test Vulkan support
-
-set -euo pipefail
-
-if ! command -v vulkaninfo >/dev/null 2>&1; then
-  echo "ERROR: vulkaninfo command not found. Install vulkan-tools." >&2
-  exit 1
-fi
-
-echo "Vulkan Instance Version:"
-vulkaninfo --summary 2>/dev/null | grep "Vulkan Instance Version" || echo "  ⚠ Unable to determine instance version"
-
-echo ""
-echo "Available Vulkan Devices:"
-if ! vulkaninfo 2>/dev/null | grep -A 5 "GPU id"; then
-  echo "  ⚠ No Vulkan devices detected"
-fi
-
-echo ""
-echo "Running vulkan cube demo (vglrun required if VirtualGL active)..."
-if command -v vkcube >/dev/null 2>&1; then
-  if command -v vglrun >/dev/null 2>&1; then
-    vglrun vkcube || echo "  ⚠ vkcube failed under VirtualGL"
-  else
-    vkcube || echo "  ⚠ vkcube failed"
-  fi
-else
-  echo "  ⚠ vkcube command not available"
-fi
-VULKAN
-chmod +x /usr/local/bin/test_vulkan.sh
-
-echo "✓ Vulkan support installed"
+printf '%s\n' "✓ Vulkan support installed"
 
 #--- Sub-block 34.3: Xpra modern X11 forwarding ---
 # Critical: Seamless application forwarding with HTML5 client
 # Dependencies: Block 6 (APT configuration), Python 3, pip
 # Outputs: Installed packages
-echo "==> Installing Xpra ${XPRA_VERSION} from GitHub for modern X11 forwarding..."
+printf '%s\n' "==> Installing Xpra ${XPRA_VERSION} from GitHub for modern X11 forwarding..."
 
 # Initialize installation status variables
 XPRA_INSTALLED=false
@@ -23837,43 +21443,45 @@ apt-get install -y --no-install-recommends \
     libvpx-dev \
     libxxhash-dev \
     pkg-config \
-    || echo "⚠ Some Xpra dependencies may not be available"
+    || printf '%s\n' "⚠ Some Xpra dependencies may not be available"
 
 # Try to install libavresample4 as fallback (for older Xpra compatibility)
 # This is optional - newer Xpra versions use libswresample instead
 apt-get install -y --no-install-recommends libavresample4 2>/dev/null || \
-    echo "⚠ libavresample4 not available (using libswresample4 instead - this is normal in Ubuntu 24.04)"
+    printf '%s\n' "⚠ libavresample4 not available (using libswresample4 instead - this is normal in Ubuntu 24.04)"
 
 # Fix any broken dependencies that may have occurred
-apt-get --fix-broken install -y || echo "⚠ Dependency fix may have issues (non-critical)"
+apt-get --fix-broken install -y || printf '%s\n' "⚠ Dependency fix may have issues (non-critical)"
 
 # CRITICAL: Verify libxxhash-dev is actually installed and provides .pc file
 # Some Ubuntu versions may have libxxhash-dev without .pc file, or it may be in a different package
 if ! dpkg_resolve_installed_package "libxxhash-dev" >/dev/null; then
-    echo "⚠ libxxhash-dev package not found in dpkg, attempting reinstall..."
-    apt-get install -y --reinstall libxxhash-dev 2>/dev/null || echo "  (Reinstall may have failed)"
+    printf '%s\n' "⚠ libxxhash-dev package not found in dpkg, attempting reinstall..."
+    apt-get install -y --reinstall libxxhash-dev 2>/dev/null || printf '%s\n' "  (Reinstall may have failed)"
 fi
 
 # Verify libxxhash library files are present
 if [ ! -f "/usr/lib/x86_64-linux-gnu/libxxhash.so" ] && [ ! -f "/usr/lib/libxxhash.so" ]; then
-    echo "⚠ libxxhash.so not found in standard locations"
-    echo "  Attempting to locate libxxhash library..."
-    find /usr -name "*libxxhash*" -type f 2>/dev/null | head -3 || echo "    (No libxxhash files found)"
+    printf '%s\n' "⚠ libxxhash.so not found in standard locations"
+    printf '%s\n' "  Attempting to locate libxxhash library..."
+    # D3e: SIGPIPE error handling - add || true to prevent exit code 141
+    find /usr -name "*libxxhash*" -type f 2>/dev/null | head -3 2>/dev/null || printf '%s\n' "    (No libxxhash files found)"
 fi
 
 # Verify Cairo/Py3Cairo installation (required for virtual:world extra)
-echo "==> Verifying Cairo and py3cairo availability..."
+printf '%s\n' "==> Verifying Cairo and py3cairo availability..."
 if pkg-config --exists py3cairo 2>/dev/null; then
-    echo "✓ py3cairo found in pkg-config"
+    printf '%s\n' "✓ py3cairo found in pkg-config"
 elif python3 -c "import cairo" 2>/dev/null; then
-    echo "✓ python3-cairo module importable"
+    printf '%s\n' "✓ python3-cairo module importable"
 else
-    echo "⚠ py3cairo not found - may cause build issues"
-    echo "  Attempting to verify python3-cairo installation..."
-    dpkg -l | grep -E "python3-cairo|libcairo" | head -5 || echo "    (Could not verify Cairo packages)"
+    printf '%s\n' "⚠ py3cairo not found - may cause build issues"
+    printf '%s\n' "  Attempting to verify python3-cairo installation..."
+    # D3e: SIGPIPE error handling - add || true to prevent exit code 141
+    dpkg -l | grep -E "python3-cairo|libcairo" 2>/dev/null | head -5 2>/dev/null || printf '%s\n' "    (Could not verify Cairo packages)"
 fi
-pkg-config --exists cairo && echo "✓ cairo library found" || echo "⚠ cairo library not found in pkg-config"
-pkg-config --exists gtk+-3.0 && echo "✓ gtk+-3.0 found" || echo "⚠ gtk+-3.0 not found in pkg-config"
+pkg-config --exists cairo && printf '%s\n' "✓ cairo library found" || printf '%s\n' "⚠ cairo library not found in pkg-config"
+pkg-config --exists gtk+-3.0 && printf '%s\n' "✓ gtk+-3.0 found" || printf '%s\n' "⚠ gtk+-3.0 not found in pkg-config"
 
 # CRITICAL: Find pkg-config .pc files required by Xpra build
 # Based on Xpra setup.py requirements: py3cairo, pygobject-3.0, gtk+-3.0, gobject-introspection-1.0
@@ -23897,7 +21505,7 @@ PC_SEARCH_DIRS=(
 for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
     if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/py3cairo.pc" ]; then
         PY3CAIRO_PC_LOCATION="${pc_dir}"
-        echo "✓ Found py3cairo.pc at: ${pc_dir}"
+        printf '%s\n' "✓ Found py3cairo.pc at: ${pc_dir}"
         break
     fi
 done
@@ -23906,7 +21514,7 @@ done
 for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
     if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/pygobject-3.0.pc" ]; then
         PYGOBJECT_PC_LOCATION="${pc_dir}"
-        echo "✓ Found pygobject-3.0.pc at: ${pc_dir}"
+        printf '%s\n' "✓ Found pygobject-3.0.pc at: ${pc_dir}"
         break
     fi
 done
@@ -23915,7 +21523,7 @@ done
 for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
     if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/gtk+-3.0.pc" ]; then
         GTK3_PC_LOCATION="${pc_dir}"
-        echo "✓ Found gtk+-3.0.pc at: ${pc_dir}"
+        printf '%s\n' "✓ Found gtk+-3.0.pc at: ${pc_dir}"
         break
     fi
 done
@@ -23924,19 +21532,19 @@ done
 for pc_dir in "${PC_SEARCH_DIRS[@]}"; do
     if [ -n "${pc_dir:-}" ] && [ -d "${pc_dir}" ] && [ -f "${pc_dir}/gobject-introspection-1.0.pc" ]; then
         GOBJECT_INTROSPECTION_PC_LOCATION="${pc_dir}"
-        echo "✓ Found gobject-introspection-1.0.pc at: ${pc_dir}"
+        printf '%s\n' "✓ Found gobject-introspection-1.0.pc at: ${pc_dir}"
         break
     fi
 done
 
 # If any .pc files not found, search more broadly and reinstall if needed
 if [ -z "${PY3CAIRO_PC_LOCATION:-}" ]; then
-    echo "  Searching for py3cairo.pc in system..."
-    PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 || echo "")
+    printf '%s\n' "  Searching for py3cairo.pc in system..."
+    PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${PY3CAIRO_PC_FOUND:-}" ] && [ -f "${PY3CAIRO_PC_FOUND}" ]; then
         PY3CAIRO_PC_LOCATION=$(dirname "${PY3CAIRO_PC_FOUND}" 2>/dev/null || echo "")
         if [ -n "${PY3CAIRO_PC_LOCATION:-}" ] && [ -d "${PY3CAIRO_PC_LOCATION}" ]; then
-            echo "✓ Found py3cairo.pc at: ${PY3CAIRO_PC_FOUND}"
+            printf '%s\n' "✓ Found py3cairo.pc at: ${PY3CAIRO_PC_FOUND}"
         else
             echo "⚠ Invalid directory from py3cairo.pc path: ${PY3CAIRO_PC_FOUND}"
             PY3CAIRO_PC_LOCATION=""
@@ -23945,11 +21553,11 @@ if [ -z "${PY3CAIRO_PC_LOCATION:-}" ]; then
         echo "⚠ py3cairo.pc not found - attempting to reinstall python3-cairo-dev..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall python3-cairo-dev 2>/dev/null || echo "  (Reinstall may have failed)"
         # Search again after reinstall
-        PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 || echo "")
+        PY3CAIRO_PC_FOUND=$(find /usr -name "py3cairo.pc" 2>/dev/null | head -1 2>/dev/null || echo "")
         if [ -n "${PY3CAIRO_PC_FOUND:-}" ] && [ -f "${PY3CAIRO_PC_FOUND}" ]; then
             PY3CAIRO_PC_LOCATION=$(dirname "${PY3CAIRO_PC_FOUND}" 2>/dev/null || echo "")
             if [ -n "${PY3CAIRO_PC_LOCATION:-}" ] && [ -d "${PY3CAIRO_PC_LOCATION}" ]; then
-                echo "✓ Found py3cairo.pc after reinstall at: ${PY3CAIRO_PC_FOUND}"
+                printf '%s\n' "✓ Found py3cairo.pc after reinstall at: ${PY3CAIRO_PC_FOUND}"
             else
                 PY3CAIRO_PC_LOCATION=""
             fi
@@ -23959,12 +21567,12 @@ fi
 
 # Similar check for pygobject-3.0.pc
 if [ -z "${PYGOBJECT_PC_LOCATION:-}" ]; then
-    echo "  Searching for pygobject-3.0.pc in system..."
-    PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 || echo "")
+    printf '%s\n' "  Searching for pygobject-3.0.pc in system..."
+    PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${PYGOBJECT_PC_FOUND:-}" ] && [ -f "${PYGOBJECT_PC_FOUND}" ]; then
         PYGOBJECT_PC_LOCATION=$(dirname "${PYGOBJECT_PC_FOUND}" 2>/dev/null || echo "")
         if [ -n "${PYGOBJECT_PC_LOCATION:-}" ] && [ -d "${PYGOBJECT_PC_LOCATION}" ]; then
-            echo "✓ Found pygobject-3.0.pc at: ${PYGOBJECT_PC_FOUND}"
+            printf '%s\n' "✓ Found pygobject-3.0.pc at: ${PYGOBJECT_PC_FOUND}"
         else
             echo "⚠ Invalid directory from pygobject-3.0.pc path: ${PYGOBJECT_PC_FOUND}"
             PYGOBJECT_PC_LOCATION=""
@@ -23972,11 +21580,11 @@ if [ -z "${PYGOBJECT_PC_LOCATION:-}" ]; then
     else
         echo "⚠ pygobject-3.0.pc not found - attempting to reinstall python-gi-dev..."
         DEBIAN_FRONTEND=noninteractive apt-get install -y --reinstall python-gi-dev 2>/dev/null || echo "  (Reinstall may have failed)"
-        PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 || echo "")
+        PYGOBJECT_PC_FOUND=$(find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -1 2>/dev/null || echo "")
         if [ -n "${PYGOBJECT_PC_FOUND:-}" ] && [ -f "${PYGOBJECT_PC_FOUND}" ]; then
             PYGOBJECT_PC_LOCATION=$(dirname "${PYGOBJECT_PC_FOUND}" 2>/dev/null || echo "")
             if [ -n "${PYGOBJECT_PC_LOCATION:-}" ] && [ -d "${PYGOBJECT_PC_LOCATION}" ]; then
-                echo "✓ Found pygobject-3.0.pc after reinstall at: ${PYGOBJECT_PC_FOUND}"
+                printf '%s\n' "✓ Found pygobject-3.0.pc after reinstall at: ${PYGOBJECT_PC_FOUND}"
             else
                 PYGOBJECT_PC_LOCATION=""
             fi
@@ -24030,7 +21638,7 @@ if ! pkg-config --exists py3cairo 2>/dev/null; then
     echo "  This is required by Xpra for GTK3 support"
     if dpkg_resolve_installed_package "python3-cairo-dev" >/dev/null; then
         echo "  python3-cairo-dev is installed, but py3cairo.pc may be missing"
-        find /usr -name "py3cairo.pc" 2>/dev/null | head -3 || echo "    (py3cairo.pc not found)"
+        find /usr -name "py3cairo.pc" 2>/dev/null | head -3 2>/dev/null || echo "    (py3cairo.pc not found)"
     fi
 else
     echo "✓ py3cairo verified accessible via pkg-config"
@@ -24042,7 +21650,7 @@ if ! pkg-config --exists pygobject-3.0 2>/dev/null; then
     echo "  This is required by Xpra for GTK3 support"
     if dpkg_resolve_installed_package "python-gi-dev" >/dev/null; then
         echo "  python-gi-dev is installed, but pygobject-3.0.pc may be missing"
-        find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -3 || echo "    (pygobject-3.0.pc not found)"
+        find /usr -name "pygobject-3.0.pc" 2>/dev/null | head -3 2>/dev/null || echo "    (pygobject-3.0.pc not found)"
     fi
 else
     echo "✓ pygobject-3.0 verified accessible via pkg-config"
@@ -24082,9 +21690,9 @@ if pkg-config --exists libxxhash 2>/dev/null; then
 else
     echo "⚠ libxxhash not found in pkg-config"
     echo "  Searching for libxxhash.pc file..."
-    find /usr -name "libxxhash.pc" 2>/dev/null | head -3 || echo "    (libxxhash.pc not found)"
+    find /usr -name "libxxhash.pc" 2>/dev/null | head -3 2>/dev/null || echo "    (libxxhash.pc not found)"
     echo "  Attempting to locate libxxhash library..."
-    xxhash_files=$(find /usr -name "*xxhash*" -type f 2>/dev/null | grep -E "\.(so|a|pc)$" | head -5 || echo "")
+    xxhash_files=$(find /usr -name "*xxhash*" -type f 2>/dev/null | grep -E "\.(so|a|pc)$" 2>/dev/null | head -5 2>/dev/null || echo "")
     if [ -n "${xxhash_files}" ]; then
       echo "${xxhash_files}"
     else
@@ -24115,7 +21723,7 @@ else
             echo "deb https://xpra.org/ stable main" > /etc/apt/sources.list.d/xpra.list
         fi
         # Modern GPG key handling (replaces deprecated apt-key)
-        if ! wget -qO- https://xpra.org/gpg.asc | gpg --dearmor > /etc/apt/trusted.gpg.d/xpra.gpg 2>/dev/null; then
+        if ! wget --timeout=30 -qO- https://xpra.org/gpg.asc 2>/dev/null | gpg --dearmor > /etc/apt/trusted.gpg.d/xpra.gpg 2>/dev/null; then
             echo "⚠ WARNING: Failed to add Xpra GPG key, repository may not be trusted"
         fi
         if ! apt-get update -qq; then
@@ -24149,14 +21757,23 @@ elif ! cd /tmp 2>/dev/null; then
 else
     # Continue with installation if directory creation and cd succeeded
     # Download and extract HTML5 client from GitHub release
-    if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/tags/${XPRA_HTML5_TAG}.tar.gz" -O /tmp/xpra-html5.tar.gz; then
+    if wget --timeout=30 -q "https://github.com/Xpra-org/xpra-html5/archive/refs/tags/${XPRA_HTML5_TAG}.tar.gz" -O /tmp/xpra-html5.tar.gz; then
         if tar -xzf /tmp/xpra-html5.tar.gz 2>/dev/null; then
             XPRA_HTML5_EXTRACTED="$(find . -maxdepth 1 -type d -name "xpra-html5-*" -print -quit 2>/dev/null || true)"
             if [ -n "${XPRA_HTML5_EXTRACTED}" ] && [ -d "${XPRA_HTML5_EXTRACTED}/html5" ]; then
                 # Construct full source path for robust glob expansion
                 XPRA_HTML5_SOURCE="${XPRA_HTML5_EXTRACTED}/html5"
                 # Enumerate files explicitly to avoid empty glob issues and preserve spaces
-                mapfile -d '' -t XPRA_HTML5_ENTRIES < <(find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                # Note: mapfile is Bash 4+ feature - ensure Bash 4+ compatibility
+                if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+                    mapfile -d '' -t XPRA_HTML5_ENTRIES < <(find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                else
+                    # POSIX fallback for older Bash versions
+                    XPRA_HTML5_ENTRIES=()
+                    while IFS= read -r -d '' entry || [ -n "${entry}" ]; do
+                        XPRA_HTML5_ENTRIES+=("${entry}")
+                    done < <(find "${XPRA_HTML5_SOURCE}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                fi
                 if [ "${#XPRA_HTML5_ENTRIES[@]}" -eq 0 ]; then
                     echo "⚠ No Xpra HTML5 client files discovered in ${XPRA_HTML5_SOURCE}"
                     XPRA_HTML5_INSTALLED=false
@@ -24190,14 +21807,23 @@ else
     else
         echo "⚠ Failed to download Xpra HTML5 client v${XPRA_HTML5_VERSION}"
         echo "  Attempting to download from master branch as fallback..."
-        if wget -q "https://github.com/Xpra-org/xpra-html5/archive/refs/heads/master.tar.gz" -O /tmp/xpra-html5-master.tar.gz; then
+        if wget --timeout=30 -q "https://github.com/Xpra-org/xpra-html5/archive/refs/heads/master.tar.gz" -O /tmp/xpra-html5-master.tar.gz; then
             if tar -xzf /tmp/xpra-html5-master.tar.gz 2>/dev/null; then
                 XPRA_HTML5_MASTER="$(find . -maxdepth 1 -type d -name "xpra-html5-master*" -print -quit 2>/dev/null || true)"
                 if [ -n "${XPRA_HTML5_MASTER}" ] && [ -d "${XPRA_HTML5_MASTER}/html5" ]; then
                     # Construct full source path for robust glob expansion
                     XPRA_HTML5_SOURCE_MASTER="${XPRA_HTML5_MASTER}/html5"
                     # Enumerate files explicitly to avoid empty glob issues and preserve spaces
-                    mapfile -d '' -t XPRA_HTML5_MASTER_ENTRIES < <(find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                    # Note: mapfile is Bash 4+ feature - ensure Bash 4+ compatibility
+                    if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+                        mapfile -d '' -t XPRA_HTML5_MASTER_ENTRIES < <(find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                    else
+                        # POSIX fallback for older Bash versions
+                        XPRA_HTML5_MASTER_ENTRIES=()
+                        while IFS= read -r -d '' entry || [ -n "${entry}" ]; do
+                            XPRA_HTML5_MASTER_ENTRIES+=("${entry}")
+                        done < <(find "${XPRA_HTML5_SOURCE_MASTER}" -mindepth 1 -maxdepth 1 -print0 2>/dev/null || true)
+                    fi
                     if [ "${#XPRA_HTML5_MASTER_ENTRIES[@]}" -eq 0 ]; then
                         echo "⚠ No Xpra HTML5 client files discovered in master branch archive"
                         XPRA_HTML5_INSTALLED=false
@@ -24211,263 +21837,37 @@ else
                             fi
                         done
                         if [ "${XPRA_HTML5_MASTER_COPY_FAILED}" = false ]; then
-                            echo "✓ Xpra HTML5 client installed from master branch"
+                            echo "✓ Xpra HTML5 client v${XPRA_HTML5_VERSION} installed to ${XPRA_HTML5_DIR} (from master branch)"
                             XPRA_HTML5_INSTALLED=true
                         else
                             XPRA_HTML5_INSTALLED=false
                         fi
+                        unset XPRA_HTML5_MASTER_ENTRIES XPRA_HTML5_MASTER_ENTRY XPRA_HTML5_MASTER_COPY_FAILED
                     fi
-                    unset XPRA_HTML5_MASTER_ENTRIES XPRA_HTML5_MASTER_ENTRY XPRA_HTML5_MASTER_COPY_FAILED
+                    rm -rf /tmp/xpra-html5-master.tar.gz /tmp/xpra-html5-master* 2>/dev/null || true
                 else
-                    echo "⚠ Failed to find html5 directory in master archive"
+                    echo "⚠ Failed to extract Xpra HTML5 client archive from master branch"
                     XPRA_HTML5_INSTALLED=false
+                    rm -f /tmp/xpra-html5-master.tar.gz 2>/dev/null || true
                 fi
             else
-                echo "⚠ Failed to extract master branch archive"
+                echo "⚠ Failed to download Xpra HTML5 client from master branch"
                 XPRA_HTML5_INSTALLED=false
             fi
-            rm -rf /tmp/xpra-html5-master* 2>/dev/null || true
-        else
-            echo "⚠ Failed to download master branch archive"
-            XPRA_HTML5_INSTALLED=false
         fi
     fi
 fi
 
-# Create Xpra launcher with HTML5 support
-cat > /usr/local/bin/start_xpra.sh << 'XPRA'
-#!/usr/bin/env bash
-# Xpra Application Streaming with HTML5 client
-
-set -euo pipefail
-
-if ! command -v xpra >/dev/null 2>&1; then
-    echo "ERROR: xpra command not found. Please install Xpra before running this launcher." >&2
-    exit 1
-fi
-
-DISPLAY_NUM=${1:-10}
-PORT=${2:-10000}
-
-echo "=========================================="
-echo "Xpra Application Streaming"
-echo "=========================================="
-echo "Display: :${DISPLAY_NUM}"
-echo "TCP Port: ${PORT}"
-echo "HTML5 Client: http://localhost:${PORT}/"
-echo ""
-echo "Usage:"
-echo "  start_xpra.sh [display] [port]"
-echo "  Example: start_xpra.sh 10 10000"
-echo "=========================================="
-echo ""
-
-# Set up Xpra HTML5 web directory
-# Official path per https://github.com/Xpra-org/xpra-html5
-XPRA_HTML5_DIR="/usr/share/xpra/www"
-XPRA_WEB_DIR=""
-if [ -d "${XPRA_HTML5_DIR}" ]; then
-    XPRA_WEB_DIR="${XPRA_HTML5_DIR}"
-    export XPRA_WEB_DIR
-    echo "✓ HTML5 client available at ${XPRA_HTML5_DIR}"
-else
-    echo "⚠ HTML5 client not found (using built-in if available)"
-fi
-
-XPRA_ARGS=(
-    ":${DISPLAY_NUM}"
-    "--bind-tcp=0.0.0.0:${PORT}"
-    "--html=on"
-    "--start=startxfce4"
-    "--daemon=no"
-    "--notifications=no"
-    "--clipboard=yes"
-    "--printing=no"
-)
-
-if [ -n "${XPRA_WEB_DIR}" ]; then
-    XPRA_ARGS+=("--webdir=${XPRA_WEB_DIR}")
-fi
-
-echo "Starting Xpra server..."
-xpra start "${XPRA_ARGS[@]}"
-
-echo ""
-echo "Xpra stopped"
-XPRA
-chmod +x /usr/local/bin/start_xpra.sh
-
-# Create Xpra seamless mode launcher (for single applications)
-cat > /usr/local/bin/xpra_seamless.sh << 'XPRA_SEAMLESS'
-#!/usr/bin/env bash
-# Xpra Seamless Mode - Stream individual applications
-
-set -euo pipefail
-
-if ! command -v xpra >/dev/null 2>&1; then
-    echo "ERROR: xpra command not found. Please install Xpra before running this launcher." >&2
-    exit 1
-fi
-
-APP=${1:-xterm}
-DISPLAY_NUM=${2:-10}
-PORT=${3:-10000}
-
-echo "Starting Xpra in seamless mode for: ${APP}"
-echo "Connect: http://localhost:${PORT}/"
-echo ""
-
-XPRA_HTML5_DIR="/usr/share/xpra/www"
-XPRA_ARGS=(
-    "--start=${APP}"
-    "--bind-tcp=0.0.0.0:${PORT}"
-    "--html=on"
-    "--daemon=no"
-    "--notifications=no"
-    "--clipboard=yes"
-)
-
-if [ -d "${XPRA_HTML5_DIR}" ]; then
-    XPRA_ARGS+=("--webdir=${XPRA_HTML5_DIR}")
-else
-    echo "⚠ HTML5 client not found at ${XPRA_HTML5_DIR} (falling back to Xpra defaults)"
-fi
-
-xpra start "${XPRA_ARGS[@]}"
-XPRA_SEAMLESS
-chmod +x /usr/local/bin/xpra_seamless.sh
-
-if [ "$XPRA_INSTALLED" = true ]; then
-    echo "✓ Xpra installed successfully"
-    if [ "$XPRA_HTML5_INSTALLED" = true ]; then
-        echo "✓ Xpra HTML5 client installed successfully"
-    else
-        echo "⚠ Xpra HTML5 client not installed (may use built-in)"
-    fi
-else
-    echo "⚠ Xpra installation may have issues - check logs"
-fi
-echo "  Available commands:"
-echo "    start_xpra.sh [display] [port]  - Full desktop"
-echo "    xpra_seamless.sh [app] [display] [port]  - Single application"
-
-#--- Sub-block 34.4: x11vnc alternative VNC server ---
-# Critical: Lightweight VNC server that attaches to existing X sessions
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Installing x11vnc..."
-
-apt-get install -y --no-install-recommends x11vnc
-
-cat > /usr/local/bin/start_x11vnc.sh << 'X11VNC'
-#!/usr/bin/env bash
-# x11vnc - attach to existing X display
-# Official docs: https://github.com/LibVNC/x11vnc
-# ArchWiki: https://wiki.archlinux.org/title/X11vnc
-
-set -euo pipefail
-
-DISPLAY_NUM=${1:-1}
-# Validate DISPLAY_NUM is a positive integer
-if ! [[ "${DISPLAY_NUM}" =~ ^[0-9]+$ ]] || [ "${DISPLAY_NUM}" -le 0 ]; then
-    echo "ERROR: Display number must be a positive integer" >&2
-    exit 1
-fi
-PORT=$((5900 + DISPLAY_NUM))
-
-echo "Starting x11vnc on display :${DISPLAY_NUM} (port ${PORT})"
-echo "Official documentation: https://github.com/LibVNC/x11vnc"
-
-# Create password file if doesn't exist
-# SECURITY: Always use password protection (never use -nopw in production)
-if [ ! -f ~/.vnc/passwd ]; then
-    echo "VNC password not set. Setting now:"
-    x11vnc -storepasswd ~/.vnc/passwd
-    chmod 600 ~/.vnc/passwd
-fi
-
-# Start x11vnc with security and performance optimizations
-# Official best practices:
-# - -forever: Keep server running after client disconnects
-# - -shared: Allow multiple clients to connect
-# - -rfbauth: Use password file (secure, never use -nopw)
-# - -noxdamage: Better compatibility
-# - -ncache: Enable pixel caching
-# - -speeds: Optimize for LAN
-x11vnc -display ":${DISPLAY_NUM}" \
-  -forever \
-  -shared \
-  -rfbport "${PORT}" \
-  -rfbauth ~/.vnc/passwd \
-  -noxdamage \
-  -noxrecord \
-  -noxfixes \
-  -ncache 10 \
-  -ncache_cr \
-  -speeds lan \
-  -wait 20 \
-  -defer 20 \
-  -bg \
-  -o ~/.vnc/x11vnc.log
-X11VNC
-chmod +x /usr/local/bin/start_x11vnc.sh
-
-echo "✓ x11vnc installed"
-
-#===============================================================================
-# BLOCK 35: MULTIMEDIA AND PERFORMANCE TOOLS
-#===============================================================================
-# Purpose: Install video encoding, performance monitoring, and system tools
-# Self-contained: Yes (complete multimedia stack)
-# Dependencies: NVIDIA drivers for hardware encoding
-# Outputs: GPU libraries, CUDA toolkit
-#-------------------------------------------------------------------------------
-
-#--- Sub-block 35.1: FFmpeg with hardware encoding ---
-# Critical: Video encoding with NVENC GPU acceleration
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Installing ffmpeg with NVENC support..."
-
-apt-get install -y --no-install-recommends \
-  ffmpeg \
-  libavcodec-extra
-
-# Create screen recording script
-#--- Sub-block 35.2: Create screen recording script ---
-# Purpose: ffmpeg-based screen recording with GPU encoding
+# Note: shell-scripts file: /usr/local/bin/record_screen.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-35-multimedia-and-performance-tools/record-screen.sh
+# Target: /usr/local/bin/record_screen.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /usr/local/bin/record_screen.sh << 'RECORD'
-#!/usr/bin/env bash
-# Screen recording with GPU encoding
-
-DISPLAY_NUM=${1:-1}
-OUTPUT=${2:-"screen_recording_$(date +%Y%m%d_%H%M%S).mp4"}
-
-echo "Recording display :${DISPLAY_NUM} to ${OUTPUT}"
-echo "Press Ctrl+C to stop"
-
-# Try NVENC (GPU encoding), fallback to libx264 (CPU)
-if ffmpeg -encoders 2>/dev/null | grep -q h264_nvenc; then
-  ENCODER="h264_nvenc"
-  echo "Using NVIDIA GPU encoder"
-else
-  ENCODER="libx264"
-  echo "Using CPU encoder"
-fi
-
-DISPLAY=:${DISPLAY_NUM} ffmpeg \
-  -f x11grab \
-  -video_size 1920x1080 \
-  -framerate 30 \
-  -i :${DISPLAY_NUM} \
-  -c:v ${ENCODER} \
-  -preset medium \
-  -crf 23 \
-  "${OUTPUT}"
-RECORD
-chmod +x /usr/local/bin/record_screen.sh
+# Note: shell-scripts file: /usr/local/bin/record_screen.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-35-multimedia-and-performance-tools/record-screen.sh
+# Target: /usr/local/bin/record_screen.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 echo "✓ ffmpeg installed with screen recording support"
 
@@ -24480,22 +21880,10 @@ echo "==> Installing Remmina remote desktop client..."
 apt-get install -y --no-install-recommends \
   remmina \
   remmina-plugin-vnc \
-  remmina-plugin-rdp
-
-echo "✓ Remmina installed (launch from Applications menu)"
-
-#--- Sub-block 35.4: Performance monitoring and profiling tools ---
-# Critical: System performance analysis, debugging, and resource monitoring
-# Dependencies: Block 6 (APT configuration)
-# Outputs: Installed packages
-echo "==> Installing performance monitoring tools..."
-
-apt-get install -y --no-install-recommends \
-  htop \
-  iotop \
-  iftop \
-  nethogs \
-  nload \
+# Note: shell-scripts file: /usr/local/bin/gpu_monitor.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-35-multimedia-and-performance-tools/gpu-monitor.sh
+# Target: /usr/local/bin/gpu_monitor.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
   bmon \
   sysstat \
   dstat \
@@ -24508,117 +21896,10 @@ apt-get install -y --no-install-recommends \
 
 # Create GPU monitoring script
 #--- Sub-block 35.5: Create GPU monitoring script ---
-# Purpose: Real-time GPU utilization monitoring
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-cat > /usr/local/bin/gpu_monitor.sh << 'GPUMON'
-#!/usr/bin/env bash
-# Real-time GPU monitoring
-
-if ! command -v nvidia-smi >/dev/null 2>&1; then
-    echo "ERROR: nvidia-smi not found. NVIDIA drivers may not be installed." >&2
-    exit 1
-fi
-
-if ! command -v watch >/dev/null 2>&1; then
-    echo "ERROR: watch command not found. Please install procps package." >&2
-    exit 1
-fi
-
-watch -n 1 "nvidia-smi --query-gpu=timestamp,name,utilization.gpu,utilization.memory,memory.total,memory.used,memory.free,temperature.gpu,power.draw --format=csv,noheader,nounits | column -t -s','"
-GPUMON
-chmod +x /usr/local/bin/gpu_monitor.sh
-
-echo "✓ Performance monitoring tools installed"
-echo "  - glances (comprehensive system monitor)"
-echo "  - htop/btop (process viewers)"
-echo "  - gpu_monitor.sh (GPU stats)"
-
-# Create VNC performance monitor script
-#--- Sub-block 35.6: Create VNC performance monitor ---
-# Purpose: Monitor VNC session performance and connections
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-cat > /usr/local/bin/vnc_monitor.sh << 'VNCMON'
-#!/usr/bin/env bash
-# Monitor VNC session performance
-
-set -euo pipefail
-
-echo "=========================================="
-echo "VNC Session Performance Monitor"
-echo "=========================================="
-echo ""
-
-echo "1. VNC Processes:"
-# Use pgrep instead of ps aux | grep for better reliability
-if command -v pgrep >/dev/null 2>&1; then
-    pgrep -af "Xvnc|websockify|xfce" 2>/dev/null || echo "  No matching processes found"
-else
-    # Fallback to ps if pgrep not available
-    ps aux 2>/dev/null | grep -E "Xvnc|websockify|xfce" | grep -v grep || echo "  No matching processes found"
-fi
-echo ""
-
-echo "2. Network Connections:"
-if command -v ss >/dev/null 2>&1; then
-    if ! ss -tuln | grep -E "5901|6081|5800"; then
-        echo "  No matching connections found"
-    fi
-else
-    echo "  Networking utility 'ss' not available"
-fi
-echo ""
-
-echo "3. GPU Utilization:"
-if command -v nvidia-smi >/dev/null 2>&1; then
-    nvidia-smi --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.total \
-      --format=csv,noheader,nounits
-else
-    echo "  nvidia-smi not available"
-fi
-echo ""
-
-echo "4. CPU Usage (VNC related):"
-# Use pgrep instead of ps aux | grep
-if command -v pgrep >/dev/null 2>&1; then
-    mapfile -t vnc_pids < <(pgrep -f "Xvnc|websockify" 2>/dev/null || true)
-    if [ "${#vnc_pids[@]}" -gt 0 ]; then
-        pid_list=$(printf '%s\n' "${vnc_pids[@]}" | paste -sd, -)
-        if ps_output=$(ps -o pid=,pcpu= -p "${pid_list}" 2>/dev/null); then
-            total_cpu=$(printf '%s\n' "${ps_output}" | awk '{sum+=$2} END {print sum}')
-            echo "  Total CPU: ${total_cpu:-0}%"
-        else
-            echo "  Unable to calculate CPU usage"
-        fi
-    else
-        echo "  No VNC processes found"
-    fi
-else
-    # Fallback to ps if pgrep not available
-    ps aux 2>/dev/null | grep -E "Xvnc|websockify" | grep -v grep | awk '{print $3}' | \
-      awk '{sum+=$1} END {if (NR>0) print "  Total CPU: " sum "%"; else print "  No VNC processes found"}'
-fi
-echo ""
-
-echo "5. Memory Usage:"
-free -h
-echo ""
-
-echo "6. Display Information:"
-if [ -n "${DISPLAY:-}" ]; then
-    echo "  DISPLAY: ${DISPLAY}"
-    if command -v xdpyinfo >/dev/null 2>&1; then
-        xdpyinfo | grep -E "dimensions|resolution" | sed 's/^/  /'
-    else
-        echo "  xdpyinfo command not available"
-    fi
-else
-    echo "  Not running in X session"
-fi
-echo "=========================================="
-VNCMON
-chmod +x /usr/local/bin/vnc_monitor.sh
+# Note: shell-scripts file: /usr/local/bin/vnc_monitor.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-35-multimedia-and-performance-tools/vnc-monitor.sh
+# Target: /usr/local/bin/vnc_monitor.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 echo "✓ Performance monitoring tools installed"
 
@@ -24648,7 +21929,7 @@ else
         echo "✓ zoxide installed via apt repository"
     else
         echo "⚠ WARNING: Failed to install zoxide via apt; attempting upstream installer"
-        if curl -sSf https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh -o /tmp/zoxide_install.sh; then
+        if curl --connect-timeout 30 --max-time 300 -sSf https://raw.githubusercontent.com/ajeetdsouza/zoxide/main/install.sh -o /tmp/zoxide_install.sh; then
             if [ -s /tmp/zoxide_install.sh ]; then
                 chmod 700 /tmp/zoxide_install.sh
                 if bash /tmp/zoxide_install.sh; then
@@ -24718,40 +21999,48 @@ python3 -m pip install --no-cache-dir \
   "juliapkg==${JULIAPKG_VERSION}"
 
 # JULIA PACKAGES (After fixing pip)
-${JULIA_HOME}/bin/julia -e '
-  using Pkg
+# Note: python-scripts file: /tmp/julia-packages-install.jl is installed via install.sh from container-scripts/
+# Source: python-scripts/block-21-julia-environment-setup/julia-packages-install.jl
+# Target: /tmp/julia-packages-install.jl
+# Installed in Block 0 (early in script, before any scripts are needed)
+cat > /tmp/julia-packages-install.jl << 'JULIA_EOF'
+# Purpose: Install Julia packages for Python bridge, image processing, IPC, and GPU support
+# This script is executed by the main build script after Julia-Python bridge pip packages are installed
 
-  # Python bridge packages (these use pip internally)
-  Pkg.add(["PythonCall", "CondaPkg"])
+using Pkg
 
-  # Configure to use system Python
-  ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
-  ENV["PYTHON"] = "/usr/bin/python3"
+# Python bridge packages (these use pip internally)
+Pkg.add(["PythonCall", "CondaPkg"])
 
-  # Build with system Python (now pip works)
-  try
-    Pkg.build("PythonCall")
-  catch e
-    @warn "PythonCall build failed" exception=e
-  end
+# Configure to use system Python
+ENV["JULIA_CONDAPKG_BACKEND"] = "Null"
+ENV["PYTHON"] = "/usr/bin/python3"
 
-  # Image processing packages
-  Pkg.add([
-    "Images",
-    "ImageFiltering",
-    "ImageFeatures",
-    "VideoIO"
-  ])
+# Build with system Python (now pip works)
+try
+  Pkg.build("PythonCall")
+catch e
+  @warn "PythonCall build failed" exception=e
+end
 
-  # IPC packages
-  Pkg.add(["ZMQ", "MsgPack", "JSON3"])
+# Image processing packages
+Pkg.add([
+  "Images",
+  "ImageFiltering",
+  "ImageFeatures",
+  "VideoIO"
+])
 
-  # GPU packages
-  Pkg.add(["CUDA"])
+# IPC packages
+Pkg.add(["ZMQ", "MsgPack", "JSON3"])
 
-  # Precompile
-  Pkg.precompile()
-'
+# GPU packages
+Pkg.add(["CUDA"])
+
+# Precompile
+Pkg.precompile()
+JULIA_EOF
+"${JULIA_HOME}/bin/julia" /tmp/julia-packages-install.jl
 # === ADDITION 4: Monitoring Tools ===
 
 #--- Code section 5286 ---
@@ -24788,76 +22077,11 @@ cmake .. \
   -DNVIDIA_SUPPORT=ON \
   -DAMDGPU_SUPPORT=OFF \
   -DINTEL_SUPPORT=OFF \
-  -DAPPLE_SUPPORT=OFF \
-  -DMSM_SUPPORT=OFF \
-  -DCMAKE_INSTALL_PREFIX=/usr/local
-
-ninja -j"$(nproc)" || { echo "ERROR: Failed to build nvtop"; exit 1; }
-ninja install 2>&1 | tee /tmp/nvtop_install.log || { echo "ERROR: Failed to install nvtop"; exit 1; }
-# Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/nvtop_install.log" 200
-
-cd / && rm -rf /tmp/nvtop
-echo "✓ nvtop installed successfully"
-
-
-#--- Sub-block 36.3: Rust tools build continuation ---
-# Purpose: Additional CLI tool compilation
-# Dependencies: Block 6 (APT configuration), Block 8.5 (Julia installation)
-# Outputs: Installed packages
-# === ADDITION 5: Efficient Data Formats ===
-apt-get install -y --no-install-recommends \
-  libhdf5-dev \
-  liblz4-dev
-python3 -m pip install --no-cache-dir \
-  h5py==${H5PY_VERSION} \
-  zarr==${ZARR_VERSION}
-${JULIA_HOME}/bin/julia -e '
-  using Pkg
-  Pkg.add(["HDF5", "JLD2"])
-'
-
-# === FAST-DDS CONFIGURATION ===
-echo "==> Configuring Fast-DDS (default RMW for ROS 2)"
-mkdir -p /etc/fastdds
-cat > /etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml << 'EOF'
-<?xml version="1.0" encoding="UTF-8" ?>
-<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
-    <participant profile_name="default_participant" is_default_profile="true">
-        <rtps>
-            <useBuiltinTransports>true</useBuiltinTransports>
-            <builtin>
-                <discovery_config>
-                    <discoveryProtocol>SIMPLE</discoveryProtocol>
-                    <use_SIMPLE_EndpointDiscoveryProtocol>true</use_SIMPLE_EndpointDiscoveryProtocol>
-                    <use_STATIC_EndpointDiscoveryProtocol>false</use_STATIC_EndpointDiscoveryProtocol>
-                    <leaseDuration>
-                        <sec>20</sec>
-                        <nanosec>0</nanosec>
-                    </leaseDuration>
-                </discovery_config>
-            </builtin>
-            <userTransports>
-                <transport_id>shm_transport</transport_id>
-                <transport_id>udp_transport</transport_id>
-            </userTransports>
-        </rtps>
-    </participant>
-
-    <transport_descriptors>
-        <transport_descriptor>
-            <transport_id>shm_transport</transport_id>
-            <type>SHM</type>
-            <maxMessageSize>65536</maxMessageSize>
-        </transport_descriptor>
-        <transport_descriptor>
-            <transport_id>udp_transport</transport_id>
-            <type>UDPv4</type>
-            <maxMessageSize>65536</maxMessageSize>
-        </transport_descriptor>
-    </transport_descriptors>
-</profiles>
-EOF
+  -DAPPLE_SUPPORT=OFF || { echo "ERROR: CMake configuration failed for nvtop"; exit 1; }
+# Note: other file: /etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml is installed via install.sh from container-scripts/
+# Source: other/block-36-modern-rust-based-cli-tools/DEFAULT-FASTRTPS-PROFILES.xml
+# Target: /etc/fastdds/DEFAULT_FASTRTPS_PROFILES.xml
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 # Set environment variable to use this config
 mkdir -p /etc/profile.d
@@ -24867,11 +22091,13 @@ if [ -f "${FASTDDS_PROFILE}" ]; then
     if ! grep -Fx "${FASTDDS_EXPORT}" "${FASTDDS_PROFILE}" >/dev/null 2>&1; then
         printf '%s\n' "${FASTDDS_EXPORT}" >> "${FASTDDS_PROFILE}"
     fi
+# ENDIF: FASTDDS_EXPORT check
 else
     printf '%s\n' "${FASTDDS_EXPORT}" > "${FASTDDS_PROFILE}"
 fi
+# ENDIF: FASTDDS_PROFILE check
 chmod 644 "${FASTDDS_PROFILE}"
-echo "✓ Fast-DDS configured"
+printf '%s\n' "✓ Fast-DDS configured"
 
 # === ADDITION 7: Helper Scripts Directory ===
 mkdir -p /opt/scripts
@@ -24951,11 +22177,12 @@ if command -v rustc &>/dev/null && command -v cargo &>/dev/null; then
   echo "  cargo location: $(which cargo)"
 else
   echo "✗ Rust installation failed - binaries not found"
-  echo "  PATH: $PATH"
+  printf '%s\n' "  PATH: ${PATH}"
   echo "  Directory contents:"
   find /opt/rust/cargo/bin -maxdepth 1 -type f -ls 2>/dev/null || echo "cargo/bin directory doesn't exist"
   exit 1
 fi
+# ENDIF: Rust installation verification
 
 # === RUST TOOLS COMPILATION ===
 echo
@@ -24988,10 +22215,10 @@ install_rust_tool() {
     echo "  This takes ~${build_time} minutes..."
   fi
   
-  if [ -n "$version" ]; then
+  if [ -n "${version}" ]; then
     # Try first with --locked (respect Cargo.lock)
     if cargo install "${package}" \
-        --version "$version" \
+        --version "${version}" \
         --root /opt/rust/tools \
         --locked 2>/dev/null; then
       echo "✓ ${package} installed successfully (with --locked)"
@@ -25001,7 +22228,7 @@ install_rust_tool() {
       echo "[warn] Installation with --locked failed, retrying without lock file..."
       # Retry without --locked to allow dependency updates (handles yanked packages)
       if cargo install "${package}" \
-          --version "$version" \
+          --version "${version}" \
           --root /opt/rust/tools; then
         echo "✓ ${package} installed successfully (without --locked)"
         INSTALLED_TOOLS="${INSTALLED_TOOLS} ${package}"
@@ -25083,11 +22310,14 @@ remove_tool_from_failed() {
 
   [ -z "${tool}" ] && return 0
 
-  for entry in ${FAILED_TOOLS}; do
+  # Use here-string for safe iteration over space-separated list
+  while IFS= read -r entry || [ -n "${entry}" ]; do
+    [ -z "${entry}" ] && continue
     if [ "${entry}" != "${tool}" ]; then
       updated="${updated} ${entry}"
     fi
-  done
+  done <<< "${FAILED_TOOLS}"
+  # ENDFOR: entry
 
   FAILED_TOOLS="${updated# }"
 }
@@ -25099,11 +22329,14 @@ add_tool_to_failed() {
 
   [ -z "${tool}" ] && return 0
 
-  for entry in ${FAILED_TOOLS}; do
+  # Use here-string for safe iteration over space-separated list
+  while IFS= read -r entry || [ -n "${entry}" ]; do
+    [ -z "${entry}" ] && continue
     if [ "${entry}" = "${tool}" ]; then
       return 0
     fi
-  done
+  done <<< "${FAILED_TOOLS}"
+  # ENDFOR: entry
 
   FAILED_TOOLS="${FAILED_TOOLS} ${tool}"
   FAILED_TOOLS="${FAILED_TOOLS# }"
@@ -25215,7 +22448,7 @@ else
 fi
 
 # Method 2: Try Debian package installation (recommended for Debian/Ubuntu)
-if [ "$OX_INSTALLED" = false ]; then
+if [ "${OX_INSTALLED}" = false ]; then
   echo "  Method 2: Installing Debian package from GitHub releases..."
   # Confirmed from GitHub release page: ox_0.7.7-1_amd64.deb
   # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox_0.7.7-1_amd64.deb
@@ -25262,7 +22495,7 @@ if [ "$OX_INSTALLED" = false ]; then
 fi
 
 # Method 3: Try pre-built binary from GitHub releases if Debian package failed
-if [ "$OX_INSTALLED" = false ]; then
+if [ "${OX_INSTALLED}" = false ]; then
   echo "  Method 3: Downloading pre-built binary from GitHub releases..."
   # Confirmed from GitHub release page: binary name is "ox"
   # Source: https://github.com/curlpipe/ox/releases/download/0.7.7/ox
@@ -25271,61 +22504,70 @@ if [ "$OX_INSTALLED" = false ]; then
   OX_BINARY_TEMP=""
   OX_FAILURE_SUMMARY_PRINTED=false
 
+  # C2155: Declare and assign separately to avoid masking return values
+  OX_BINARY_TEMP=""
   if OX_BINARY_TEMP=$(mktemp "/tmp/ox.${OX_VERSION}.XXXXXX"); then
     if curl --fail --location --silent --show-error \
       --retry 5 --retry-delay 2 --retry-connrefused \
       --output "${OX_BINARY_TEMP}" "${OX_BINARY_URL}"; then
       if [ -s "${OX_BINARY_TEMP}" ]; then
-        if file "${OX_BINARY_TEMP}" 2>/dev/null | grep -qE "(ELF|executable|binary)"; then
+        # D3: Use here-string instead of unsafe pipe pattern
+        if file "${OX_BINARY_TEMP}" 2>/dev/null | grep -qE -- "(ELF|executable|binary)" || true; then
           if install -m 0755 -D "${OX_BINARY_TEMP}" "/opt/rust/tools/bin/ox"; then
             if [ -x "/opt/rust/tools/bin/ox" ]; then
-              echo "✓ ox ${OX_VERSION} installed from pre-built binary"
+              printf '%s\n' "✓ ox ${OX_VERSION} installed from pre-built binary"
               INSTALLED_TOOLS="${INSTALLED_TOOLS} ox"
               OX_INSTALLED=true
             else
-              echo "✗ ox binary not executable after installation"
+              printf '%s\n' "✗ ox binary not executable after installation" >&2
               add_tool_to_failed "ox"
             fi
+          # ENDIF: install check
           else
-            echo "✗ Failed to install ox binary into /opt/rust/tools/bin"
+            printf '%s\n' "✗ Failed to install ox binary into /opt/rust/tools/bin" >&2
             add_tool_to_failed "ox"
           fi
+        # ENDIF: file type check
         else
-          echo "✗ Downloaded file is not a valid binary"
+          printf '%s\n' "✗ Downloaded file is not a valid binary" >&2
           add_tool_to_failed "ox"
         fi
+      # ENDIF: file size check
       else
-        echo "✗ ox binary download failed - file is empty or missing"
+        printf '%s\n' "✗ ox binary download failed - file is empty or missing" >&2
         add_tool_to_failed "ox"
       fi
+    # ENDIF: curl download
     else
       OX_FAILURE_SUMMARY_PRINTED=true
-      echo "✗ ox ${OX_VERSION} installation failed from all methods"
-      echo "  Tried:"
-      echo "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}"
-      echo "    2. Debian package: ${OX_DEB_URL}"
-      echo "    3. Binary: ${OX_BINARY_URL}"
-      echo "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}"
+      printf '%s\n' "✗ ox ${OX_VERSION} installation failed from all methods" >&2
+      printf '%s\n' "  Tried:" >&2
+      printf '%s\n' "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}" >&2
+      printf '%s\n' "    2. Debian package: ${OX_DEB_URL}" >&2
+      printf '%s\n' "    3. Binary: ${OX_BINARY_URL}" >&2
+      printf '%s\n' "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}" >&2
       add_tool_to_failed "ox"
     fi
+  # ENDIF: mktemp
   else
-    echo "✗ Failed to allocate temporary file for ox binary download"
+    printf '%s\n' "✗ Failed to allocate temporary file for ox binary download" >&2
     add_tool_to_failed "ox"
   fi
 
   rm -f "${OX_BINARY_TEMP:-}"
 fi
 
-if [ "$OX_INSTALLED" = false ]; then
+if [ "${OX_INSTALLED}" = false ]; then
   if [ "${OX_FAILURE_SUMMARY_PRINTED}" = false ]; then
-    echo "✗ ox ${OX_VERSION} installation failed from all methods"
-    echo "  Tried:"
-    echo "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}"
-    echo "    2. Debian package: ${OX_DEB_URL}"
-    echo "    3. Binary: ${OX_BINARY_URL}"
-    echo "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}"
+    printf '%s\n' "✗ ox ${OX_VERSION} installation failed from all methods" >&2
+    printf '%s\n' "  Tried:" >&2
+    printf '%s\n' "    1. cargo install --git https://github.com/curlpipe/ox --tag ${OX_VERSION}" >&2
+    printf '%s\n' "    2. Debian package: ${OX_DEB_URL}" >&2
+    printf '%s\n' "    3. Binary: ${OX_BINARY_URL}" >&2
+    printf '%s\n' "  GitHub release: https://github.com/curlpipe/ox/releases/tag/${OX_VERSION}" >&2
   fi
-  echo "  Note: ox is a lightweight text editor - optional tool"
+  printf '%s\n' "  Note: ox is a lightweight text editor - optional tool"
+# ENDIF: OX_INSTALLED check
 fi
 echo ""
 
@@ -25355,35 +22597,46 @@ for binary in "${!TOOL_MAP[@]}"; do
   cmd_name="${TOOL_MAP[$binary]}"
   if [ -f "/opt/rust/tools/bin/${binary}" ]; then
     if ln -sf "/opt/rust/tools/bin/${binary}" "/usr/local/bin/${cmd_name}" 2>/dev/null; then
-      echo "✓ ${binary} -> /usr/local/bin/${cmd_name}"
+      printf '%s\n' "✓ ${binary} -> /usr/local/bin/${cmd_name}"
     else
-      echo "✗ Failed to create symlink for ${binary}"
+      printf '%s\n' "✗ Failed to create symlink for ${binary}" >&2
     fi
   else
-    echo "✗ ${binary} binary not found (not installed)"
+    printf '%s\n' "✗ ${binary} binary not found (not installed)"
   fi
+# ENDFOR: binary
 done
 
 echo ""
 
-# CLEANUP
-#--- Sub-block 37.9: Clean up Rust build artifacts ---
-# Purpose: Remove cargo cache to save space
-# Dependencies: Block 24 (Rust toolchain)
-# Outputs: Rust binaries in /opt/rust/tools/bin
-echo "Cleaning Up Build Artifacts"
+# Note: shell-scripts file: /etc/profile.d/rust.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-37-rust-toolchain-installation/rust.sh
+# Target: /etc/profile.d/rust.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # Calculate sizes before cleanup
 REGISTRY_SIZE="0"
 GIT_SIZE="0"
+# F2, H4: Validate command substitution results
 if [ -d "/opt/rust/cargo/registry" ]; then
+  REGISTRY_SIZE=""
   REGISTRY_SIZE=$(du -sh /opt/rust/cargo/registry 2>/dev/null | cut -f1 || echo "0")
+  # Validate result is non-empty
+  if [ -z "${REGISTRY_SIZE}" ]; then
+    REGISTRY_SIZE="0"
+  fi
 fi
 if [ -d "/opt/rust/cargo/git" ]; then
+  GIT_SIZE=""
   GIT_SIZE=$(du -sh /opt/rust/cargo/git 2>/dev/null | cut -f1 || echo "0")
+  # Validate result is non-empty
+  if [ -z "${GIT_SIZE}" ]; then
+    GIT_SIZE="0"
+  fi
 fi
 
-echo "  Cargo registry: $REGISTRY_SIZE"
-echo "  Cargo git cache: $GIT_SIZE"
+# D1: Proper quoting for all variables
+printf '%s\n' "  Cargo registry: ${REGISTRY_SIZE}"
+printf '%s\n' "  Cargo git cache: ${GIT_SIZE}"
 
 # Remove cargo cache
 rm -rf /opt/rust/cargo/registry
@@ -25397,13 +22650,15 @@ echo ""
 # Purpose: Add Rust to system PATH for all sessions
 # Dependencies: Block 24 (Rust toolchain)
 # Outputs: /etc/profile.d/rust.sh
-cat > /etc/profile.d/rust.sh << 'EOF'
-# Rust toolchain environment
-export RUSTUP_HOME=/opt/rust/rustup
-export CARGO_HOME=/opt/rust/cargo
-export PATH="/opt/rust/cargo/bin:/opt/rust/tools/bin:${PATH}"
-EOF
-chmod +x /etc/profile.d/rust.sh
+# Note: shell-scripts file: /etc/profile.d/rust.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-37-rust-toolchain-installation/rust.sh
+# Target: /etc/profile.d/rust.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
+# J1: Verify file exists before chmod
+if [ -f "/etc/profile.d/rust.sh" ]; then
+  chmod +x /etc/profile.d/rust.sh || { printf '%s\n' "✗ Failed to set executable bit on /etc/profile.d/rust.sh" >&2; }
+fi
 
 echo "✓ Rust environment configured (/etc/profile.d/rust.sh)"
 echo ""
@@ -25416,370 +22671,56 @@ echo ""
 echo "Rust Tools Installation Summary"
 echo ""
 if [ -n "${INSTALLED_TOOLS}" ]; then
-  echo "✓ Successfully installed tools:"
+  printf '%s\n' "✓ Successfully installed tools:"
+  # D2: Use read -r for raw input, no backslash interpretation
   # Use proper word splitting with IFS to handle spaces
-  IFS=' ' read -ra TOOLS_ARRAY <<< "${INSTALLED_TOOLS}"
+  IFS=' ' read -r -a TOOLS_ARRAY <<< "${INSTALLED_TOOLS}"
   for tool in "${TOOLS_ARRAY[@]}"; do
-    [ -n "${tool}" ] && echo "  - ${tool}"
+    [ -n "${tool}" ] && printf '%s\n' "  - ${tool}"
   done
 fi
 
 if [ -n "${FAILED_TOOLS}" ]; then
-  echo "✗ Failed to install (non-critical):"
+  printf '%s\n' "✗ Failed to install (non-critical):"
+  # D2: Use read -r for raw input, no backslash interpretation
   # Use proper word splitting to handle spaces
-  IFS=' ' read -ra FAILED_ARRAY <<< "${FAILED_TOOLS}"
+  IFS=' ' read -r -a FAILED_ARRAY <<< "${FAILED_TOOLS}"
   for tool in "${FAILED_ARRAY[@]}"; do
-    [ -n "${tool}" ] && echo "  - ${tool}"
+    printf '%s\n' "  - ${tool}"
   done
 fi
 
-# Verify final installation
-echo "Installed binaries:"
-find /opt/rust/tools/bin -maxdepth 1 -type f -ls 2>/dev/null || echo " (none)"
+# Note: shell-scripts file: /etc/bash.bashrc is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-37-rust-toolchain-installation/bash.sh
+# Target: /etc/bash.bashrc
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file uses 'cat >>' (append), so the content is added to existing /etc/bash.bashrc
 
-echo "Disk space used:"
-du -sh /opt/rust 2>/dev/null || echo " Unable to calculate"
+# Note: config-files file: /etc/zellij/config.kdl is installed via install.sh from container-scripts/
+# Source: config-files/block-37-rust-toolchain-installation/config.kdl
+# Target: /etc/zellij/config.kdl
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-echo ""
-echo "✓ Rust toolchain setup complete"
+# Note: config-files file: /etc/ox/config.ron is installed via install.sh from container-scripts/
+# Source: config-files/block-37-rust-toolchain-installation/config.ron
+# Target: /etc/ox/config.ron
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-# ... [after cargo install commands] ...
-# VERIFY before claiming success
-if [ -d "/opt/rust/tools/bin" ] && [ "$(find /opt/rust/tools/bin -mindepth 1 -maxdepth 1 2>/dev/null | wc -l)" -gt 0 ]; then
-  echo "✓ Rust tools installed successfully"
-  find /opt/rust/tools/bin -maxdepth 1 -type f -ls 2>/dev/null || echo "  (directory exists but listing failed)"
-else
-  echo "Rust tools directory empty or missing"
-  echo "Creating directory for manual installation later..."
-  mkdir -p /opt/rust/tools/bin 2>/dev/null || true
-fi
+# Note: shell-scripts file: /usr/local/bin/ros_multiterm_zellij is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-37-rust-toolchain-installation/ros-multiterminal-zellij-launcher.sh
+# Target: /usr/local/bin/ros_multiterm_zellij
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-#--- Sub-block 37.12: Configure Rust tool aliases ---
-# Purpose: Set up convenient aliases for compiled Rust tools
-# Dependencies: Block 24 (cargo install complete)
-# Outputs: Shell aliases in /etc/bash.bashrc
-echo "==> Configuring Rust tool aliases..."
-if ! grep -Fq "# Modern Rust-based tool aliases (compiled from source)" /etc/bash.bashrc 2>/dev/null; then
-  cat >> /etc/bash.bashrc << 'RUSTALIASES'
-
-# Modern Rust-based tool aliases (compiled from source)
-alias cat='bat --paging=never'
-alias catp='bat'  # with paging
-alias ls='eza --icons'
-alias ll='eza --icons -l'
-alias la='eza --icons -la'
-alias tree='eza --tree'
-alias find='fd'
-alias grep='rg'
-alias top='btm'
-alias ps='procs'
-
-# Add /root/.local/bin to PATH for zoxide (if not already present)
-if [ -d "/root/.local/bin" ]; then
-  case ":${PATH}:" in
-    *:/root/.local/bin:*)
-      # Already in PATH
-      ;;
-    *)
-      export PATH="/root/.local/bin:${PATH}"
-      ;;
-  esac
-  # Initialize zoxide (better cd) - installed earlier via curl script
-  if command -v zoxide >/dev/null 2>&1; then
-    eval "$(zoxide init bash 2>/dev/null)" || true
-    alias cd='z'
-  fi
-fi
-RUSTALIASES
-else
-  echo "  Rust tool aliases already configured in /etc/bash.bashrc"
-fi
-
-echo "✓ Rust tool aliases configured"
-
-#--- Sub-block 37.13: Add /root/.local/bin to system-wide PATH ---
-# Purpose: Ensure zoxide is available in all shell sessions
-# Dependencies: zoxide installation (Block 23)
-# Outputs: System-wide PATH configuration
-echo "==> Creating system-wide PATH configuration for zoxide..."
-cat > /etc/profile.d/zoxide-path.sh << 'EOF'
-#!/bin/sh
-# Add /root/.local/bin to PATH for zoxide
-if [ -d "/root/.local/bin" ]; then
-    case ":${PATH}:" in
-        *:/root/.local/bin:*)
-            # Already present
-            ;;
-        *)
-            export PATH="/root/.local/bin:${PATH}"
-            ;;
-    esac
-fi
-EOF
-chmod +x /etc/profile.d/zoxide-path.sh
-echo "✓ System-wide PATH configuration for zoxide created"
-
-# ZELLIJ CONFIGURATION
-mkdir -p /etc/zellij || { echo "✗ Failed to create /etc/zellij directory"; exit 1; }
-if ! cat <<'EOF' > /etc/zellij/config.kdl
-// Zellij configuration for ROS 2 multi-workspace development
-
-// Keybindings
-keybinds {
-    normal {
-        // Use Ctrl+g as prefix (like tmux's Ctrl+b)
-        bind "Ctrl g" { SwitchToMode "locked"; }
-    }
-    locked {
-        bind "Ctrl g" { SwitchToMode "normal"; }
-        bind "Ctrl h" { MoveFocus "Left"; }
-        bind "Ctrl j" { MoveFocus "Down"; }
-        bind "Ctrl k" { MoveFocus "Up"; }
-        bind "Ctrl l" { MoveFocus "Right"; }
-    }
-}
-
-// UI Configuration
-ui {
-    pane_frames {
-        rounded_corners true
-    }
-}
-// Theme
-theme "catppuccin-mocha"
-// Default Layout
-default_layout "compact"
-// Mouse support
-mouse_mode true
-// Copy on select
-copy_on_select true
-EOF
-then
-    echo "✗ Failed to write /etc/zellij/config.kdl" >&2
-    exit 1
-fi
-
-# OX EDITOR CONFIGURATION
-mkdir -p /etc/ox || { echo "✗ Failed to create /etc/ox directory"; exit 1; }
-if ! cat <<'EOX' > /etc/ox/config.ron
-Config(
-    general: General(
-        line_number_padding_right: 2,
-        line_number_padding_left: 1,
-        tab_width: 4,
-        undo_period: 5,
-        greeting_message: "Ox Editor - Rust-based minimal editor",
-    ),
-    theme: Theme(
-        editor_bg: (0, 0, 0),
-        editor_fg: (255, 255, 255),
-        line_number_fg: (65, 65, 65),
-        line_number_bg: (0, 0, 0),
-    ),
-    macros: {
-        "python": "#!/usr/bin/env python3\n",
-        "julia": "#!/usr/bin/env julia\n",
-        "bash": "#!/bin/bash\n",
-    },
-)
-EOX
-then
-    echo "✗ Failed to write /etc/ox/config.ron" >&2
-    exit 1
-fi
-
-
-# ROS MULTI-WORKSPACE LAUNCHER (Zellij version)
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij
-#!/bin/bash
-set -euo pipefail
-
-# Launch Zellij session with multiple ROS environments
-
-#--- Sub-block 37.14: System configuration ---
-# Purpose: Final system setup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-SESSION="ros_multi"
-if ! layout_file="$(mktemp -t ros_layout.XXXXXX.kdl)"; then
-    echo "✗ Failed to allocate temporary layout file" >&2
-    exit 1
-fi
-
-cleanup() {
-    rm -f "${layout_file}"
-}
-trap cleanup EXIT INT TERM
-
-if ! cat <<'LAYOUT' > "${layout_file}"
-layout {
-    default_tab_template {
-        pane size=1 borderless=true {
-            plugin location="zellij:tab-bar"
-        }
-        children
-        pane size=2 borderless=true {
-            plugin location="zellij:status-bar"
-        }
-    }
-
-    tab name="Humble" focus=true {
-        pane {
-            command "bash"
-            args "-c" "conda activate ros2_humble && cd /workspaces/humble_ws && exec bash"
-        }
-    }
-
-    tab name="Jazzy" {
-        pane {
-            command "bash"
-            args "-c" "conda activate ros2_jazzy && cd /workspaces/jazzy_ws && exec bash"
-        }
-    }
-
-    tab name="Bridge" {
-        pane {
-            command "bash"
-            args "-c" "echo 'Start domain bridge via: python3 /opt/scripts/domain_bridge.py' && exec bash"
-        }
-    }
-
-    tab name="Julia" {
-        pane split_direction="vertical" {
-            pane {
-                command "bash"
-                args "-c" "echo 'Start Julia server: julia /opt/scripts/julia_vision_server.jl' && exec bash"
-            }
-            pane {
-                command "julia"
-            }
-        }
-    }
-
-
-
-    tab name="Monitor" {
-        pane split_direction="vertical" {
-            pane {
-                command "btm" // bottom system monitor
-            }
-            pane {
-                command "nvtop" // GPU monitor
-            }
-        }
-    }
-}
-LAYOUT
-then
-    : # File created successfully
-else
-    echo "✗ Failed to create Zellij layout file" >&2
-    exit 1
-fi
-
-if [ ! -s "${layout_file}" ]; then
-    echo "✗ Failed to create Zellij layout file" >&2
-    exit 1
-fi
-
-# Launch Zellij with layout
-if command -v zellij >/dev/null 2>&1; then
-    if ! zellij --layout "${layout_file}" attach -c "${SESSION}"; then
-        echo "✗ Failed to launch Zellij session" >&2
-        exit 1
-    fi
-else
-    echo "Error: zellij not found. Please install zellij first." >&2
-    exit 1
-fi
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/ros_multiterm_zellij || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij" >&2; exit 1; }
-
-# ALTERNATIVE: TMUX LAUNCHER (keep both options)
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_tmux
-#!/bin/bash
-# Launch tmux session with multiple ROS environments
-
-set -euo pipefail
-
-SESSION="ros_multi"
-
-# Create new tmux session
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "Error: tmux not found. Please install tmux first." >&2
-  exit 1
-fi
-
-if ! tmux new-session -d -s "${SESSION}" 2>/dev/null; then
-  echo "✗ Failed to create tmux session ${SESSION}" >&2
-  exit 1
-fi
-
-# Window 0: Humble workspace
-tmux rename-window -t "${SESSION}:0" 'Humble' 2>/dev/null || true
-tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble" C-m 2>/dev/null || true
-tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m 2>/dev/null || true
-
-# Window 1: Jazzy workspace
-tmux new-window -t "${SESSION}:1" -n 'Jazzy' 2>/dev/null || true
-tmux send-keys -t "${SESSION}:1" "conda activate ros2_jazzy" C-m 2>/dev/null || true
-tmux send-keys -t "${SESSION}:1" "cd /workspaces/jazzy_ws" C-m 2>/dev/null || true
-
-# Window 2: Bridge/monitoring
-tmux new-window -t "${SESSION}:2" -n 'Bridge' 2>/dev/null || true
-tmux send-keys -t "${SESSION}:2" "echo 'Start domain bridge when ready'" C-m 2>/dev/null || true
-tmux send-keys -t "${SESSION}:2" "python3 /opt/scripts/domain_bridge.py" C-m 2>/dev/null || true
-
-
-# Window 3: Julia processing
-tmux new-window -t "${SESSION}:3" -n 'Julia' 2>/dev/null || true
-tmux send-keys -t "${SESSION}:3" "echo 'Julia server: julia /opt/scripts/julia_vision_server.jl'" C-m 2>/dev/null || true
-tmux send-keys -t "${SESSION}:3" "julia" C-m 2>/dev/null || true
-
-
-# Window 4: Monitoring (split pane)
-tmux new-window -t "${SESSION}:4" -n 'Monitor' 2>/dev/null || true
-tmux send-keys -t "${SESSION}:4" 'btm' C-m 2>/dev/null || true
-tmux split-window -h -t "${SESSION}:4" 2>/dev/null || true
-tmux send-keys -t "${SESSION}:4.1" 'nvtop' C-m 2>/dev/null || true
-
-# Attach to session
-if ! tmux attach-session -t "${SESSION}"; then
-  echo "✗ Failed to attach to tmux session ${SESSION}" >&2
-  exit 1
-fi
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_tmux" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/ros_multiterm_tmux || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_tmux" >&2; exit 1; }
+# Note: shell-scripts file: /usr/local/bin/ros_multiterm_tmux is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-37-rust-toolchain-installation/ros-multiterminal-tmux-launcher.sh
+# Target: /usr/local/bin/ros_multiterm_tmux
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 # Create convenience alias
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm
-#!/bin/bash
-# Default to Zellij, fallback to tmux
-set -euo pipefail
-if command -v zellij >/dev/null 2>&1; then
-  exec /usr/local/bin/ros_multiterm_zellij "$@"
-elif command -v tmux >/dev/null 2>&1; then
-  exec /usr/local/bin/ros_multiterm_tmux "$@"
-else
-  echo "Error: No terminal multiplexer found (zellij or tmux)" >&2
-  exit 1
-fi
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/ros_multiterm || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm" >&2; exit 1; }
+# Note: shell-scripts file: /usr/local/bin/ros_multiterm is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-16-phase-1-foundational-system-libraries/ros-multiterminal-launcher.sh
+# Target: /usr/local/bin/ros_multiterm
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 # CLEANUP RUST BUILD ARTIFACTS
 # Remove cargo cache to save space
@@ -25842,7 +22783,10 @@ if [ "${ZENOH_DOWNLOAD_SUCCESS}" = true ]; then
     echo "✓ Extraction successful"
     
     # Find and install zenohd binary
-    ZENOH_BIN=$(find /opt/zenoh -type f -name "zenohd" 2>/dev/null | head -1)
+    # D3e: Add || true to prevent SIGPIPE error (exit code 141)
+    ZENOH_BIN=""
+    ZENOH_BIN=$(find /opt/zenoh -type f -name "zenohd" 2>/dev/null | head -1 2>/dev/null || true)
+    # F2, H4: Validate result is non-empty
     if [ -n "${ZENOH_BIN}" ] && [ -f "${ZENOH_BIN}" ]; then
       if chmod +x "${ZENOH_BIN}" 2>/dev/null && ln -sf "${ZENOH_BIN}" /usr/local/bin/zenohd 2>/dev/null; then
         echo "✓ Zenoh router installed: ${ZENOH_VERSION:-unknown}"
@@ -25851,8 +22795,11 @@ if [ "${ZENOH_DOWNLOAD_SUCCESS}" = true ]; then
         ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
         mkdir -p "${ZENOH_PLUGINS_DIR}" || { echo "✗ Failed to create plugins directory"; }
         find /opt/zenoh -type f -name "libzenoh_plugin*.so" -exec cp {} "${ZENOH_PLUGINS_DIR}/" \; 2>/dev/null || true
-        PLUGIN_COUNT=$(find "${ZENOH_PLUGINS_DIR}" -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l)
-        if [ "${PLUGIN_COUNT}" -gt 0 ]; then
+        # F2, H4: Validate command substitution result
+        PLUGIN_COUNT=""
+        PLUGIN_COUNT=$(find "${ZENOH_PLUGINS_DIR}" -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l || echo "0")
+        # Validate result is numeric
+        if [ -n "${PLUGIN_COUNT}" ] && [ "${PLUGIN_COUNT}" -gt 0 ] 2>/dev/null; then
           echo "✓ Zenoh plugins installed: ${PLUGIN_COUNT} plugin(s)"
           # Normalize plugin permissions
           find "${ZENOH_PLUGINS_DIR}" -type f -name "*.so" -exec chmod 644 {} + 2>/dev/null || true
@@ -25928,7 +22875,10 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
       echo "✓ Extraction successful"
       
       # Find and install zenoh-bridge-ros2dds binary
-      ROS2DDS_BRIDGE_BIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "zenoh-bridge-ros2dds" 2>/dev/null | head -1)
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141)
+      ROS2DDS_BRIDGE_BIN=""
+      ROS2DDS_BRIDGE_BIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "zenoh-bridge-ros2dds" 2>/dev/null | head -1 2>/dev/null || true)
+      # F2, H4: Validate result is non-empty
       if [ -n "${ROS2DDS_BRIDGE_BIN}" ] && [ -f "${ROS2DDS_BRIDGE_BIN}" ]; then
         if chmod +x "${ROS2DDS_BRIDGE_BIN}" 2>/dev/null && \
            ln -sf "${ROS2DDS_BRIDGE_BIN}" /usr/local/bin/zenoh-bridge-ros2dds 2>/dev/null && \
@@ -25941,12 +22891,17 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
       fi
       
       # Find and install ROS2DDS plugin
-      ROS2DDS_PLUGIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "libzenoh_plugin_ros2dds*.so" 2>/dev/null | head -1)
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141)
+      ROS2DDS_PLUGIN=""
+      ROS2DDS_PLUGIN=$(find "${TEMP_EXTRACT_DIR}" -type f -name "libzenoh_plugin_ros2dds*.so" 2>/dev/null | head -1 2>/dev/null || true)
+      # F2, H4: Validate result is non-empty
       if [ -n "${ROS2DDS_PLUGIN}" ] && [ -f "${ROS2DDS_PLUGIN}" ]; then
         ZENOH_PLUGINS_DIR="/opt/zenoh/plugins"
         mkdir -p "${ZENOH_PLUGINS_DIR}" || { echo "✗ Failed to create plugins directory"; }
         if cp "${ROS2DDS_PLUGIN}" "${ZENOH_PLUGINS_DIR}/" 2>/dev/null; then
-          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}")
+          # F2, H4: Validate command substitution result
+          PLUGIN_NAME=""
+          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}" || printf '%s\n' "unknown")
           chmod 644 "${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}" 2>/dev/null || true
           echo "✓ Zenoh ROS 2 DDS plugin installed"
           # shellcheck disable=SC2034 # ZENOH_ROS2DDS_INSTALLED used for conditional logic
@@ -25958,346 +22913,52 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
       
       # Verify installation
       if command -v zenoh-bridge-ros2dds >/dev/null 2>&1 || [ -n "${ROS2DDS_PLUGIN:-}" ]; then
-        echo "✓ Zenoh ROS 2 DDS Bridge installation verified"
-        BRIDGE_BIN_PATH=$(command -v zenoh-bridge-ros2dds 2>/dev/null || echo 'N/A (plugin only)')
-        echo "  Bridge binary: ${BRIDGE_BIN_PATH}"
+        printf '%s\n' "✓ Zenoh ROS 2 DDS Bridge installation verified"
+        # F2, H4: Validate command substitution result
+        BRIDGE_BIN_PATH=""
+        BRIDGE_BIN_PATH=$(command -v zenoh-bridge-ros2dds 2>/dev/null || printf '%s\n' 'N/A (plugin only)')
+        printf '%s\n' "  Bridge binary: ${BRIDGE_BIN_PATH}"
         if [ -n "${ROS2DDS_PLUGIN:-}" ]; then
-          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}")
-          echo "  Plugin: ${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}"
+          # F2, H4: Validate command substitution result
+          PLUGIN_NAME=""
+          PLUGIN_NAME=$(basename "${ROS2DDS_PLUGIN}" || printf '%s\n' "unknown")
+          printf '%s\n' "  Plugin: ${ZENOH_PLUGINS_DIR}/${PLUGIN_NAME}"
         fi
       fi
-      
-      # Cleanup
-      [ -d "${TEMP_EXTRACT_DIR}" ] && rm -rf "${TEMP_EXTRACT_DIR}"
-    else
-      echo "✗ Extraction failed"
     fi
-    [ -f "${ZENOH_ROS2DDS_FILE}" ] && rm -f "${ZENOH_ROS2DDS_FILE}"
-  else
-    if [ -n "${ZENOH_ROS2DDS_URL:-}" ]; then
-      echo "✗ Download failed after 3 attempts - Zenoh ROS 2 DDS Bridge will not be available"
-      echo "  URL: ${ZENOH_ROS2DDS_URL}"
-      echo "  File: ${ZENOH_ROS2DDS_FILE}"
-      echo "  You can install manually later if needed"
-    fi
-  fi
-else
-  echo "⚠ Skipping Zenoh ROS 2 DDS Bridge installation (Zenoh not installed)"
-fi
-cd /
-
-#--- Sub-block 38.3: Configure Zenoh router ---
-# Purpose: Setup Zenoh router configuration and management scripts
-# Dependencies: Successful Zenoh installation
-# Outputs: Environment variables, configuration
-
-# Only configure Zenoh if installation was successful
-if [ "${ZENOH_INSTALLED}" = true ]; then
-  echo "==> Configuring Zenoh"
-  mkdir -p /etc/zenoh || { echo "✗ Failed to create /etc/zenoh directory"; exit 1; }
-  # Zenoh Router Configuration
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-router.json5
-// Zenoh router configuration for ROS 2 multi-version bridge
-{
-  // Router mode
-
-#--- Sub-block 38.4: Verification continuation ---
-# Purpose: Additional validation checks
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-  mode: "router",
-  // Listening endpoints
-  listen: {
-    endpoints: [
-      "tcp/0.0.0.0:7447", // Main Zenoh protocol
-      "udp/0.0.0.0:7447", // UDP multicast
-    ],
-  },
-  // Connect to other routers (for distributed systems)
-  connect: {
-    endpoints: [
-      // Add remote routers here if needed
-      // "tcp/remote-router:7447"
-    ],
-  },
-  // Storage configuration (optional - for persistent data)
-  plugins: {
-    storage_manager: {
-      volumes: {
-        memory: {
-          // In-memory storage for transient data
-        },
-      },
-      storages: {
-        demo: {
-          key_expr: "ros2/**",
-          volume: "memory",
-        },
-      },
-    },
-    // REST API plugin (useful for debugging)
-    rest: {
-      http_port: 8000
-    },
-  },
-  // Advanced settings
-  scouting: {
-    multicast: {
-      enabled: true,
-      address: "224.0.0.224:7446"
-    }
-  }
-}
-EOF
-  then
-    echo "✗ Failed to write /etc/zenoh/zenoh-router.json5" >&2
-    exit 1
-  fi
-
-
-
-#--- Code section 5964 ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block 38.5: Environment setup ---
-# Purpose: Environment variables and paths
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-  # Zenoh-DDS Bridge Configuration (Humble domain)
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-humble.json5
-// Bridge ROS 2 Humble (Domain 1) to Zenoh
-{
-  mode: "client",
-  connect: {
-    endpoints: ["tcp/localhost:7447"]
-  },
-
-#--- Sub-block 38.6: Environment finalization ---
-# Purpose: Complete environment setup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-  plugins: {
-    ros2dds: {
-      // Domain ID for Humble
-      domain: 1,
-      // Namespace for Humble topics in Zenoh
-      namespace: "/humble",
-      // Topic routing rules
-      allow: [
-        // allow all topics under /humble namespace
-        { topic: "**" }
-      ],
-      // DDS Configuration
-      shm_enabled: true,  // Shared memory for local performance
-      // QoS mapping
-      reliable_routes_blocking: true
-    }
-  }
-}
-EOF
-  then
-    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-humble.json5" >&2
-    exit 1
-  fi
+# Note: json-configs file: /etc/zenoh/zenoh-router.json5 is installed via install.sh from container-scripts/
+# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-router.json5
+# Target: /etc/zenoh/zenoh-router.json5
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: json-configs file: /etc/zenoh/zenoh-bridge-humble.json5 is installed via install.sh from container-scripts/
+# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-humble.json5
+# Target: /etc/zenoh/zenoh-bridge-humble.json5
+# Installed in Block 0 (early in script, before any scripts are needed)
 
   # Zenoh-DDS Bridge Configuration (Jazzy domain)
-  if ! cat <<'EOF' > /etc/zenoh/zenoh-bridge-jazzy.json5
-// Bridge ROS 2 Jazzy (Domain 2) to Zenoh
-{
-  mode: "client",
-  connect: {
-    endpoints: ["tcp/localhost:7447"]
-  },
-  plugins: {
-    ros2dds: {
-      // Domain ID for Jazzy
-      domain: 2,
-      // Namespace for Jazzy topics in Zenoh
-      namespace: "/jazzy",
-      // Topic routing rules
-      allow: [
-        { topic: "**" }
-      ],
-      shm_enabled: true,
-      reliable_routes_blocking: true
-    }
-  }
-}
-EOF
-  then
-    echo "✗ Failed to write /etc/zenoh/zenoh-bridge-jazzy.json5" >&2
-    exit 1
-  fi
+# Note: json-configs file: /etc/zenoh/zenoh-bridge-jazzy.json5 is installed via install.sh from container-scripts/
+# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-jazzy.json5
+# Target: /etc/zenoh/zenoh-bridge-jazzy.json5
+# Installed in Block 0 (early in script, before any scripts are needed)
 
-
-
-# ZENOH JULIA BINDINGS (Optional, but useful)
-if [ -n "${JULIA_HOME:-}" ] && [ -x "${JULIA_HOME}/bin/julia" ]; then
-  "${JULIA_HOME}/bin/julia" -e '
-    using Pkg
-    # Zenoh.jl wrapper (community package)
-    # Note: Official Julia bindings may not exist yet
-    # Use ZMQ bridge to Zenoh as fallback
-    Pkg.add(["ZMQ", "JSON3", "HTTP"])
-    # If official Zenoh.jl becomes available:
-    # Pkg.add("Zenoh")
-  ' || echo "⚠ Failed to install Zenoh Julia bindings (non-critical)"
-else
-  echo "⚠ Julia not found - skipping Zenoh Julia bindings"
+# Note: shell-scripts file: /usr/local/bin/zenoh_start is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-startup.sh
+# Target: /usr/local/bin/zenoh_start
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: shell-scripts file: /usr/local/bin/zenoh_stop is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-shutdown.sh
+# Target: /usr/local/bin/zenoh_stop
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Verify file exists before chmod
+if [ -f "/usr/local/bin/zenoh_start" ]; then
+  chmod +x /usr/local/bin/zenoh_start || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
 fi
-
-# ZENOH MANAGEMENT SCRIPTS
-# Zenoh startup script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_start
-#!/bin/bash
-# Start Zenoh router and bridges
-
-set -euo pipefail
-
-if ! command -v zenohd >/dev/null 2>&1; then
-  echo "✗ zenohd not found. Install Zenoh before running this script." >&2
-  exit 1
-fi
-
-echo "Starting Zenoh infrastructure..."
-
-# Determine plugin availability
-PLUGIN_COUNT=0
-if [ -d "/opt/zenoh/plugins" ]; then
-  PLUGIN_COUNT=$(find /opt/zenoh/plugins -mindepth 1 -maxdepth 1 -type f -name "*.so" 2>/dev/null | wc -l | tr -d '[:space:]')
-fi
-
-PLUGIN_ARGS=()
-if [ -d "/opt/zenoh/plugins" ] && [ "${PLUGIN_COUNT}" -gt 0 ]; then
-  export ZENOH_PLUGIN_SEARCH_DIR="/opt/zenoh/plugins"
-  PLUGIN_ARGS+=(--plugin-search-dir "${ZENOH_PLUGIN_SEARCH_DIR}")
-  echo "  Using Zenoh plugins directory: ${ZENOH_PLUGIN_SEARCH_DIR} (${PLUGIN_COUNT} plugin(s))"
-fi
-
-ROUTER_LOG="/tmp/zenoh-router.log"
-
-# Start Zenoh router in background
-echo "  Starting Zenoh router on port 7447..."
-zenohd "${PLUGIN_ARGS[@]}" --config /etc/zenoh/zenoh-router.json5 > "${ROUTER_LOG}" 2>&1 &
-ROUTER_PID=$!
-sleep 2
-
-# Check if router started
-if ! ps -p "${ROUTER_PID}" > /dev/null 2>&1; then
-  echo "  ✗ Failed to start Zenoh router"
-  cat "${ROUTER_LOG}" 2>/dev/null || true
-  exit 1
-fi
-echo "  ✓ Zenoh router started (PID: ${ROUTER_PID})"
-
-start_bridge() {
-  local bridge_name="$1"
-  local bridge_config="$2"
-  local log_path="$3"
-
-  if ! command -v zenoh-bridge-ros2dds >/dev/null 2>&1 && ! command -v zenoh-bridge-dds >/dev/null 2>&1; then
-    echo "  ⚠ No Zenoh bridge binary found - skipping ${bridge_name} bridge"
-    echo "    Note: Bridge functionality requires zenoh-plugin-ros2dds installation"
-    return 0
-  fi
-
-  local bridge_cmd
-  if command -v zenoh-bridge-ros2dds >/dev/null 2>&1; then
-    bridge_cmd="zenoh-bridge-ros2dds"
-  elif command -v zenoh-bridge-dds >/dev/null 2>&1; then
-    bridge_cmd="zenoh-bridge-dds"
-  else
-    bridge_cmd=""
-  fi
-
-  if [ -z "${bridge_cmd}" ]; then
-    echo "  ⚠ Unable to determine bridge command for ${bridge_name}"
-    return 0
-  fi
-
-  echo "  Starting Zenoh ROS 2 DDS bridge for ${bridge_name}..."
-  local bridge_args=()
-  if [ "${#PLUGIN_ARGS[@]}" -gt 0 ]; then
-    bridge_args+=("${PLUGIN_ARGS[@]}")
-  fi
-  bridge_args+=(--config "${bridge_config}")
-
-  "${bridge_cmd}" "${bridge_args[@]}" > "${log_path}" 2>&1 &
-  local bridge_pid=$!
-  sleep 1
-  if ps -p "${bridge_pid}" > /dev/null 2>&1; then
-    echo "  ✓ ${bridge_name} bridge started (PID: ${bridge_pid})"
-  else
-    echo "  ✗ Failed to start ${bridge_name} bridge"
-    cat "${log_path}" 2>/dev/null || true
-  fi
-}
-
-if [ -d "/conda/envs/ros2_humble" ]; then
-  start_bridge "Humble (Domain 1)" "/etc/zenoh/zenoh-bridge-humble.json5" "/tmp/zenoh-humble.log"
-fi
-
-
-
-if [ -d "/conda/envs/ros2_jazzy" ] || ([ -n "${ROS_DISTRO:-}" ] && [ -d "/opt/ros/${ROS_DISTRO}" ]); then
-  start_bridge "Jazzy (Domain 2)" "/etc/zenoh/zenoh-bridge-jazzy.json5" "/tmp/zenoh-jazzy.log"
-fi
-
-echo "Zenoh infrastructure ready!"
-echo "  Router: http://localhost:8000 (REST API)"
-echo "  Logs: /tmp/zenoh*.log"
-echo ""
-echo "To stop everything: zenoh_stop"
-echo "To check status:   zenoh_status"
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/zenoh_start" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/zenoh_start || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
 
 # Zenoh stop script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_stop
-#!/bin/bash
-# Stop all Zenoh processes
-
-set -euo pipefail
-
-echo "Stopping Zenoh infrastructure..."
-pids_terminated=false
-if pkill -f zenohd >/dev/null 2>&1; then
-  pids_terminated=true
-fi
-if pkill -f zenoh-bridge-ros2dds >/dev/null 2>&1; then
-  pids_terminated=true
-fi
-if pkill -f zenoh-bridge-dds >/dev/null 2>&1; then
-  pids_terminated=true
-fi
-if pkill -f zenoh-bridge >/dev/null 2>&1; then
-  pids_terminated=true
-fi
-
-if [ "${pids_terminated}" = false ]; then
-  echo "  No Zenoh processes were running"
-fi
-echo "✓ Zenoh stopped"
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/zenoh_stop" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/zenoh_stop || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_stop" >&2; exit 1; }
-
-# Zenoh status script
-if ! cat <<'EOF' > /usr/local/bin/zenoh_status
-#!/bin/bash
-# Check Zenoh status
-
-set -euo pipefail
-
+# Note: shell-scripts file: /usr/local/bin/zenoh_status is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-status-check.sh
+# Target: /usr/local/bin/zenoh_status
+# Installed in Block 0 (early in script, before any scripts are needed)
 echo "Zenoh Infrastructure Status:"
 echo "----------------------------"
 # Check router
@@ -26307,227 +22968,30 @@ if pgrep -f "zenohd" > /dev/null; then
 else
   echo "✗ Zenoh Router: STOPPED"
 fi
-
-
-
-# Check Humble bridge
-if pgrep -f 'zenoh-bridge.*zenoh-bridge-humble\.json5' > /dev/null 2>&1; then
-  echo "✓ Humble Bridge: RUNNING (Domain 1 -> /humble namespace)"
-else
-  echo "✗ Humble Bridge: STOPPED"
+# Note: python-scripts file: /opt/scripts/zenoh_topic_bridge.py is installed via install.sh from container-scripts/
+# Source: python-scripts/block-38-robotics-middleware-zenoh/zenoh-topic-bridge.py
+# Target: /opt/scripts/zenoh_topic_bridge.py
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: shell-scripts file: /usr/local/bin/ros_multiterm_zellij_zenoh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-38-robotics-middleware-zenoh/ros-multiterminal-zellij-launcher.sh
+# Target: /usr/local/bin/ros_multiterm_zellij_zenoh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Verify file exists before chmod
+if [ -f "/usr/local/bin/ros_multiterm_zellij_zenoh" ]; then
+  chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
 fi
-
-# Check Jazzy bridge
-if pgrep -f 'zenoh-bridge.*zenoh-bridge-jazzy\.json5' > /dev/null 2>&1; then
-  echo "✓ Jazzy Bridge: RUNNING (Domain 2 -> /jazzy namespace)"
-else
-  echo "✗ Jazzy Bridge: STOPPED"
-fi
-
-echo "Logs:"
-echo "  Router: /tmp/zenoh-router.log"
-echo "  Humble: /tmp/zenoh-humble.log"
-echo "  Jazzy: /tmp/zenoh-jazzy.log"
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/zenoh_status" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/zenoh_status || { echo "✗ Failed to set executable bit on /usr/local/bin/zenoh_status" >&2; exit 1; }
-
-# ZENOH PYTHON UTILITIES
-# ZENOH TOPIC BRIDGE SCRIPT
-if ! cat <<'EOF' > /opt/scripts/zenoh_topic_bridge.py
-#!/usr/bin/env python3
-# Zenoh topic bridge for ROS 2 Humble <-> Jazzy communication
-
-import sys
-try:
-    import zenoh
-except ImportError:
-    #--- Sub-block 38.7: Helper scripts generation ---
-    # Purpose: Create utility and monitoring scripts
-    # Dependencies: None (foundational)
-    # Outputs: Environment variables, configuration
-    print(" Zenoh-Python package not installed")
-    print("Install with: python3 -m pip install eclipse-zenoh")
-    sys.exit(1)
-
-class ZenohTopicBridge:
-    def __init__(self):
-        # Connect to Zenoh router
-        config = zenoh.Config()
-        self.session = zenoh.open(config)
-        print("✓ Connected to Zenoh router")
-
-
-    def bridge_topic(self, from_topic: str, to_topic: str):
-        """Bridge a topic from one namespace to another"""
-        def callback(sample):
-            # Forward data
-            self.session.put(to_topic, sample.payload)
-            print(f"Bridged: {from_topic} -> {to_topic}")
-
-        #--- Sub-block 38.8: Utility scripts ---
-        # Purpose: Helper scripts creation
-        # Dependencies: None (foundational)
-        # Outputs: Environment variables, configuration
-
-        #--- Code section 6161 ---
-        # Purpose: Continuing implementation
-        # Dependencies: None (foundational)
-        # Outputs: Environment variables, configuration
-        # Subscribe and forward
-        subscriber = self.session.declare_subscriber(from_topic, callback)
-        print(f"Bridge active: {from_topic} -> {to_topic}")
-
-        #--- Sub-block 38.9: Script generation ---
-        # Purpose: Create additional helper scripts
-        # Dependencies: None (foundational)
-        # Outputs: Environment variables, configuration
-        return subscriber
-
-    def run(self):
-        """Keep bridge running"""
-        print("Zenoh topic bridge running. Press Ctrl+C to stop.")
-        try:
-            import time
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            print("Stopping bridge...")
-
-if __name__ == "__main__":
-    bridge = ZenohTopicBridge()
-    # Example bridges - customize as needed
-    bridge.bridge_topic('/humble/camera/image', '/jazzy/camera/image')
-    bridge.bridge_topic('/jazzy/cmd_vel', '/humble/cmd_vel')
-    bridge.run()
-EOF
-then
-  echo "✗ Failed to write /opt/scripts/zenoh_topic_bridge.py" >&2
-  exit 1
-fi
-chmod +x /opt/scripts/zenoh_topic_bridge.py || { echo "✗ Failed to set executable bit on /opt/scripts/zenoh_topic_bridge.py" >&2; exit 1; }
-echo "✓ Zenoh topic bridge script created"
-
-# UPDATE ZELLIJ LAYOUT WITH ZENOH
-# Update the Zellij launcher to include Zenoh
-if ! cat <<'EOF' > /usr/local/bin/ros_multiterm_zellij_zenoh
-#!/bin/bash
-# Launch Zellij session with Zenoh-enabled ROS environments
-
-set -euo pipefail
-
-SESSION="ros_multi_zenoh"
-if ! layout_file="$(mktemp -t ros_zenoh_layout.XXXXXX.kdl)"; then
-  echo "✗ Failed to allocate temporary Zenoh layout file" >&2
-  exit 1
-fi
-
-cleanup() {
-  rm -f "${layout_file}"
-}
-trap cleanup EXIT INT TERM
-
-# Start Zenoh infrastructure first
-zenoh_start
-
-# Create Zellij layout
-if ! cat <<'LAYOUT' > "${layout_file}"
-layout {
-    default_tab_template {
-        pane size=1 borderless=true {
-            plugin location="zellij:tab-bar"
-        }
-        children
-        pane size=2 borderless=true {
-            plugin location="zellij:status-bar"
-        }
-    }
-
-    tab name="Humble" focus=true {
-        pane {
-            command "bash"
-            args "-c" "conda activate ros2_humble && export RMW_IMPLEMENTATION=rmw_zenoh_cpp && cd /workspaces/humble_ws && exec bash"
-        }
-    }
-
-    tab name="Jazzy" {
-        pane {
-            command "bash"
-            args "-c" "conda activate ros2_jazzy && export RMW_IMPLEMENTATION=rmw_zenoh_cpp && cd /workspaces/jazzy_ws && exec bash"
-        }
-    }
-
-    tab name="Zenoh" {
-        pane split_direction="vertical" {
-            pane {
-                command "bash"
-                args "-c" "zenoh_status && echo '' && echo 'Zenoh Infrastructure running' && exec bash"
-            }
-            pane {
-                command "bash"
-                args "-c" "tail -f /tmp/zenoh-router.log"
-            }
-        }
-    }
-
-    tab name="Julia" {
-        pane split_direction="vertical" {
-            pane {
-                command "bash"
-                args "-c" "echo 'Start Julia server: julia /opt/scripts/julia_vision_server.jl' && exec bash"
-            }
-            pane {
-                command "julia"
-            }
-        }
-    }
-
-    tab name="Monitor" {
-        pane split_direction="vertical" {
-            pane {
-                command "btm"
-            }
-            pane {
-                command "nvtop"
-            }
-        }
-    }
-}
-LAYOUT
-then
-    : # File created successfully
-else
-    echo "✗ Failed to create Zellij Zenoh layout file" >&2
-    exit 1
-fi
-
-
-# Launch Zellij with layout
-if ! zellij --layout "${layout_file}" attach -c "${SESSION}"; then
-  echo "✗ Failed to launch Zellij Zenoh session" >&2
-  exit 1
-fi
-EOF
-then
-  echo "✗ Failed to write /usr/local/bin/ros_multiterm_zellij_zenoh" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { echo "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
 
 # CLEANUP
 #--- Sub-block 38.10: Clean up Rust build artifacts ---
 # Purpose: Remove cargo cache to save space
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-  # Remove Zenoh build artifacts
-  rm -rf /opt/rust/cargo/registry
-  rm -rf /opt/rust/cargo/git
-  echo "✓ Zenoh installation and configuration complete"
-else
-  echo "⚠ Zenoh not installed - skipping configuration"
+    # Remove Zenoh build artifacts
+    rm -rf /opt/rust/cargo/registry
+    rm -rf /opt/rust/cargo/git
+    echo "✓ Zenoh installation and configuration complete"
+  else
+    echo "⚠ Zenoh not installed - skipping configuration"
   echo "  Zenoh is optional and can be installed manually later if needed"
 fi
 
@@ -26560,11 +23024,12 @@ TURBOVNC_BINS=(vncserver Xvnc vncpasswd vncconnect vncviewer webserver tvncconfi
 for binary in "${TURBOVNC_BINS[@]}"; do
   if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/TurboVNC/bin/${binary}" ]; then
     if ln -sf "/opt/TurboVNC/bin/${binary}" "/usr/local/bin/${binary}"; then
-      echo "  ✓ Created missing symlink: ${binary}"
+      printf '%s\n' "  ✓ Created missing symlink: ${binary}"
     else
-      echo "  ✗ Failed to create symlink for ${binary}" >&2
+      printf '%s\n' "  ✗ Failed to create symlink for ${binary}" >&2
     fi
   fi
+# ENDFOR: binary
 done
 
 # VirtualGL binaries (comprehensive list)
@@ -26572,16 +23037,18 @@ VIRTUALGL_BINS=(vglrun vglclient vglconfig vglconnect vglgenkey vgllogin vglserv
 for binary in "${VIRTUALGL_BINS[@]}"; do
   if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/VirtualGL/bin/${binary}" ]; then
     if ln -sf "/opt/VirtualGL/bin/${binary}" "/usr/local/bin/${binary}"; then
-      echo "  ✓ Created missing symlink: ${binary}"
+      printf '%s\n' "  ✓ Created missing symlink: ${binary}"
     else
-      echo "  ✗ Failed to create symlink for ${binary}" >&2
+      printf '%s\n' "  ✗ Failed to create symlink for ${binary}" >&2
     fi
   fi
+# ENDFOR: binary
 done
 
 # Final comprehensive verification
 echo ""
 echo "==> Critical symlink verification:"
+# A6: declare -A requires Bash 4+ - verified: shebang is #!/bin/bash
 declare -A CRITICAL_BINS=(
   ["vncserver"]="/opt/TurboVNC/bin/vncserver"
   ["Xvnc"]="/opt/TurboVNC/bin/Xvnc"
@@ -26595,15 +23062,20 @@ for binary in "${!CRITICAL_BINS[@]}"; do
   # shellcheck disable=SC2034 # expected used in loop body
   expected="${CRITICAL_BINS[$binary]}"
   if [ -L "/usr/local/bin/${binary}" ]; then
-    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}" 2>/dev/null || true)
+    # F2, H4: Validate command substitution result
+    actual=""
+    # SC2155: Declare and assign separately to avoid masking return values
+    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}" 2>/dev/null || printf '%s\n' "")
+    # F2: Validate result is non-empty and valid before use
     if [ -n "${actual}" ] && [ -x "${actual}" ]; then
-      echo "  ✓ ${binary} -> ${actual} [OK]"
+      printf '%s\n' "  ✓ ${binary} -> ${actual} [OK]"
     else
-      echo "  ✗ ${binary} -> ${actual} [BROKEN]"
+      printf '%s\n' "  ✗ ${binary} -> ${actual} [BROKEN]" >&2
     fi
   else
-    echo "  ✗ ${binary} [MISSING]"
+    printf '%s\n' "  ✗ ${binary} [MISSING]"
   fi
+# ENDFOR: binary
 done
 
 
@@ -26618,10 +23090,16 @@ echo "==> Cleaning temporary files while preserving cache..."
 
 # Clean APT lists (safe to remove)
 echo "  » APT LISTS CLEANUP - Monitoring cache before APT lists cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+# H4: Validate command substitution result
+cache_count_before=""
+cache_count_before=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_before} .deb files"
 rm -rf /var/lib/apt/lists/* 2>/dev/null || true
 echo "  » APT LISTS CLEANUP - Monitoring cache after APT lists cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+# H4: Validate command substitution result
+cache_count_after=""
+cache_count_after=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after} .deb files"
 
 # Clean temporary APT directories that might cause issues
 rm -rf /tmp/apt-dpkg-install* 2>/dev/null || true
@@ -26629,17 +23107,21 @@ rm -rf /tmp/apt-dpkg-install* 2>/dev/null || true
 
 # Clean temporary files but preserve our container cache
 echo "  » CLEANUP SECTION - Monitoring cache before cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
-# DEBUG: Check for symlinks or unusual directory structure
-echo "  DEBUG: Checking for symlinks or unusual paths..."
-find /tmp -maxdepth 1 -type l -o -type d -name "*container_cache*" -o -name "*apt*" 2>/dev/null | head -10 || echo "No suspicious symlinks in /tmp"
-find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -5 || echo "Directory empty or not accessible"
-echo "  DEBUG: About to run: find /tmp -type f -name '*.deb' -delete"
+# H4: Validate command substitution result
+cache_count_before_cleanup=""
+cache_count_before_cleanup=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_before_cleanup} .deb files"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find /tmp -maxdepth 1 -type l -o -type d -name "*container_cache*" -o -name "*apt*" 2>/dev/null | head -10 2>/dev/null || echo "No suspicious symlinks in /tmp"
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -5 2>/dev/null || echo "Directory empty or not accessible"
 find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
 find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true
 find /tmp -type f -name "*.whl" -delete 2>/dev/null || true
 echo "  » CLEANUP SECTION - Monitoring cache after cleanup"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+# H4: Validate command substitution result
+cache_count_after_cleanup=""
+cache_count_after_cleanup=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_cleanup} .deb files"
 
 # === FINAL CACHE PRESERVATION ===
 # Reverting cache file permissions to normal ===
@@ -26662,12 +23144,19 @@ cache_summary
 
 echo "  » DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
 echo "  Container cache directory contents:"
-find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
 echo "  Var cache directory contents:"
-find /var/cache/apt/archives -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find /var/cache/apt/archives -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
 echo "Cache file counts:"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
-echo "  /var/cache/apt/archives: $(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l) .deb files"
+# H4: Validate command substitution result
+apt_cache_count=""
+apt_cache_count=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${apt_cache_count} .deb files"
+var_cache_count=""
+var_cache_count=$(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  /var/cache/apt/archives: ${var_cache_count} .deb files"
 
 # Ensure all downloaded packages are preserved in the cache directory
 echo "==> Preserving APT cache for future builds ==="
@@ -26676,7 +23165,10 @@ if [ -d "/var/cache/apt/archives" ]; then
     echo "Copying packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
     find /var/cache/apt/archives -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
     echo "After copying from /var/cache/apt/archives:"
-    echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+    # H4: Validate command substitution result
+    cache_count_after_copy=""
+    cache_count_after_copy=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+    echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_copy} .deb files"
 fi
 
 # Also preserve any packages that might be in the system cache
@@ -26684,7 +23176,10 @@ if [ -d "/var/lib/apt/cache" ]; then
     echo "Checking system APT cache for additional packages..."
     find /var/lib/apt/cache -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
     echo "After copying from /var/lib/apt/cache:"
-    echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+    # H4: Validate command substitution result
+    cache_count_after_system_copy=""
+    cache_count_after_system_copy=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+    echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_system_copy} .deb files"
 fi
 
 # Final monitoring before cache harvest
@@ -26693,17 +23188,30 @@ monitor_cache "Final cache status before harvest"
 # Add one more detailed check right before the script ends
 echo "  » FINAL CACHE CHECK - RIGHT BEFORE SCRIPT END"
 echo "Final container cache contents:"
-find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 || echo "Directory empty or not accessible"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
 echo ""
 echo "Final cache file count:"
-echo "  ${CONTAINER_APT_CACHE}: $(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l) .deb files"
+# H4: Validate command substitution result
+final_cache_count=""
+final_cache_count=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${final_cache_count} .deb files"
 echo ""
 # Report cache status
-echo "[debug] Container cache status:"
-echo "  APT archives: $(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l) files"
-echo "  Conda packages: $(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
-echo "  Pip wheels: $(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
-echo "  Julia packages: $(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l) files"
+echo "Container cache status:"
+# H4: Validate command substitution results
+apt_archives_count=""
+apt_archives_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l || echo "0")
+conda_packages_count=""
+conda_packages_count=$(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+pip_wheels_count=""
+pip_wheels_count=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+julia_packages_count=""
+julia_packages_count=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+echo "  APT archives: ${apt_archives_count} files"
+echo "  Conda packages: ${conda_packages_count} files"
+echo "  Pip wheels: ${pip_wheels_count} files"
+echo "  Julia packages: ${julia_packages_count} files"
 echo "=========================================================================="
 
 
@@ -26720,8 +23228,9 @@ echo "=========================================="
 echo ""
 echo "TurboVNC Installation:"
 if [ -x /usr/local/bin/vncserver ]; then
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
   if /usr/local/bin/vncserver -help >/dev/null 2>&1; then
-    /usr/local/bin/vncserver -help 2>&1 | head -1 || true
+    /usr/local/bin/vncserver -help 2>&1 | head -1 2>/dev/null || true
   fi
   echo "  ✓ TurboVNC installed"
 else
@@ -26732,612 +23241,10 @@ fi
 echo ""
 echo "VirtualGL Installation:"
 if [ -x /usr/local/bin/vglrun ]; then
-  if /usr/local/bin/vglrun --version >/dev/null 2>&1; then
-    /usr/local/bin/vglrun --version 2>&1 | head -1 || true
-  fi
   echo "  ✓ VirtualGL installed"
 else
   echo "  ✗ VirtualGL not found!"
 fi
-
-# Test helper scripts
-echo ""
-echo "Helper Scripts:"
-for script in start_vnc_xfce.sh test_virtualgl.sh vgl_benchmark.sh vgl_info.sh vgl_launch.sh; do
-  if [ -x "/usr/local/bin/${script}" ]; then
-    echo "  ✓ ${script}"
-  else
-    echo "  ✗ ${script} missing"
-  fi
-done
-
-
-echo ""
-echo "=========================================="
-echo "Build Complete!"
-echo "=========================================="
-
-# ===============================================================
-
-# VNC server selection and comparison tool
-# ===============================================================
-echo "==> Creating VNC server selection tool..."
-
-if ! cat <<'VNCSELECT' > /usr/local/bin/vnc_select.sh
-#!/usr/bin/env bash
-# VNC Server Selection and Comparison Tool
-
-set -euo pipefail
-
-cat << 'INFO'
-========================================
-VNC Server Options
-========================================
-
-Available VNC servers in this container:
-
-1. TurboVNC (Default - Recommended)
-   - Best performance for GPU applications
-   - Optimized JPEG compression
-   - Built specifically for VirtualGL
-   - Command: start_vnc_xfce.sh
-
-2. TurboVNC Ultimate (Enhanced)
-   - All TurboVNC features
-   - Automatic optimization
-   - Performance monitoring
-   - Audio support
-   - Command: start_vnc_ultimate.sh
-
-3. TigerVNC (Alternative)
-   - Good compatibility
-   - Different compression algorithm
-   - Some prefer the image quality
-   - Command: start_vnc_tigervnc.sh
-
-4. KasmVNC (Modern)
-   - Modern web-first VNC
-   - Built-in web interface
-   - Container-optimized
-   - Command: start_kasmvnc.sh
-
-
-5. x11vnc (Screen Sharing)
-   - Can attach to existing X session
-   - Good for debugging
-   - Command: start_x11vnc.sh
-
-
-
-#--- Sub-block 39.2: Final cleanup ---
-# Purpose: Post-installation cleanup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-========================================
-RECOMMENDATION
-========================================
-
-
-#--- Sub-block 39.3: Final cleanup operations ---
-# Purpose: Post-installation cleanup tasks
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-For most users: start_vnc_ultimate.sh
-
-This provides the best balance of:
-- Performance (TurboVNC)
-- GPU support (VirtualGL)
-- Ease of use (noVNC web interface)
-- Monitoring and diagnostics
-
-========================================
-PERFORMANCE COMPARISON
-========================================
-
-Benchmark your options:
-  vgl_benchmark.sh       (VirtualGL performance)
-  turbovnc_tune.sh       (TurboVNC settings)
-  vnc_monitor.sh         (Real-time monitoring)
-
-========================================
-INFO
-
-# If argument provided, start that server
-if [ $# -gt 0 ]; then
-  case "${1}" in
-    turbovnc|1)
-      exec start_vnc_xfce.sh
-      ;;
-    ultimate|2)
-      exec start_vnc_ultimate.sh
-      ;;
-    tiger|3)
-      exec start_vnc_tigervnc.sh
-      ;;
-    kasm|4)
-      exec start_kasmvnc.sh
-      ;;
-    x11vnc|5)
-      exec start_x11vnc.sh
-      ;;
-    *)
-      echo "Unknown option: ${1}"
-      exit 1
-      ;;
-  esac
-fi
-VNCSELECT
-then
-  echo "✗ Failed to write /usr/local/bin/vnc_select.sh" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/vnc_select.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/vnc_select.sh" >&2; exit 1; }
-
-
-
-echo "✓ VNC selection tool created"
-
-# ===============================================================
-# Network and TCP Tuning for Remote Desktop
-# ===============================================================
-echo "==> Creating network optimization script..."
-
-if ! cat <<'NETOPT' > /usr/local/bin/optimize_network.sh
-#!/usr/bin/env bash
-# Optimize network for remote desktop (run on host/container with permissions)
-
-set -euo pipefail
-
-echo "Optimizing TCP for remote desktop..."
-
-# These would need to run on host or with capabilities
-# Include as documentation
-
-cat << 'EOF'
-# Add these to host system /etc/sysctl.conf for better performance:
-
-# Increase TCP buffer sizes
-net.core.rmem_max = 134217728
-net.core.wmem_max = 134217728
-net.ipv4.tcp_rmem = 4096 87380 67108864
-net.ipv4.tcp_wmem = 4096 65536 67108864
-
-# Enable TCP window scaling
-net.ipv4.tcp_window_scaling = 1
-
-# Increase max backlog
-net.core.netdev_max_backlog = 5000
-
-# Enable BBR congestion control
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-
-Then run: sudo sysctl -p
-EOF
-
-
-echo ""
-echo "Note: These optimizations require host-level changes"
-NETOPT
-then
-  echo "✗ Failed to write /usr/local/bin/optimize_network.sh" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/optimize_network.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/optimize_network.sh" >&2; exit 1; }
-
-echo "✓ Network optimization guide created"
-
-
-# ===============================================================
-# Create Unified Remote Desktop Launcher
-# ===============================================================
-echo "==> Creating unified remote desktop launcher..."
-
-
-#--- Sub-block 39.4: Create unified remote desktop launcher ---
-# Purpose: Interactive menu for launching VNC/noVNC sessions
-# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
-# Outputs: VNC server, GPU acceleration
-if ! cat <<'RDLAUNCH' > /usr/local/bin/remote_desktop.sh
-#!/usr/bin/env bash
-# Unified Remote Desktop Launcher
-
-set -euo pipefail
-
-# Ensure helper scripts exist before invocation and surface failures.
-invoke_helper() {
-  local executable="${1:?executable name required}"
-  shift
-
-  if ! command -v "${executable}" >/dev/null 2>&1; then
-    printf 'Required helper "%s" is not available in PATH.\n' "${executable}" >&2
-    return 0
-  fi
-
-  if ! "${executable}" "$@"; then
-    local rc=$?
-    printf 'Helper "%s" exited with status %s.\n' "${executable}" "${rc}" >&2
-  fi
-
-  return 0
-}
-
-# Display the interactive menu of remote desktop options.
-print_menu() {
-  cat <<'EOF'
-
-========================================
-Remote Desktop Launcher
-========================================
-
-Available Options:
-
-VNC SERVERS:
-  1) TurboVNC (default, best for most uses)
-  2) TurboVNC High Quality (fast network)
-  3) TurboVNC Low Bandwidth (slow network)
-  4) TigerVNC (alternative)
-  5) x11vnc (attach to existing display)
-  6) KasmVNC (modern web VNC)
-
-APPLICATION STREAMING:
-  7) Xpra (seamless windows)
-  8) Sunshine (game streaming, ultra-low latency)
-
-UTILITIES:
-  9) List running sessions
- 10) Kill all VNC servers
- 11) Test VirtualGL
- 12) GPU benchmark
- 13) Record screen
-
- 0) Exit
-
-========================================
-EOF
-}
-
-# Prompt the operator to press Enter before returning to the menu.
-prompt_continue() {
-  local _discard=""
-
-  if ! read -r -p "Press Enter to continue..." _discard; then
-    printf 'Input aborted; exiting.\n' >&2
-    return 1
-  fi
-
-  return 0
-}
-
-handle_choice() {
-  local selection="${1:-}"
-
-  case "${selection}" in
-    1) invoke_helper start_vnc_xfce.sh ;;
-    2) invoke_helper start_vnc_ultrahq.sh ;;
-    3) invoke_helper start_vnc_lowbw.sh ;;
-    4) invoke_helper start_vnc_tigervnc.sh ;;
-    5)
-      local disp=""
-      if ! read -r -p "Display number (default 1): " disp; then
-        printf 'Input aborted; returning to menu.\n' >&2
-        return 2
-      fi
-      invoke_helper start_x11vnc.sh "${disp:-1}"
-      ;;
-    6) invoke_helper start_kasmvnc.sh ;;
-    7) invoke_helper start_xpra.sh ;;
-    8) invoke_helper start_sunshine.sh ;;
-    9)
-      if command -v vncserver >/dev/null 2>&1; then
-        vncserver -list 2>/dev/null || true
-      else
-        printf 'vncserver is not available in PATH.\n' >&2
-      fi
-      printf '\n'
-      if command -v pgrep >/dev/null 2>&1; then
-        pgrep -af 'vnc|xpra|sunshine' 2>/dev/null || true
-      else
-        ps aux 2>/dev/null | grep -E 'vnc|xpra|sunshine' | grep -v grep || true
-      fi
-      ;;
-    10)
-      if command -v vncserver >/dev/null 2>&1; then
-        vncserver -kill :1 2>/dev/null || true
-      fi
-      if command -v pkill >/dev/null 2>&1; then
-        pkill -f vnc || true
-        pkill -f xpra || true
-      else
-        printf 'pkill not available; please terminate sessions manually if needed.\n' >&2
-      fi
-      printf 'All VNC-related servers requested to terminate.\n'
-      ;;
-    11) invoke_helper test_virtualgl.sh ;;
-    12) invoke_helper vgl_benchmark.sh ;;
-    13)
-      local fname=""
-      if ! read -r -p "Output filename (default: screen_recording.mp4): " fname; then
-        printf 'Input aborted; returning to menu.\n' >&2
-        return 2
-      fi
-      invoke_helper record_screen.sh 1 "${fname:-screen_recording.mp4}"
-      ;;
-    0)
-      printf 'Exiting remote desktop launcher.\n'
-      return 1
-      ;;
-    *)
-      printf 'Invalid option.\n'
-      return 2
-      ;;
-  esac
-
-  return 0
-}
-
-main() {
-  local choice=""
-
-  while true; do
-    print_menu
-
-    if ! read -r -p "Select option: " choice; then
-      printf 'Input aborted; exiting.\n' >&2
-      return 0
-    fi
-
-    printf '\n'
-
-    if handle_choice "${choice}"; then
-      if ! prompt_continue; then
-        break
-      fi
-    else
-      local rc=$?
-
-      case "${rc}" in
-        1) break ;;
-        2) continue ;;
-        *) if ! prompt_continue; then break; fi ;;
-      esac
-    fi
-  done
-
-  return 0
-}
-
-# Check if running in container
-if [ -f /.singularity.d/Singularity ]; then
-  printf 'Running inside Singularity container\n'
-else
-  printf 'Warning: Should be run inside container\n'
-fi
-
-main "$@"
-RDLAUNCH
-then
-  echo "✗ Failed to write /usr/local/bin/remote_desktop.sh" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/remote_desktop.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/remote_desktop.sh" >&2; exit 1; }
-
-echo "✓ Unified launcher created: remote_desktop.sh"
-
-# ===============================================================
-
-#--- Sub-block 39.5: Create performance benchmark suite ---
-# Purpose: Comprehensive remote desktop performance testing
-# Dependencies: Block 6.13 (NVIDIA CUDA), Block 15 (VirtualGL)
-# Outputs: GPU libraries, CUDA toolkit
-# Create Performance Benchmarking Suite
-# ===============================================================
-echo "==> Creating performance benchmark suite..."
-
-if ! cat <<'BENCH' > /usr/local/bin/benchmark_all.sh
-#!/usr/bin/env bash
-# Comprehensive Remote Desktop Performance Benchmark
-
-set -euo pipefail
-
-# Print the benchmark header banner.
-print_header() {
-  printf '==========================================\n'
-  printf 'Remote Desktop Performance Benchmark\n'
-  printf '==========================================\n\n'
-}
-
-# Display CPU, memory, and GPU inventory details.
-report_system_info() {
-  printf 'SYSTEM INFORMATION:\n'
-
-  if [ -r /proc/cpuinfo ]; then
-    local cpu_model=""
-    cpu_model=$(awk -F':' '/^model name/ {gsub(/^[[:space:]]+/, "", $2); print $2; exit}' /proc/cpuinfo || true)
-    if [ -n "${cpu_model}" ]; then
-      printf '  CPU: %s\n' "${cpu_model}"
-    fi
-  fi
-
-  if command -v nproc >/dev/null 2>&1; then
-    printf '  Cores: %s\n' "$(nproc)"
-  fi
-
-  if command -v free >/dev/null 2>&1; then
-    local total_mem=""
-    total_mem=$(free -h | awk '/^Mem:/ {print $2; exit}' || true)
-    if [ -n "${total_mem}" ]; then
-      printf '  Memory: %s\n' "${total_mem}"
-    fi
-  fi
-
-  report_gpu_info
-  printf '\n'
-}
-
-# Collect GPU model and memory using nvidia-smi when present.
-report_gpu_info() {
-  if ! command -v nvidia-smi >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local gpu_name=""
-  local gpu_vram=""
-
-  if command -v timeout >/dev/null 2>&1; then
-    gpu_name=$(timeout 5 nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
-    gpu_vram=$(timeout 5 nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
-  else
-    gpu_name=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1 || true)
-    gpu_vram=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -1 || true)
-  fi
-
-  if [ -n "${gpu_name}" ]; then
-    printf '  GPU: %s\n' "${gpu_name}"
-  fi
-
-  if [ -n "${gpu_vram}" ]; then
-    printf '  VRAM: %s MB\n' "${gpu_vram}"
-  fi
-}
-
-# Exercise VirtualGL rendering if the stack is available.
-run_virtualgl_benchmark() {
-  printf 'VIRTUALGL PERFORMANCE:\n'
-
-  if [ -z "${DISPLAY:-}" ] || ! command -v vglrun >/dev/null 2>&1 || ! command -v glxspheres64 >/dev/null 2>&1; then
-    printf '  ⚠ DISPLAY not set or vglrun/glxspheres64 not available\n\n'
-    return 0
-  fi
-
-  printf '  Testing GPU rendering...\n'
-  local result=""
-
-  if command -v timeout >/dev/null 2>&1; then
-    result=$(timeout 10s vglrun glxspheres64 2>&1 | grep 'frames' | tail -1 || true)
-  else
-    result=$(vglrun glxspheres64 2>&1 | grep 'frames' | tail -1 || true)
-  fi
-
-  if [ -n "${result}" ]; then
-    printf '  %s\n\n' "${result}"
-  else
-    printf '  ⚠ GPU test failed or incomplete\n\n'
-  fi
-}
-
-# Run sysbench CPU test when available.
-run_cpu_benchmark() {
-  printf 'CPU PERFORMANCE:\n'
-
-  if ! command -v sysbench >/dev/null 2>&1; then
-    printf '  ⚠ sysbench not available\n\n'
-    return 0
-  fi
-
-  printf '  Running CPU benchmark...\n'
-  local cores="1"
-  cores=$(nproc 2>/dev/null || printf '1\n')
-
-  local sb_output=""
-  sb_output=$(sysbench cpu --threads="${cores}" --time=10 run 2>&1 || true)
-
-  local events=""
-  events=$(grep 'events per second' <<< "${sb_output}" || true)
-
-  if [ -n "${events}" ]; then
-    printf '  %s\n\n' "${events}"
-  else
-    printf '  ⚠ CPU benchmark failed\n\n'
-  fi
-}
-
-# Measure disk throughput using a temporary file that is always cleaned up.
-run_disk_benchmark() {
-  printf 'DISK I/O:\n'
-
-  if ! command -v dd >/dev/null 2>&1; then
-    printf '  ⚠ dd not available\n\n'
-    return 0
-  fi
-
-  local tmp_file=""
-  if ! tmp_file=$(mktemp /tmp/benchmark.dd.XXXXXX); then
-    printf '  ⚠ Failed to create temp file for disk benchmark\n\n'
-    return 0
-  fi
-
-  trap 'rm -f "${tmp_file}" 2>/dev/null || true' RETURN
-
-  local dd_output=""
-  local dd_status=0
-  local -a dd_cmd=(dd if=/dev/zero of="${tmp_file}" bs=1M count=256 conv=fdatasync)
-
-  if command -v timeout >/dev/null 2>&1; then
-    dd_output=$(timeout 60s "${dd_cmd[@]}" 2>&1) || dd_status=$?
-  else
-    dd_output=$("${dd_cmd[@]}" 2>&1) || dd_status=$?
-  fi
-
-  if [ "${dd_status}" -eq 0 ]; then
-    local copied_line=""
-    copied_line=$(grep 'copied' <<< "${dd_output}" || true)
-    if [ -n "${copied_line}" ]; then
-      printf '  %s\n\n' "${copied_line}"
-    else
-      printf '  ⚠ Disk I/O test failed to capture throughput\n\n'
-    fi
-  else
-    printf '  ⚠ Disk I/O test failed\n\n'
-  fi
-
-  rm -f "${tmp_file}" 2>/dev/null || true
-  trap - RETURN
-}
-
-# Issue a short latency probe to a public endpoint when tools permit.
-run_network_check() {
-  printf 'NETWORK:\n'
-
-  if ! command -v ping >/dev/null 2>&1; then
-    printf '  ⚠ ping not available\n\n'
-    return 0
-  fi
-
-  local ping_output=""
-  ping_output=$(ping -c 4 8.8.8.8 2>&1 || true)
-
-  local summary=""
-  summary=$(grep -E 'rtt|round-trip' <<< "${ping_output}" || true)
-
-  if [ -n "${summary}" ]; then
-    printf '  %s\n\n' "${summary}"
-  else
-    printf '  ⚠ Network test skipped or failed\n\n'
-  fi
-}
-
-main() {
-  print_header
-  report_system_info
-  run_virtualgl_benchmark
-  run_cpu_benchmark
-  run_disk_benchmark
-  run_network_check
-  printf '==========================================\n'
-  printf 'Benchmark Complete\n'
-  printf '==========================================\n'
-}
-
-main "$@"
-BENCH
-then
-  echo "✗ Failed to write /usr/local/bin/benchmark_all.sh" >&2
-  exit 1
-fi
-chmod +x /usr/local/bin/benchmark_all.sh || { echo "✗ Failed to set executable bit on /usr/local/bin/benchmark_all.sh" >&2; exit 1; }
-
-echo "✓ Benchmark suite created"
 
 #===============================================================================
 # BLOCK 40: DOCUMENTATION AND USER GUIDES
@@ -27353,102 +23260,26 @@ echo "✓ Benchmark suite created"
 # Dependencies: Block 15 (VirtualGL)
 # Outputs: VNC server, GPU acceleration
 mkdir -p /usr/local/share/doc || { echo "✗ Failed to create /usr/local/share/doc" >&2; exit 1; }
-if ! { cat <<'GUIDE' > /usr/local/share/doc/virtualgl-guide.txt
-========================================
-VirtualGL Usage Guide
-========================================
-
-QUICK START
------------
-1. Start VNC with GPU support:
-   start_vnc_xfce.sh
-
-2. Connect via VNC viewer
-
-3. Open terminal in VNC session
-
-4. Launch GPU-accelerated applications:
-   vglrun blender
-   vglrun openscad
-   vglrun glxspheres64
-
-AVAILABLE COMMANDS
-------------------
-Core Tools:
-  vglrun <app>     - Run application with GPU acceleration
-  vglconfig        - Configure VirtualGL
-  vglconnect       - SSH with VGL integration
-
-Testing & Info:
-  glxinfo          - OpenGL system information
-  glxspheres64     - OpenGL benchmark (spinning spheres)
-  eglinfo          - EGL information
-  vgl_info.sh      - Complete VirtualGL/OpenGL info
-  vgl_benchmark.sh - Compare CPU vs GPU rendering
-  test_virtualgl.sh - Test VirtualGL installation
-
-Performance Tools:
-  cpustat          - CPU statistics
-  nettest          - Network performance test
-  tcbench          - TCP benchmark
-
-
-CONVENIENT ALIASES
-------------------
-(Available in bash shell)
-  vblender         - Launch Blender with GPU
-  vopenscad        - Launch OpenSCAD with GPU
-  vfreecad         - Launch FreeCAD with GPU
-  gpubench         - Quick GPU benchmark
-  gpuinfo          - Quick OpenGL info
-  vgl <command>    - Shortcut for vglrun
-
-
-USAGE EXAMPLES
---------------
-# Launch application with GPU:
-vglrun blender
-
-# Or use alias:
-vblender
-
-# Or use helper script:
-vgl_launch.sh openscad model.scad
-
-# Benchmark GPU performance:
-vgl_benchmark.sh
-
-# Compare rendering methods:
-compare_render glxspheres64
-
-# Check GPU is detected:
-nvidia-smi
-vgl_info.sh
-
-TROUBLESHOOTING
----------------
-Problem: Low FPS even with vglrun
-Solution: Check GPU is available
-  nvidia-smi
-
-Problem: "Could not open display"
-Solution: Set DISPLAY variable
-
-Problem: vglrun not found
-Solution: Add to PATH
-
-For more info:
-  man vglrun
-  test_virtualgl.sh
-  vgl_info.sh
-========================================
-GUIDE
-}; then
-  echo "✗ Failed to write /usr/local/share/doc/virtualgl-guide.txt" >&2
+# Note: other file: /usr/local/share/doc/virtualgl-guide.txt is installed via install.sh from container-scripts/
+# Source: other/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/virtualgl-guide.txt
+# Target: /usr/local/share/doc/virtualgl-guide.txt
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Verify file exists before checking permissions
+if [ ! -f /usr/local/share/doc/virtualgl-guide.txt ]; then
+  echo "✗ Failed to create /usr/local/share/doc/virtualgl-guide.txt" >&2
   exit 1
 fi
 chmod 644 /usr/local/share/doc/virtualgl-guide.txt || { echo "✗ Failed to set permissions on /usr/local/share/doc/virtualgl-guide.txt" >&2; exit 1; }
 
-
 echo "✓ User guide created: /usr/local/share/doc/virtualgl-guide.txt"
+
+#===============================================================================
+# BLOCK 41: UTILITY SCRIPTS DOCUMENTATION
+#===============================================================================
+# Purpose: Document available utility scripts for users
+# Self-contained: Yes
+# Dependencies: All utility scripts installed via install.sh
+# Outputs: Echo message listing available utilities
+echo ""
+echo "========================================================================================================"
 

@@ -1,0 +1,48 @@
+# Block system Ceres packages (prevent installation)
+# We will compile Ceres from source in /usr/local (Block 8)
+# Negative priority (-1) means APT will never install these packages
+
+Package: libceres-dev
+Pin: release *
+Pin-Priority: -1
+
+# Note: config-files file: /etc/tmux.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-16-phase-1-foundational-system-libraries/tmux.conf
+# Target: /etc/tmux.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
+echo "✓ System Ceres packages are now blocked (early protection active)"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Note: shell-scripts file: /usr/local/bin/ros_multiterm is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-16-phase-1-foundational-system-libraries/ros-multiterminal-launcher.sh
+# Target: /usr/local/bin/ros_multiterm
+# Installed in Block 0 (early in script, before any scripts are needed)
+}
+
+# Window 0: Humble workspace
+tmux rename-window -t "${SESSION}:0" 'Humble'
+tmux_conda_prefix "${SESSION}:0"
+tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble >/dev/null 2>&1 || true" C-m
+tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
+
+# Window 1: ROS workspace (using ROS_DISTRO from environment/config.sh)
+ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
+# A6: Use POSIX-compliant uppercase first character (Bash 4+ ${var^} not portable)
+# Extract first character, uppercase it, then append rest using POSIX-compliant commands
+first_char=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c1)
+rest_chars=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c2-)
+ROS_WINDOW_NAME="$(printf '%s%s' "$(printf '%s' "${first_char}" | tr '[:lower:]' '[:upper:]')" "${rest_chars}")"
+tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
+tmux_conda_prefix "${SESSION}:1"
+tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy} >/dev/null 2>&1 || true" C-m
+tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO:-jazzy}_ws" C-m
+
+# Window 2: Bridge/monitoring
+tmux new-window -t "${SESSION}:2" -n 'Bridge'
+tmux_conda_prefix "${SESSION}:2"
+tmux send-keys -t "${SESSION}:2" "echo 'Domain bridge - start when ready'" C-m
+
+# Window 3: Julia processing
+tmux new-window -t "${SESSION}:3" -n 'Julia'
+tmux send-keys -t "${SESSION}:3" 'julia' C-m
+
+tmux attach-session -t "${SESSION}"

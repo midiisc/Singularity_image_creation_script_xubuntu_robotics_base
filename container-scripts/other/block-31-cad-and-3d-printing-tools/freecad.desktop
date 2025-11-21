@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=FreeCAD
+Comment=A general purpose 3D CAD modeler
+Exec=freecad %F
+Icon=freecad
+Terminal=false
+Type=Application
+Categories=Graphics;3DGraphics;Engineering;
+MimeType=application/x-extension-fcstd;

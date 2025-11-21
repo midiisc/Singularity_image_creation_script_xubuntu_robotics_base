@@ -187,6 +187,65 @@ A. Structure & Syntax
   - FORBIDDEN: `${var,,}` (lowercase) - use `tr '[:upper:]' '[:lower:]'` instead
   - FORBIDDEN: Associative arrays (`declare -A`) without version check
   - When using Bash 4+ features, add explicit version check: `if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then ... else ... fi`
+- A7. **ORPHANED CODE CHUNK DETECTION AND REMOVAL**: Identify and remove orphaned code chunks that serve no functional purpose:
+  - **MANDATORY FIRST CHECK IN EACH CHUNK**: Before processing any other checklist items, scan the entire chunk for orphaned code
+  - **ORPHANED CODE PATTERNS**:
+    - Code blocks with no function calls, variable assignments, or side effects
+    - Comment-only blocks that don't explain active code
+    - Duplicate function definitions (keep only the last/active one)
+    - Unreachable code after `return`, `exit`, or unconditional `break`/`continue`
+    - Dead code in conditional branches that are never executed
+    - Temporary debugging code (`echo "DEBUG"`, `set -x` without cleanup)
+    - Commented-out code blocks that are no longer needed
+    - Unused variable assignments that are never read
+    - Empty functions or functions that only contain comments
+  - **DETECTION METHODS**:
+    - **Function analysis**: Check if functions are called anywhere in the script
+    - **Variable analysis**: Check if variables are read after assignment
+    - **Control flow analysis**: Identify unreachable code after `return`/`exit`
+    - **Pattern matching**: Find common orphan patterns (`# TODO`, `# FIXME`, `# DEBUG`, commented blocks)
+    - **Cross-reference**: Verify code references (functions, variables) exist and are used
+  - **VALIDATION PATTERNS**:
+    - **WRONG** (orphaned function):
+      ```bash
+      # This function is never called
+      unused_function() {
+        echo "This is never executed"
+      }
+      ```
+    - **WRONG** (unreachable code):
+      ```bash
+      if [ "${COND}" = "true" ]; then
+        return 1
+        echo "This line is never reached"  # Orphaned
+      fi
+      ```
+    - **WRONG** (commented-out code block):
+      ```bash
+      # Old implementation - no longer needed
+      # function old_way() {
+      #   echo "deprecated"
+      # }
+      ```
+    - **CORRECT** (remove orphaned code):
+      ```bash
+      # Only keep active, functional code
+      active_function() {
+        echo "This is used"
+      }
+      ```
+  - **AUTO-FIX STRATEGY**:
+    1. Identify orphaned code using detection methods above
+    2. Verify code is truly unused (check entire script, not just current chunk)
+    3. Remove orphaned code blocks
+    4. Preserve relevant comments that explain active code
+    5. Update any references if code structure changes
+  - **EXCEPTIONS** (DO NOT REMOVE):
+    - Code marked with `# KEEP` or `# REQUIRED` comments
+    - Functions/variables used in other scripts (check imports/sources)
+    - Code in conditional blocks that may execute based on runtime conditions
+    - Documentation code blocks that serve as examples
+  - **INTEGRATION**: This check runs FIRST in each chunk before other checklist items to ensure clean codebase
 
 B. Shell Options & Execution Controls
 - B0. Environment/Shell probe and strict-mode helpers PRESENT (and EXPORTED) at top-level:

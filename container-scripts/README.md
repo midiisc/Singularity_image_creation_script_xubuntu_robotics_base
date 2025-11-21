@@ -15,12 +15,12 @@ Within each type, files are organized by block number.
 
 ## Total Files
 
-- **Total**: 90 files
-- **Shell scripts**: 55
-- **JSON configs**: 3
-- **Config files**: 21
+- **Total**: 3 files
+- **Shell scripts**: 2
+- **JSON configs**: 0
+- **Config files**: 0
 - **Layout configs**: 0
-- **Other**: 9
+- **Other**: 1
 
 ## Installation
 

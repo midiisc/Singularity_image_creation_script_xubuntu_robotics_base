@@ -1,0 +1,88 @@
+========================================
+VirtualGL Usage Guide
+========================================
+
+QUICK START
+-----------
+1. Start VNC with GPU support:
+   start_vnc_xfce.sh
+
+2. Connect via VNC viewer
+
+3. Open terminal in VNC session
+
+4. Launch GPU-accelerated applications:
+   vglrun blender
+   vglrun openscad
+   vglrun glxspheres64
+
+AVAILABLE COMMANDS
+------------------
+Core Tools:
+  vglrun <app>     - Run application with GPU acceleration
+  vglconfig        - Configure VirtualGL
+  vglconnect       - SSH with VGL integration
+
+Testing & Info:
+  glxinfo          - OpenGL system information
+  glxspheres64     - OpenGL benchmark (spinning spheres)
+  eglinfo          - EGL information
+  vgl_info.sh      - Complete VirtualGL/OpenGL info
+  vgl_benchmark.sh - Compare CPU vs GPU rendering
+  test_virtualgl.sh - Test VirtualGL installation
+
+Performance Tools:
+  cpustat          - CPU statistics
+  nettest          - Network performance test
+  tcbench          - TCP benchmark
+
+
+CONVENIENT ALIASES
+------------------
+(Available in bash shell)
+  vblender         - Launch Blender with GPU
+  vopenscad        - Launch OpenSCAD with GPU
+  vfreecad         - Launch FreeCAD with GPU
+  gpubench         - Quick GPU benchmark
+  gpuinfo          - Quick OpenGL info
+  vgl <command>    - Shortcut for vglrun
+
+
+USAGE EXAMPLES
+--------------
+# Launch application with GPU:
+vglrun blender
+
+# Or use alias:
+vblender
+
+# Or use helper script:
+vgl_launch.sh openscad model.scad
+
+# Benchmark GPU performance:
+vgl_benchmark.sh
+
+# Compare rendering methods:
+compare_render glxspheres64
+
+# Check GPU is detected:
+nvidia-smi
+vgl_info.sh
+
+TROUBLESHOOTING
+---------------
+Problem: Low FPS even with vglrun
+Solution: Check GPU is available
+  nvidia-smi
+
+Problem: "Could not open display"
+Solution: Set DISPLAY variable
+
+Problem: vglrun not found
+Solution: Add to PATH
+
+For more info:
+  man vglrun
+  test_virtualgl.sh
+  vgl_info.sh
+========================================

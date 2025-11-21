@@ -259,13 +259,14 @@ export WHEELS_CACHE="${CACHE_DIR}/wheels"
 # Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base
 # Capitalize ROS distribution name (first letter uppercase, rest lowercase)
 # ROS_DISTRO_CAPITALIZED kept for potential future use (may be exported or used by other scripts)
-    if [ -n "${ROS_DISTRO:-}" ]; then
-        ROS_DISTRO_CAPITALIZED=$(echo "${ROS_DISTRO}" | awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}')
-        export ROS_DISTRO_CAPITALIZED
-    else
-        export ROS_DISTRO_CAPITALIZED="Unknown"
-    # ENDIF: ROS_DISTRO presence check
-    fi
+if [ -n "${ROS_DISTRO:-}" ]; then
+    # D3: Use here-string instead of echo | awk for better performance and safety
+    ROS_DISTRO_CAPITALIZED=$(awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}' <<< "${ROS_DISTRO}")
+    export ROS_DISTRO_CAPITALIZED
+else
+    export ROS_DISTRO_CAPITALIZED="Unknown"
+fi
+# ENDIF: ROS_DISTRO presence check
 # SIF_NAME and DEF_NAME are defined in BUILD OUTPUT CONFIGURATION section below
 # They are generated dynamically in build script if not set
 
@@ -352,306 +353,35 @@ export CONTAINER_POST_SCRIPT_MODE="${CONTAINER_POST_SCRIPT_MODE:-debug}"
 export ENABLE_LOG_ERROR_EXTRACTION="${ENABLE_LOG_ERROR_EXTRACTION:-0}"
 
 #===============================================================================
-# UNIFIED LOG ANALYSIS FUNCTION
+# NOTE: analyze_build_log() FUNCTION MOVED TO scripts/common_functions.sh
 #===============================================================================
 # Purpose: Analyze build logs to extract errors/warnings with context
-# Usage: analyze_build_log <log_file> <error_log>
+# Usage: Source scripts/common_functions.sh and call analyze_build_log <log_file> <error_log>
 #        Set LOG_FILE and ERROR_LOG variables before calling
 #        For container builds: use BUILD_LOG_FILE and BUILD_ERROR_LOG
 #===============================================================================
+# Legacy function removed - now in scripts/common_functions.sh
+# Use: source "${SCRIPT_DIR}/scripts/common_functions.sh" to access
+# For backwards compatibility, keeping stub that sources common functions if available:
+if [ -z "${ANALYZE_BUILD_LOG_SOURCED:-}" ]; then
+    if [ -f "${SCRIPT_DIR:-}/scripts/common_functions.sh" ]; then
+        # shellcheck source=scripts/common_functions.sh
+        source "${SCRIPT_DIR}/scripts/common_functions.sh"
+        export ANALYZE_BUILD_LOG_SOURCED=1
+    fi
+    # ENDIF: common_functions.sh exists
+fi
+# ENDIF: ANALYZE_BUILD_LOG_SOURCED check
 
+# Legacy stub (forward to common function if available):
 analyze_build_log() {
-    # Respect global toggle to avoid expensive parsing when disabled
-    if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" != "1" ]; then
-        return 0
-    fi
-    
-    # Determine log and error log file based on context
-    local log_file="${1:-${LOG_FILE:-${BUILD_LOG_FILE:-}}}"
-    local error_log="${2:-${ERROR_LOG:-${BUILD_ERROR_LOG:-}}}"
-    
-    if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
-        return 0  # No log file to analyze
-    fi
-    
-    if [ -z "$error_log" ]; then
-        return 0  # No error log specified
-    fi
-    
-    echo ""
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  Analyzing build log for errors and warnings..."
-    echo "═══════════════════════════════════════════════════════════════"
-    
-    # Write new header with analysis timestamp
-    {
-        echo "========================================"
-        echo "Error Log Analysis: $(date)"
-        echo "Build Log: ${log_file}"
-        echo "Analysis Method: Post-build extraction with context"
-        echo "========================================"
-        echo ""
-    } > "${error_log}"
-    
-    # Context window size (lines before and after error)
-    local context_lines=5
-    local total_errors=0
-    local total_warnings=0
-    local total_debug_flags=0
-    local total_deprecations=0
-    
-    # Read log file line by line with line numbers
-    local line_num=0
-    local error_line_nums=()
-    local warning_line_nums=()
-    local debug_flag_line_nums=()
-    local deprecation_line_nums=()
-    local all_lines=()
-    # current_context kept for potential future use in context reporting
-    # shellcheck disable=SC2034
-    local current_context="General Build"
-    local context_stack=()
-    
-    # Context detection patterns (ordered by specificity)
-    declare -A context_patterns=(
-        ["OpenCV Compilation"]="(PHASE 4.*OpenCV|Compiling OpenCV|Building OpenCV|OpenCV.*Build|cmake.*opencv|ninja.*opencv)"
-        ["OpenCV Configuration"]="(Configuring OpenCV|OpenCV.*CMake|OpenCV.*configure|opencv.*cmake config)"
-        ["Open3D Compilation"]="(Building Open3D|Compiling Open3D|Open3D.*ninja|ninja.*open3d|open3d.*build)"
-        ["Open3D Configuration"]="(Configuring Open3D|Open3D.*CMake|Open3D.*configure|open3d.*cmake config)"
-        ["Open3D Python"]="(Open3D.*Python|open3d.*pip|open3d.*wheel|install.*open3d|python.*open3d)"
-        ["COLMAP Compilation"]="(Building COLMAP|Compiling COLMAP|COLMAP.*ninja|ninja.*colmap|colmap.*build)"
-        ["COLMAP Configuration"]="(Configuring COLMAP|COLMAP.*CMake|COLMAP.*configure|colmap.*cmake config)"
-        ["COLMAP Python"]="(PyCOLMAP|pycolmap|COLMAP.*Python|colmap.*pip)"
-        ["Ceres Compilation"]="(Building Ceres|Compiling Ceres|Ceres.*ninja|ninja.*ceres|ceres.*build)"
-        ["Ceres Configuration"]="(Configuring Ceres|Ceres.*CMake|Ceres.*configure|ceres.*cmake config)"
-        ["G2O Compilation"]="(Building g2o|Compiling g2o|g2o.*ninja|ninja.*g2o)"
-        ["G2O Configuration"]="(Configuring g2o|g2o.*CMake|g2o.*configure)"
-        ["GTSAM Compilation"]="(Building GTSAM|Compiling GTSAM|GTSAM.*ninja|ninja.*gtsam)"
-        ["GTSAM Configuration"]="(Configuring GTSAM|GTSAM.*CMake|GTSAM.*configure)"
-        ["Conda Installation"]="(Installing.*conda|conda.*install|mamba.*install|Conda.*setup)"
-        ["Conda Update"]="(Updating.*conda|conda.*update|mamba.*update)"
-        ["Julia Installation"]="(Installing.*Julia|Julia.*install|julia.*setup)"
-        ["TurboVNC Installation"]="(Installing.*TurboVNC|TurboVNC.*install|turbovnc)"
-        ["VirtualGL Installation"]="(Installing.*VirtualGL|VirtualGL.*install|virtualgl)"
-        ["APT Package Installation"]="(apt-get.*install|apt install|Installing.*packages)"
-        ["CMake Configuration"]="(CMake.*configuration|cmake.*config|Configuring.*CMake)"
-        ["Ninja Build"]="(ninja.*build|Building.*ninja|ninja.*-j)"
-        ["Python Package"]="(pip.*install|python.*setup|Installing.*Python)"
-        ["GPU/CUDA Setup"]="(CUDA.*setup|GPU.*configuration|NVIDIA.*install)"
-        ["Phase 1"]="(PHASE 1|Phase 1|PHASE.*1)"
-        ["Phase 2"]="(PHASE 2|Phase 2|PHASE.*2)"
-        ["Phase 3"]="(PHASE 3|Phase 3|PHASE.*3)"
-        ["Phase 4"]="(PHASE 4|Phase 4|PHASE.*4)"
-    )
-    
-    # First pass: identify all error, warning, debug, and deprecation lines
-    while IFS= read -r line || [ -n "$line" ]; do
-        line_num=$((line_num + 1))
-        all_lines+=("$line")
-        
-        # Update context based on line content
-        # current_context kept for potential future use in context reporting
-        # shellcheck disable=SC2034
-        for context_name in "${!context_patterns[@]}"; do
-            if grep -qiE "${context_patterns[$context_name]}" <<< "$line"; then
-                current_context="$context_name"
-                context_stack+=("$context_name")
-                break
-            fi
-        done
-        
-        # Match error patterns (case-insensitive) - most specific first
-        if grep -qiE \
-            '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)' <<< "$line"; then
-            # SC2206: Quote to prevent word splitting
-            error_line_nums+=("$line_num")
-            total_errors=$((total_errors + 1))
-        # Match warning patterns (case-insensitive, but not errors)
-        elif grep -qiE \
-            '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)' <<< "$line"; then
-            # SC2206: Quote to prevent word splitting
-            warning_line_nums+=("$line_num")
-            total_warnings=$((total_warnings + 1))
-        # Match debug flags and diagnostic output (non-fatal but informative)
-        elif grep -qiE \
-            '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)' <<< "$line"; then
-            # SC2206: Quote to prevent word splitting
-            debug_flag_line_nums+=("$line_num")
-            total_debug_flags=$((total_debug_flags + 1))
-        # Match deprecation warnings (specific pattern for future compatibility issues)
-        elif grep -qiE \
-            '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)' <<< "$line"; then
-            # SC2206: Quote to prevent word splitting
-            deprecation_line_nums+=("$line_num")
-            total_deprecations=$((total_deprecations + 1))
-        fi
-    done < "$log_file"
-    
-    # Second pass: extract error/warning blocks with context
-    if [ ${#error_line_nums[@]} -gt 0 ] || [ ${#warning_line_nums[@]} -gt 0 ] || [ ${#debug_flag_line_nums[@]} -gt 0 ] || [ ${#deprecation_line_nums[@]} -gt 0 ]; then
-        echo "  Found ${total_errors} error(s), ${total_warnings} warning(s), ${total_debug_flags} debug flag(s), ${total_deprecations} deprecation(s)"
-        echo ""
-        
-        # Combine and sort line numbers
-        # SC2207: Use mapfile instead of command substitution for array assignment
-        local all_issue_lines
-        mapfile -t all_issue_lines < <(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" | sort -n | uniq)
-        
-            local last_extracted_line=0
-            # current_context_line kept for potential future use in context tracking
-            # shellcheck disable=SC2034
-            local current_context_line=0
-        
-        for issue_line in "${all_issue_lines[@]}"; do
-            # Skip if we already extracted this area (within context window)
-            # SC2086: Quote arithmetic variables for safety
-            if [ "$issue_line" -le "$last_extracted_line" ]; then
-                continue
-            fi
-            
-            # Determine issue type and severity
-            local is_error=false
-            local is_warning=false
-            local is_debug=false
-            local is_deprecation=false
-            
-            for err_line in "${error_line_nums[@]}"; do
-                # SC2086: Quote arithmetic variables for safety
-                if [ "$err_line" -eq "$issue_line" ]; then
-                    is_error=true
-                    break
-                fi
-            done
-            
-            if [ "$is_error" != true ]; then
-                for warn_line in "${warning_line_nums[@]}"; do
-                    # SC2086: Quote arithmetic variables for safety
-                    if [ "$warn_line" -eq "$issue_line" ]; then
-                        is_warning=true
-                        break
-                    fi
-                done
-            fi
-            
-            if [ "$is_error" != true ] && [ "$is_warning" != true ]; then
-                for debug_line in "${debug_flag_line_nums[@]}"; do
-                    # SC2086: Quote arithmetic variables for safety
-                    if [ "$debug_line" -eq "$issue_line" ]; then
-                        is_debug=true
-                        break
-                    fi
-                done
-            fi
-            
-            if [ "$is_error" != true ] && [ "$is_warning" != true ] && [ "$is_debug" != true ]; then
-                for dep_line in "${deprecation_line_nums[@]}"; do
-                    # SC2086: Quote arithmetic variables for safety
-                    if [ "$dep_line" -eq "$issue_line" ]; then
-                        is_deprecation=true
-                        break
-                    fi
-                done
-            fi
-            
-            # Find the most recent context before this line
-            local context_for_issue="General Build"
-            local i
-            i=$((issue_line - 1))
-            while [ $i -gt 0 ] && [ $i -gt $((issue_line - 50)) ]; do
-                for context_name in "${!context_patterns[@]}"; do
-                    if [ $i -le ${#all_lines[@]} ]; then
-                        local idx
-                        idx=$((i - 1))
-                        if [ $idx -ge 0 ]; then
-                            if grep -qiE "${context_patterns[$context_name]}" <<< "${all_lines[$idx]}"; then
-                                context_for_issue="$context_name"
-                                break 2
-                            fi
-                        fi
-                    fi
-                done
-                i=$((i - 1))
-            done
-            
-            # Calculate context range
-            local start_line
-            start_line=$((issue_line - context_lines))
-            if [ $start_line -lt 1 ]; then
-                start_line=1
-            fi
-            local end_line
-            end_line=$((issue_line + context_lines))
-            if [ $end_line -gt ${#all_lines[@]} ]; then
-                end_line=${#all_lines[@]}
-            fi
-            
-            # Write block header
-            {
-                echo "───────────────────────────────────────────────────────────"
-                if [ "$is_error" = true ]; then
-                    echo "[ERROR] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_warning" = true ]; then
-                    echo "[WARNING] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_deprecation" = true ]; then
-                    echo "[DEPRECATION] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_debug" = true ]; then
-                    echo "[DEBUG FLAG] Line $issue_line | Context: $context_for_issue"
-                else
-                    echo "[ISSUE] Line $issue_line | Context: $context_for_issue"
-                fi
-                echo "───────────────────────────────────────────────────────────"
-                echo ""
-                
-                # Extract context block (0-indexed array, so subtract 1)
-                local i
-                for i in $(seq "$start_line" "$end_line"); do
-                    local idx
-                    idx=$((i - 1))
-                    if [ "$idx" -ge 0 ] && [ "$idx" -lt ${#all_lines[@]} ]; then
-                        local marker=""
-                        if [ "$i" -eq "$issue_line" ]; then
-                            marker=" >>> "
-                        elif [ "$i" -lt "$issue_line" ]; then
-                            marker="     "
-                        else
-                            marker="     "
-                        fi
-                        printf "%6d%s%s\n" "$i" "$marker" "${all_lines[$idx]}"
-                    fi
-                done
-                echo ""
-                echo ""
-            } >> "${error_log}"
-            
-            last_extracted_line=$end_line
-        done
-        
-        echo "  ✓ Error log analysis complete: ${error_log}"
+    # Forward to common function if it exists, otherwise no-op
+    if command -v analyze_build_log >/dev/null 2>&1 || type analyze_build_log >/dev/null 2>&1; then
+        command analyze_build_log "$@" || return 1
     else
-        echo "  ✓ No errors or warnings found in build log"
-        {
-            echo "No errors or warnings detected in build log."
-            echo ""
-            echo "This does not guarantee a successful build - check the full"
-            echo "build log for any issues that may not match standard patterns."
-        } >> "${error_log}"
+        echo "ERROR: analyze_build_log() not available. Source scripts/common_functions.sh first." >&2
+        return 1
     fi
-    
-    # Append summary
-    {
-        echo "========================================"
-        echo "Summary:"
-        echo "  Total errors found: ${total_errors}"
-        echo "  Total warnings found: ${total_warnings}"
-        echo "  Total debug flags found: ${total_debug_flags}"
-        echo "  Total deprecations found: ${total_deprecations}"
-        echo "  Log file analyzed: ${log_file}"
-        echo "  Analysis completed: $(date)"
-        echo "========================================"
-    } >> "${error_log}"
-    
-    # Final sync
-    sync "${error_log}" 2>/dev/null || sync
 }
 
 #===============================================================================

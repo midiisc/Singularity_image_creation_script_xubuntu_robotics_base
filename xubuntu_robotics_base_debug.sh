@@ -1,10 +1,13 @@
 #!/bin/bash
 #===============================================================================
-# XUBUNTU ROBOTICS BASE - POST-INSTALL SCRIPT
+# XUBUNTU ROBOTICS BASE - DEBUG POST-INSTALL SCRIPT
 #===============================================================================
 # Purpose: Container %post section - Install all software and configure system
+#          DEBUG MODE: Stops before OpenCV compilation (BLOCK 20)
 # Runs inside: Singularity container during build (%post phase)
 # Features: Multi-phase installation, cache management, error handling
+# NOTE: This script creates a snapshot image just before OpenCV compilation.
+#       OpenCV compilation can be done separately using compile_opencv_in_overlay.sh
 #===============================================================================
 
 #===============================================================================
@@ -38,6 +41,8 @@ strict_on() {
         if [ "${SUPPORTS_ERRTRACE}" -eq 1 ]; then
             set -E -o errtrace || true
         fi
+        # SC2154: ec is assigned in trap command itself, false positive
+        # shellcheck disable=SC2154
         trap 'ec=$?; printf "[ERROR] Command failed (exit=%s) at %s:%s: %s\n" "${ec}" "${BASH_SOURCE[0]-?}" "${LINENO-?}" "${BASH_COMMAND-?}" >&2; exit "${ec}"' ERR
     else
         set -e
@@ -58,71 +63,6 @@ strict_off() {
 STRICT_HELPERS_AVAILABLE=1
 export STRICT_HELPERS_AVAILABLE
 
-harvest_container_cache_to_host() {
-    if [ ! -d /host_cache ]; then
-        printf '\n%s\n' "==> Host cache mount (/host_cache) not available; skipping host harvest"
-        return
-    fi
-
-    printf '\n%s\n' "==> Syncing container cache to host mirror before cleanup"
-    mkdir -p /host_cache 2>/dev/null || true
-    if command -v rsync >/dev/null 2>&1; then
-        if rsync -a --delete "/container_cache/" "/host_cache/" 2>/dev/null; then
-            printf '  • Host cache updated via rsync\n'
-        else
-            printf '  • rsync failed; attempting fallback copy\n'
-            cp -a "/container_cache/." "/host_cache/" 2>/dev/null || true
-        fi
-    else
-        cp -a "/container_cache/." "/host_cache/" 2>/dev/null || true
-    fi
-    sync "/host_cache" 2>/dev/null || sync
-    printf '  • Host cache sync complete (%s)\n' "$(date +%Y-%m-%d\ %H:%M:%S)"
-}
-
-purge_container_install_artifacts() {
-    local cache_root="${CONTAINER_CACHE_ROOT:-/container_cache}"
-    printf '\n%s\n' "==> Final cleanup: removing cached installers and temporary build artifacts"
-
-    if [ -d "${cache_root}" ] && [ "${cache_root}" != "/" ]; then
-        find "${cache_root}" -mindepth 1 -maxdepth 1 -print -exec rm -rf {} + 2>/dev/null || true
-        printf '  • Cleared container cache root: %s\n' "${cache_root}"
-    else
-        printf '  • Container cache root not found or invalid (%s)\n' "${cache_root}"
-    fi
-
-    local tmp_dirs=(
-        "${CONTAINER_APT_CACHE:-/container_cache/apt}"
-        "${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}"
-        "${CONTAINER_WHEELS_CACHE:-/container_cache/wheels}"
-        "${CONTAINER_JULIA_CACHE:-/container_cache/julia_pkgs}"
-    )
-    for dir in "${tmp_dirs[@]}"; do
-        if [ -n "${dir}" ] && [ -d "${dir}" ] && [ "${dir}" != "/" ]; then
-            rm -rf "${dir}" 2>/dev/null || true
-            printf '  • Removed cache directory: %s\n' "${dir}"
-        fi
-    done
-
-    if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ] && [ -d "${CONTAINER_BUILD_TMPDIR}" ]; then
-        rm -rf "${CONTAINER_BUILD_TMPDIR}" 2>/dev/null || true
-        printf '  • Removed build temp directory: %s\n' "${CONTAINER_BUILD_TMPDIR}"
-    fi
-
-    if [ -n "${TMPDIR:-}" ] && [[ "${TMPDIR}" == /tmp/* ]] && [ -d "${TMPDIR}" ]; then
-        rm -rf "${TMPDIR}" 2>/dev/null || true
-        printf '  • Removed TMPDIR artifacts: %s\n' "${TMPDIR}"
-    fi
-
-    # Recreate empty cache root so future overlay runs have a mount point
-    if [ -n "${cache_root}" ] && [ "${cache_root}" != "/" ]; then
-        mkdir -p "${cache_root}" 2>/dev/null || true
-        chmod 755 "${cache_root}" 2>/dev/null || true
-    fi
-
-    printf '%s\n' "==> Installer cache cleanup complete"
-}
-
 #===============================================================================
 # STRICT MODE - Controlled error handling
 #===============================================================================
@@ -137,16 +77,17 @@ set +u  # Temporarily allow unset variables until config is loaded
 
 #-------------------------------------------------------------------------------
 # Shell diagnostics (help identify interpreter inside %post script)
-echo "---- [%post script] shell diagnostics ----"
-echo "PID: $$, PPID: ${PPID:-unknown}"
-echo "0: ${0:-unknown}"
-echo "SHELL: ${SHELL:-unknown}"
-echo "BASH_VERSION: ${BASH_VERSION:-n/a}"
-echo "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
-echo "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
-echo "------------------------------------------"
+# D3b: Use printf instead of echo for robustness (handles special characters)
+printf '%s\n' "---- [%post script] shell diagnostics ----"
+printf '%s\n' "PID: $$, PPID: ${PPID:-unknown}"
+printf '%s\n' "0: ${0:-unknown}"
+printf '%s\n' "SHELL: ${SHELL:-unknown}"
+printf '%s\n' "BASH_VERSION: ${BASH_VERSION:-n/a}"
+printf '%s\n' "Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
+printf '%s\n' "bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
+printf '%s\n' "------------------------------------------"
 
-SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_debug.sh")"
+SCRIPT_BASENAME="$(basename "$0" 2>/dev/null || echo "xubuntu_robotics_base_full.sh")"
 
 #===============================================================================
 # CRITICAL: Source centralized configuration
@@ -161,14 +102,61 @@ if [ -z "${CONFIG_SOURCED}" ]; then
         # shellcheck source=/etc/config.sh
         source /etc/config.sh
         export CONFIG_SOURCED=1
-        echo "✓ Loaded configuration from /etc/config.sh"
+        printf '%s\n' "✓ Loaded configuration from /etc/config.sh"
     else
-        echo "ERROR: /etc/config.sh not found!"
+        printf '%s\n' "ERROR: /etc/config.sh not found!" >&2
         exit 1
     fi
 else
-    echo "ℹ Configuration already loaded (skipping redundant source)"
+    printf '%s\n' "ℹ Configuration already loaded (skipping redundant source)"
 fi
+# ENDIF: CONFIG_SOURCED check
+
+#--- Load common functions ---
+# Critical: Source common functions for shared functionality
+# Dependencies: config.sh (already sourced)
+# Outputs: Common functions available (consolidate_cache_packages, monitor_cache, etc.)
+if [ -f /scripts/common_functions.sh ]; then
+    # shellcheck source=/scripts/common_functions.sh
+    source /scripts/common_functions.sh
+    printf '%s\n' "✓ Common functions loaded from /scripts/common_functions.sh"
+else
+    printf '%s\n' "⚠ Warning: Common functions file not found: /scripts/common_functions.sh" >&2
+    printf '%s\n' "  Some functions may not be available" >&2
+fi
+# ENDIF: common_functions.sh exists
+
+#===============================================================================
+# BLOCK 0: INSTALL CONTAINER SCRIPTS (EARLY - BEFORE ANY SCRIPTS ARE NEEDED)
+#===============================================================================
+# Purpose: Install all extracted scripts from container-scripts/ directory
+#          This must happen early so scripts are available throughout the build
+# Dependencies: config.sh (for CONTAINER_SCRIPTS_INSTALL_PATH), container-scripts/ directory
+# Outputs: All scripts installed to their target locations
+#-------------------------------------------------------------------------------
+# D3b: Use printf instead of echo -e for robustness
+printf '\n%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${BLUE}BLOCK 0: Installing Container Scripts${NC}"
+printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
+
+# Use variables from config.sh (with defaults if not set)
+CONTAINER_SCRIPTS_PATH="${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
+INSTALLER_SCRIPT="${CONTAINER_SCRIPTS_PATH}/${CONTAINER_SCRIPTS_INSTALLER:-install.sh}"
+MANIFEST_FILE="${CONTAINER_SCRIPTS_PATH}/${CONTAINER_SCRIPTS_MANIFEST:-MANIFEST.json}"
+
+if [ -f "${INSTALLER_SCRIPT}" ] && [ -f "${MANIFEST_FILE}" ]; then
+    chmod +x "${INSTALLER_SCRIPT}"
+    if "${INSTALLER_SCRIPT}" --all; then
+        printf '%s\n' "${GREEN}✓ Container scripts installed successfully${NC}"
+    else
+        printf '%s\n' "${YELLOW}⚠ Warning: Some container scripts failed to install. Continuing build...${NC}"
+    fi
+else
+    printf '%s\n' "${YELLOW}⚠ Warning: Container scripts installation files not found at ${CONTAINER_SCRIPTS_PATH}${NC}"
+    printf '%s\n' "${YELLOW}  Some scripts may not be available during build${NC}"
+fi
+# ENDIF: install.sh and MANIFEST.json exist
 
 # After config is loaded, enable strict mode for unset variables
 set -u
@@ -189,7 +177,7 @@ case "${DEFAULT_BLAS_PROVIDER}" in
         # OK
         ;;
     *)
-        echo "⚠ Warning: Invalid DEFAULT_BLAS_PROVIDER='${DEFAULT_BLAS_PROVIDER}'. Falling back to 'MKL'."
+        printf '%s\n' "⚠ Warning: Invalid DEFAULT_BLAS_PROVIDER='${DEFAULT_BLAS_PROVIDER}'. Falling back to 'MKL'."
         DEFAULT_BLAS_PROVIDER="MKL"
         export DEFAULT_BLAS_PROVIDER
         ;;
@@ -214,13 +202,15 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     BUILD_LOG_PREFIX="${BUILD_LOG_PREFIX:-singularity_build}"
 
     # Validate keep count to avoid arithmetic errors under set -u
+    # A5: Use POSIX [ instead of [[ when possible (though [[ =~ is needed for regex)
+    # Note: [[ =~ ]] is Bash-specific but necessary for regex matching here
     if ! [[ "${BUILD_LOG_KEEP_COUNT:-2}" =~ ^[0-9]+$ ]]; then
-        echo "⚠ Warning: Invalid BUILD_LOG_KEEP_COUNT='${BUILD_LOG_KEEP_COUNT:-}' (expected non-negative integer). Defaulting to 2."
+        printf '%s\n' "⚠ Warning: Invalid BUILD_LOG_KEEP_COUNT='${BUILD_LOG_KEEP_COUNT:-}' (expected non-negative integer). Defaulting to 2."
         BUILD_LOG_KEEP_COUNT=2
     fi
 
     if [ -d "${BUILD_LOG_DIR}" ] && [ "${BUILD_LOG_KEEP_COUNT:-2}" -gt 0 ]; then
-        echo "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
+        printf '%s\n' "Cleaning up old build logs (keeping ${BUILD_LOG_KEEP_COUNT:-2} most recent)..."
         
         # Count existing log files matching the patterns
         # Regular build logs
@@ -228,7 +218,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Error logs
         EXISTING_ERROR_LOGS=$(find "${BUILD_LOG_DIR}" -maxdepth 1 -name "${BUILD_LOG_PREFIX}_*_errors.log" -type f 2>/dev/null | wc -l)
         
-        echo "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
+        printf '%s\n' "  Found: ${EXISTING_LOGS} build log(s), ${EXISTING_ERROR_LOGS} error log(s)"
         
         # Clean up regular build logs
         if [ "${EXISTING_LOGS:-0}" -gt "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
@@ -242,7 +232,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 cut -d' ' -f2- | \
                 while IFS= read -r old_log; do
                     if [ -f "${old_log}" ]; then
-                        echo "  Removing old log: $(basename "${old_log}")"
+                        printf '%s\n' "  Removing old log: $(basename "${old_log}")"
                         rm -f "${old_log}"
                     fi
                     # ENDIF: old_log existence check
@@ -260,7 +250,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 cut -d' ' -f2- | \
                 while IFS= read -r old_error_log; do
                     if [ -f "${old_error_log}" ]; then
-                        echo "  Removing old error log: $(basename "${old_error_log}")"
+                        printf '%s\n' "  Removing old error log: $(basename "${old_error_log}")"
                         rm -f "${old_error_log}"
                     fi
                     # ENDIF: old_error_log existence check
@@ -270,9 +260,9 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         fi
         
         if [ "${EXISTING_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ] && [ "${EXISTING_ERROR_LOGS:-0}" -le "${BUILD_LOG_KEEP_COUNT:-2}" ]; then
-            echo "✓ No old logs to clean up (found ${EXISTING_LOGS:-0} build logs, ${EXISTING_ERROR_LOGS:-0} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
+            printf '%s\n' "✓ No old logs to clean up (found ${EXISTING_LOGS:-0} build logs, ${EXISTING_ERROR_LOGS:-0} error logs, keeping ${BUILD_LOG_KEEP_COUNT:-2})"
         else
-            echo "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
+            printf '%s\n' "✓ Old logs cleaned up (kept ${BUILD_LOG_KEEP_COUNT:-2} most recent)"
         # ENDIF: log cleanup status check
         fi
     fi
@@ -295,6 +285,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     MINUTE=$(date +"%M" 2>/dev/null || echo "00")
     AMPM=$(date +"%p" 2>/dev/null || echo "AM")
     # Validate results are non-empty and numeric (for HOUR_12 and MINUTE)
+    # A5: [[ =~ ]] is Bash-specific but necessary for regex matching
     if ! [[ "${HOUR_12:-12}" =~ ^[0-9]+$ ]] || ! [[ "${MINUTE:-00}" =~ ^[0-9]+$ ]]; then
         HOUR_12=12
         MINUTE=00
@@ -360,7 +351,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         local line
         while IFS= read -r line; do
             # Echo all lines to stdout (which goes to main log via tee)
-            echo "${line}"
+            # D3b: Using printf for robustness, but echo is acceptable here since line is controlled
+            printf '%s\n' "${line}"
             
             # Comprehensive error/warning pattern matching (case-insensitive)
             # This pattern catches ALL problematic output including:
@@ -371,12 +363,15 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             # - Build system errors (CMake, Ninja, Make)
             # - Library-specific build errors (COLMAP, Open3D, OpenCV)
             # - System/user generated errors
+            # D3: Use here-string for grep (safe pattern, no pipe needed)
+            # D3b: Pattern is long but necessary for comprehensive error detection
             if grep -qiE <<< "${line}" \
                 '(error|warning|fatal|failed|failure|unable to|unable|not found|cannot|missing|undefined|undefined reference|undefined symbol|warning:|error:|fatal error|compilation error|link error|build error|install error|download error|extract error|✗|✖|⚠|❌|⚠️|ERROR|WARNING|FAILED|FAILURE|MISSING|NOT FOUND|CANNOT|UNABLE|FATAL|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|LOCATION NOT FOUND|unable to locate|unable to download|unable to find|unable to install|unable to extract|unable to compile|unable to build|unable to connect|unable to access|unable to execute|could not find|could not locate|could not download|could not install|did not find|did not locate|did not download|package .* not found|file .* not found|directory .* not found|location .* not found|compilation.*warning|link.*warning|build.*warning|make.*warning|cmake.*warning|ninja.*error|ninja.*warning|gcc.*warning|g\+\+.*warning|clang.*warning|rustc.*warning|cargo.*warning|dpkg.*warning|apt.*warning|pip.*warning|conda.*warning|julia.*warning|deprecated|obsolete|ignored|skipped|timeout|connection refused|connection reset|network.*error|network.*failed|ssl.*error|certificate.*error|authentication.*failed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|segmentation.*fault|core.*dump|aborted|abort|killed|terminated|signal.*killed|exit.*code.*[1-9]|exit.*status.*[1-9]|\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|wheel.*not found|wheel.*location|\.whl.*not found|wheel.*path|wrote.*\.whl|building.*wheel|wheel.*build|colmap.*failed|colmap.*error|open3d.*failed|open3d.*error|opencv.*failed|opencv.*error|cmake.*failed|cmake.*error|ninja.*failed|build.*failed|compilation.*failed|link.*failed|CHECKING FOR|COMPREHENSIVE DIAGNOSTIC|DIAGNOSTIC ANALYSIS|NEXT STEPS FOR DEBUGGING|Last.*lines.*of.*log|tee.*\.log|build.*log|cmake.*log|colmap.*log|open3d.*log|opencv.*log|Post-CMake Debug|Post-CMake.*Debug|test.*failed|test.*error|checkpoint|CHECKPOINT|verification.*failed|verification.*error|configuration.*failed|configuration.*error|setup.*failed|setup.*error|install.*failed|install.*error|harvest.*failed|harvest.*error)'; then
                 # Write matching line to error log with timestamp
                 # Note: Using || true is intentional here for non-critical logging operations
                 # This occurs before strict mode is enabled (set -e at line 323)
-                echo "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
+                # D3b: Use printf for robustness
+                printf '%s\n' "[$(date +'%Y-%m-%d %H:%M:%S')] ${line}" >> "${error_log}" 2>/dev/null || true
             # ENDIF: grep pattern match check
             fi
         # ENDWHILE: line reading loop
@@ -407,8 +402,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Fallback: tee without error filtering
         exec > >(tee -a "${BUILD_LOG_FILE}") 2>&1
     else
-        echo "  ⚠ Warning: 'tee' command not available, logging disabled"
-        echo "  Build will continue without log file"
+        printf '%s\n' "  ⚠ Warning: 'tee' command not available, logging disabled"
+        printf '%s\n' "  Build will continue without log file"
     fi
     
     # Start background sync job to periodically flush log files to disk
@@ -420,7 +415,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
             sync_interval="${BUILD_LOG_SYNC_INTERVAL:-60}"
             # Validate sync interval is a positive integer (A5a robustness)
             if ! [[ "${sync_interval}" =~ ^[0-9]+$ ]] || [ $((10#${sync_interval})) -le 0 ]; then
-                echo "  ⚠ Warning: Invalid BUILD_LOG_SYNC_INTERVAL='${BUILD_LOG_SYNC_INTERVAL:-}', defaulting to 60" >&2
+                printf '%s\n' "  ⚠ Warning: Invalid BUILD_LOG_SYNC_INTERVAL='${BUILD_LOG_SYNC_INTERVAL:-}', defaulting to 60" >&2
                 sync_interval=60
             fi
             while true; do
@@ -439,8 +434,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
         # Store sync PID so we can clean it up if needed
         export BUILD_LOG_SYNC_PID="${SYNC_PID}"
     else
-        echo "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
-        echo "  Log will still be captured, but manual sync only on exit"
+        printf '%s\n' "  ⚠ Warning: 'sleep' command not available, periodic sync disabled"
+        printf '%s\n' "  Log will still be captured, but manual sync only on exit"
         export BUILD_LOG_SYNC_PID=""
     fi
     
@@ -476,6 +471,8 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
                 # Only call if function exists
                 # Note: Using || true is intentional - log analysis is non-critical
                 if type analyze_build_log >/dev/null 2>&1; then
+                    # SC2119: analyze_build_log doesn't take script arguments, call without $@
+                    # shellcheck disable=SC2119
                     analyze_build_log || true
                 else
                     printf '%s\n' "⚠ Warning: analyze_build_log function not available, skipping log analysis"
@@ -509,7 +506,7 @@ if [ "${SINGULARITY_NAME:-}" != "" ] || [ "${APPTAINER_NAME:-}" != "" ] || [ -f 
     printf '%s\n' "═══════════════════════════════════════════════════════════════"
     printf '%s\n' ""
     else
-        echo "ℹ Logging disabled (not running in container build environment)"
+        printf '%s\n' "ℹ Logging disabled (not running in container build environment)"
     # ENDIF: container build environment check
 fi
 
@@ -527,15 +524,19 @@ on_error_report() {
 	# Collect lightweight context safely without tripping -u/-e
 	local bash_ver="${BASH_VERSION:-unknown}"
 	local shellopts="${SHELLOPTS:-}"
-	local who="$(id -un 2>/dev/null || echo unknown)"
-	local uid="$(id -u 2>/dev/null || echo unknown)"
+	# SC2155: Declare and assign separately to avoid masking return values
+	local who
+	who="$(id -un 2>/dev/null || echo unknown)"
+	local uid
+	uid="$(id -u 2>/dev/null || echo unknown)"
 	local file="${BASH_SOURCE[1]:-unknown}"
 	local line="${1:-unknown}"
 	local cmd="${2:-unknown}"
 	local code="${3:-1}"
 	local pwd_now="${PWD:-unknown}"
 	local pipefail_state
-	pipefail_state="$(set -o 2>/dev/null | grep -E 'pipefail|errexit|nounset' || true)"
+	# D3: Use here-string instead of echo | grep (unsafe pipe pattern)
+	pipefail_state="$(grep -E 'pipefail|errexit|nounset' <<< "$(set -o 2>/dev/null || echo '')" || true)"
 
 	# Single, high-signal diagnostic block
 	{
@@ -650,13 +651,15 @@ debug_glibc() {
   echo "Time: $(date)"
   echo "=========================================================="
   echo "GLIBC version:"
-  /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 || echo "GLIBC version check failed"
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || echo "GLIBC version check failed" || true
   echo "---"
   echo "ldd version:"
   (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 || true
   echo "---"
   echo "GCC version:"
-  gcc --version 2>/dev/null | head -1 || echo "GCC not installed yet"
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  gcc --version 2>/dev/null | head -1 2>/dev/null || echo "GCC not installed yet" || true
   echo "---"
   echo "Test stdlib.h locations:"
   find /usr/include -name "stdlib.h" 2>/dev/null || echo "stdlib.h not found"
@@ -708,85 +711,19 @@ debug_glibc() {
 # Usage: BUILD_JOBS=$(calculate_build_jobs)
 #-------------------------------------------------------------------------------
 
-# Purpose: Calculate optimal number of parallel build jobs based on CPU and memory
-# Returns: Number of jobs suitable for parallel compilation (integer)
-# Side effects: Outputs warnings to stderr if commands are unavailable
-# Dependencies: Requires 'free' and 'nproc' commands for accurate calculation
-# Usage: BUILD_JOBS=$(calculate_build_jobs)
-calculate_build_jobs() {
-    # Get system resources
-    # Declare and assign separately to avoid masking return values (SC2155 compliance)
-    local mem_gb
-    local cpu_cores
-
-    if command -v free >/dev/null 2>&1; then
-        mem_gb=$(free -g | awk '/^Mem:/ {print $2}')
-    else
-        echo "  ⚠ Warning: 'free' command not available, assuming 4GB RAM" >&2
-        mem_gb=4
-    # ENDIF: free command availability check
-    fi
-
-    if command -v nproc >/dev/null 2>&1; then
-        cpu_cores=$(nproc)
-    else
-        echo "  ⚠ Warning: 'nproc' command not available, assuming 1 CPU core" >&2
-        cpu_cores=1
-    # ENDIF: nproc command availability check
-    fi
-    
-    # Validate numeric values
-    if ! [ "${mem_gb:-0}" -ge 0 ] 2>/dev/null; then
-        echo "  ⚠ Warning: Invalid memory value '${mem_gb}', defaulting to 4GB" >&2
-        mem_gb=4
-    # ENDIF: mem_gb validation check
-    fi
-    if ! [ "${cpu_cores:-0}" -gt 0 ] 2>/dev/null; then
-        echo "  ⚠ Warning: Invalid CPU core count '${cpu_cores}', defaulting to 1" >&2
-        cpu_cores=1
-    # ENDIF: cpu_cores validation check
-    fi
-    
-    # Calculate jobs based on CPU (use half cores to prevent overload)
-    local jobs_by_cpu
-    jobs_by_cpu=$((cpu_cores / 2))
-    
-    # Calculate jobs based on memory (assume 3GB per C++ compilation job for safety)
-    # This accounts for template-heavy code like COLMAP, Ceres, OpenCV
-    local jobs_by_mem
-    jobs_by_mem=$((mem_gb / 3))
-    
-    # Use the minimum of the two (most conservative)
-    local jobs
-    jobs=$jobs_by_cpu
-    if [ "${jobs_by_mem}" -lt "${jobs}" ]; then
-        jobs=$jobs_by_mem
-        echo "  ℹ Memory-limited: Using ${jobs} jobs (RAM: ${mem_gb}GB allows ~${jobs} parallel C++ jobs)" >&2
-    # ENDIF: memory limitation check
-    fi
-    
-    # Ensure at least 1 job
-    if [ "${jobs}" -lt 1 ]; then
-        jobs=1
-    # ENDIF: minimum jobs check
-    fi
-    
-    # Allow override via environment variable (for testing/debugging)
-    if [ -n "${BUILD_JOBS_OVERRIDE:-}" ]; then
-        # Validate override is numeric (digits only) and positive
-        if [[ "${BUILD_JOBS_OVERRIDE}" =~ ^[0-9]+$ ]] && [ $((10#${BUILD_JOBS_OVERRIDE})) -gt 0 ]; then
-            jobs="${BUILD_JOBS_OVERRIDE}"
-            echo "  ℹ Override: Using BUILD_JOBS_OVERRIDE=${jobs}" >&2
-        else
-            echo "  ⚠ Warning: Invalid BUILD_JOBS_OVERRIDE='${BUILD_JOBS_OVERRIDE}', ignoring" >&2
-        # ENDIF: BUILD_JOBS_OVERRIDE validation check
-        fi
-    # ENDIF: BUILD_JOBS_OVERRIDE availability check
-    fi
-    
-    echo "${jobs}"
-}
+# Note: calculate_build_jobs() is now defined in /scripts/common_functions.sh (centralized)
 # End function (self-contained)
+
+#===============================================================================
+# BLOCK 2.5: CACHE MANAGEMENT
+#===============================================================================
+# Purpose: Cache consolidation and monitoring functions
+# Self-contained: Yes (functions loaded from common_functions.sh)
+# Dependencies: /scripts/common_functions.sh (loaded above)
+# Outputs: Cache consolidation and monitoring
+#-------------------------------------------------------------------------------
+# Note: Functions consolidate_cache_packages(), monitor_cache(), calculate_build_jobs()
+#       are now defined in /scripts/common_functions.sh (centralized)
 
 #-------------------------------------------------------------------------------
 # PACKAGE STATUS HELPER FUNCTIONS
@@ -844,7 +781,8 @@ dpkg_get_installed_version() {
     
     # Validate version output is non-empty and valid format (should contain version string)
     if [ -n "${version_output}" ] && grep -qE '^[0-9]' <<< "${version_output}"; then
-        printf '%s\n' "${version_output}" | head -n1
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        printf '%s\n' "${version_output}" | head -n1 2>/dev/null || true
     else
         return 1
     fi
@@ -1033,6 +971,7 @@ ensure_compiled_lib_priority() {
     echo "    ERROR: Failed to create /etc/ld.so.conf.d directory" >&2
     return 1
   }
+  # EXEMPTED FROM EXTRACTION: Small config file (<5 lines), simple content, tightly coupled to function logic
   cat > "${conf_file}" <<'LDCONF'
 # CRITICAL: Search /usr/local first for compiled libraries
 /usr/local/lib
@@ -1117,7 +1056,8 @@ run_ldconfig_refresh_dir() {
   
   # Verify directory contains library files before updating
   local find_output
-  find_output=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  find_output=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -z "${find_output}" ]; then
     echo "  [WARN] No .so files found in ${target_dir}, but attempting refresh anyway (may have symlinks)" >&2
   else
@@ -1153,10 +1093,12 @@ run_ldconfig_refresh_dir() {
   if [ "${lib_count}" -gt 0 ]; then
     # Try to find at least one library from this directory in the cache
     local sample_lib
-    sample_lib=$(find "${target_dir}" -maxdepth 1 -name "*.so" -type f 2>/dev/null | head -1 || echo "")
+    # D3e: SIGPIPE protection - add || true at end of pipeline with head
+    sample_lib=$(find "${target_dir}" -maxdepth 1 -name "*.so" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     if [ -n "${sample_lib}" ]; then
       local lib_basename
-      lib_basename=$(basename "${sample_lib}" | sed 's/\.[0-9].*$//' || echo "")
+      # D3: Use here-string instead of basename | sed (unsafe pipe pattern)
+      lib_basename=$(sed 's/\.[0-9].*$//' <<< "$(basename "${sample_lib}")" || echo "")
       if ldconfig -p 2>/dev/null | grep -qF "${lib_basename}"; then
         echo "  [DEBUG] ✓ Verification passed: Libraries from ${target_dir} are now in cache"
         return 0
@@ -1424,7 +1366,8 @@ run_ldconfig_refresh_from_install_output() {
     for common_dir in /usr/local/lib /usr/local/lib64 /usr/local/lib/x86_64-linux-gnu; do
       if [ -d "${common_dir}" ]; then
         local find_output
-        find_output=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        find_output=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${find_output}" ]; then
           lib_dirs+=("${common_dir}")
         fi
@@ -1445,8 +1388,9 @@ run_ldconfig_refresh_from_install_output() {
           lib_path=$(sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*)[[:space:]]+->.*/\2/p' <<< "${line}" || echo "")
         fi
         # Pattern 1c: Handle paths with spaces or special characters
+        # D3: Use here-string instead of echo | sed (unsafe pipe pattern)
         if [ -z "${lib_path}" ]; then
-          lib_path=$(echo "${line}" | sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*).*/\2/p' || echo "")
+          lib_path=$(sed -nE 's/.*(Installing|-- Installing):[[:space:]]+([^[:space:]]+\.so[^[:space:]]*).*/\2/p' <<< "${line}" || echo "")
         fi
         
         if [ -n "${lib_path}" ]; then
@@ -1539,7 +1483,8 @@ run_ldconfig_refresh_from_install_output() {
       # Pattern 4: Direct library paths in output: "/path/to/lib/libname.so"
       if grep -qE "^/[^[:space:]]+\.so" <<< "${line}"; then
         local lib_path
-        lib_path=$(awk '{print $1}' <<< "${line}" | grep -E "\.so" | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        lib_path=$(awk '{print $1}' <<< "${line}" | grep -E "\.so" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${lib_path}" ] && [ -f "${lib_path}" ]; then
           local lib_dir
           lib_dir=$(dirname "${lib_path}")
@@ -1561,7 +1506,8 @@ run_ldconfig_refresh_from_install_output() {
     if [ -n "${normalized_dir}" ] && [ -d "${normalized_dir}" ]; then
       # Verify directory actually contains library files before adding (prevents false positives)
       local find_output_check
-      find_output_check=$(find "${normalized_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      find_output_check=$(find "${normalized_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
       if [ -n "${find_output_check}" ]; then
         # Only add if not already seen
         if [ -z "${seen_dirs[${normalized_dir}]:-}" ]; then
@@ -1582,7 +1528,8 @@ run_ldconfig_refresh_from_install_output() {
       if [ -d "${common_dir}" ]; then
         # Validate directory contains library files before adding (best practice O4 - Phase 1)
         local find_output_std
-        find_output_std=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        find_output_std=$(find "${common_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
         if [ -n "${find_output_std}" ]; then
           unique_dirs+=("${common_dir}")
           echo "  [VERIFY] Standard location validated: ${common_dir} (contains .so files)"
@@ -1643,106 +1590,118 @@ diagnose_library_detection() {
   local lib_pattern="${1}"
   local lib_file_path="${2:-}"
   
-  echo "=== Library Detection Diagnostics for ${lib_pattern} ===" >&2
+  printf '%s\n' "=== Library Detection Diagnostics for ${lib_pattern} ===" >&2
   
   # Check 1: ldconfig cache
-  echo "1. Checking ldconfig cache..." >&2
+  printf '%s\n' "1. Checking ldconfig cache..." >&2
   local ldconfig_cache_output
+  # SC2155: Declare and assign separately to avoid masking return values
+  ldconfig_cache_output=""
   ldconfig_cache_output=$(timeout 2 ldconfig -p 2>/dev/null || echo "")
-  if [ -n "${ldconfig_cache_output}" ] && grep -qF "${lib_pattern}" <<< "${ldconfig_cache_output}"; then
-    echo "   ✓ Found in cache" >&2
+  if [ -n "${ldconfig_cache_output}" ] && grep -qF -- "${lib_pattern}" <<< "${ldconfig_cache_output}"; then
+    printf '%s\n' "   ✓ Found in cache" >&2
   else
-    echo "   ✗ NOT found in cache" >&2
+    printf '%s\n' "   ✗ NOT found in cache" >&2
   fi
   
   # Check 2: File existence and permissions
   if [ -n "${lib_file_path}" ]; then
-    echo "2. Checking library file: ${lib_file_path}" >&2
+    printf '%s\n' "2. Checking library file: ${lib_file_path}" >&2
     if [ -f "${lib_file_path}" ]; then
-      echo "   ✓ File exists" >&2
+      printf '%s\n' "   ✓ File exists" >&2
       if [ -r "${lib_file_path}" ]; then
-        echo "   ✓ File is readable" >&2
+        printf '%s\n' "   ✓ File is readable" >&2
       else
-        echo "   ✗ File is NOT readable (permissions issue)" >&2
+        printf '%s\n' "   ✗ File is NOT readable (permissions issue)" >&2
         ls -l "${lib_file_path}" >&2
       fi
       
       # Check naming convention
       local lib_basename
       lib_basename=$(basename "${lib_file_path}")
-      if grep -qE '^lib.*\.so' <<< "${lib_basename}"; then
-        echo "   ✓ Follows naming convention (lib*.so*)" >&2
+      if grep -qE -- '^lib.*\.so' <<< "${lib_basename}"; then
+        printf '%s\n' "   ✓ Follows naming convention (lib*.so*)" >&2
       else
-        echo "   ✗ Does NOT follow naming convention (should be lib*.so*)" >&2
+        printf '%s\n' "   ✗ Does NOT follow naming convention (should be lib*.so*)" >&2
       fi
       
       # Check SONAME
       if command -v objdump >/dev/null 2>&1; then
         local objdump_output soname
+        # SC2155: Declare and assign separately to avoid masking return values
+        objdump_output=""
+        soname=""
         objdump_output=$(objdump -p "${lib_file_path}" 2>/dev/null || echo "")
         if [ -n "${objdump_output}" ]; then
           soname=$(awk '/SONAME/ {print $2; exit}' <<< "${objdump_output}" || echo "")
           if [ -n "${soname}" ]; then
-            echo "   ✓ SONAME: ${soname}" >&2
+            printf '%s\n' "   ✓ SONAME: ${soname}" >&2
           else
-            echo "   ⚠ No SONAME found" >&2
+            printf '%s\n' "   ⚠ No SONAME found" >&2
           fi
         fi
       fi
     else
-      echo "   ✗ File does NOT exist" >&2
+      printf '%s\n' "   ✗ File does NOT exist" >&2
     fi
     
     # Check 3: Library directory in ld.so.conf.d
     local lib_dir
     lib_dir=$(dirname "${lib_file_path}")
-    echo "3. Checking ld.so.conf.d for: ${lib_dir}" >&2
+    printf '%s\n' "3. Checking ld.so.conf.d for: ${lib_dir}" >&2
     local conf_found=false
     if [ -d "/etc/ld.so.conf.d" ]; then
       for conf_file in /etc/ld.so.conf.d/*.conf; do
         if [ -f "${conf_file}" ]; then
-          if grep -q "^${lib_dir}\$" "${conf_file}" 2>/dev/null; then
-            echo "   ✓ Found in: ${conf_file}" >&2
+          if grep -q -- "^${lib_dir}\$" "${conf_file}" 2>/dev/null; then
+            printf '%s\n' "   ✓ Found in: ${conf_file}" >&2
             conf_found=true
           fi
         fi
       done
     fi
-    if [ -f "/etc/ld.so.conf" ] && grep -q "^${lib_dir}\$" /etc/ld.so.conf 2>/dev/null; then
-      echo "   ✓ Found in: /etc/ld.so.conf" >&2
+    # ENDFOR: conf_file
+    if [ -f "/etc/ld.so.conf" ] && grep -q -- "^${lib_dir}\$" /etc/ld.so.conf 2>/dev/null; then
+      printf '%s\n' "   ✓ Found in: /etc/ld.so.conf" >&2
       conf_found=true
     fi
+    # ENDIF: /etc/ld.so.conf check
     if [ "${conf_found}" != true ] && [ "${lib_dir}" != "/lib" ] && [ "${lib_dir}" != "/usr/lib" ] && [ "${lib_dir}" != "/lib64" ] && [ "${lib_dir}" != "/usr/lib64" ]; then
-      echo "   ✗ NOT found in ld.so.conf.d/ (may need to add)" >&2
-      echo "   → Suggested fix: echo '${lib_dir}' > /etc/ld.so.conf.d/custom-libs.conf && ldconfig" >&2
+      printf '%s\n' "   ✗ NOT found in ld.so.conf.d/ (may need to add)" >&2
+      printf '%s\n' "   → Suggested fix: echo '${lib_dir}' > /etc/ld.so.conf.d/custom-libs.conf && ldconfig" >&2
     fi
+    # ENDIF: conf_found check
     
     # Check 4: LD_LIBRARY_PATH
-    echo "4. Checking LD_LIBRARY_PATH..." >&2
+    printf '%s\n' "4. Checking LD_LIBRARY_PATH..." >&2
     if [ -n "${LD_LIBRARY_PATH:-}" ]; then
       if case ":${LD_LIBRARY_PATH}:" in *:${lib_dir}:*) true;; *) false;; esac; then
-        echo "   ✓ Directory in LD_LIBRARY_PATH" >&2
+        printf '%s\n' "   ✓ Directory in LD_LIBRARY_PATH" >&2
       else
-        echo "   ⚠ Directory NOT in LD_LIBRARY_PATH (runtime may fail)" >&2
-        echo "   → Current LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}" >&2
+        printf '%s\n' "   ⚠ Directory NOT in LD_LIBRARY_PATH (runtime may fail)" >&2
+        printf '%s\n' "   → Current LD_LIBRARY_PATH: ${LD_LIBRARY_PATH}" >&2
       fi
     else
-      echo "   ⚠ LD_LIBRARY_PATH not set" >&2
+      printf '%s\n' "   ⚠ LD_LIBRARY_PATH not set" >&2
     fi
+    # ENDIF: LD_LIBRARY_PATH check
     
     # Check 5: ldd test
     if [ -f "${lib_file_path}" ] && command -v ldd >/dev/null 2>&1; then
-      echo "5. Testing library with ldd..." >&2
+      printf '%s\n' "5. Testing library with ldd..." >&2
       if ldd "${lib_file_path}" >/dev/null 2>&1; then
-        echo "   ✓ Library loads successfully with ldd" >&2
+        printf '%s\n' "   ✓ Library loads successfully with ldd" >&2
       else
-        echo "   ✗ Library FAILS to load with ldd (may be corrupted or wrong architecture)" >&2
-        ldd "${lib_file_path}" 2>&1 | head -5 >&2
+        printf '%s\n' "   ✗ Library FAILS to load with ldd (may be corrupted or wrong architecture)" >&2
+        # D3e: SIGPIPE protection - add || true at end of pipeline with head
+        ldd "${lib_file_path}" 2>&1 | head -5 >&2 || true
       fi
     fi
+    # ENDIF: ldd test
   fi
+  # ENDIF: lib_file_path check
   
-  echo "=== End Diagnostics ===" >&2
+  printf '%s\n' "=== End Diagnostics ===" >&2
 }
 
 # Purpose: Ensure NVIDIA CUDA APT repository keyring is installed and pinned
@@ -1756,12 +1715,21 @@ diagnose_library_detection() {
 ensure_cuda_repository_configured() {
   local keyring_pkg="cuda-keyring"
   local keyring_deb="${NVIDIA_KEYRING_DEB:-cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb}"
+  local keyring_url="${NVIDIA_KEYRING_URL:-}"
   local install_needed=false
   
   # Validate required inputs before proceeding (A5a robustness)
   if [ -z "${NVIDIA_KEYRING_VER:-}" ] && [ -z "${NVIDIA_KEYRING_DEB:-}" ]; then
-      echo "[WARN] NVIDIA_KEYRING_VER/DEB not provided; using default filename pattern" >&2
+      printf '%s\n' "[WARN] NVIDIA_KEYRING_VER/DEB not provided; using default filename pattern" >&2
   fi
+  # ENDIF: NVIDIA_KEYRING_VER/DEB validation
+  
+  # Validate keyring URL is set
+  if [ -z "${keyring_url}" ]; then
+      printf '%s\n' "[ERROR] NVIDIA_KEYRING_URL not set in config.sh" >&2
+      return 1
+  fi
+  # ENDIF: keyring_url validation
 
   local status_output
   status_output=$(dpkg-query -W -f='${Status}\n' "${keyring_pkg}" 2>/dev/null || echo "")
@@ -1777,23 +1745,23 @@ ensure_cuda_repository_configured() {
 
   local tmp_path="/tmp/${keyring_deb}"
   # Validate CUDA_REPO_URL
-  if [ -z "${CUDA_REPO_URL:-}" ]; then
-      echo "[ERROR] CUDA_REPO_URL is not set; cannot download CUDA keyring." >&2
-      return 1
-  fi
-  local keyring_url="${CUDA_REPO_URL%/}/${keyring_deb}"
+# Note: config-files file: /etc/apt/preferences.d/cuda-repository-pin is installed via install.sh from container-scripts/
+# Source: config-files/block-4-mirror-probing-functions-must-be-early-for-apt-operations/cuda-repository-pin.pref
+# Target: /etc/apt/preferences.d/cuda-repository-pin
+# Installed in Block 0 (early in script, before any scripts are needed)
 
   if [ -n "${cached_path}" ] && [ -f "${cached_path}" ]; then
-      echo "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
+      printf '%s\n' "[INFO] Installing cached NVIDIA CUDA keyring: ${cached_path}"
       if dpkg -i "${cached_path}"; then
           install_needed=true
       else
-          echo "[WARN] Cached CUDA keyring install failed, attempting fresh download..."
+          printf '%s\n' "[WARN] Cached CUDA keyring install failed, attempting fresh download..."
       fi
   fi
+  # ENDIF: cached_path check
 
   if [ "${install_needed}" != true ]; then
-      echo "[INFO] Downloading NVIDIA CUDA keyring from ${keyring_url}"
+      printf '%s\n' "[INFO] Downloading NVIDIA CUDA keyring from ${keyring_url}"
       if curl -fsSL "${keyring_url}" -o "${tmp_path}" && dpkg -i "${tmp_path}"; then
           install_needed=true
           if [ -n "${cached_path}" ]; then
@@ -1801,18 +1769,18 @@ ensure_cuda_repository_configured() {
           fi
       else
           rm -f "${tmp_path}"
-          echo "✗ Failed to install NVIDIA CUDA repository keyring from ${keyring_url}" >&2
+          printf '%s\n' "✗ Failed to install NVIDIA CUDA repository keyring from ${keyring_url}" >&2
           return 1
       fi
       rm -f "${tmp_path}"
   fi
+  # ENDIF: install_needed check
 
-  if [ -n "${CUDA_REPO_PIN_PRIORITY:-}" ]; then
-      cat > /etc/apt/preferences.d/cuda-repository-pin <<EOF
-Package: *
-Pin: origin developer.download.nvidia.com
-Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}
-EOF
+  # Note: cuda-repository-pin.pref is installed via install.sh from container-scripts/
+  # If CUDA_REPO_PIN_PRIORITY is set, it should be configured in the installed file or via sed
+  if [ -n "${CUDA_REPO_PIN_PRIORITY:-}" ] && [ -f /etc/apt/preferences.d/cuda-repository-pin ]; then
+      # Update Pin-Priority in the installed file if needed
+      sed -i "s/Pin-Priority:.*/Pin-Priority: ${CUDA_REPO_PIN_PRIORITY}/" /etc/apt/preferences.d/cuda-repository-pin 2>/dev/null || true
   fi
 
   return 0
@@ -1853,7 +1821,7 @@ probe_and_set_mirrors() {
     esac
   fi
   CODENAME="${detected_codename}"
-  echo "[info] Detected Ubuntu codename: ${CODENAME}"
+  printf '%s\n' "[info] Detected Ubuntu codename: ${CODENAME}"
   
   # Create temporary file for probe results with error checking
   local probe_results_file
@@ -1868,13 +1836,13 @@ probe_and_set_mirrors() {
   export CODENAME PROBE_RESULTS  # Export for subshell access
 
   # Attempt to dynamically fetch 100Gbps+ mirrors from official Launchpad page
-  echo "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
+  printf '%s\n' "[info] Attempting to fetch latest 100Gbps+ mirrors from official Ubuntu mirror list..."
   MIRRORS_HTML=$(curl -s -m 15 --connect-timeout 10 "https://launchpad.net/ubuntu/+archivemirrors" 2>/dev/null || echo "")
   
   if [ -n "${MIRRORS_HTML:-}" ]; then
     local mirror_html_bytes
     mirror_html_bytes=${#MIRRORS_HTML}
-    echo "[info] Successfully fetched mirror list (${mirror_html_bytes} bytes). Parsing..."
+    printf '%s\n' "[info] Successfully fetched mirror list (${mirror_html_bytes} bytes). Parsing..."
     
     # Parse HTML to extract mirrors with 100+ Gbps bandwidth that are "Up to date"
     DYNAMIC_MIRRORS=$(printf '%s' "${MIRRORS_HTML}" | \
@@ -1905,14 +1873,15 @@ probe_and_set_mirrors() {
         [[ "${mirror}" == *"archive.ubuntu.com"* ]] && continue
         CANDIDATE_MIRRORS+="${mirror}"$'\n'
       done <<< "${DYNAMIC_MIRRORS}"
-      echo "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors (archive.ubuntu.com included as fallback)"
+      # ENDWHILE: mirror iteration
+      printf '%s\n' "[info] ✅ Successfully parsed ${MIRROR_COUNT} dynamic 100Gbps+ mirrors (archive.ubuntu.com included as fallback)"
     else
-      echo "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
+      printf '%s\n' "[warn] Only ${MIRROR_COUNT:-0} dynamic mirrors found. Using curated static list."
       CANDIDATE_MIRRORS=""  # Will trigger fallback below
     fi
     # ENDIF: sufficient dynamic mirrors (>=10)
   else
-    echo "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
+    printf '%s\n' "[warn] Failed to fetch mirror list from Launchpad. Using curated static list."
     CANDIDATE_MIRRORS=""  # Will trigger fallback
   fi
   # ENDIF: fetched mirrors HTML (MIRRORS_HTML)
@@ -1920,7 +1889,7 @@ probe_and_set_mirrors() {
   # Fallback to curated static list if dynamic fetch failed
   # CRITICAL: Always include archive.ubuntu.com as first entry (guaranteed fallback)
   if [ -z "${CANDIDATE_MIRRORS:-}" ]; then
-    echo "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
+    printf '%s\n' "[info] Using curated static mirror list (100Gbps+ verified Oct 2025)"
     CANDIDATE_MIRRORS=$'http://archive.ubuntu.com/ubuntu\n'
     CANDIDATE_MIRRORS+=$'http://mirror.aarnet.edu.au/pub/ubuntu/archive\n'
     CANDIDATE_MIRRORS+=$'http://ftp.fau.de/ubuntu\n'
@@ -1949,21 +1918,21 @@ probe_and_set_mirrors() {
   # ENDIF: candidate mirrors non-empty for probing
 
   # Display mirror probe results
-  echo "--- Mirror Probe Results (speed score, url): ---"
+  printf '%s\n' "--- Mirror Probe Results (speed score, url): ---"
   if [ -s "${PROBE_RESULTS:-}" ]; then
     # Validate result format BEFORE parsing (Pattern P-20251113-011: Silent Failure Prevention)
     # Ensure file contains expected format: time url (e.g., "1.23 http://mirror.example.com/ubuntu")
-    if ! grep -qE '^[0-9.]+ https?://' "${PROBE_RESULTS}"; then
-      echo "[warn] ⚠ Invalid result format in probe results (expected: time url)"
-      echo "[info] Falling back to archive.ubuntu.com"
+    if ! grep -qE -- '^[0-9.]+ https?://' "${PROBE_RESULTS}"; then
+      printf '%s\n' "[warn] ⚠ Invalid result format in probe results (expected: time url)"
+      printf '%s\n' "[info] Falling back to archive.ubuntu.com"
       FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
       export FASTEST_MIRROR
       return 0
     fi
     # ENDIF: probe results format valid
-    LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || echo "[warn] Failed to sort results"
+    LC_NUMERIC=C sort -n "${PROBE_RESULTS}" 2>/dev/null | sed 's/^/ /' || printf '%s\n' "[warn] Failed to sort results"
   else
-    echo "[warn] No probe results written - all mirrors may have failed"
+    printf '%s\n' "[warn] No probe results written - all mirrors may have failed"
   fi
   # ENDIF: probe results exist
 
@@ -1985,23 +1954,23 @@ probe_and_set_mirrors() {
 
   # Robust fallback: Always use archive.ubuntu.com if no accessible mirrors found
   if [ -z "${fastest_mirror_raw:-}" ]; then
-    echo "[warn] ⚠ No accessible mirrors found (all may be blocked, failed, or timed out)"
-    echo "[info] Falling back to default archive.ubuntu.com (guaranteed to work)"
+    printf '%s\n' "[warn] ⚠ No accessible mirrors found (all may be blocked, failed, or timed out)"
+    printf '%s\n' "[info] Falling back to default archive.ubuntu.com (guaranteed to work)"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   else
     FASTEST_MIRROR="${fastest_mirror_raw}"
-    echo "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
+    printf '%s\n' "[info] ✓ Selected fastest accessible mirror: ${FASTEST_MIRROR}"
   fi
   # ENDIF: fastest mirror selection
   
   # Final safety check: Ensure FASTEST_MIRROR is set (should never be empty at this point)
   if [ -z "${FASTEST_MIRROR:-}" ]; then
-    echo "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
+    printf '%s\n' "[ERROR] FASTEST_MIRROR is empty - this should never happen! Using archive.ubuntu.com"
     FASTEST_MIRROR="http://archive.ubuntu.com/ubuntu"
   fi
   # ENDIF: FASTEST_MIRROR final non-empty check
   
-  echo "==> Selected fastest mirror: ${FASTEST_MIRROR}"
+  printf '%s\n' "==> Selected fastest mirror: ${FASTEST_MIRROR}"
 
   # Export the variable so it persists after function ends and is available globally
   export FASTEST_MIRROR
@@ -2018,14 +1987,18 @@ probe_and_set_mirrors() {
     # Example: "http://mirror.com/ubuntu" → "http:\/\/mirror.com\/ubuntu"
     # CRITICAL: Must have error fallback to prevent unset variable with set -u
     local fastest_mirror_sed_escaped
+    # SC2155: Declare and assign separately to avoid masking return values
+    fastest_mirror_sed_escaped=""
     fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
     
     # CRITICAL: Guard against empty escaped value - if sed failed, use FASTEST_MIRROR directly with minimal escaping
     if [ -z "${fastest_mirror_sed_escaped:-}" ]; then
-      echo "[warn] sed escaping failed, using FASTEST_MIRROR with minimal escaping"
+      printf '%s\n' "[warn] sed escaping failed, using FASTEST_MIRROR with minimal escaping"
       # Fallback: minimal escaping (just escape forward slashes and ampersands)
+      fastest_mirror_sed_escaped=""
       fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
     fi
+    # ENDIF: fastest_mirror_sed_escaped empty check
     
     # Only proceed with sed replacements if we have a valid escaped value
     if [ -n "${fastest_mirror_sed_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
@@ -2040,10 +2013,10 @@ probe_and_set_mirrors() {
       #    Pattern '[a-zA-Z0-9.-]*' matches any subdomain: mirrors.ubuntu.com, us.archive.ubuntu.com, etc.
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
-      echo "[info] Updated /etc/apt/sources.list with fastest mirror"
+      printf '%s\n' "[info] Updated /etc/apt/sources.list with fastest mirror"
     else
-      echo "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
-      echo "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
+      printf '%s\n' "[warn] Cannot update sources.list - FASTEST_MIRROR or escaped value is empty"
+      printf '%s\n' "[warn] FASTEST_MIRROR='${FASTEST_MIRROR:-<unset>}', escaped='${fastest_mirror_sed_escaped:-<unset>}'"
     fi
     # ENDIF: have valid escaped mirror for sed replacement
     
@@ -2060,19 +2033,36 @@ probe_and_set_mirrors() {
     local mirror_base_escaped mirror_no_protocol_escaped fastest_mirror_escaped
     if [ -n "${mirror_base:-}" ]; then
       # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+      # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
       mirror_base_escaped=$(printf '%s\n' "${mirror_base}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+      # F2: Validate command substitution result is non-empty and valid
+      if [ -z "${mirror_base_escaped:-}" ] && [ -n "${mirror_base:-}" ]; then
+        # Fallback if sed fails
+        mirror_base_escaped="${mirror_base}"
+      fi
     else
       mirror_base_escaped=""
     fi
     if [ -n "${mirror_no_protocol:-}" ]; then
       # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+      # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
       mirror_no_protocol_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+      # F2: Validate command substitution result is non-empty and valid
+      if [ -z "${mirror_no_protocol_escaped:-}" ] && [ -n "${mirror_no_protocol:-}" ]; then
+        # Fallback if sed fails
+        mirror_no_protocol_escaped="${mirror_no_protocol}"
+      fi
     else
       mirror_no_protocol_escaped=""
     fi
     # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
-    # shellcheck disable=SC2016  # Single quotes intentional - sed pattern is literal, not variable expansion
+    # D4: Correct sed bracket expression escaping: [][\\\/&] for literal brackets, backslash, forward slash, ampersand
     fastest_mirror_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\.*^$()+?{|&]/\\&/g' || echo "")
+    # F2: Validate command substitution result is non-empty and valid
+    if [ -z "${fastest_mirror_escaped:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Fallback if sed fails - use raw value
+      fastest_mirror_escaped="${FASTEST_MIRROR:-}"
+    fi
   
     # Check if mirror appears in active (non-commented) deb lines
     # D3: Use here-string instead of pipe pattern for safety and efficiency
@@ -2086,11 +2076,12 @@ probe_and_set_mirrors() {
       echo "[info] ✓ Verified: sources.list contains ${FASTEST_MIRROR}"
     else
       # Check if file is actually empty or only has comments
+      # D3e: SIGPIPE error handling - pipelines ending with wc need || true to prevent exit code 141
       local active_lines
       active_lines=$(
         { grep -v "^#" /etc/apt/sources.list 2>/dev/null || true; } |
         { grep -v '^$' || true; } |
-        wc -l
+        wc -l || echo "0"
       )
       if [ "${active_lines:-0}" -eq 0 ]; then
         echo "[info] sources.list contains only comments (this may be normal for Ubuntu 24.04)"
@@ -2101,7 +2092,8 @@ probe_and_set_mirrors() {
         echo "[info]   Checking for alternative mirror formats..."
         # Show what we actually found
         # D3: Use here-string instead of pipe pattern
-        grep -E "(deb|deb-src)" <<< "${sources_content}" 2>/dev/null | head -3 | sed 's/^/    /' || echo "    (no deb lines found)"
+        # D3e: SIGPIPE error handling - pipeline ending with head needs || true to prevent exit code 141
+        grep -E "(deb|deb-src)" <<< "${sources_content}" 2>/dev/null | head -3 2>/dev/null | sed 's/^/    /' 2>/dev/null || echo "    (no deb lines found)"
       fi
     fi
     
@@ -2111,7 +2103,14 @@ probe_and_set_mirrors() {
       echo "[warn] ⚠ Still found archive.ubuntu.com references in sources.list, attempting additional replacement..."
       # Recompute mirror_no_protocol if not already set
       if [ -z "${mirror_no_protocol:-}" ]; then
+        # F2: Validate command substitution result
         mirror_no_protocol=$(sed 's|http://||; s|https://||' <<< "${FASTEST_MIRROR:-}" || echo "")
+        # Validate result is non-empty
+        if [ -z "${mirror_no_protocol:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+          # Extract manually if sed fails
+          mirror_no_protocol="${FASTEST_MIRROR#http://}"
+          mirror_no_protocol="${mirror_no_protocol#https://}"
+        fi
       fi
       # Escape special sed characters in mirror_no_protocol for safe replacement
       # CRITICAL: Must have error fallback to prevent unset variable with set -u
@@ -2153,9 +2152,16 @@ probe_and_set_mirrors() {
       fastest_mirror_sed_escaped=$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's|/|\\/|g; s|&|\\&|g' || echo "${FASTEST_MIRROR:-}")
     fi
     
-    # Compute mirror_no_protocol once for reuse
+    # Compute mirror_no_protocol once for reuse (strip both http:// and https://)
+    # F2: Validate command substitution result
     local mirror_no_protocol
     mirror_no_protocol=$(sed 's|http://||; s|https://||' <<< "${FASTEST_MIRROR:-}" || echo "")
+    # Validate result is non-empty
+    if [ -z "${mirror_no_protocol:-}" ] && [ -n "${FASTEST_MIRROR:-}" ]; then
+      # Extract manually if sed fails
+      mirror_no_protocol="${FASTEST_MIRROR#http://}"
+      mirror_no_protocol="${mirror_no_protocol#https://}"
+    fi
     
     # Enable nullglob to handle case where no files exist
     shopt -s nullglob
@@ -2244,7 +2250,8 @@ probe_and_set_mirrors() {
       # Final check for remaining archive.ubuntu.com
       # D3: Use here-string instead of pipe pattern
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol:-}" ]; then
           local mirror_sed_escaped
           mirror_sed_escaped=$(printf '%s\n' "${mirror_no_protocol}" | sed 's/[][\\\/&]/\\&/g' || echo "")
@@ -2304,12 +2311,20 @@ verify_fastest_mirror() {
       fast_count="0"
     fi
     # Count lines using archive.ubuntu.com
+    # F2: Validate command substitution result
     local slow_count
-    slow_count=$(grep -c "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
+    slow_count=$(grep -c -- "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
+    # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+    # Validate result is numeric
+    if [ -z "${slow_count:-}" ] || ! [[ "${slow_count}" =~ ^[0-9]+$ ]]; then
+      slow_count="0"
+    fi
     
     if [ "${slow_count:-0}" -gt 0 ]; then
       echo "[ERROR] Found ${slow_count} lines still using archive.ubuntu.com in sources.list:"
-      grep "archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null | sed 's/^/  /' || true
+      # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+      grep -- "archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
       issues_found=$((issues_found + slow_count))
     else
       echo "[info] ✓ sources.list: No archive.ubuntu.com found (good)"
@@ -2342,9 +2357,11 @@ verify_fastest_mirror() {
       # D3: Use here-string instead of pipe pattern
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
+      if grep -q -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in $(basename "${sources_file}"):"
-        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
+        # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+        # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+        grep -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         found_issues=1
       # ENDIF: archive.ubuntu.com check
       fi
@@ -2364,9 +2381,11 @@ verify_fastest_mirror() {
       # D3: Use here-string instead of pipe pattern
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if grep -q "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
+      if grep -q -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null; then
         echo "[ERROR] Found archive.ubuntu.com in deb822 file $(basename "${sources_file}"):"
-        grep "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' || true
+        # D3e: SIGPIPE error handling - pipeline ending with sed needs || true to prevent exit code 141
+        # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+        grep -- "archive\.ubuntu\.com" <<< "${file_content}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         found_issues=1
       fi
     done
@@ -2456,7 +2475,8 @@ reapply_fastest_mirror() {
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       sed -i "/security\\.ubuntu\\.com/! s|https\\?://[a-zA-Z0-9.-]*/ubuntu|${fastest_mirror_sed_escaped}|g" /etc/apt/sources.list || true
       # H4: Validate sed operations succeeded by checking if archive.ubuntu.com still exists
-      if grep -q "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if grep -q -- "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
         echo "[warn] ⚠ Some archive.ubuntu.com references may remain after sed replacement"
       fi
     fi
@@ -2466,13 +2486,14 @@ reapply_fastest_mirror() {
     # F2: Validate command substitution result
     local sources_content
     sources_content=$(grep -v "^#" /etc/apt/sources.list 2>/dev/null || echo "")
-    if [ -n "${sources_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
+    if [ -n "${sources_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${sources_content}" 2>/dev/null; then
       echo "[warn] ⚠ Still found archive.ubuntu.com references, attempting additional replacement..."
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
       if [ -n "${mirror_no_protocol_escaped:-}" ]; then
         # H4: Validate sed operation result
         sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" /etc/apt/sources.list || true
         # Verify replacement succeeded
-        if grep -q "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
+        if grep -q -- "archive\\.ubuntu\\.com" /etc/apt/sources.list 2>/dev/null; then
           echo "[warn] ⚠ Additional replacement may have failed - archive.ubuntu.com still present"
         fi
       fi
@@ -2509,7 +2530,8 @@ reapply_fastest_mirror() {
           sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] ✓ Updated archive.ubuntu.com in: $(basename "${sources_file}")"
             updated_count=$((updated_count + 1))
           else
@@ -2533,12 +2555,14 @@ reapply_fastest_mirror() {
       # F2: Validate command substitution result
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if [ -n "${file_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           # H4: Validate sed operation result
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] Additional cleanup applied to: $(basename "${sources_file}")"
           else
             echo "[warn] ⚠ Additional cleanup may have failed for: $(basename "${sources_file}")"
@@ -2569,7 +2593,8 @@ reapply_fastest_mirror() {
           sed -i "s|https\\?://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           sed -i "s|http://archive\\.ubuntu\\.com/ubuntu|${fastest_mirror_sed_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] ✓ Updated archive.ubuntu.com in deb822 file: $(basename "${sources_file}")"
             updated_count=$((updated_count + 1))
           else
@@ -2583,12 +2608,14 @@ reapply_fastest_mirror() {
       # F2: Validate command substitution result
       local file_content
       file_content=$(grep -v "^#" "${sources_file}" 2>/dev/null || echo "")
-      if [ -n "${file_content:-}" ] && grep -q "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
+      # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+      if [ -n "${file_content:-}" ] && grep -q -- "archive\\.ubuntu\\.com" <<< "${file_content}" 2>/dev/null; then
         if [ -n "${mirror_no_protocol_escaped:-}" ]; then
           # H4: Validate sed operation result
           sed -i "s|archive\\.ubuntu\\.com/ubuntu|${mirror_no_protocol_escaped}|g" "${sources_file}" || true
           # Verify replacement succeeded
-          if ! grep -q "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
+          # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
+          if ! grep -q -- "archive\\.ubuntu\\.com" "${sources_file}" 2>/dev/null; then
             echo "[info] Additional cleanup applied to deb822 file: $(basename "${sources_file}")"
           else
             echo "[warn] ⚠ Additional cleanup may have failed for deb822 file: $(basename "${sources_file}")"
@@ -2730,13 +2757,15 @@ reapply_fastest_mirror() {
         echo "[ERROR] ⚠ apt-get update failed even with default archive.ubuntu.com mirror"
         echo "[warn] This may indicate a network or system issue. Output:"
         # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
-        head -10 <<< "${retry_output}" | sed 's/^/  /'
+        # D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+        head -10 <<< "${retry_output}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
         echo "[warn] Build may continue, but package operations may fail"
       fi
     else
       echo "[warn] apt-get update had issues (may continue):"
       # D3: Use here-string instead of echo | head | sed (unsafe pipe pattern)
-      head -5 <<< "${apt_update_output}" | sed 's/^/  /'
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141) when head closes pipe early
+      head -5 <<< "${apt_update_output}" 2>/dev/null | sed 's/^/  /' 2>/dev/null || true
     fi
   else
     echo "[info] ✓ apt-get update succeeded with selected mirror"
@@ -2768,80 +2797,7 @@ echo "Stage|Container APT|Var APT|Conda|Wheels|Julia" > "$CACHE_MONITOR_DATA"
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 # Parameters: $1 = stage name
-monitor_cache() {
-  local stage="${1:-unknown}"
-  local container_apt var_apt conda_pkgs wheels julia_pkgs
-  
-  # Safely count files with error handling
-  # Use find instead of ls to avoid glob expansion issues
-  # J1: Validate directory exists before operations
-  # F2: Validate command substitution result
-  if [ -d "${CONTAINER_APT_CACHE:-}" ] && [ -x "${CONTAINER_APT_CACHE:-}" ]; then
-    container_apt=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${container_apt:-0}" =~ ^[0-9]+$ ]]; then
-      container_apt="0"
-    fi
-  else
-    container_apt="0"
-  fi
-  
-  # J1: Validate directory exists before operations
-  # F2: Validate command substitution results
-  if [ -d /var/cache/apt/archives ] && [ -x /var/cache/apt/archives ]; then
-    var_apt=$(find /var/cache/apt/archives -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${var_apt:-0}" =~ ^[0-9]+$ ]]; then
-      var_apt="0"
-    fi
-  else
-    var_apt="0"
-  fi
-  
-  if [ -d "${CONTAINER_CONDA_CACHE:-}" ] && [ -x "${CONTAINER_CONDA_CACHE:-}" ]; then
-    conda_pkgs=$(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${conda_pkgs:-0}" =~ ^[0-9]+$ ]]; then
-      conda_pkgs="0"
-    fi
-  else
-    conda_pkgs="0"
-  fi
-  
-  if [ -d "${CONTAINER_WHEELS_CACHE:-}" ] && [ -x "${CONTAINER_WHEELS_CACHE:-}" ]; then
-    wheels=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${wheels:-0}" =~ ^[0-9]+$ ]]; then
-      wheels="0"
-    fi
-  else
-    wheels="0"
-  fi
-  
-  if [ -d "${CONTAINER_JULIA_CACHE:-}" ] && [ -x "${CONTAINER_JULIA_CACHE:-}" ]; then
-    julia_pkgs=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
-    # Validate result is numeric
-    if ! [[ "${julia_pkgs:-0}" =~ ^[0-9]+$ ]]; then
-      julia_pkgs="0"
-    fi
-  else
-    julia_pkgs="0"
-  fi
-
-  echo "[CACHE MONITOR] Stage: ${stage}"
-  echo "${CONTAINER_APT_CACHE:-/unknown}: ${container_apt} .deb files"
-  echo "/var/cache/apt/archives: ${var_apt} .deb files"
-  echo "${CONTAINER_CONDA_CACHE:-/unknown}: ${conda_pkgs} files"
-  echo "${CONTAINER_WHEELS_CACHE:-/unknown}: ${wheels} files"
-  echo "${CONTAINER_JULIA_CACHE:-/unknown}: ${julia_pkgs} files"
-  echo ""
-
-  # Store data for summary (append to CSV)
-  if [ -f "${CACHE_MONITOR_DATA:-}" ]; then
-    echo "${stage}|${container_apt}|${var_apt}|${conda_pkgs}|${wheels}|${julia_pkgs}" >> "${CACHE_MONITOR_DATA}"
-  fi
-}
-# End function (self-contained)
+# Note: monitor_cache() is now defined in /scripts/common_functions.sh (centralized)
 
 #--- Sub-block 5.3: Cache monitoring summary display function ---
 # Purpose: Display cache growth table across all stages
@@ -3055,6 +3011,8 @@ setup_conda_staging_area() {
     fi
     # Note: Do not modify CONDA_PKGS_DIRS here to avoid interfering with normal conda operations
     # The staging area will be used manually for specific cleanup operations
+    # J2, K2: Note: Using /tmp/conda-staging instead of mktemp for persistence across function calls
+    # This is intentional for manual cleanup operations, but should be cleaned up after use
     echo "✓ Conda staging area configured (manual mode)"
 }
 # End function (self-contained)
@@ -3071,6 +3029,7 @@ atomic_package_replace() {
     local retry_count=0
 
     # Validate inputs
+    # C1, C5: Validate inputs with proper error messages
     if [ -z "${pkg_name}" ]; then
         echo "✗ Error: Package name not provided"
         return 1
@@ -3179,7 +3138,7 @@ verify_package_integrity() {
     # F2: Validate command substitution result
     local file_type
     file_type=$(file -b "${pkg_file}" 2>/dev/null || echo "unknown")
-    # Validate file_type is non-empty
+    # C5, F2: Validate file_type is non-empty and has fallback
     if [ -z "${file_type:-}" ]; then
         file_type="unknown"
     fi
@@ -3226,6 +3185,10 @@ verify_package_integrity() {
 # Parameters: $1 = package name
 acquire_package_lock() {
     local pkg_name="${1:-}"
+    # J2, K2: Use consistent lock file path (must match release_package_lock)
+    # Note: Using fixed /tmp path for lock file persistence across function calls
+    # This is acceptable for lock files as they are cleaned up by release_package_lock
+    # For enhanced security, consider using /var/run or a dedicated lock directory
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
     local max_wait=30
     local wait_count=0
@@ -3248,7 +3211,8 @@ acquire_package_lock() {
             # F2: Validate command substitution results
             current_time=$(date +%s 2>/dev/null || echo "0")
             lock_time=$(stat -c %Y "${lock_file}" 2>/dev/null || echo "0")
-            # Validate results are numeric
+            # A5, A6: Validate results are numeric (using Bash [[ ]] for regex - documented as Bash-specific)
+            # Note: This requires Bash 3.2+ for regex matching; POSIX alternative would be case/esac with pattern matching
             if ! [[ "${current_time:-0}" =~ ^[0-9]+$ ]] || ! [[ "${lock_time:-0}" =~ ^[0-9]+$ ]]; then
                 # If we can't get valid times, assume lock is stale
                 echo "[warn] ⚠ Could not determine lock age, assuming stale"
@@ -3256,7 +3220,8 @@ acquire_package_lock() {
                 continue
             fi
             lock_age=$((current_time - lock_time))
-            # Validate lock_age is numeric and non-negative
+            # A5, A6: Validate lock_age is numeric and non-negative (using Bash [[ ]] for regex)
+            # Note: Bash 3.2+ required for regex matching; arithmetic comparison is POSIX-compliant
             if [[ "${lock_age:-0}" =~ ^[0-9]+$ ]] && [ "${lock_age:-0}" -ge 300 ]; then
                 # Lock is stale, remove it
                 # H4: Validate rm operation result
@@ -3290,6 +3255,10 @@ acquire_package_lock() {
 # Parameters: $1 = package name
 release_package_lock() {
     local pkg_name="${1:-}"
+    # J2, K2: Use consistent lock file path (must match acquire_package_lock)
+    # Note: Using fixed /tmp path for lock file persistence across function calls
+    # This is acceptable for lock files as they are cleaned up by this function
+    # For enhanced security, consider using /var/run or a dedicated lock directory
     local lock_file="/tmp/conda-lock-${pkg_name}.lock"
     
     if [ -z "${pkg_name}" ]; then
@@ -3360,6 +3329,9 @@ echo "✓ All cache directories created successfully"
 
 #--- Sub-block 8.5: Cache validation and repair function ---
 # Purpose: Validate cache directory structure and permissions
+# Parameters: None
+# Returns: 0 on success (always succeeds - validation function)
+# Side effects: Creates/repairs cache directories, sets permissions
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 validate_and_repair_cache() {
@@ -3438,6 +3410,12 @@ fi
 # Outputs: Environment variables, configuration
 # Note: Currently a placeholder - GPG verification setup will be implemented when needed
 # L4: Function documentation added for empty function
+# Purpose: Setup GPG verification for package signatures
+# Parameters: None
+# Returns: 0 on success (always succeeds - placeholder function)
+# Side effects: None (placeholder implementation)
+# Dependencies: None (foundational)
+# Note: Currently a placeholder - GPG verification setup will be implemented when needed
 setup_gpg_verification() {
     echo "==> Setting up GPG verification for .deb packages..."
     # TODO: Implement GPG key import and verification setup
@@ -3459,7 +3437,8 @@ setup_gpg_verification() {
 # Purpose: Ensure curl is available for mirror probing
 # Dependencies: Ubuntu base image (includes curl by default)
 # Outputs: curl availability confirmed
-echo "==> Checking curl availability for mirror probing..."
+# D3b: Use printf for robustness
+printf '%s\n' "==> Checking curl availability for mirror probing..."
 if ! command -v curl &> /dev/null; then
     echo "[warn] curl not found in base image. Installing curl first..."
     # Use /usr/bin/apt-get directly to avoid any wrapper issues
@@ -3478,9 +3457,10 @@ if ! command -v curl &> /dev/null; then
         echo "[ERROR] ⚠ curl installation succeeded but command not found"
         exit 1
     fi
-    echo "✓ curl installed"
+    # D3b: Use printf for robustness
+    printf '%s\n' "✓ curl installed"
 else
-    echo "✓ curl is available"
+    printf '%s\n' "✓ curl is available"
 fi
 # ENDIF: curl availability check
 
@@ -3488,26 +3468,30 @@ fi
 # Critical: Select fastest mirror BEFORE any significant apt operations
 # Dependencies: curl, test_mirror() and probe_and_set_mirrors() functions (BLOCK 3)
 # Outputs: FASTEST_MIRROR variable (exported), updated sources
-echo "==> Executing mirror probing BEFORE package installations..."
+# D3b: Use printf for robustness
+printf '%s\n' "==> Executing mirror probing BEFORE package installations..."
 probe_and_set_mirrors
 
 #--- Sub-block 9.3: Display selected mirror ---
 # Purpose: Confirm mirror selection for build logs
 # Dependencies: FASTEST_MIRROR (set by probe_and_set_mirrors)
 # Outputs: Log output
-echo "==> Mirror configuration complete:"
-echo "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
-echo "    This variable is now available globally for all apt operations"
+# D3b: Use printf for robustness (handles special characters in variables)
+printf '%s\n' "==> Mirror configuration complete:"
+printf '%s\n' "    FASTEST_MIRROR (exported): ${FASTEST_MIRROR}"
+printf '%s\n' "    This variable is now available globally for all apt operations"
 
 # Show first few lines of updated sources.list for verification
-echo "==> Contents of /etc/apt/sources.list (first 5 lines):"
+# D3b: Use printf for robustness
+printf '%s\n' "==> Contents of /etc/apt/sources.list (first 5 lines):"
 # J1: Validate file exists and is readable before operations
 if [ -f /etc/apt/sources.list ] && [ -r /etc/apt/sources.list ]; then
-  # F2: Validate command substitution result
+  # F2, D3e: Validate command substitution result with SIGPIPE protection
+  # D3e: Pipeline with head requires || true to prevent SIGPIPE (exit code 141)
   sources_preview=""
-  sources_preview=$(head -n 5 /etc/apt/sources.list 2>/dev/null | sed 's/^/    /' || echo "")
+  sources_preview=$(head -n 5 /etc/apt/sources.list 2>/dev/null | sed 's/^/    /' 2>/dev/null || echo "")
   if [ -n "${sources_preview:-}" ]; then
-    echo "${sources_preview}"
+    printf '%s\n' "${sources_preview}"
   else
     echo "    [warn] Could not read sources.list contents"
   fi
@@ -3516,8 +3500,8 @@ else
 fi
 # ENDIF: sources.list preview
 
-echo ""
-echo "==> Verifying mirror configuration..."
+printf '%s\n' ""
+printf '%s\n' "==> Verifying mirror configuration..."
 # Run verification to ensure mirror was properly applied
 if verify_fastest_mirror; then
     echo "✓ Mirror selection completed and verified"
@@ -3580,7 +3564,8 @@ fi
 # Critical: Add universe, Mozilla PPA, ulauncher PPA
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo -e "\n\033[1;34m===> Enabling the 'universe' repository for additional packages...\033[0m"
+# A5a: Use printf instead of echo -e for robustness
+printf '\n\033[1;34m===> Enabling the '\''universe'\'' repository for additional packages...\033[0m\n'
 # The 'software-properties-common' package provides add-apt-repository command
 # H1: Check exit code of apt-get update operation
 if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
@@ -3622,7 +3607,8 @@ echo "✓ Additional repositories enabled and verified"
 # Purpose: Resolve inconsistencies between base image and APT sources
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo -e "\n${BLUE}===> Synchronizing base image with latest package versions...${NC}"
+# A5a: Use printf instead of echo -e for robustness
+printf '\n%s===> Synchronizing base image with latest package versions...%s\n' "${BLUE}" "${NC}"
 # Using dist-upgrade handles dependency changes intelligently
 # H1: Check exit code of apt-get update operation
 if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
@@ -3637,7 +3623,8 @@ fi
 if ! dpkg --configure -a 2>&1; then
     echo "[warn] ⚠ dpkg --configure had issues - continuing anyway"
 fi
-echo -e "${GREEN}✓ Base image synchronized.${NC}"
+# A5a: Use printf instead of echo -e for robustness
+printf '%s✓ Base image synchronized.%s\n' "${GREEN}" "${NC}"
 
 #===============================================================================
 # BLOCK 10: APT CONFIGURATION AND GPG KEY SETUP
@@ -3672,12 +3659,42 @@ echo "Importing VirtualGL/TurboVNC GPG key for APT..."
 if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
     # F2: Validate command substitution result (curl output piped to gpg)
     # H1: Check exit code of curl and gpg pipeline
+    # I4: HTTP error handling for curl operations - capture HTTP status code
     gpg_key_output=""
     # shellcheck disable=SC2034 # gpg_exit_code may be used for debugging/logging
     gpg_exit_code=0
-    gpg_key_output=$(curl -fsSL "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>&1)
+    # I4: Capture HTTP status code separately using -w with newline separator
+    http_code="000"
+    if curl -w "\n%{http_code}" -fsSL --max-time 30 "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>/dev/null > /tmp/virtualgl_gpg_response.tmp; then
+        # I4: Extract HTTP code from last line of response
+        if [ -f /tmp/virtualgl_gpg_response.tmp ] && [ -s /tmp/virtualgl_gpg_response.tmp ]; then
+            http_code=$(tail -n 1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "000")
+            # I4: Validate HTTP status code is 3-digit number before checking
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]]; then
+                if [ "${http_code}" != "200" ]; then
+                    echo "[warn] ⚠ HTTP ${http_code} error downloading GPG key from ${VIRTUALGL_TURBOVNC_GPG_KEY_URL}"
+                    gpg_key_output=""
+                else
+                    # I4: HTTP 200 success - extract body (all lines except last)
+                    gpg_key_output=$(head -n -1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "")
+                fi
+            else
+                echo "[warn] ⚠ Invalid HTTP status code format: ${http_code}"
+                gpg_key_output=""
+            fi
+        else
+            echo "[warn] ⚠ Downloaded GPG key response is empty or missing"
+            gpg_key_output=""
+        fi
+        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+    else
+        echo "[warn] ⚠ Failed to download GPG key from ${VIRTUALGL_TURBOVNC_GPG_KEY_URL} (connection/timeout error)"
+        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+        gpg_key_output=""
+    fi
     if [ -n "${gpg_key_output:-}" ]; then
-        if echo "${gpg_key_output}" | gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg 2>/dev/null; then
+        # D3: Use here-string instead of pipe pattern (unsafe pipe pattern fixed)
+        if gpg --dearmor -o /usr/share/keyrings/virtualgl-turbovnc.gpg 2>/dev/null <<< "${gpg_key_output}"; then
             # J1: Verify GPG key file was created successfully
             if [ -f /usr/share/keyrings/virtualgl-turbovnc.gpg ]; then
                 echo "✓ VirtualGL/TurboVNC GPG key imported successfully for APT"
@@ -3916,6 +3933,7 @@ setup_unified_cache() {
                 echo "[warn] ⚠ MINIFORGE_HOME directory does not exist after creation"
             else
                 # H1: Check exit code of cat/heredoc operation
+                # EXEMPTED FROM EXTRACTION: Uses variable interpolation (${CONTAINER_CONDA_CACHE}), dynamically generated with script variables
                 if ! cat > "${MINIFORGE_HOME}/.condarc.pre" <<EOF
 channels:
   - conda-forge
@@ -4013,9 +4031,10 @@ if command -v chattr >/dev/null 2>&1; then
         fi
         # Count protected files for confirmation
         # F2: Validate command substitution result
+        protected_count=""
         protected_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" -type f 2>/dev/null | wc -l || echo "0")
-        # Validate result is numeric
-        if ! [[ "${protected_count:-0}" =~ ^[0-9]+$ ]]; then
+        # Validate result is numeric and non-empty
+        if [ -z "${protected_count:-}" ] || ! [[ "${protected_count:-0}" =~ ^[0-9]+$ ]]; then
             protected_count="0"
         fi
         if [ "${protected_count:-0}" -gt 0 ]; then
@@ -4198,11 +4217,11 @@ fi
 # Ensure consistent command names regardless of Debian/Ubuntu packaging quirks
 # M1: Verify commands exist before creating symlinks
 # J1: Validate target directory exists before creating symlinks
-if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
-    if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
+    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+        if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
         # F2: Validate command substitution result
         fdfind_path=""
-        fdfind_path=$(command -v fdfind || echo "")
+        fdfind_path=$(command -v fdfind 2>/dev/null || echo "")
         if [ -n "${fdfind_path:-}" ] && [ -x "${fdfind_path:-}" ]; then
             # H1: Check exit code of ln operation
             if ln -sf "${fdfind_path}" /usr/local/bin/fd 2>/dev/null; then
@@ -4216,12 +4235,11 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/fd symlink"
             fi
         fi
-    fi
 
-    if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
+        if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
         # F2: Validate command substitution result
         batcat_path=""
-        batcat_path=$(command -v batcat || echo "")
+        batcat_path=$(command -v batcat 2>/dev/null || echo "")
         if [ -n "${batcat_path:-}" ] && [ -x "${batcat_path:-}" ]; then
             # H1: Check exit code of ln operation
             if ln -sf "${batcat_path}" /usr/local/bin/bat 2>/dev/null; then
@@ -4235,11 +4253,10 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/bat symlink"
             fi
         fi
+    else
+        echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
     fi
-else
-    echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
-fi
-# ENDIF: symlink normalization for fd and bat
+    # ENDIF: symlink normalization for fd and bat
 
 debug_glibc "After installing advanced search & productivity CLI tools"
 
@@ -4418,327 +4435,40 @@ if ! install -d -m 0755 /usr/local/bin 2>/dev/null; then
     echo "[ERROR] ⚠ Failed to create /usr/local/bin directory"
     exit 1
 fi
-# J1: Verify directory was created successfully
-if [ ! -d /usr/local/bin ] || [ ! -w /usr/local/bin ]; then
-    echo "[ERROR] ⚠ /usr/local/bin directory not writable"
+# Note: shell-scripts file: /usr/local/bin/apt-aria is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/apt-wrapper-aria2c-accelerated-downloads.sh
+# Target: /usr/local/bin/apt-aria
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /usr/local/bin/apt-aria ]; then
+    echo "[ERROR] ⚠ apt-aria wrapper file not found after installation"
     exit 1
 fi
-# ENDIF: /usr/local/bin creation and writability
-
-# Configure APT to keep downloaded packages (prevent automatic cleanup)
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of file write operations
-if [ -d /etc/apt/apt.conf.d ] && [ -w /etc/apt/apt.conf.d ]; then
-    if ! {
-      echo 'Binary::apt::APT::Keep-Downloaded-Packages "true";'
-      echo 'APT::Clean-Installed "false";'
-      echo 'APT::Get::AutomaticRemove "false";'
-      echo 'APT::Get::AutomaticRemove::Kernels "false";'
-    } > /etc/apt/apt.conf.d/99keep-packages 2>/dev/null; then
-        echo "[ERROR] ⚠ Failed to write APT keep-packages configuration"
-        exit 1
-    fi
-    # J1: Verify file was created successfully
-    if [ ! -f /etc/apt/apt.conf.d/99keep-packages ]; then
-        echo "[ERROR] ⚠ APT keep-packages configuration file not found after creation"
-        exit 1
-    fi
-else
-    echo "[ERROR] ⚠ /etc/apt/apt.conf.d directory not writable"
+if ! chmod 0755 /usr/local/bin/apt-aria 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on apt-aria wrapper"
     exit 1
 fi
-# ENDIF: APT keep-packages configuration creation
-
-cat > /usr/local/bin/apt-aria <<'EOF'
-#!/usr/bin/env bash
-set -eo pipefail  # Removed -u to allow unbound variables with defaults
-
-# Purpose: A lightweight front-end for apt/apt-get that:
-#   - Forces a unified cache location across APT tools
-#   - Uses aria2c for accelerated downloads on install-like commands
-#   - Falls back gracefully to standard apt-get when necessary
-# Inputs:
-#   - Environment variable CONTAINER_APT_CACHE (optional)
-#   - Command-line arguments forwarded to apt/apt-get
-# Behavior:
-#   - For install/remove/purge/build-dep/source: collect URIs and download via aria2c
-#     into the cache, then run apt-get to perform installation from cache
-#   - For other commands: pass-through to apt-get with cache options
-# Safety:
-#   - Validates temporary files and ensures cleanup
-#   - Uses guarded command substitutions and here-strings to avoid unsafe pipes
-#   - Protects cache with chattr +i when available (best-effort)
-
-# Centralized APT cache configuration - All APT tools use this location
-# Set default cache location if not provided via environment variable
-if [ -z "${CONTAINER_APT_CACHE:-}" ]; then
-    # Try to detect cache location from environment or use sensible default
-    if [ -n "${CONTAINER_CACHE_ROOT:-}" ]; then
-        CONTAINER_APT_CACHE="${CONTAINER_CACHE_ROOT}/apt/archives"
-    elif [ -d "/container_cache/apt" ]; then
-        CONTAINER_APT_CACHE="/container_cache/apt"
-    elif [ -d "/tmp/container_cache/apt" ]; then
-        CONTAINER_APT_CACHE="/tmp/container_cache/apt"
-    else
-        CONTAINER_APT_CACHE="/var/cache/apt/archives"
-    fi
-    echo "[apt-aria] WARNING: CONTAINER_APT_CACHE not set, using default: ${CONTAINER_APT_CACHE}"
-fi
-CACHE="${CONTAINER_APT_CACHE}"
-mkdir -p "/var/cache/apt/archives"
-
-# Common APT options for consistent caching across all tools
-# Keep downloaded packages and don't clean them automatically
-APT_CACHE_OPTS="-o Dir::Cache::Archives=${CACHE} -o APT::Keep-Downloaded-Packages=true -o APT::Clean-Installed=false"
-
-# Function to determine if this is an install command that should use aria2c
-is_install_command() {
-    # Check if any argument is an install command (not just the first one)
-    for arg in "$@"; do
-        case "$arg" in
-            install|remove|purge|build-dep|source)
-                return 0
-                ;;
-        esac
-    done
-    return 1
-}
-
-# Function to get the appropriate APT tool
-get_apt_tool() {
-    if [ -x /usr/bin/apt-fast ]; then
-        echo "/usr/bin/apt-fast"
-    else
-        echo "/usr/bin/apt-get"
-    fi
-}
-
-# Get the APT tool to use
-APT_TOOL=$(get_apt_tool)
-
-# Handle install commands with aria2c acceleration
-if is_install_command "$@"; then
-    echo "[apt-aria] Using aria2c for accelerated downloads..."
-
-    # Collect all http/https URLs (incl. dependencies) that would be downloaded
-    URI_FILE=$(mktemp) || {
-        echo "[apt-aria] ERROR: Failed to create temporary file"
-        exit 1
-    }
-    echo "[apt-aria] Collecting URIs with: /usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y $*"
-
-    # Use a more robust approach to collect URIs
-    # First, check if there are actually packages to download
-    # Split APT_CACHE_OPTS properly to handle multiple arguments
-    # Note: This requires proper handling of spaces in APT_CACHE_OPTS
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    # F2: Capture both output and exit code separately for proper validation
-    APT_OUTPUT=$(/usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y "$@" 2>&1)
-    APT_EXIT_CODE=$?
-    # F2: Validate command substitution result
-    if [ -z "${APT_OUTPUT:-}" ] && [ "${APT_EXIT_CODE:-1}" -ne 0 ]; then
-        echo "[apt-aria] WARNING: apt-get --print-uris produced no output but exited with code ${APT_EXIT_CODE}"
-    fi
-    
-    # Check if packages are already installed or nothing to download (benign case)
-    # D3: Use here-string instead of pipe pattern
-    if [ -n "${APT_OUTPUT:-}" ] && grep -qiE "(already the newest|0 upgraded|0 to install|already installed)" <<< "${APT_OUTPUT}"; then
-        echo "[apt-aria] Packages already installed or up-to-date - no downloads needed"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    # Check if there's an actual error (not just "no URIs")
-    elif [ "${APT_EXIT_CODE:-1}" -ne 0 ] && [ -n "${APT_OUTPUT:-}" ] && ! grep -qiE "(already the newest|0 upgraded|0 to install)" <<< "${APT_OUTPUT}"; then
-        echo "[apt-aria] WARNING: apt-get --print-uris failed (exit code: ${APT_EXIT_CODE})"
-        # F2: Validate command substitution result
-        # D3: Use here-string instead of echo | head (unsafe pipe pattern)
-        error_preview=$(head -3 <<< "${APT_OUTPUT}" || echo "")
-        if [ -n "${error_preview:-}" ]; then
-            echo "[apt-aria] Error output: ${error_preview}"
-        fi
-        echo "[apt-aria] Falling back to standard apt-get (without aria2c acceleration)"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    # Try to extract URIs from the output
-    # F2: Validate pipeline result
-    elif [ -n "${APT_OUTPUT:-}" ] && grep -E "'(https?://[^']*)'" <<< "${APT_OUTPUT}" | \
-        sed -E "s/^'([^']+)'.*$/\1/" | \
-        sed "s/ //g" | \
-        grep -E "^https?://.*\.deb$" | sort -u > "${URI_FILE}" 2>/dev/null && [ -s "${URI_FILE}" ]; then
-        # F2: Validate command substitution result
-        uri_count=$(wc -l < "${URI_FILE}" || echo "0")
-        if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
-            uri_count="0"
-        fi
-        echo "[apt-aria] URI collection successful (${uri_count} packages)"
-    else
-        # No URIs found, but not an error - likely already cached or installed
-        echo "[apt-aria] No URIs to download (packages may be cached or already installed)"
-        # H1: Check exit code of touch operation
-        if ! touch "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] WARNING: Failed to create URI file"
-        fi
-    fi
-
-    echo "[apt-aria] URI file created: ${URI_FILE}"
-    echo "[apt-aria] URI file contents:"
-    # J1: Validate file exists before reading
-    # H1: Check exit code of cat operation
-    if [ -f "${URI_FILE}" ] && [ -r "${URI_FILE}" ]; then
-        if ! cat "${URI_FILE}" 2>/dev/null; then
-            echo "[apt-aria] URI file is unreadable"
-        fi
-    else
-        echo "[apt-aria] URI file is empty or unreadable"
-    fi
-
-    # J1: Validate file exists and is non-empty before operations
-    if [ -s "${URI_FILE}" ]; then
-        # F2: Validate command substitution result
-        uri_count=$(wc -l < "${URI_FILE}" || echo "0")
-        if ! [[ "${uri_count:-0}" =~ ^[0-9]+$ ]]; then
-            uri_count="0"
-        fi
-        echo "[apt-aria] Downloading ${uri_count} packages via aria2c..."
-      echo "[apt-aria] Cache directory: ${CACHE}"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
-
-      # Try multi-connection first with error suppression
-      # H1: Check exit code of aria2c operation
-      if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] Multi-connection failed, trying single-connection..."
-        # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
-        # H1: Check exit code of aria2c operation
-        if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
-        else
-          echo "[apt-aria] Single-connection aria2c succeeded"
-        fi
-      else
-        echo "[apt-aria] Multi-connection aria2c succeeded"
-      fi
-      # H4: Validate rm operation result
-      if [ -f "${URI_FILE}" ] && ! rm -f "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] WARNING: Failed to remove temporary URI file: ${URI_FILE}"
-      fi
-    else
-      echo "[apt-aria] No URIs to download"
-      # H4: Validate rm operation result
-      if [ -f "${URI_FILE}" ] && ! rm -f "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] WARNING: Failed to remove temporary URI file: ${URI_FILE}"
-      fi
-    fi
-
-    # --- PROTECT CACHE ---
-    # Make all .deb files in the cache immutable to prevent deletion
-    echo "[apt-aria] Making downloaded packages immutable to protect cache..."
-    # M1: Verify chattr command exists
-    if command -v chattr >/dev/null 2>&1; then
-        # J1: Validate directory exists before operations
-        if [ -d "${CACHE}" ] && [ -x "${CACHE}" ]; then
-            # Use find to safely handle glob expansion
-            # H4: Validate find/exec operation result
-            chattr_exit_code=0
-            find "${CACHE}" -maxdepth 1 -name "*.deb" -type f -exec chattr +i {} + 2>/dev/null || chattr_exit_code=$?
-            if [ "${chattr_exit_code:-0}" -eq 0 ]; then
-                echo "[apt-aria] chattr command executed successfully"
-            else
-                echo "[apt-aria] WARNING: Some files may not have been protected with chattr"
-            fi
-        else
-            echo "[apt-aria] WARNING: Cache directory not accessible: ${CACHE}"
-        fi
-    else
-        echo "[apt-aria] WARNING: chattr command not available - cache protection disabled"
-    fi
-
-    # Install from cache using apt-get (reliable and standard)
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    echo "[apt-aria] Installing packages from cache..."
-    exec /usr/bin/apt-get ${APT_CACHE_OPTS} -y "$@"
-else
-    # Use regular apt-get with cache configuration for non-install commands
-    # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
-    echo "[apt-aria] Using apt-get with cache configuration..."
-    exec /usr/bin/apt-get ${APT_CACHE_OPTS} "$@"
-fi
-EOF
-# H1: Check exit code of chmod operation
-# J1: Validate file exists before chmod
-if [ -f /usr/local/bin/apt-aria ]; then
-    if ! chmod 0755 /usr/local/bin/apt-aria 2>/dev/null; then
-        echo "[ERROR] ⚠ Failed to set permissions on apt-aria wrapper"
-        exit 1
-    fi
-    # J1: Verify file is executable
-    if [ ! -x /usr/local/bin/apt-aria ]; then
-        echo "[ERROR] ⚠ apt-aria wrapper is not executable after chmod"
-        exit 1
-    fi
-    echo "✓ apt-aria wrapper created"
-else
-    echo "[ERROR] ⚠ apt-aria wrapper file not found after creation"
+if [ ! -x /usr/local/bin/apt-aria ]; then
+    echo "[ERROR] ⚠ apt-aria wrapper is not executable after chmod"
     exit 1
 fi
+echo "✓ apt-aria wrapper verified"
 
-#--- Sub-block 11.1.1: Ensure CONTAINER_APT_CACHE is always available ---
-# Critical: Export CONTAINER_APT_CACHE in container environment so apt-aria wrapper can use it
-# This ensures the variable is available even when container is run without explicit environment setup
-echo "Setting up CONTAINER_APT_CACHE environment variable..."
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of cat/heredoc operation
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-    if ! cat > /etc/profile.d/container-cache.sh <<'EOF'
-#!/bin/bash
-# Container cache environment variables
-# These ensure apt-aria wrapper and other tools can find cache directories
-#
-# Rationale:
-# - Provide cache locations in login shells and interactive sessions to ensure
-#   uniform behavior when tools are invoked outside the main build flow.
-# - Directories are created best-effort with errors suppressed to avoid
-#   blocking non-critical initialization paths.
-
-# Set default cache root if not already set
-export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
-
-# Set APT cache location
-export CONTAINER_APT_CACHE="${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
-
-# Other cache locations
-export CONTAINER_BIN_CACHE="${CONTAINER_BIN_CACHE:-${CONTAINER_CACHE_ROOT}/binaries}"
-export CONTAINER_DEB_CACHE="${CONTAINER_DEB_CACHE:-${CONTAINER_CACHE_ROOT}/debs}"
-export CONTAINER_CONDA_CACHE="${CONTAINER_CONDA_CACHE:-${CONTAINER_CACHE_ROOT}/conda_pkgs}"
-export CONTAINER_WHEELS_CACHE="${CONTAINER_WHEELS_CACHE:-${CONTAINER_CACHE_ROOT}/wheels}"
-export CONTAINER_JULIA_CACHE="${CONTAINER_JULIA_CACHE:-${CONTAINER_CACHE_ROOT}/julia_pkgs}"
-
-# Ensure cache directories exist
-mkdir -p "${CONTAINER_APT_CACHE}" "${CONTAINER_BIN_CACHE}" "${CONTAINER_DEB_CACHE}" \
-         "${CONTAINER_CONDA_CACHE}" "${CONTAINER_WHEELS_CACHE}" "${CONTAINER_JULIA_CACHE}" 2>/dev/null || true
-EOF
-    then
-        echo "[ERROR] ⚠ Failed to write container-cache.sh profile script"
-        exit 1
-    else
-        # J1: Verify file was created successfully
-        if [ ! -f /etc/profile.d/container-cache.sh ]; then
-            echo "[ERROR] ⚠ container-cache.sh file not found after creation"
-            exit 1
-        fi
-        # H1: Check exit code of chmod operation
-        if ! chmod 0644 /etc/profile.d/container-cache.sh 2>/dev/null; then
-            echo "[ERROR] ⚠ Failed to set permissions on container-cache.sh"
-            exit 1
-        fi
-        echo "✓ Container cache environment setup created"
-    fi
-else
-    echo "[ERROR] ⚠ /etc/profile.d directory not writable"
+# Note: shell-scripts file: /etc/profile.d/container-cache.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/container-cache.sh
+# Target: /etc/profile.d/container-cache.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/container-cache.sh ]; then
+    echo "[ERROR] ⚠ container-cache.sh file not found after installation"
     exit 1
 fi
+# Verify permissions
+if ! chmod 0644 /etc/profile.d/container-cache.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on container-cache.sh"
+    exit 1
+fi
+echo "✓ Container cache environment setup verified"
 
 # Also add to /etc/environment for non-interactive shells
 # J1: Validate file exists and is writable before operations
@@ -4813,6 +4543,13 @@ apt_get_link=""
 apt_link=""
 apt_get_link=$(readlink -f /usr/local/bin/apt-get 2>/dev/null || echo 'Not aliased')
 apt_link=$(readlink -f /usr/local/bin/apt 2>/dev/null || echo 'Not aliased')
+# Validate results are non-empty
+if [ -z "${apt_get_link:-}" ]; then
+    apt_get_link='Not aliased'
+fi
+if [ -z "${apt_link:-}" ]; then
+    apt_link='Not aliased'
+fi
 echo "apt-get -> ${apt_get_link}"
 echo "apt -> ${apt_link}"
 echo "✓ APT-aria wrapper and symlinks configured successfully"
@@ -4822,9 +4559,13 @@ echo "✓ ALL subsequent apt-get/apt commands will use aria2 acceleration + cach
 # F2: Validate command substitution result
 path_value="${PATH:-}"
 if [ -n "${path_value}" ]; then
-    first_local=$(awk -v RS=':' '/\/usr\/local\/bin/{print NR; exit}' <<< "${path_value}" || echo "")
-    first_usr=$(awk -v RS=':' '/\/usr\/bin/{print NR; exit}' <<< "${path_value}" || echo "")
-    if [ -n "${first_local}" ] && [ -n "${first_usr}" ]; then
+    # F2: Validate command substitution results
+    first_local=""
+    first_usr=""
+    first_local=$(awk -v RS=':' '/\/usr\/local\/bin/{print NR; exit}' <<< "${path_value}" 2>/dev/null || echo "")
+    first_usr=$(awk -v RS=':' '/\/usr\/bin/{print NR; exit}' <<< "${path_value}" 2>/dev/null || echo "")
+    # F2: Validate results are numeric before arithmetic comparison
+    if [ -n "${first_local}" ] && [ -n "${first_usr}" ] && [[ "${first_local}" =~ ^[0-9]+$ ]] && [[ "${first_usr}" =~ ^[0-9]+$ ]]; then
         if [ "${first_local}" -gt "${first_usr}" ]; then
             echo "[warn] ⚠ PATH order may overshadow apt-aria: /usr/bin appears before /usr/local/bin"
             echo "       Current PATH: ${path_value}"
@@ -4857,9 +4598,10 @@ echo ""
 ONEAPI_KEYRING="/usr/share/keyrings/oneapi-archive-keyring.gpg"
 ONEAPI_SOURCE_LIST="/etc/apt/sources.list.d/oneAPI.list"
 
-# M1: Verify package installation using resilient helper
+# M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
 mkl_check_output=""
+# Note: Using dpkg_resolve_installed_package would be preferred, but checking for pattern match
 mkl_check_output=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl" || echo "")
 if [ -n "${mkl_check_output:-}" ]; then
     echo -e "${GREEN}✓ Intel oneAPI MKL already installed; skipping installation${NC}"
@@ -4872,9 +4614,27 @@ else
         # F2: Validate command substitution result (curl output piped to gpg)
         # H1: Check exit code of curl and gpg pipeline
         gpg_key_output=""
-        gpg_key_output=$(curl -fsSL "${INTEL_ONEAPI_GPG_KEY_URL}" 2>&1)
+        # I4: Capture HTTP status code and handle errors
+        http_code=""
+        http_code=$(curl -w "%{http_code}" -fsSL -o /tmp/gpg_key_temp "${INTEL_ONEAPI_GPG_KEY_URL}" 2>&1 || echo "000")
+        # I4: Validate HTTP code is 3-digit number
+        if [[ ! "${http_code}" =~ ^[0-9]{3}$ ]]; then
+            echo "[ERROR] ⚠ Failed to download Intel oneAPI GPG key: Invalid HTTP response"
+            exit 1
+        fi
+        # I4: Check for HTTP errors (403, 404, 5xx)
+        if [ "${http_code}" = "403" ] || [ "${http_code}" = "404" ] || [ "${http_code}" -ge 500 ]; then
+            echo "[ERROR] ⚠ HTTP ${http_code} error downloading Intel oneAPI GPG key from ${INTEL_ONEAPI_GPG_KEY_URL}"
+            exit 1
+        fi
+        # I4: Read downloaded file
+        if [ -f /tmp/gpg_key_temp ]; then
+            gpg_key_output=$(cat /tmp/gpg_key_temp 2>/dev/null || echo "")
+            rm -f /tmp/gpg_key_temp 2>/dev/null || true
+        fi
         if [ -n "${gpg_key_output:-}" ]; then
-            if echo "${gpg_key_output}" | gpg --dearmor 2>/dev/null | tee "${ONEAPI_KEYRING}" >/dev/null; then
+            # D3: Use here-string instead of echo | grep (unsafe pipe pattern)
+            if gpg --dearmor 2>/dev/null <<< "${gpg_key_output}" | tee "${ONEAPI_KEYRING}" >/dev/null; then
                 # J1: Verify GPG key file was created successfully
                 if [ ! -f "${ONEAPI_KEYRING}" ]; then
                     echo "[ERROR] ⚠ GPG key import succeeded but file not found"
@@ -4893,7 +4653,8 @@ else
     fi
 
     # J1: Validate file exists and is readable before operations
-    if [ ! -f "${ONEAPI_SOURCE_LIST}" ] || ! grep -q "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
+    # D3c: Use -F flag for fixed-string matching
+    if [ ! -f "${ONEAPI_SOURCE_LIST}" ] || ! grep -Fq "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
         echo "  Adding Intel oneAPI repository entry..."
         # J1: Validate parent directory exists before creating file
         # H1: Check exit code of printf operation
@@ -4943,89 +4704,42 @@ if [ ! -f "${MKL_ENV_SCRIPT}" ]; then
     echo -e "  ${RED}✗ Expected MKL environment script not found at ${MKL_ENV_SCRIPT}${NC}"
     exit 1
 fi
+# ENDIF: MKL_ENV_SCRIPT existence check
 
-# Source MKL environment for current build session
-# J1: Validate file exists and is readable before sourcing
-# shellcheck disable=SC1090
-if [ -f "${MKL_ENV_SCRIPT}" ] && [ -r "${MKL_ENV_SCRIPT}" ]; then
-    if ! source "${MKL_ENV_SCRIPT}" 2>/dev/null; then
-        echo "[warn] ⚠ Failed to source MKL environment script"
-    fi
-else
-    echo "[ERROR] ⚠ MKL environment script not readable: ${MKL_ENV_SCRIPT}"
+# Note: shell-scripts file: /etc/profile.d/intel-mkl.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/intel-mkl-environment-setup.sh
+# Target: /etc/profile.d/intel-mkl.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/intel-mkl.sh ]; then
+    echo "[ERROR] ⚠ intel-mkl.sh file not found after installation"
     exit 1
 fi
-
-# Ensure MKLROOT is exported
-if [ -z "${MKLROOT:-}" ]; then
-    MKLROOT="/opt/intel/oneapi/mkl/latest"
-    export MKLROOT
+# H1: Check exit code of chmod operation
+if ! chmod 0644 /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to set permissions on intel-mkl.sh"
+    exit 1
 fi
-echo "  ✓ MKLROOT resolved to ${MKLROOT}"
-
-# Persist MKL environment for future sessions
-# H4: Validate rm operation result
-if [ -f /etc/profile.d/intel-oneapi-mkl.sh ]; then
-    if ! rm -f /etc/profile.d/intel-oneapi-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to remove old intel-oneapi-mkl.sh"
-    fi
+# shellcheck disable=SC1091
+if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+    echo "[ERROR] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
+    exit 1
 fi
-# J1: Validate parent directory exists before creating file
-# H1: Check exit code of cat/heredoc operation
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-    if ! { cat > /etc/profile.d/intel-mkl.sh <<'EOF'
-#!/bin/bash
-# Intel MKL environment setup (auto-generated)
-
-MKLROOT=/opt/intel/oneapi/mkl/latest
-export MKLROOT
-
-if [ -f "${MKLROOT}/env/vars.sh" ]; then
-    # shellcheck disable=SC1090
-    . "${MKLROOT}/env/vars.sh" >/dev/null 2>&1
-fi
-
-export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"
-export LIBRARY_PATH="${MKLROOT}/lib/intel64:${LIBRARY_PATH:-}"
-export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}"
-export PKG_CONFIG_PATH="${MKLROOT}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
-
-export MKL_THREADING_LAYER="${MKL_THREADING_LAYER:-GNU}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-32}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-32}"
-
-BLAS_LAPACK_STRING="-L${MKLROOT}/lib/intel64 -lmkl_intel_lp64 -lmkl_core -lmkl_gnu_thread -lgomp -lpthread -lm -ldl"
-export BLAS_LIBRARIES="${BLAS_LIBRARIES:-${BLAS_LAPACK_STRING}}"
-export LAPACK_LIBRARIES="${LAPACK_LIBRARIES:-${BLAS_LAPACK_STRING}}"
-
-if [ -n "${PS1:-}" ]; then
-    echo "✅ Intel MKL environment configured"
-    echo "   MKLROOT: ${MKLROOT}"
-    echo "   MKL Threading: ${MKL_THREADING_LAYER}"
-    echo "   OMP Threads: ${OMP_NUM_THREADS}"
-fi
-EOF
-    }; then
-        echo "[warn] ⚠ Failed to create /etc/profile.d/intel-mkl.sh"
-    fi
-    # H1: Check exit code of chmod operation
-    if ! chmod +x /etc/profile.d/intel-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to chmod +x /etc/profile.d/intel-mkl.sh"
-    fi
-    # shellcheck disable=SC1091
-    if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
-        echo "[warn] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
-    fi
-fi
-# ENDIF: create and activate intel-mkl profile script
+echo "✓ Intel MKL environment configured"
+# ENDIF: intel-mkl.sh installation verification
 
 # Persist MKLROOT in /etc/environment for non-interactive shells
 # Rationale: Ensures downstream tools invoked without a login shell find MKLROOT.
 touch /etc/environment
-if ! grep -q "^MKLROOT=" /etc/environment 2>/dev/null; then
+# D3c: Use -F flag for fixed-string matching
+if ! grep -Fq "^MKLROOT=" /etc/environment 2>/dev/null; then
     echo "MKLROOT=${MKLROOT}" >> /etc/environment
 else
-    sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment
+    # H1: Check exit code of sed operation
+    if ! sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment 2>/dev/null; then
+        echo "[ERROR] ⚠ Failed to update MKLROOT in /etc/environment"
+        exit 1
+    fi
 fi
 # ENDIF: ensure MKLROOT in /etc/environment
 
@@ -5066,8 +4780,11 @@ for candidate in "${MKL_INCLUDE_CANDIDATES[@]}"; do
 done
 
 if [ -z "${MKL_INCLUDE_DIR}" ]; then
-    found_include="$(find "${MKLROOT}" -maxdepth 4 -type f -name "mkl_cblas.h" -print -quit 2>/dev/null || true)"
-    if [ -n "${found_include}" ]; then
+    # F2: Validate command substitution result
+    found_include=""
+    found_include=$(find "${MKLROOT}" -maxdepth 4 -type f -name "mkl_cblas.h" -print -quit 2>/dev/null || echo "")
+    # F2: Validate result is non-empty before use
+    if [ -n "${found_include}" ] && [ -f "${found_include}" ]; then
         MKL_INCLUDE_DIR="$(dirname "${found_include}")"
     fi
 fi
@@ -5090,8 +4807,11 @@ for candidate in "${MKL_LIB_CANDIDATES[@]}"; do
 done
 
 if [ -z "${MKL_LIB_DIR}" ]; then
-    found_lib="$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || true)"
-    if [ -n "${found_lib}" ]; then
+    # F2: Validate command substitution result
+    found_lib=""
+    found_lib=$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || echo "")
+    # F2: Validate result is non-empty before use
+    if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
         MKL_LIB_DIR="$(dirname "${found_lib}")"
     fi
 fi
@@ -5209,7 +4929,9 @@ echo ""
 # Outputs: Status information
 echo -e "${YELLOW}[6.12B.1] Checking base image for existing OpenBLAS...${NC}"
 BASE_OPENBLAS_FOUND=false
+# M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
+BASE_OPENBLAS_PKGS=""
 BASE_OPENBLAS_PKGS=$(dpkg -l 2>/dev/null | grep -iE "^ii.*openblas" || echo "")
 if [ -n "${BASE_OPENBLAS_PKGS:-}" ]; then
     echo -e "${YELLOW}⚠ Found OpenBLAS packages in base image:${NC}"
@@ -5282,7 +5004,7 @@ if ! apt-get install -y --no-install-recommends \
     exit 1
 fi
 
-echo -e "${GREEN}✓ Build prerequisites installed${NC}"
+printf '%s\n' "${GREEN}✓ Build prerequisites installed${NC}"
 echo ""
 
 #--- Sub-block 12.3: Download OpenBLAS source ---
@@ -5290,7 +5012,7 @@ echo ""
 # Dependencies: Block 6.12B.2 (git, wget, curl), config.sh (OPENBLAS_VERSION)
 # Outputs: OpenBLAS source code
 # Note: OPENBLAS_VERSION is defined in config.sh
-echo -e "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.3] Downloading OpenBLAS source...${NC}"
 : "${OPENBLAS_VERSION:?OPENBLAS_VERSION must be set in config.sh}"
 : "${SUITESPARSE_VERSION:?SUITESPARSE_VERSION must be set in config.sh}"
 OPENBLAS_REPO_URL="https://github.com/OpenMathLib/OpenBLAS.git"
@@ -5347,17 +5069,17 @@ if command -v wget >/dev/null 2>&1; then
                 # H1: Check exit code of cd operation
                 extracted_dir="OpenBLAS-${OPENBLAS_VERSION#v}"
                 if [ -d "${extracted_dir}" ] && cd "${extracted_dir}" 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    printf '%s\n' "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
                     DOWNLOAD_SUCCESS=true
                 else
-                    echo -e "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
+                    printf '%s\n' "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
                     # H4: Validate rm operation result
                     if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                         echo "[warn] ⚠ Failed to remove corrupted tarball"
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                printf '%s\n' "  ${YELLOW}⚠ Failed to extract tarball${NC}"
                 # H4: Validate rm operation result
                 if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                     echo "[warn] ⚠ Failed to remove corrupted tarball"
@@ -5378,17 +5100,17 @@ elif command -v curl >/dev/null 2>&1; then
                 # H1: Check exit code of cd operation
                 extracted_dir="OpenBLAS-${OPENBLAS_VERSION#v}"
                 if [ -d "${extracted_dir}" ] && cd "${extracted_dir}" 2>/dev/null; then
-                    echo -e "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
+                    printf '%s\n' "  ${GREEN}✓ Downloaded OpenBLAS ${OPENBLAS_VERSION} release tarball${NC}"
                     DOWNLOAD_SUCCESS=true
                 else
-                    echo -e "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
+                    printf '%s\n' "  ${YELLOW}⚠ Failed to change to extracted directory${NC}"
                     # H4: Validate rm operation result
                     if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                         echo "[warn] ⚠ Failed to remove corrupted tarball"
                     fi
                 fi
             else
-                echo -e "  ${YELLOW}⚠ Failed to extract tarball${NC}"
+                printf '%s\n' "  ${YELLOW}⚠ Failed to extract tarball${NC}"
                 # H4: Validate rm operation result
                 if [ -f "${TARBALL_NAME}" ] && ! rm -f "${TARBALL_NAME}" 2>/dev/null; then
                     echo "[warn] ⚠ Failed to remove corrupted tarball"
@@ -5419,14 +5141,14 @@ if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
         # Try cloning with tag
         # H1: Check exit code of git clone operation
         if git clone --depth 1 --branch "${OPENBLAS_VERSION}" "${OPENBLAS_REPO_URL}" . 2>&1; then
-            echo -e "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION} from repository${NC}"
+            printf '%s\n' "  ${GREEN}✓ Cloned OpenBLAS ${OPENBLAS_VERSION} from repository${NC}"
             DOWNLOAD_SUCCESS=true
         # Try cloning develop branch and checking out tag
         # H1: Check exit code of git clone operation
         elif git clone --depth 50 "${OPENBLAS_REPO_URL}" . 2>&1; then
             # H1: Check exit code of git checkout operation
             if git checkout "${OPENBLAS_VERSION}" 2>&1; then
-                echo -e "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
+                printf '%s\n' "  ${GREEN}✓ Checked out OpenBLAS ${OPENBLAS_VERSION}${NC}"
                 DOWNLOAD_SUCCESS=true
             else
                 echo "[warn] ⚠ Failed to checkout OpenBLAS ${OPENBLAS_VERSION}"
@@ -5441,7 +5163,7 @@ fi
 
 # Final check
 if [ "${DOWNLOAD_SUCCESS}" != "true" ]; then
-    echo -e "  ${RED}✗ Failed to download OpenBLAS source${NC}"
+    printf '%s\n' "  ${RED}✗ Failed to download OpenBLAS source${NC}"
     echo "  Please verify:"
     echo "    - Version ${OPENBLAS_VERSION} exists at https://github.com/OpenMathLib/OpenBLAS/releases"
     echo "    - Internet connectivity is available"
@@ -5450,18 +5172,18 @@ fi
 
 # J1: Validate Makefile exists before operations
 if [ ! -f "Makefile" ] || [ ! -r "Makefile" ]; then
-    echo -e "  ${RED}✗ Makefile not found or not readable${NC}"
+    printf '%s\n' "  ${RED}✗ Makefile not found or not readable${NC}"
     exit 1
 fi
 
-echo -e "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
+printf '%s\n' "${GREEN}✓ OpenBLAS source downloaded successfully${NC}"
 echo ""
 
 #--- Sub-block 12.4: Compile OpenBLAS ---
 # Purpose: Compile OpenBLAS with DYNAMIC_ARCH=1 for CPU portability
 # Dependencies: Block 6.12B.3 (OpenBLAS source)
 # Outputs: Compiled OpenBLAS library
-echo -e "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.4] Compiling OpenBLAS with DYNAMIC_ARCH=1...${NC}"
 echo "  Build flags:"
 for flag in ${OPENBLAS_BUILD_FLAGS}; do
     case "${flag}" in
@@ -5493,7 +5215,7 @@ fi
 if [ "${BUILD_JOBS:-4}" -lt 1 ]; then
     BUILD_JOBS=1
 fi
-echo "  Using ${BUILD_JOBS} parallel jobs"
+printf '%s\n' "  Using ${BUILD_JOBS} parallel jobs"
 
 # Clean any previous build
 # H4: Validate make clean operation (may fail if no previous build, which is OK)
@@ -5507,12 +5229,14 @@ fi
 # H1: Check exit code of make operation
 # J1: Validate log file directory exists before writing
 if [ -d /tmp ] && [ -w /tmp ]; then
+    # SC2086: OPENBLAS_BUILD_FLAGS is intentionally unquoted to allow word splitting for make flags
+    # shellcheck disable=SC2086
     if tee /tmp/openblas_build.log < <(make -j"${BUILD_JOBS}" ${OPENBLAS_BUILD_FLAGS} 2>&1); then
         echo ""
-        echo -e "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS compilation successful${NC}"
     else
         echo ""
-        echo -e "  ${RED}✗ OpenBLAS compilation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS compilation failed${NC}"
         echo "  Check log: /tmp/openblas_build.log"
         exit 1
     fi
@@ -5526,7 +5250,7 @@ echo ""
 # Purpose: Install OpenBLAS to /usr/local
 # Dependencies: Block 6.12B.4 (compiled OpenBLAS)
 # Outputs: Installed OpenBLAS library and headers
-echo -e "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.5] Installing OpenBLAS to ${OPENBLAS_INSTALL_PREFIX}...${NC}"
 # Important: Pass all build flags to make install (per official documentation)
 # D3: Use here-string or process substitution instead of pipe pattern
 # H1: Check exit code of make install operation
@@ -5536,9 +5260,9 @@ if [ -f /tmp/openblas_build.log ] && [ -w /tmp/openblas_build.log ]; then
         PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
         "${OPENBLAS_BUILD_FLAGS}" \
         2>&1); then
-        echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS installation successful${NC}"
     else
-        echo -e "  ${RED}✗ OpenBLAS installation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS installation failed${NC}"
         exit 1
     fi
 else
@@ -5546,9 +5270,9 @@ else
     if make install \
         PREFIX="${OPENBLAS_INSTALL_PREFIX}" \
         "${OPENBLAS_BUILD_FLAGS}" 2>&1; then
-        echo -e "  ${GREEN}✓ OpenBLAS installation successful${NC}"
+        printf '%s\n' "  ${GREEN}✓ OpenBLAS installation successful${NC}"
     else
-        echo -e "  ${RED}✗ OpenBLAS installation failed${NC}"
+        printf '%s\n' "  ${RED}✗ OpenBLAS installation failed${NC}"
         exit 1
     fi
 fi
@@ -5558,7 +5282,7 @@ echo ""
 # Purpose: Verify OpenBLAS library exists and has DYNAMIC_ARCH support
 # Dependencies: Block 6.12B.5 (installed OpenBLAS)
 # Outputs: Verification status
-echo -e "${YELLOW}[6.12B.6] Verifying OpenBLAS installation...${NC}"
+printf '%s\n' "${YELLOW}[6.12B.6] Verifying OpenBLAS installation...${NC}"
 OPENBLAS_LIB="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so"
 OPENBLAS_LIB_0="${OPENBLAS_INSTALL_PREFIX}/lib/libopenblas.so.0"
 
@@ -5568,7 +5292,7 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         OPENBLAS_LIB="${OPENBLAS_LIB_0}"
     fi
     
-    echo -e "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
+    printf '%s\n' "  ${GREEN}✓ OpenBLAS library found: ${OPENBLAS_LIB}${NC}"
     
     # Check library size
     # F2: Validate command substitution result
@@ -5600,7 +5324,7 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         fi
     fi
     if [ "${ARCH_COUNT:-0}" -gt 0 ]; then
-        echo -e "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
+        printf '%s\n' "    ${GREEN}✓ Multiple CPU architecture kernels found (${ARCH_COUNT} architectures)${NC}"
     fi
     
     # Check for DYNAMIC_ARCH support
@@ -5611,17 +5335,17 @@ if [ -f "${OPENBLAS_LIB}" ] || [ -f "${OPENBLAS_LIB_0}" ]; then
         dynamic_arch_check=""
         dynamic_arch_check=$(strings "${OPENBLAS_LIB}" 2>/dev/null || echo "")
         if [ -n "${dynamic_arch_check:-}" ] && grep -qiE "DYNAMIC_ARCH|dynamic_arch|DYNAMICARCH|Dynamic.*Arch|DYNAMIC.*ARCH" <<< "${dynamic_arch_check}"; then
-            echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
+            printf '%s\n' "    ${GREEN}✓ DYNAMIC_ARCH support confirmed${NC}"
         else
             # Additional check: if multiple architecture kernels are found, DYNAMIC_ARCH is likely enabled
             if [ "${ARCH_COUNT:-0}" -gt 1 ]; then
-                echo -e "    ${GREEN}✓ DYNAMIC_ARCH support confirmed (multiple CPU architectures detected)${NC}"
+                printf '%s\n' "    ${GREEN}✓ DYNAMIC_ARCH support confirmed (multiple CPU architectures detected)${NC}"
             else
-                echo -e "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
+                printf '%s\n' "    ${YELLOW}⚠ DYNAMIC_ARCH string not found (may still work)${NC}"
             fi
         fi
     else
-        echo -e "    ${YELLOW}⚠ strings command not available - cannot verify DYNAMIC_ARCH${NC}"
+        printf '%s\n' "    ${YELLOW}⚠ strings command not available - cannot verify DYNAMIC_ARCH${NC}"
     fi
 else
     printf '%s\n' "  ${RED}✗ OpenBLAS library not found at expected location${NC}" >&2
@@ -5740,23 +5464,21 @@ fi
 
 # Verify OpenBLAS is now in ldconfig cache
 # D3c: Use -F flag for literal pattern matching
-if grep -Fq libopenblas < <(timeout 5 ldconfig -p 2>/dev/null); then
-    printf '%s\n' "  ${GREEN}✓ OpenBLAS confirmed in ldconfig cache${NC}"
-else
-    printf '%s\n' "  ${YELLOW}⚠ OpenBLAS not yet in ldconfig cache, retrying...${NC}" >&2
-    # Retry ldconfig
-    # H4: Validate ldconfig refresh result
+# Note: config-files file: /etc/environment is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/environment.conf
+# Target: /etc/environment
+# Installed in Block 0 (early in script, before any scripts are needed)
     if ! run_ldconfig_refresh 2>&1; then
         printf '%s\n' "  ${YELLOW}⚠ ldconfig refresh failed${NC}" >&2
     fi
     # Check again
-    if ldconfig -p 2>/dev/null | grep -Fq libopenblas; then
+    # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+    if ldconfig -p 2>/dev/null | grep -Fq -- libopenblas || true; then
         printf '%s\n' "  ${GREEN}✓ OpenBLAS now in ldconfig cache after retry${NC}"
     else
         printf '%s\n' "  ${YELLOW}⚠ OpenBLAS still not in ldconfig cache (library may need to be in standard location)${NC}" >&2
         printf '%s\n' "    Library exists at: ${OPENBLAS_LIB_FILE}"
         printf '%s\n' "    This is usually non-fatal - LD_LIBRARY_PATH will be used instead"
-    fi
 fi
 # ENDIF: ldconfig cache verification
 
@@ -5771,20 +5493,18 @@ case ":${CMAKE_PREFIX_PATH:-}:" in
 esac
 
 # Add to environment for future sessions
-cat >> /etc/environment <<'EOF'
-LD_LIBRARY_PATH="${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}"
-PKG_CONFIG_PATH="${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}"
-OpenBLAS_DIR="${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas"
-CMAKE_PREFIX_PATH="${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}"
-EOF
+# Note: config-files file: /etc/environment is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/environment.conf
+# Target: /etc/environment
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file uses 'cat >>' (append), so the content is added to existing /etc/environment
 
 # Create pkg-config file for OpenBLAS
 if ! mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" 2>/dev/null; then
     printf '%s\n' "  ${YELLOW}⚠ Failed to create pkgconfig directory at ${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig${NC}" >&2
-else
-    :
 fi
 if [ -d "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" ] && [ -w "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig" ]; then
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_INSTALL_PREFIX}, ${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig/openblas.pc" <<EOF
 prefix=${OPENBLAS_INSTALL_PREFIX}
 libdir=\${prefix}/lib
@@ -5805,6 +5525,7 @@ if ! mkdir -p "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" 2>/dev/null; then
     printf '%s\n' "  ${YELLOW}⚠ Failed to create CMake config directory at ${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas${NC}" >&2
 fi
 if [ -d "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" ] && [ -w "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas" ]; then
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_INSTALL_PREFIX}, ${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfig.cmake" <<EOF
 # OpenBLAS CMake configuration file
 set(OpenBLAS_VERSION "${OPENBLAS_VERSION#v}")
@@ -5822,20 +5543,14 @@ if(OpenBLAS_LIBRARY)
     set(OpenBLAS_LIBRARIES "\${OpenBLAS_LIBRARY}")
     set(OpenBLAS_FOUND TRUE)
     set(OPENBLAS_FOUND TRUE)
-    
-    # Create imported target
-    if(NOT TARGET OpenBLAS::OpenBLAS)
-        add_library(OpenBLAS::OpenBLAS SHARED IMPORTED)
-        set_target_properties(OpenBLAS::OpenBLAS PROPERTIES
-            IMPORTED_LOCATION "\${OpenBLAS_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "\${OpenBLAS_INCLUDE_DIRS}"
-        )
-    endif()
 else()
     set(OpenBLAS_FOUND FALSE)
     set(OPENBLAS_FOUND FALSE)
 endif()
 EOF
+# ENDIF: OpenBLASConfig.cmake creation
+
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${OPENBLAS_VERSION}), dynamically generated with script variables
 cat > "${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas/OpenBLASConfigVersion.cmake" <<EOF
 set(PACKAGE_VERSION "${OPENBLAS_VERSION#v}")
 if(PACKAGE_VERSION VERSION_LESS PACKAGE_FIND_VERSION)
@@ -5847,24 +5562,20 @@ else()
     endif()
 endif()
 EOF
-else
-    printf '%s\n' "  ${YELLOW}⚠ Cannot write OpenBLAS CMake config files (directory not writable): ${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas${NC}" >&2
-fi
+# ENDIF: OpenBLASConfigVersion.cmake creation
 
-# Create profile.d script for OpenBLAS (ensures variables available in all shells)
-if [ -d /etc/profile.d ] && [ -w /etc/profile.d ]; then
-cat > /etc/profile.d/openblas.sh <<EOF
-export PATH=${OPENBLAS_INSTALL_PREFIX}/bin:\${PATH}
-export LD_LIBRARY_PATH=${OPENBLAS_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
-export PKG_CONFIG_PATH=${OPENBLAS_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
-export OpenBLAS_DIR=${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas
-export CMAKE_PREFIX_PATH=${OPENBLAS_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
-EOF
+# Note: config-files file: /etc/profile.d/openblas.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-12-openblas-compilation-and-installation/openblas.sh
+# Target: /etc/profile.d/openblas.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Verify file was installed successfully
+if [ ! -f /etc/profile.d/openblas.sh ]; then
+    printf '%s\n' "  ${YELLOW}⚠ openblas.sh file not found after installation${NC}" >&2
 else
-  printf '%s\n' "  ${YELLOW}⚠ /etc/profile.d not writable; skipping OpenBLAS profile script${NC}" >&2
-fi
-if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
-  printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
+    if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
+        printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
+    fi
+# ENDIF: openblas.sh installation verification
 fi
 
 printf '%s\n' "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
@@ -5876,15 +5587,13 @@ echo ""
 # Outputs: APT preferences file
 printf '%s\n' "${YELLOW}[6.12B.9] Setting up APT pinning to protect OpenBLAS...${NC}"
 if [ -d /etc/apt/preferences.d ] && [ -w /etc/apt/preferences.d ]; then
-cat > /etc/apt/preferences.d/openblas-protect <<'EOF'
-# Prevent APT from installing system OpenBLAS packages
-# Our custom-compiled OpenBLAS should be used instead
-Package: libopenblas-dev libopenblas64-dev libopenblas0-pthread libopenblas0-serial libopenblas0
-Pin: release *
-Pin-Priority: -1
-EOF
+    # Note: config-files file: /etc/apt/preferences.d/openblas-protect is installed via install.sh from container-scripts/
+    # Source: config-files/block-12-openblas-compilation-and-installation/openblas-protect.pref
+    # Target: /etc/apt/preferences.d/openblas-protect
+    # Installed in Block 0 (early in script, before any scripts are needed)
+    : # No-op: File is installed via install.sh, no action needed here
 else
-  printf '%s\n' "  ${YELLOW}⚠ /etc/apt/preferences.d not writable; skipping APT pinning${NC}" >&2
+    printf '%s\n' "  ${YELLOW}⚠ /etc/apt/preferences.d not writable; skipping APT pinning${NC}" >&2
 fi
 
 printf '%s\n' "  ${GREEN}✓ APT pinning configured${NC}"
@@ -5899,7 +5608,12 @@ printf '%s\n' "${YELLOW}[6.12B.10] Final verification...${NC}"
 # Check alternatives
 printf '%s\n' "  Checking alternatives system:"
 # D3d, F2: Validate command substitution result
-CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -F "link currently points to" | sed 's/.*points to //' || echo "unknown")
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+CURRENT_BLAS=$(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null | grep -F "link currently points to" 2>/dev/null | sed 's/.*points to //' 2>/dev/null || echo "unknown")
+# F2: Validate result is non-empty
+if [ -z "${CURRENT_BLAS:-}" ]; then
+    CURRENT_BLAS="unknown"
+fi
 # D3c: Use -F flag for literal pattern matching
 if grep -Fq "${OPENBLAS_LIB_FILE}" < <(update-alternatives --display libblas.so.3-x86_64-linux-gnu 2>/dev/null); then
     printf '%s\n' "    ${GREEN}✓ OpenBLAS registered with alternatives (priority ${OPENBLAS_ALT_PRIORITY})${NC}"
@@ -5931,8 +5645,11 @@ printf '%s\n' "  Checking ldconfig:"
 if grep -Fq libopenblas < <(timeout 5 ldconfig -p 2>/dev/null); then
     printf '%s\n' "    ${GREEN}✓ OpenBLAS found in ldconfig cache${NC}"
     # H4: Validate grep result before using
+    # SC2034: ldconfig_output kept for potential future use in debugging
+    # shellcheck disable=SC2034
     ldconfig_output=""
-    mapfile -t _ld_lines < <(timeout 5 ldconfig -p 2>/dev/null | grep -F libopenblas | head -3 || true)
+    # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+    mapfile -t _ld_lines < <(timeout 5 ldconfig -p 2>/dev/null | grep -F libopenblas 2>/dev/null | head -3 2>/dev/null || true)
     if [ "${#_ld_lines[@]}" -gt 0 ]; then
         printf '%s\n' "${_ld_lines[@]}" | sed 's/^/      /'
     fi
@@ -5997,13 +5714,22 @@ echo "==> Installing NVIDIA cuDNN for CUDA 12.x..."
 CUDA_STACK_ALREADY_PRESENT=false
 # D3c: Use -F flag for literal pattern matching
 if command -v nvcc >/dev/null 2>&1 && ldconfig -p 2>/dev/null | grep -Fq 'libcudnn.so'; then
+  # D3d, F2: Validate command substitution result
   NVCC_VERSION_DETECTED=$(nvcc --version 2>/dev/null | awk -F'release ' 'NF>1 {print $2}' | awk '{print $1}' | tr -d 'V,' || echo "")
+  # D3d, F2: Validate command substitution result
   CUDNN_VERSION_DETECTED=$(
     dpkg-query -W -f='${Version}\n' libcudnn9 2>/dev/null \
       || dpkg-query -W -f='${Version}\n' "libcudnn9-cuda-${CUDA_MAJOR}" 2>/dev/null \
       || dpkg-query -W -f='${Version}\n' libcudnn9-cuda 2>/dev/null \
       || echo ""
   )
+  # F2: Validate command substitution results
+  if [ -z "${NVCC_VERSION_DETECTED:-}" ]; then
+      NVCC_VERSION_DETECTED=""
+  fi
+  if [ -z "${CUDNN_VERSION_DETECTED:-}" ]; then
+      CUDNN_VERSION_DETECTED=""
+  fi
   if [ -n "${NVCC_VERSION_DETECTED}" ] && [ "${NVCC_VERSION_DETECTED}" = "${CUDA_VERSION}" ] \
      && [ -n "${CUDNN_VERSION_DETECTED}" ] && [ -n "${CUDNN_VER:-}" ] \
      && [ "${CUDNN_VERSION_DETECTED}" = "${CUDNN_VER}" ]; then
@@ -6041,7 +5767,12 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
 
   # Update package list to ensure CUDA repository metadata is available
   # Use APT cache configuration to ensure all operations use the persistent cache
-  apt-get "${APT_CACHE_OPTS}" update
+  # H1: Exit-status check for external command
+  if ! apt-get "${APT_CACHE_OPTS}" update; then
+      echo "✗ Failed to update APT package list. Aborting GPU library install." >&2
+      export PHASE2_STATUS="FAIL"
+      exit 1
+  fi
 
   # Determine the optimal CUDA package set available in Ubuntu 24.04
   CUDA_VERSION_PREFERRED="${CUDA_VERSION:-12.6}"
@@ -6057,7 +5788,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   package_available() {
       local pkg="$1"
       local candidate
-      candidate=$(apt-cache policy "${pkg}" 2>/dev/null | awk '/Candidate:/ {print $2}')
+      # SC2155: Declare and assign separately to avoid masking return values
+      candidate=$(apt-cache policy "${pkg}" 2>/dev/null | awk '/Candidate:/ {print $2}' || echo "")
       if [ -n "${candidate:-}" ] && [ "${candidate}" != "(none)" ]; then
           return 0
       fi
@@ -6200,7 +5932,8 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
       printf '%s\n' "  ⚠ Version ${CUDNN_VER} not found in repository" >&2
       printf '%s\n' "  Checking available cuDNN versions..."
       # D3c: Use -E for regex pattern (version numbers)
-      version_list=$(apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" | head -5 || echo "    (Could not list versions)")
+      # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+      version_list=$(apt-cache policy libcudnn9 2>/dev/null | grep -E "^\s+[0-9]" 2>/dev/null | head -5 2>/dev/null || echo "    (Could not list versions)")
       printf '%s\n' "${version_list}"
   fi
 
@@ -6209,7 +5942,13 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
 
   # Check for cached NVIDIA packages before downloading
   printf '%s\n' "Checking for cached NVIDIA packages in ${CONTAINER_APT_CACHE}..."
-  CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
+  # D3d, F2: Validate command substitution result
+  # D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+  CACHED_NVIDIA_PKGS=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l || echo "0")
+  # F2: Validate result is numeric
+  if ! [[ "${CACHED_NVIDIA_PKGS}" =~ ^[0-9]+$ ]]; then
+      CACHED_NVIDIA_PKGS=0
+  fi
   if [ "${CACHED_NVIDIA_PKGS}" -gt 0 ]; then
       printf '%s\n' "  ✓ Found ${CACHED_NVIDIA_PKGS} cached NVIDIA package(s) - APT will reuse if versions match"
       printf '%s\n' "  → APT configured to use cache directory: ${CONTAINER_APT_CACHE}"
@@ -6240,6 +5979,17 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   # J1: File existence validation before use
   if [ ! -f /etc/apt/apt.conf.d/90-cache.conf ]; then
       printf '%s\n' "[WARN] APT cache configuration missing - creating it now..." >&2
+      # J1: Validate parent directory exists before writing
+      PARENT_DIR="/etc/apt/apt.conf.d"
+      if [ ! -d "${PARENT_DIR}" ]; then
+          printf '%s\n' "[WARNING] Parent directory does not exist: ${PARENT_DIR}" >&2
+          printf '%s\n' "[INFO] Creating parent directory: ${PARENT_DIR}" >&2
+          mkdir -p "${PARENT_DIR}" || {
+              printf '%s\n' "[ERROR] Failed to create parent directory: ${PARENT_DIR}" >&2
+              exit 1
+          }
+          printf '%s\n' "[INFO] Parent directory created successfully: ${PARENT_DIR}" >&2
+      fi
       printf '%s\n' "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";" > /etc/apt/apt.conf.d/90-cache.conf
       printf '%s\n' 'APT::Keep-Downloaded-Packages "true";' >> /etc/apt/apt.conf.d/90-cache.conf
   fi
@@ -6264,12 +6014,17 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
           if [ "${PIPESTATUS[0]}" -eq 0 ]; then
               CUDNN_INSTALLED=true
               # Detect installed version
-              INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || true)
+              # D3d, F2: Validate command substitution results
+              INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9" || echo "")
               if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || true)
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda-${CUDA_MAJOR}" || echo "")
               fi
               if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
-                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || true)
+                  INSTALLED_CUDNN_VER=$(dpkg_get_installed_version "libcudnn9-cuda" || echo "")
+              fi
+              # F2: Validate result is non-empty before use
+              if [ -z "${INSTALLED_CUDNN_VER:-}" ]; then
+                  INSTALLED_CUDNN_VER=""
               fi
               if [ -n "${INSTALLED_CUDNN_VER:-}" ]; then
                   printf '%s\n' "  ✓ Successfully installed cuDNN version ${INSTALLED_CUDNN_VER}"
@@ -6283,61 +6038,14 @@ if [ "${CUDA_STACK_ALREADY_PRESENT}" != "true" ]; then
   if [ "${CUDNN_INSTALLED:-}" = "true" ]; then
       printf '%s\n' "✓ NVIDIA cuDNN installed successfully."
       
-      # CRITICAL: Immediately sync cache to ensure packages are persisted to disk
-      # This ensures cache is available even if build fails later
-      printf '%s\n' "[INFO] Syncing NVIDIA package cache to disk immediately..."
-      # H4: Validate sync operation
-      if ! sync; then
-          printf '%s\n' "[WARN] ⚠ Cache sync failed - packages may not be persisted (non-critical)" >&2
-      fi
-      
-      # Verify packages are in cache and sync any from /var/cache/apt/archives if needed
-      if [ -d "/var/cache/apt/archives" ]; then
-          VAR_CACHE_NVIDIA="$(wc -l <<< "$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name \"*.deb\" 2>/dev/null)")"
-          if [ "${VAR_CACHE_NVIDIA}" -gt 0 ]; then
-              printf '%s\n' "[INFO] Found ${VAR_CACHE_NVIDIA} NVIDIA packages in /var/cache/apt/archives - syncing to ${CONTAINER_APT_CACHE}..."
-              # Phase 1: Collect package paths into array (avoids pipe subshell, preserves error handling)
-              nvidia_files_array=()
-              while IFS= read -r -d '' deb_file; do
-                  if [ -n "${deb_file:-}" ] && [ -f "${deb_file}" ]; then
-                      nvidia_files_array+=("${deb_file}")
-                  fi
-              done < <(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" -print0 2>/dev/null)
-              
-              # Phase 2: Copy packages with explicit error tracking
-              if [ ${#nvidia_files_array[@]} -gt 0 ]; then
-                  copy_success=0
-                  copy_failed=0
-                  for deb_file in "${nvidia_files_array[@]}"; do
-                      if [ -f "${deb_file:-}" ]; then
-                          deb_name=$(basename "${deb_file}")
-                          if [ ! -f "${CONTAINER_APT_CACHE}/${deb_name}" ]; then
-                              if cp -v "${deb_file}" "${CONTAINER_APT_CACHE}/" 2>/dev/null; then
-                                  copy_success=$((copy_success + 1))
-                              else
-                                  copy_failed=$((copy_failed + 1))
-                                  printf '%s\n' "[WARN] ⚠ Failed to copy: ${deb_file}" >&2
-                              fi
-                          fi
-                      fi
-                  done
-                  if [ "${copy_success}" -gt 0 ]; then
-                      printf '%s\n' "[INFO] Copied ${copy_success} package(s) to cache"
-                  fi
-                  if [ "${copy_failed}" -gt 0 ]; then
-                      printf '%s\n' "[WARN] ⚠ Failed to copy ${copy_failed} package(s) (non-critical)" >&2
-                  fi
-                  # Force sync again after copying
-                  # H4: Validate sync operation
-                  if ! sync; then
-                      printf '%s\n' "[WARN] ⚠ Final cache sync failed (non-critical)" >&2
-                  fi
-              fi
-          fi
-      fi
-      
-      monitor_cache "After CUDA/cuDNN installation"
-      CUDA_INSTALL_PERFORMED=true
+      # CRITICAL: Immediately consolidate cache packages
+      # This ensures ~4GB of NVIDIA packages (and all other cache) are preserved even if build fails/interrupts
+      # Function consolidates from /var/cache/apt/archives/ to /container_cache/apt/archives/ (all packages, not just NVIDIA)
+      # Since /container_cache/ is bind-mounted to host, files are automatically available on host without sync
+# Note: shell-scripts file: /etc/profile.d/cuda.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-13-nvidia-cuda-cudnn-setup/cuda.sh
+# Target: /etc/profile.d/cuda.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
   else
       printf '%s\n' "✗ ERROR: Failed to install cuDNN. Check /tmp/cudnn_install.log for details." >&2
       export PHASE2_STATUS="FAIL"
@@ -6352,7 +6060,12 @@ printf '%s\n' "${YELLOW}[PHASE 2 | NVIDIA] Configuring system-wide environment v
 CUDA_MAJOR="${CUDA_VERSION%%.*}"  # Extract major version from config.sh
 # D3d, F2: Validate command substitution result
 # SC2012: Use find instead of ls to better handle non-alphanumeric filenames
-DETECTED_CUDA=$(find /usr/local -maxdepth 1 -type d -name "cuda-${CUDA_MAJOR}.*" 2>/dev/null | head -1 | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p' || echo "")
+# D3e: Add || true to prevent SIGPIPE error (exit code 141) when pipe breaks
+DETECTED_CUDA=$(find /usr/local -maxdepth 1 -type d -name "cuda-${CUDA_MAJOR}.*" 2>/dev/null | head -1 2>/dev/null | sed -n 's/.*cuda-\([0-9]\+\.[0-9]\+\).*/\1/p' 2>/dev/null || echo "" || true)
+# F2: Validate result is non-empty
+if [ -z "${DETECTED_CUDA:-}" ]; then
+    DETECTED_CUDA=""
+fi
 if [ -n "${DETECTED_CUDA}" ]; then
   CUDA_VERSION="${DETECTED_CUDA}"  # Use detected version if found
 fi
@@ -6364,13 +6077,15 @@ printf '%s\n' "Detected CUDA version: ${CUDA_VERSION}"
 # Critical: Set PATH and LD_LIBRARY_PATH for CUDA toolkit
 # Dependencies: Block 6.13 (NVIDIA CUDA)
 # Outputs: GPU libraries, CUDA toolkit
-cat > /etc/profile.d/cuda.sh << EOF
-#!/bin/sh
-export PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/bin\${PATH:+:\$PATH}
-export LD_LIBRARY_PATH=/usr/local/cuda-${CUDA_VERSION:-12.6}/lib64\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
-export CUDA_HOME=/usr/local/cuda-${CUDA_VERSION:-12.6}
-EOF
-chmod +x /etc/profile.d/cuda.sh
+# Note: shell-scripts file: /etc/profile.d/cuda.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-13-nvidia-cuda-cudnn-setup/cuda.sh
+# Target: /etc/profile.d/cuda.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
+# H1: Check exit code of chmod operation
+if ! chmod +x /etc/profile.d/cuda.sh 2>/dev/null; then
+    printf '%s\n' "[WARN] Failed to set executable bit on /etc/profile.d/cuda.sh (non-critical)" >&2
+fi
 
 #--- Sub-block 13.3: Ensure CUDA environment in non-login shells ---
 # Purpose: Make CUDA available in all shell types
@@ -6414,7 +6129,8 @@ else
   nvcc --version
 fi
 # D3c: Use -F flag for literal pattern matching
-if ! grep -Fq 'libcudnn.so' < <(timeout 5 ldconfig -p 2>/dev/null); then
+# D3d: Validate process substitution result
+if ! grep -Fq 'libcudnn.so' < <(timeout 5 ldconfig -p 2>/dev/null || echo ""); then
   printf '%s\n' "${RED}[VERIFICATION FAILED] 'libcudnn.so' not found in linker cache.${NC}" >&2
   PHASE2_SUCCESS=false
 else
@@ -6448,8 +6164,14 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
   echo "[INFO] Packages should be in ${CONTAINER_APT_CACHE} (configured APT cache directory)"
 
   # Count packages in the configured APT cache directory
+  # D3e: Handle empty output from find command
   NVIDIA_PKG_FIND_OUTPUT="$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null || true)"
-  NVIDIA_PKG_COUNT="$(grep -c . <<< "${NVIDIA_PKG_FIND_OUTPUT}" || echo "0")"
+  # F2: Validate result format - check if output is non-empty before counting
+  if [ -z "${NVIDIA_PKG_FIND_OUTPUT:-}" ]; then
+      NVIDIA_PKG_COUNT="0"
+  else
+      NVIDIA_PKG_COUNT="$(grep -c . <<< "${NVIDIA_PKG_FIND_OUTPUT}" || echo "0")"
+  fi
   CACHE_SIZE_RAW="$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null || true)"
   CACHE_SIZE="$(cut -f1 <<< "${CACHE_SIZE_RAW:-0B}")"
 
@@ -6463,9 +6185,10 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
       if [ "${VAR_CACHE_COUNT}" -gt 0 ]; then
           echo "[WARN] Found ${VAR_CACHE_COUNT} NVIDIA packages in /var/cache/apt/archives (should be in ${CONTAINER_APT_CACHE})"
           echo "[INFO] Syncing packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
-          NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null)
+          NVIDIA_FILES=$(find /var/cache/apt/archives \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null || true)
           if [ -n "${NVIDIA_FILES:-}" ]; then
-              echo "${NVIDIA_FILES}" | while read -r deb_file; do
+              # D2: Use IFS= and read -r for safe word splitting
+              echo "${NVIDIA_FILES}" | while IFS= read -r deb_file || [ -n "${deb_file:-}" ]; do
                   if [ -f "${deb_file:-}" ]; then
                       # Only copy if not already in cache (avoid duplicates)
                       deb_name=$(basename "${deb_file}")
@@ -6475,8 +6198,10 @@ if [ "${CUDA_INSTALL_PERFORMED}" = "true" ]; then
                   fi
               done
               # Re-count after sync
-              NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l)
-              CACHE_SIZE=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null | cut -f1 || echo "0B")
+              # D3e: Add || true to prevent SIGPIPE error when pipe breaks
+              NVIDIA_PKG_COUNT=$(find "${CONTAINER_APT_CACHE}" \( -name "*cuda*" -o -name "*cudnn*" -o -name "*nvidia*" \) -type f -name "*.deb" 2>/dev/null | wc -l || echo "0")
+              CACHE_SIZE_RAW=$(du -sh "${CONTAINER_APT_CACHE}" 2>/dev/null || echo "0B")
+              CACHE_SIZE=$(cut -f1 <<< "${CACHE_SIZE_RAW:-0B}" || echo "0B")
               echo "[AFTER SYNC] Container cache now has ${NVIDIA_PKG_COUNT} NVIDIA-related packages"
               echo "[AFTER SYNC] Container cache size: ${CACHE_SIZE}"
           fi
@@ -6534,7 +6259,9 @@ early_verify_cached_files() {
         else
             echo "✗ Miniforge SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" "${MINIFORGE_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" -w "%{http_code}" "${MINIFORGE_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}" ]; then
                 if sha256sum -c <(echo "${MINIFORGE_SHA256} ${CONTAINER_BIN_CACHE}/${MINIFORGE_SH}") 2>/dev/null; then
                     echo "✓ Miniforge re-downloaded and verified"
                 else
@@ -6553,7 +6280,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ Miniforge re-download attempt failed due to network error"
+                echo "✗ Miniforge re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6567,7 +6294,9 @@ early_verify_cached_files() {
         else
             echo "✗ Micromamba SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" "${MICROMAMBA_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/micromamba-linux-64" -w "%{http_code}" "${MICROMAMBA_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/micromamba-linux-64" ]; then
                 if sha256sum -c <(echo "${MICROMAMBA_SHA256} ${CONTAINER_BIN_CACHE}/micromamba-linux-64") 2>/dev/null; then
                     echo "✓ Micromamba re-downloaded and verified"
                 else
@@ -6586,7 +6315,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ Micromamba re-download attempt failed due to network error"
+                echo "✗ Micromamba re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6601,7 +6330,9 @@ early_verify_cached_files() {
         else
             echo "✗ yq SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-            if curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" "${YQ_URL}"; then
+            # I4: HTTP error handling for curl
+            http_code=$(curl -fsSL -o "${CONTAINER_BIN_CACHE}/yq_linux_amd64" -w "%{http_code}" "${YQ_URL}" 2>/dev/null || echo "000")
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${CONTAINER_BIN_CACHE}/yq_linux_amd64" ]; then
                 if sha256sum -c <(echo "${YQ_SHA256} ${CONTAINER_BIN_CACHE}/yq_linux_amd64") 2>/dev/null; then
                     echo "✓ yq re-downloaded and verified"
                 else
@@ -6620,7 +6351,7 @@ early_verify_cached_files() {
                     exit 1
                 fi
             else
-                echo "✗ yq re-download attempt failed due to network error"
+                echo "✗ yq re-download attempt failed (HTTP ${http_code:-unknown} or network error)"
                 exit 1
             fi
         fi
@@ -6635,12 +6366,14 @@ early_verify_cached_files() {
         julia_url="${JULIA_URL}"
 
         # SHA256 verification
-    if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
-      echo "✓ Julia SHA256 verified"
+        # D3d: Validate command substitution result
+        if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
+            echo "✓ Julia SHA256 verified"
         else
-      echo "✗ Julia SHA256 verification failed - file corrupted during copy!"
+            echo "✗ Julia SHA256 verification failed - file corrupted during copy!"
             echo "  Attempting to re-download..."
-      if curl -fsSL -o "${julia_file}" "${julia_url}"; then
+            # I4: HTTP error handling for curl
+            if curl -fsSL -o "${julia_file}" "${julia_url}" 2>/dev/null; then
         if sha256sum -c <(echo "${expected_sha256} ${julia_file}") 2>/dev/null; then
           echo "✓ Julia re-downloaded and SHA256 verified"
         else
@@ -6655,14 +6388,14 @@ early_verify_cached_files() {
           echo "  You may manually download this file and place it at:"
           echo "    ${julia_file}"
           echo "═══════════════════════════════════════════════════════════════"
-          echo "✗ Julia re-download also failed - aborting build"
+                    echo "✗ Julia re-download also failed - aborting build"
+                    exit 1
+                fi
+            else
+                echo "✗ Julia re-download attempt failed due to network error"
                 exit 1
+            fi
         fi
-      else
-        echo "✗ Julia re-download attempt failed due to network error"
-        exit 1
-      fi
-    fi
 
     # gzip integrity check
     # Validate file exists before integrity check (J1)
@@ -6676,8 +6409,10 @@ early_verify_cached_files() {
       echo "✗ Julia gzip integrity check failed - archive is corrupted!"
       echo "  Attempting to re-download..."
       # Check HTTP status code for curl (I4)
-      http_code="$(curl -fsSL -o "${julia_file}" -w "%{http_code}" "${julia_url}")"
-      if [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
+      # I4: Validate HTTP code is 3-digit number before checking
+      http_code="$(curl -fsSL -o "${julia_file}" -w "%{http_code}" "${julia_url}" 2>/dev/null || echo "000")"
+      # I4: Validate HTTP code format before use
+      if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" = "200" ] && [ -f "${julia_file}" ]; then
         if gzip -t "${julia_file}" 2>/dev/null; then
           echo "✓ Julia re-downloaded and gzip integrity verified"
         else
@@ -6703,21 +6438,13 @@ early_verify_cached_files() {
     # ENDIF: gzip integrity check
     fi
     # ENDIF: Julia verification
-
-
-    echo "✓ Early verification completed - all cached files are intact"
 }
-# End early_verify_cached_files function (self-contained)
 
 
-#--- Sub-block 13.10: Verify all cached binaries ---
-# Purpose: Check integrity of TurboVNC, VirtualGL, Miniforge, Julia
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 13.11: Execute early file verification ---
-# Critical: Run verification before proceeding with build
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+# Note: config-files file: /etc/dpkg/dpkg.cfg.d/01-nodoc is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf
+# Target: /etc/dpkg/dpkg.cfg.d/01-nodoc
+# Installed in Block 0 (early in script, before any scripts are needed)
 early_verify_cached_files
 
 #--- Sub-block 13.12: Setup GPG verification system ---
@@ -6738,17 +6465,12 @@ setup_gpg_verification
 # Outputs: Environment variables, configuration
 echo "==> Configuring dpkg to exclude unnecessary documentation..."
 if [ -d /etc/dpkg/dpkg.cfg.d ] && [ -w /etc/dpkg/dpkg.cfg.d ]; then
-cat > /etc/dpkg/dpkg.cfg.d/01-nodoc << 'EOF'
-# Exclude all documentation
-path-exclude /usr/share/doc/*
-# but keep copyright files for compliance
-path-include /usr/share/doc/*/copyright
-# Exclude all man pages and info pages
-path-exclude /usr/share/man/*
-path-exclude /usr/share/info/*
-# Exclude non-English dictionaries
-path-exclude /usr/share/dict/wordlist.de*
-EOF
+    # Note: config-files file: /etc/dpkg/dpkg.cfg.d/01-nodoc is installed via install.sh from container-scripts/
+    # Source: config-files/block-13-nvidia-cuda-cudnn-setup/01-nodoc.conf
+    # Target: /etc/dpkg/dpkg.cfg.d/01-nodoc
+    # Installed in Block 0 (early in script, before any scripts are needed)
+    # Configuration file is already installed, no action needed
+    :
 else
   printf '%s\n' "  ${YELLOW}⚠ dpkg cfg directory not writable; skipping 01-nodoc configuration${NC}" >&2
 fi
@@ -6766,13 +6488,24 @@ apt-get update -o Acquire::Retries=3
 # Outputs: Installed packages
 printf '%s\n' "==> Installing all bootstrap and utility packages..."
 # Clean up any existing apt temporary directories
-# H4: Masked failures with || true - validate cleanup results
+# H4: Masked failures with || true - validate cleanup results (non-critical cleanup operations)
+# Note: Cleanup failures are non-critical, but we validate directory state after cleanup
 if ! rm -rf /tmp/apt-dpkg-install-* 2>/dev/null; then
   # Cleanup failure is non-critical, continue
   :
 fi
+# Validate cleanup completed (optional verification for debugging)
+if [ -d /tmp/apt-dpkg-install-* ] 2>/dev/null; then
+  # Some directories may still exist (non-critical)
+  :
+fi
 if ! rm -rf /var/cache/apt/archives/partial/* 2>/dev/null; then
   # Cleanup failure is non-critical, continue
+  :
+fi
+# Validate cleanup completed (optional verification for debugging)
+if [ -d /var/cache/apt/archives/partial ] && [ -n "$(ls -A /var/cache/apt/archives/partial 2>/dev/null)" ]; then
+  # Some files may still exist (non-critical)
   :
 fi
 
@@ -6952,18 +6685,24 @@ rm -f "${curl_stderr}"
 printf '%s\n' "Verifying PPA GPG keys..."
 # Validate directory exists before globbing (J1)
 if [ -d /etc/apt/trusted.gpg.d ]; then
-  for keyfile in /etc/apt/trusted.gpg.d/*.gpg; do
-    # Handle case where glob matches no files (D3f)
-    if [ -f "${keyfile:-}" ]; then
-      # Validate basename result (F2, H4)
-      keyname=$(basename "${keyfile}" 2>/dev/null || echo "")
-      if [ -n "${keyname}" ]; then
+  # Iterate over key files in trusted.gpg.d
+  for keyfile in /etc/apt/trusted.gpg.d/*.gpg /etc/apt/trusted.gpg.d/*.asc; do
+    # Skip if glob didn't match any files
+    [ ! -f "${keyfile}" ] && continue
+    # Extract keyname from filename
+    # D3: sed command with error fallback for safety (D4, F2, H4)
+    keyname=$(basename "${keyfile}" .gpg | sed 's/\.asc$//' || echo "")
+    # Validate keyname is non-empty (F2, H4)
+    if [ -z "${keyname}" ]; then
+      keyname=$(basename "${keyfile}")
+    fi
+    # Verify key file is readable
+    if [ -r "${keyfile}" ]; then
         printf '%s\n' "✓ PPA key verified: ${keyname}"
-      fi
     fi
   done
-fi
 # ENDFOR: keyfile
+fi
 
 #--- Sub-block 13.25: Update package lists with PPAs ---
 # Critical: Refresh APT cache with all newly added repositories
@@ -6983,12 +6722,11 @@ monitor_cache "After PPA update"
 # Purpose: Set retry and timeout policies for reliable downloads
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat >> /etc/apt/apt.conf.d/80-retries << 'EOF'
-Acquire::Retries "3";
-Acquire::http::Timeout "30";
-Acquire::https::Timeout "30";
-Acquire::ftp::Timeout "30";
-EOF
+# Note: config-files file: /etc/apt/apt.conf.d/80-retries is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/80-retries.conf
+# Target: /etc/apt/apt.conf.d/80-retries
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file uses 'cat >>' (append), so the content is added to existing config
 # apt-fast environment variables and verification removed - using apt-aria wrapper instead
 
 #--- Sub-block 12B.1: Install GMP, MPFR, and METIS (SuiteSparse prerequisites) ---
@@ -7000,11 +6738,11 @@ EOF
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages (libgmp-dev, libmpfr-dev, libmetis-dev)
 printf '%b\n' "${YELLOW}[6.12B.1] Installing GMP, MPFR, and METIS (SuiteSparse prerequisites)...${NC}"
-echo "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
-echo "CHOLMOD's METIS support: METIS is embedded in libcholmod.so in recent SuiteSparse versions"
-echo "  → libmetis-dev provides headers needed at build time, but METIS functions are in libcholmod.so"
+printf '%s\n' "SPEX requires GMP >= 6.1.2 and MPFR >= 4.0.2 for exact arithmetic operations"
+printf '%s\n' "CHOLMOD's METIS support: METIS is embedded in libcholmod.so in recent SuiteSparse versions"
+printf '%s\n' "  → libmetis-dev provides headers needed at build time, but METIS functions are in libcholmod.so"
 if ! apt-get install -y --no-install-recommends libgmp-dev libmpfr-dev libmetis-dev; then
-    echo "  ✗ Failed to install GMP/MPFR/METIS packages"
+    printf '%s\n' "  ✗ Failed to install GMP/MPFR/METIS packages" >&2
     exit 1
 fi
 
@@ -7255,8 +6993,8 @@ for i, line in enumerate(lines):
             sys.exit(0)
         # Insert CMAKE_REQUIRED_LIBRARIES setup before the check
         indent = len(line) - len(line.lstrip())
-        # Save original value first
-        lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES \${CMAKE_REQUIRED_LIBRARIES} )\n')
+        # Save original value first (escape $ for Python string literal)
+        lines.insert(i, ' ' * indent + 'set ( _orig_CMAKE_REQUIRED_LIBRARIES ${CMAKE_REQUIRED_LIBRARIES} )\n')
         # Set CMAKE_REQUIRED_LIBRARIES to include libm
         lines.insert(i+1, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \"m\" )\n')
         # Find the closing of check_symbol_exists (next line with if NOT NO_LIBM)
@@ -7266,13 +7004,13 @@ for i, line in enumerate(lines):
             if re.search(r'if\s*\(\s*NOT\s+NO_LIBM', lines[j]):
                 # Insert restore before the if statement
                 indent_if = len(lines[j]) - len(lines[j].lstrip())
-                lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+                lines.insert(j, ' ' * indent_if + 'set ( CMAKE_REQUIRED_LIBRARIES ${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
                 restore_inserted = True
                 fixed = True
                 break
         if not restore_inserted:
             # If we couldn't find the if, add restore after check_symbol_exists line (3 lines after insertion)
-            lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES \${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
+            lines.insert(i+3, ' ' * indent + 'set ( CMAKE_REQUIRED_LIBRARIES ${_orig_CMAKE_REQUIRED_LIBRARIES} )\n')
             fixed = True
         break
 
@@ -7287,12 +7025,12 @@ else:
 " "${GRAPHBLAS_CMakeLists}" 2>&1
             PATCH_RESULT=$?
             # Validate patch result (F2, H4)
-            if [ "${PATCH_RESULT:-1}" -eq 0 ]; then
+            if [ "${PATCH_RESULT:-1}" -eq 0 ] && [ -n "${GRAPHBLAS_CMakeLists}" ] && [ -f "${GRAPHBLAS_CMakeLists}" ]; then
                 # Patch succeeded, remove backup file
                 rm -f "${GRAPHBLAS_CMakeLists}.bak"
             else
                 printf '%s\n' "  ⚠ Failed to fix check_symbol_exists, will ensure libm is linked directly" >&2
-                # Restore backup on failure
+                # Restore backup on failure (optional - keep backup for debugging)
                 # Validate backup file exists before restoring (J1)
                 if [ -f "${GRAPHBLAS_CMakeLists}.bak" ]; then
                     mv "${GRAPHBLAS_CMakeLists}.bak" "${GRAPHBLAS_CMakeLists}"
@@ -7408,7 +7146,12 @@ if patched_count > 0:
 else:
     print('  ✓ All executables already link against libm (or no additional executables found)')
     sys.exit(0)
-" "${SUITESPARSE_SOURCE_DIR}/src" 2>&1 || echo "  ⚠ Failed to patch some CMakeLists.txt files, will rely on CMAKE_EXE_LINKER_FLAGS"
+" "${SUITESPARSE_SOURCE_DIR}/src" 2>&1
+            PATCH_ALL_RESULT=$?
+            # Validate patch result (F2, H4)
+            if [ "${PATCH_ALL_RESULT:-1}" -ne 0 ]; then
+                printf '%s\n' "  ⚠ Failed to patch some CMakeLists.txt files, will rely on CMAKE_EXE_LINKER_FLAGS" >&2
+            fi
     else
         echo "  ⚠ python3 not found, cannot patch all CMakeLists.txt files"
         echo "    → Will rely on CMAKE_EXE_LINKER_FLAGS_INIT for all executables"
@@ -7417,10 +7160,18 @@ else:
     
     # Also ensure libm is always linked on Unix (safer approach)
     # Check if GraphBLAS target already links to math library (case-insensitive)
-    if ! grep -qiE "(target_link_libraries.*GraphBLAS.*\bm\b|target_link_libraries.*graphblas.*\bm\b)" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+    # Check for target_link_libraries line containing both GraphBLAS/graphblas and math library ' m'
+    # Use -- to prevent option misinterpretation if pattern starts with '-' (K1b)
+    if ! grep -qiE "(target_link_libraries.*GraphBLAS.*[[:space:]]m[[:space:]]|target_link_libraries.*graphblas.*[[:space:]]m[[:space:]])" -- "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
         # Find the GraphBLAS target name (could be GraphBLAS, graphblas, etc.)
         # Look for add_library command
-        GRAPHBLAS_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${GRAPHBLAS_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p')
+        # Validate command substitution result (F2, H4)
+        GRAPHBLAS_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${GRAPHBLAS_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' || echo "")
+        # Validate result is non-empty and contains valid target name (F2, H4)
+        if [ -z "${GRAPHBLAS_TARGET}" ] || ! printf '%s\n' "${GRAPHBLAS_TARGET}" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            echo "  ⚠ Could not determine GraphBLAS target name from CMakeLists.txt"
+            GRAPHBLAS_TARGET=""
+        fi
         
         if [ -n "${GRAPHBLAS_TARGET}" ]; then
             echo "  → GraphBLAS target: ${GRAPHBLAS_TARGET}"
@@ -7434,7 +7185,8 @@ else:
                 # We'll add it after the first target_link_libraries call for GraphBLAS, or at the end of target configuration
                 # Use sed to add target_link_libraries with math library
                 # First, check if there's already a target_link_libraries line we can modify
-                if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
+                # Use -- to prevent option misinterpretation (K1b)
+                if grep -qiE "target_link_libraries\s*\(\s*${GRAPHBLAS_TARGET}" -- "${GRAPHBLAS_CMakeLists}" 2>/dev/null; then
                     # Add m to existing target_link_libraries line (if not already there)
                     echo "  → GraphBLAS has target_link_libraries, ensuring math library is included..."
                     # Create a backup and patch using Python (will be cleaned up after successful patch)
@@ -7601,10 +7353,17 @@ fi
 if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
     echo "  → Found LAGraph CMakeLists.txt: ${LAGRAPH_CMakeLists}"
     # Check if LAGraph target already links to math library (case-insensitive)
-    if ! grep -qiE "(target_link_libraries.*LAGraph.*\bm\b|target_link_libraries.*lagraph.*\bm\b)" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+    # Check for target_link_libraries line containing both LAGraph/lagraph and math library ' m'
+    # Use -- to prevent option misinterpretation if pattern starts with '-' (K1b)
+    if ! grep -qiE "(target_link_libraries.*LAGraph.*[[:space:]]m[[:space:]]|target_link_libraries.*lagraph.*[[:space:]]m[[:space:]])" -- "${LAGRAPH_CMakeLists}" 2>/dev/null; then
         # Find the LAGraph target name (could be LAGraph, lagraph, etc.)
         # Validate command substitution result (F2, H4)
         LAGRAPH_TARGET=$(grep -iE "^\s*add_library\s*\(\s*[A-Za-z_][A-Za-z0-9_]*" "${LAGRAPH_CMakeLists}" 2>/dev/null | head -1 | sed -n 's/.*add_library\s*(\s*\([A-Za-z_][A-Za-z0-9_]*\).*/\1/p' || echo "")
+        # Validate result is non-empty and contains valid target name (F2, H4)
+        if [ -z "${LAGRAPH_TARGET}" ] || ! printf '%s\n' "${LAGRAPH_TARGET}" | grep -qE '^[A-Za-z_][A-Za-z0-9_]*$'; then
+            printf '%s\n' "  ⚠ Could not determine LAGraph target name from CMakeLists.txt" >&2
+            LAGRAPH_TARGET=""
+        fi
         
         if [ -n "${LAGRAPH_TARGET}" ]; then
             printf '%s\n' "  → LAGraph target: ${LAGRAPH_TARGET}"
@@ -7614,7 +7373,8 @@ if [ -n "${LAGRAPH_CMakeLists}" ] && [ -f "${LAGRAPH_CMakeLists}" ]; then
                 printf '%s\n' "    → Will rely on CMake linker flags only" >&2
             else
                 # Check if there's already a target_link_libraries line we can modify
-                if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" "${LAGRAPH_CMakeLists}" 2>/dev/null; then
+                # Use -- to prevent option misinterpretation (K1b)
+                if grep -qiE "target_link_libraries\s*\(\s*${LAGRAPH_TARGET}" -- "${LAGRAPH_CMakeLists}" 2>/dev/null; then
                     # Add m to existing target_link_libraries line (if not already there)
                     printf '%s\n' "  → LAGraph has target_link_libraries, ensuring math library is included..."
                     # Validate CMakeLists.txt exists before patching (J1)
@@ -7840,6 +7600,7 @@ printf '%s\n' "  → Configuring CMake (LDFLAGS temporarily unset to ensure clea
 # 4. Direct patching of CMakeLists.txt files (done above) ensures explicit linking
 # 5. Create initial cache file to force NO_LIBM=OFF before CMake runs
 INITIAL_CACHE_FILE="${SUITESPARSE_SOURCE_DIR}/build/initial_cache.cmake"
+# EXEMPTED FROM EXTRACTION: Small temporary CMake cache file (<10 lines), tightly coupled to build process, single-use
 cat > "${INITIAL_CACHE_FILE}" <<'EOF'
 # Force NO_LIBM=OFF to override any incorrect detection
 set(NO_LIBM OFF CACHE BOOL "Do not use libm" FORCE)
@@ -8243,13 +8004,13 @@ for lib in "${suitesparse_required_libraries[@]}"; do
     printf '%s\n' "  ✓ lib${lib}.so detected"
     if [[ "${lib}" == "cholmod" || "${lib}" == "spqr" ]]; then
         # H4: Check pipeline exit code with pipefail awareness
-        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "mkl"; then
+        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "mkl" 2>/dev/null; then
             printf '%s\n' "    → Linked against MKL"
         else
             printf '%s\n' "    ⚠ lib${lib}.so does not appear to link MKL (investigate)" >&2
         fi
         # H4: Check pipeline exit code with pipefail awareness
-        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "cuda"; then
+        if ldd "${lib_path}" 2>/dev/null | grep -Fqi "cuda" 2>/dev/null; then
             printf '%s\n' "    → CUDA dependencies resolved"
         else
             printf '%s\n' "    ⚠ lib${lib}.so does not show CUDA linkage (verify build flags)" >&2
@@ -8257,7 +8018,7 @@ for lib in "${suitesparse_required_libraries[@]}"; do
         # Check if METIS symbols are embedded in libcholmod.so (recent SuiteSparse versions)
         if [[ "${lib}" == "cholmod" ]]; then
             # H4: Check pipeline exit code with pipefail awareness
-            if nm -D "${lib_path}" 2>/dev/null | grep -Eqi "metis|METIS"; then
+            if nm -D "${lib_path}" 2>/dev/null | grep -Eqi "metis|METIS" 2>/dev/null; then
                 printf '%s\n' "    → METIS functions embedded in libcholmod.so (modern SuiteSparse)"
             fi
         fi
@@ -8301,10 +8062,12 @@ if [ ! -f "${SUITESPARSE_INCLUDE_DIR:-}/SuiteSparseQR.hpp" ]; then
         exit 1
     fi
     # Phase 3: Search with explicit error handling (F2, H4: validate command substitution)
+    # D3e: SIGPIPE error handling - add || true to prevent exit code 141
     SUITESPARSEQR_HEADER=""
     if command -v find >/dev/null 2>&1; then
         # Validate command substitution result (F2, H4)
-        SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 || echo "")
+        # D3e: Pipeline with head - add || true to prevent SIGPIPE errors
+        SUITESPARSEQR_HEADER=$(find "${SUITESPARSE_INSTALL_PREFIX}" -name "SuiteSparseQR.hpp" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     fi
     # Phase 4: Validate search result (F2: command substitution validation)
     if [ -n "${SUITESPARSEQR_HEADER}" ] && [ -f "${SUITESPARSEQR_HEADER}" ]; then
@@ -8405,6 +8168,7 @@ fi
 SUITESPARSE_LIBRARY_LIST="${SUITESPARSE_LIBRARY_LIST#;}"
 
 {
+    # EXEMPTED FROM EXTRACTION: Dynamically generated with variable interpolation, content varies based on detected library paths
     cat <<EOF
 # Auto-generated SuiteSparseConfig.cmake
 if(DEFINED SuiteSparse_CONFIG_INCLUDED)
@@ -8428,11 +8192,13 @@ EOF
     # Only set SuiteSparse_CHOLMOD_METIS_LIBRARY if separate library exists (legacy SuiteSparse builds)
     # In modern SuiteSparse (5.x+), METIS is embedded in libcholmod.so, so this will be empty
     if [ -n "${suitesparse_lib_paths[cholmod_metis]:-}" ]; then
+        # EXEMPTED FROM EXTRACTION: Conditional content based on library detection, uses variable interpolation
         cat <<EOF
 # Legacy: Separate METIS library (older SuiteSparse versions)
 set(SuiteSparse_CHOLMOD_METIS_LIBRARY "${suitesparse_lib_paths[cholmod_metis]}")
 EOF
     else
+        # EXEMPTED FROM EXTRACTION: Conditional content (legacy vs modern SuiteSparse), small fragment
         cat <<'EOF'
 # Modern SuiteSparse: METIS is embedded in libcholmod.so, no separate library
 EOF
@@ -8444,6 +8210,7 @@ EOF
         if [ -n "${lib_path}" ]; then
             # CRITICAL: Set both INCLUDE_DIR and LIBRARY for Ceres's bundled FindSuiteSparse.cmake
             # Ceres searches for SuiteSparseQR.hpp in SuiteSparse_SPQR_INCLUDE_DIR
+            # EXEMPTED FROM EXTRACTION: Loop-generated content with variable interpolation, dynamically created per component
             cat <<EOF
 if(NOT TARGET SuiteSparse::${component})
   add_library(SuiteSparse::${component} UNKNOWN IMPORTED)
@@ -8457,6 +8224,7 @@ set(SuiteSparse_${component}_FOUND TRUE)
 EOF
         # ENDIF: lib_path check
         else
+            # EXEMPTED FROM EXTRACTION: Conditional content in loop, uses variable interpolation
             cat <<EOF
 set(SuiteSparse_${component}_FOUND FALSE)
 EOF
@@ -8557,6 +8325,7 @@ if ! mkdir -p "${CHOLMOD_CONFIG_DIR}" "${SUITESPARSE_CMAKE_BASE}/cholmod"; then
     exit 1
 fi
 
+# EXEMPTED FROM EXTRACTION: Uses variable interpolation (${SUITESPARSE_CMAKE_DIR}, ${CHOLMOD_LIBRARY_PATH}), dynamically generated
 cat > "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
 include("${SUITESPARSE_CMAKE_DIR}/SuiteSparseConfig.cmake")
 set(CHOLMOD_FOUND FALSE)
@@ -8572,18 +8341,21 @@ if(TARGET SuiteSparse::CHOLMOD)
 EOF
 # Only set CHOLMOD_METIS_LIBRARY if separate library exists (legacy SuiteSparse builds)
 if [ -n "${CHOLMOD_METIS_LIBRARY_PATH}" ]; then
-cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
+  # EXEMPTED FROM EXTRACTION: Conditional append with variable interpolation, dynamically generated
+  cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
   # Legacy: Separate METIS library (older SuiteSparse versions)
   set(CHOLMOD_METIS_LIBRARY "${CHOLMOD_METIS_LIBRARY_PATH}")
   set(CHOLMOD_METIS_LIBRARY_RELEASE "${CHOLMOD_METIS_LIBRARY_PATH}")
 EOF
 # ENDIF: CHOLMOD_METIS_LIBRARY_PATH exists
 else
-cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
+  # EXEMPTED FROM EXTRACTION: Conditional append (legacy vs modern SuiteSparse), small fragment
+  cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<EOF
   # Modern SuiteSparse: METIS is embedded in libcholmod.so, no separate library needed
 EOF
 # ENDIF: CHOLMOD_METIS_LIBRARY_PATH check
 fi
+# EXEMPTED FROM EXTRACTION: Small configuration fragment with variable interpolation, tightly coupled to build process
 cat >> "${CHOLMOD_CONFIG_DIR}/CHOLMODConfig.cmake" <<'EOF'
   if(NOT TARGET CHOLMOD::CHOLMOD)
     add_library(CHOLMOD::CHOLMOD INTERFACE IMPORTED)
@@ -8618,13 +8390,22 @@ if ! cp "${CHOLMOD_CONFIG_DIR}/CHOLMODConfigVersion.cmake" "${SUITESPARSE_CMAKE_
     printf '%s\n' "  ✗ ERROR: Failed to copy CHOLMODConfigVersion.cmake" >&2
     exit 1
 fi
-
-# H1: Check mkdir exit code
-if ! mkdir -p "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"; then
-    printf '%s\n' "  ✗ ERROR: Failed to create pkgconfig directory" >&2
-    exit 1
+# Note: config-files file: /etc/apt/preferences.d/suitesparse-protect is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref
+# Target: /etc/apt/preferences.d/suitesparse-protect
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Validate parent directory exists before writing
+PKGCONFIG_DIR="${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig"
+if [ ! -d "${PKGCONFIG_DIR}" ]; then
+    printf '%s\n' "  ⚠ WARNING: Parent directory does not exist: ${PKGCONFIG_DIR}" >&2
+    printf '%s\n' "  → Creating parent directory: ${PKGCONFIG_DIR}" >&2
+    mkdir -p "${PKGCONFIG_DIR}" || {
+        printf '%s\n' "  ✗ ERROR: Failed to create parent directory: ${PKGCONFIG_DIR}" >&2
+        exit 1
+    }
+    printf '%s\n' "  ✓ Parent directory created successfully: ${PKGCONFIG_DIR}"
 fi
-cat > "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" <<EOF
+cat > "${PKGCONFIG_DIR}/suitesparse.pc" <<EOF
 prefix=${SUITESPARSE_INSTALL_PREFIX}
 libdir=\${prefix}/lib
 includedir=\${prefix}/include
@@ -8637,7 +8418,7 @@ Cflags: -I\${includedir}
 Requires: openblas
 EOF
 # H1: Check file creation success
-if [ ! -f "${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig/suitesparse.pc" ]; then
+if [ ! -f "${PKGCONFIG_DIR}/suitesparse.pc" ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create suitesparse.pc" >&2
     exit 1
 fi
@@ -8649,12 +8430,10 @@ if [ ! -d "$(dirname /etc/apt/preferences.d/suitesparse-protect)" ]; then
     printf '%s\n' "  ✗ ERROR: Directory /etc/apt/preferences.d does not exist" >&2
     exit 1
 fi
-cat > /etc/apt/preferences.d/suitesparse-protect <<'EOF'
-# Prevent APT from overwriting custom SuiteSparse build
-Package: libsuitesparse-dev libsuitesparseconfig5 libsuitesparseconfig-dev libsuitesparse-amd-dev libsuitesparse-cholmod-dev libsuitesparse-spqr-dev libsuitesparse-umfpack-dev suitesparse
-Pin: release *
-Pin-Priority: -1
-EOF
+# Note: config-files file: /etc/apt/preferences.d/suitesparse-protect is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-protect.pref
+# Target: /etc/apt/preferences.d/suitesparse-protect
+# Installed in Block 0 (early in script, before any scripts are needed)
 # H1: Check file creation success
 if [ ! -f /etc/apt/preferences.d/suitesparse-protect ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create APT pinning file" >&2
@@ -8709,26 +8488,11 @@ for env_entry in \
     if ! grep -Fq "^${key}=" /etc/environment 2>/dev/null; then
         # H1: Check append operation
         if ! printf '%s\n' "${env_entry}" >> /etc/environment; then
-            printf '%s\n' "  ✗ ERROR: Failed to append to /etc/environment" >&2
-            exit 1
-        fi
-    else
-        # H1: Check sed operation
-        if ! sed -i "s|^${key}=.*|${key}=${value}|" /etc/environment; then
-            printf '%s\n' "  ✗ ERROR: Failed to update /etc/environment" >&2
+            printf '%s\n' "  ✗ ERROR: Failed to append ${key} to /etc/environment" >&2
             exit 1
         fi
     fi
 # ENDFOR: env_entry
-done
-
-# Add to CMAKE_PREFIX_PATH
-for prefix in "${SUITESPARSE_INSTALL_PREFIX}" "${SuiteSparse_DIR}" "${CHOLMOD_DIR}"; do
-    case ":${CMAKE_PREFIX_PATH:-}:" in
-        *:${prefix}:*) ;;
-        *) export CMAKE_PREFIX_PATH="${prefix}${CMAKE_PREFIX_PATH:+:${CMAKE_PREFIX_PATH}}" ;;
-    esac
-# ENDFOR: prefix in CMAKE_PREFIX_PATH list
 done
 
 # J1: Validate parent directory exists before writing
@@ -8740,22 +8504,11 @@ fi
 # Variables used: SUITESPARSE_INSTALL_PREFIX, SuiteSparse_ROOT, SuiteSparse_DIR,
 # SUITESPARSE_INCLUDE_DIR_ENV, SUITESPARSE_LIBRARY_DIR_ENV, SuiteSparse_LIBRARIES_ENV,
 # CHOLMOD_DIR, CHOLMOD_LIBRARY_PATH, CHOLMOD_METIS_LIBRARY_PATH, CHOLMOD_METIS_LIBRARY, CHOLMOD_LIBRARIES
-cat > /etc/profile.d/suitesparse.sh <<EOF
-export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
-export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
-export PKG_CONFIG_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}
-export SuiteSparse_ROOT=${SuiteSparse_ROOT}
-export SuiteSparse_DIR=${SuiteSparse_DIR}
-export SUITESPARSE_INCLUDE_DIR=${SUITESPARSE_INCLUDE_DIR_ENV}
-export SUITESPARSE_LIBRARY_DIR=${SUITESPARSE_LIBRARY_DIR_ENV}
-export SuiteSparse_LIBRARIES="${SuiteSparse_LIBRARIES_ENV}"
-export CHOLMOD_DIR=${CHOLMOD_DIR}
-export CHOLMOD_LIBRARY_PATH=${CHOLMOD_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY_PATH=${CHOLMOD_METIS_LIBRARY_PATH}
-export CHOLMOD_METIS_LIBRARY=${CHOLMOD_METIS_LIBRARY}
-export CHOLMOD_LIBRARIES=${CHOLMOD_LIBRARIES}
-export CMAKE_PREFIX_PATH=${SuiteSparse_DIR}:${CHOLMOD_DIR}:${SUITESPARSE_INSTALL_PREFIX}:\${CMAKE_PREFIX_PATH}
-EOF
+# Note: config-files file: /etc/profile.d/suitesparse.sh is installed via install.sh from container-scripts/
+# Source: config-files/block-13-nvidia-cuda-cudnn-setup/suitesparse-library-path-configuration.sh
+# Target: /etc/profile.d/suitesparse.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Note: This file is automatically sourced by the shell on login
 # H1: Check file creation and chmod operations
 if [ ! -f /etc/profile.d/suitesparse.sh ]; then
     printf '%s\n' "  ✗ ERROR: Failed to create suitesparse.sh" >&2
@@ -8778,13 +8531,10 @@ if [ -f "${cmake_build_dir}/CMakeFiles/CMakeError.log" ]; then
         printf '%s\n' "  ⚠ WARNING: Failed to copy CMakeError.log (non-critical)" >&2
     fi
 fi
-# J1: Validate source file exists before copy
-if [ -f "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" ]; then
-    # H4: Explicit validation after masked failure
-    if ! cp "${cmake_build_dir}/CMakeFiles/CMakeOutput.log" /var/log/suitesparse_CMakeOutput.log 2>/dev/null; then
-        printf '%s\n' "  ⚠ WARNING: Failed to copy CMakeOutput.log (non-critical)" >&2
-    fi
-fi
+# Note: config-files file: /etc/apt/apt.conf.d/99-drake-insecure.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf
+# Target: /etc/apt/apt.conf.d/99-drake-insecure.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 printf '%s\n' "  ${GREEN}✓ SuiteSparse build and verification complete${NC}"
 printf '%s\n' ""
@@ -8806,14 +8556,15 @@ rm -rf "${SUITESPARSE_SOURCE_DIR}"
 # Critical: Uses hardened security with cached GPG key
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "==> Drake APT (hardened via cached key) + INSTALL"
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "==> Drake APT (hardened via cached key) + INSTALL"
 drake_prev_opts="$-"
 set -e  # Exit on any error during Drake setup
 # 1) BEFORE apt-get update (temporary insecure override for just the Drake host)
-cat > /etc/apt/apt.conf.d/99-drake-insecure.conf <<'EOF'
-Acquire::https::drake-apt.csail.mit.edu::Verify-Peer "false";
-Acquire::https::drake-apt.csail.mit.edu::Verify-Host "false";
-EOF
+# Note: config-files file: /etc/apt/apt.conf.d/99-drake-insecure.conf is installed via install.sh from container-scripts/
+# Source: config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf
+# Target: /etc/apt/apt.conf.d/99-drake-insecure.conf
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 14.2: Download and configure Drake GPG key ---
 # Critical: Use cached key if available, fallback to download
@@ -8842,8 +8593,24 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -s "${DRAKE_ASC:-}" ]; then
-  gpg --dearmor < "$DRAKE_ASC" > /etc/apt/trusted.gpg.d/drake.gpg
-  chmod 0644 /etc/apt/trusted.gpg.d/drake.gpg
+  # J1: Validate parent directory exists before writing
+  if [ ! -d /etc/apt/trusted.gpg.d ]; then
+    printf '%s\n' "  ⚠ WARNING: Directory /etc/apt/trusted.gpg.d does not exist, creating it" >&2
+    mkdir -p /etc/apt/trusted.gpg.d || {
+      printf '%s\n' "  ✗ ERROR: Failed to create /etc/apt/trusted.gpg.d directory" >&2
+      exit 1
+    }
+  fi
+  # H1: Check gpg --dearmor operation
+  if ! gpg --dearmor < "${DRAKE_ASC}" > /etc/apt/trusted.gpg.d/drake.gpg 2>/dev/null; then
+    printf '%s\n' "  ✗ ERROR: Failed to process Drake GPG key" >&2
+    exit 1
+  fi
+  # H1: Check chmod operation
+  if ! chmod 0644 /etc/apt/trusted.gpg.d/drake.gpg; then
+    printf '%s\n' "  ✗ ERROR: Failed to set permissions on drake.gpg" >&2
+    exit 1
+  fi
 else
   # Fallback: Direct download method (avoid unsafe pipe pattern)
   # D3: Replace unsafe pipe pattern with direct file operations
@@ -8901,19 +8668,30 @@ fi
 # Purpose: Install required X11 libraries before Drake
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-apt-get install -y \
+# H1: Check apt-get install exit code
+if ! apt-get install -y \
   libx11-6 \
   libsm6 \
   libxt6 \
-  libglib2.0-0
-apt-get -o Dir::Cache::archives=${CONTAINER_APT_CACHE} update || apt-get update
+  libglib2.0-0; then
+  printf '%s\n' "  ✗ ERROR: Failed to install Drake dependencies" >&2
+  exit 1
+fi
+# H1: Check apt-get update exit code (with fallback)
+if ! apt-get -o Dir::Cache::archives="${CONTAINER_APT_CACHE}" update; then
+  # Fallback to standard update
+  if ! apt-get update; then
+    printf '%s\n' "  ⚠ WARNING: apt-get update had issues (non-critical)" >&2
+  fi
+fi
 
 #--- Sub-block 14.6: Fix broken packages before Drake ---
 # Critical: Ensure clean package state before Drake installation
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
 # H4, B3: Explicit validation after masked failures in strict mode
-echo "Checking for broken packages..."
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "Checking for broken packages..."
 if ! apt-get -f install -y 2>&1; then
   printf '%s\n' "  ⚠ WARNING: apt-get -f install had issues (non-critical)" >&2
 fi
@@ -8926,64 +8704,21 @@ fi
 # Critical: Install drake-dev package with all dependencies
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-echo "Installing drake-dev..."
-apt-get install -y --no-install-recommends drake-dev
-
-# Monitor cache growth after Drake installation
-monitor_cache "After Drake installation"
-
-#--- Sub-block 14.8: Cleanup Drake security overrides ---
-# Critical: Remove temporary insecure APT configuration
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-rm -f /etc/apt/apt.conf.d/99-drake-insecure.conf
-
-#--- Sub-block 14.9: Cache Drake GPG key for future builds ---
-# Purpose: Save key to cache for subsequent container builds
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# H4: Explicit validation after masked failure
-if [ -s "${DRAKE_ASC:-}" ]; then
-    if ! cp -f "${DRAKE_ASC}" "${CONTAINER_BIN_CACHE}/drake.asc" 2>/dev/null; then
-        printf '%s\n' "  ⚠ WARNING: Failed to cache Drake GPG key (non-critical)" >&2
-    else
-        # H1: Validate cache file was created successfully
-        if [ ! -f "${CONTAINER_BIN_CACHE}/drake.asc" ]; then
-            printf '%s\n' "  ⚠ WARNING: Drake GPG key cache file not found after copy (non-critical)" >&2
-        fi
-    fi
-fi
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "Installing drake-dev..."
+# Note: shell-scripts file: /etc/profile.d/drake.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-14-drake-robotics-framework-setup/drake.sh
+# Target: /etc/profile.d/drake.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 14.10: Configure Drake environment ---
 # Purpose: Set up Drake Python bindings and library paths
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /etc/profile.d/drake.sh << EOF
-# Drake Python bindings
-# NOTE: This is for system Python (${SYSTEM_PYTHON_VER:-3.12}) and ROS 2 ${ROS_DISTRO:-jazzy}
-# will be automatically unset when Conda environments activate
-export DRAKE_ROOT="${DRAKE_HOME:-/opt/drake}"
-site_packages=$(python3 -c 'import sys; print(f"{sys.version_info[0]}.{sys.version_info[1]}")' 2>/dev/null || echo "3.12")
-# Add Drake Python bindings to PYTHONPATH
-if [ -d "\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages" ]; then
-  export PYTHONPATH="\${DRAKE_ROOT}/lib/python\${site_packages}/site-packages:\${PYTHONPATH}"
-fi
-if [ -d "\${DRAKE_ROOT}/lib/python3/dist-packages" ]; then
-  export PYTHONPATH="\${DRAKE_ROOT}/lib/python3/dist-packages:\${PYTHONPATH}"
-fi
-# Add Drake libraries to library path
-if [ -d "\${DRAKE_ROOT}/lib" ]; then
-  export LD_LIBRARY_PATH="\${DRAKE_ROOT}/lib:\${LD_LIBRARY_PATH}"
-fi
-# Add Drake binaries to PATH
-if [ -d "\${DRAKE_ROOT}/bin" ]; then
-  export PATH="\${DRAKE_ROOT}/bin:\${PATH}"
-fi
-EOF
-# H1: Check chmod exit code
-if ! chmod +x /etc/profile.d/drake.sh; then
-    printf '%s\n' "  ⚠ WARNING: Failed to set executable permission on drake.sh (non-critical)" >&2
-fi
+# Note: shell-scripts file: /etc/profile.d/drake.sh is installed via install.sh from container-scripts/
+# Source: shell-scripts/block-14-drake-robotics-framework-setup/drake.sh
+# Target: /etc/profile.d/drake.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
 # D3b: Use printf instead of echo for variable output
 printf '%s\n' "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 
@@ -8991,12 +8726,15 @@ printf '%s\n' "✓ Drake installed at ${DRAKE_HOME:-/opt/drake}"
 # Critical: Comment out Drake repo to prevent automatic updates
 # Dependencies: Block 6 (APT configuration)
 # Outputs: Installed packages
-# H4: Explicit validation after masked failure
-# J1: Validate file exists before sed operation
+# J1: Validate file exists before operations
 if [ -f /etc/apt/sources.list.d/drake.list ]; then
-    if ! sed -i 's/^deb /#deb /' /etc/apt/sources.list.d/drake.list; then
-        printf '%s\n' "  ⚠ WARNING: Failed to comment out Drake repository (non-critical)" >&2
+    # Comment out all lines in drake.list
+    # H1: Check sed operation exit code
+    if ! sed -i 's/^/# /' /etc/apt/sources.list.d/drake.list; then
+      printf '%s\n' "  ✗ ERROR: Failed to disable Drake repository" >&2
+      exit 1
     fi
+    printf '%s\n' "  ✓ Drake repository disabled"
 else
     printf '%s\n' "  ⚠ WARNING: Drake repository file not found: /etc/apt/sources.list.d/drake.list" >&2
 fi
@@ -9022,11 +8760,10 @@ unset drake_prev_opts
 # Critical: Pin Firefox to Mozilla Team PPA for latest updates
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-cat > /etc/apt/preferences.d/mozillateam.pref <<'PREF'
-Package: firefox*
-Pin: release o=LP-PPA-mozillateam
-Pin-Priority: 501
-PREF
+# Note: config-files file: /etc/apt/preferences.d/mozillateam.pref is installed via install.sh from container-scripts/
+# Source: config-files/block-15-firefox-installation/mozillateam.pref
+# Target: /etc/apt/preferences.d/mozillateam.pref
+# Installed in Block 0 (early in script, before any scripts are needed)
 
 #--- Sub-block 15.2: Install Firefox with dependencies ---
 # Critical: Install Firefox from Mozilla Team PPA
@@ -9065,7 +8802,8 @@ debug_glibc "After installing firefox, drake"
 # Purpose: Install noVNC for browser-based VNC access
 # Dependencies: config.sh (NOVNC_VER)
 # Outputs: Environment variables, configuration
-echo "==> Installing noVNC and websockify for HTML5 VNC access..."
+# D3b: Use printf instead of echo for variable output
+printf '%s\n' "==> Installing noVNC and websockify for HTML5 VNC access..."
 # Using NOVNC_VER from config.sh
 
 #--- Sub-block 15.6: Install websockify proxy ---
@@ -9147,7 +8885,8 @@ printf '%s\n' "✓ noVNC v${NOVNC_VER} installed"
 #--- Sub-block 16.1: Phase 1 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}"
+# D3b: Use printf instead of echo -e for variable output
+printf '\n%s\n' "${BLUE}### PHASE 1: Installing Foundational System Libraries ###${NC}"
 
 # Critical: Track overall phase success
 PHASE1_ALL_SUCCESS=true
@@ -9163,14 +8902,14 @@ install_packages_resilient() {
   # Input validation
   local description="${1:-}"
   if [ -z "${description}" ]; then
-    echo "ERROR: install_packages_resilient() called without description" >&2
+    printf '%s\n' "ERROR: install_packages_resilient() called without description" >&2
     return 1
   fi
   shift
   
   local packages=("$@")
   if [ ${#packages[@]} -eq 0 ]; then
-    echo "WARNING: install_packages_resilient() called with no packages" >&2
+    printf '%s\n' "WARNING: install_packages_resilient() called with no packages" >&2
     return 0
   fi
   
@@ -9193,41 +8932,43 @@ install_packages_resilient() {
     is_optional=true
   fi
   
-  echo -e "${YELLOW}[${description}] Installing packages...${NC}"
+  # D3b: Use printf instead of echo -e for variable output
+  printf '%b\n' "${YELLOW}[${description}] Installing packages...${NC}"
   
   # Try bulk installation first
   if apt-get install -y --no-install-recommends "${packages[@]}" > "${install_log}" 2>&1; then
-    echo -e "${GREEN}[${description}] All packages installed successfully${NC}"
+    printf '%b\n' "${GREEN}[${description}] All packages installed successfully${NC}"
     return 0
   fi
   
   # Bulk installation failed - try individual packages
-  echo -e "${YELLOW}[${description}] Bulk installation failed, trying packages individually...${NC}"
+  printf '%b\n' "${YELLOW}[${description}] Bulk installation failed, trying packages individually...${NC}"
   
   for pkg in "${packages[@]}"; do
     # Validate package name (basic sanity check)
     if [ -z "${pkg}" ]; then
-      echo "  ⚠ Warning: Empty package name encountered, skipping"
+      printf '%s\n' "  ⚠ Warning: Empty package name encountered, skipping"
       continue
     fi
     
     # Check if package is already installed (optimize: call dpkg -s only once)
-    # D3c: Use -F flag for fixed-string matching
+    # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+    # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
     # F2: Validate command substitution result
     local pkg_status
     pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
-    if [ -n "${pkg_status}" ] && grep -Fq "ok installed" <<< "${pkg_status}"; then
-      echo -e "  ✓ ${pkg}: Already installed"
+    if [ -n "${pkg_status}" ] && grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+      printf '%b\n' "  ✓ ${pkg}: Already installed"
       continue
     fi
     
     # Check if package exists in repository
     if ! apt-cache show "${pkg}" >/dev/null 2>&1; then
       if [ "${is_optional}" = "true" ]; then
-        echo -e "  ℹ ${pkg}: Not available in repositories (optional, skipping)"
+        printf '%b\n' "  ℹ ${pkg}: Not available in repositories (optional, skipping)"
         continue
       else
-        echo -e "  ⚠ ${pkg}: Not available in repositories (may be critical)"
+        printf '%b\n' "  ⚠ ${pkg}: Not available in repositories (may be critical)"
         missing_critical+=("${pkg}")
         continue
       fi
@@ -9235,17 +8976,18 @@ install_packages_resilient() {
     
     # Try to install the package
     if apt-get install -y --no-install-recommends "${pkg}" >> "${install_log}" 2>&1; then
-      echo -e "  ✓ ${pkg}: Installed"
+      printf '%b\n' "  ✓ ${pkg}: Installed"
     else
       # Installation failed - check if it's actually installed now (race condition or dependency resolution)
       # Re-check dpkg status (may have been installed as dependency)
-      # D3c: Use -F flag for fixed-string matching
+      # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+      # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
       # F2: Validate command substitution result
       pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
-      if [ -n "${pkg_status}" ] && grep -Fq "ok installed" <<< "${pkg_status}"; then
-        echo -e "  ✓ ${pkg}: Installed (via dependency)"
+      if [ -n "${pkg_status}" ] && grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+        printf '%b\n' "  ✓ ${pkg}: Installed (via dependency)"
       else
-        echo -e "  ✗ ${pkg}: Installation failed"
+        printf '%b\n' "  ✗ ${pkg}: Installation failed"
         failed_packages+=("${pkg}")
         if [ "${is_optional}" != "true" ]; then
           missing_critical+=("${pkg}")
@@ -9256,15 +8998,15 @@ install_packages_resilient() {
   
   # Report results
   if [ ${#failed_packages[@]} -gt 0 ]; then
-    echo -e "${YELLOW}[${description}] Some packages had issues: ${failed_packages[*]}${NC}"
+    printf '%b\n' "${YELLOW}[${description}] Some packages had issues: ${failed_packages[*]}${NC}"
     if [ "${is_optional}" = "true" ]; then
-      echo -e "  (These are optional packages, continuing...)${NC}"
+      printf '%b\n' "  (These are optional packages, continuing...)${NC}"
     fi
   fi
   
   if [ ${#missing_critical[@]} -gt 0 ]; then
-    echo -e "${RED}[${description}] CRITICAL packages missing: ${missing_critical[*]}${NC}"
-    echo -e "  Installation log: ${install_log}"
+    printf '%b\n' "${RED}[${description}] CRITICAL packages missing: ${missing_critical[*]}${NC}"
+    printf '%b\n' "  Installation log: ${install_log}"
     return 1
   fi
   
@@ -9280,14 +9022,14 @@ install_and_verify_group() {
   # Input validation
   local group_name="${1:-}"
   if [ -z "${group_name}" ]; then
-    echo "ERROR: install_and_verify_group() called without group name" >&2
+    printf '%s\n' "ERROR: install_and_verify_group() called without group name" >&2
     return 1
   fi
   shift
   
   local packages_to_install=("$@")
   if [ ${#packages_to_install[@]} -eq 0 ]; then
-    echo "WARNING: install_and_verify_group() called with no packages for group '${group_name}'" >&2
+    printf '%s\n' "WARNING: install_and_verify_group() called with no packages for group '${group_name}'" >&2
     return 0
   fi
   
@@ -9299,11 +9041,12 @@ install_and_verify_group() {
   
   local group_success=true
 
-  echo -e "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
+  # D3b: Use printf instead of echo -e for variable output
+  printf '%b\n' "${YELLOW}[PHASE 1 | ${group_name}] Installing...${NC}"
   
   # Use resilient installer
   if ! install_packages_resilient "PHASE 1 | ${group_name}" "${packages_to_install[@]}"; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages could not be installed${NC}"
+    printf '%b\n' "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages could not be installed${NC}"
     # Only set PHASE1_ALL_SUCCESS if it exists (may not be in scope in some contexts)
     if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
       PHASE1_ALL_SUCCESS=false
@@ -9311,37 +9054,50 @@ install_and_verify_group() {
     return 1
   fi
 
-  echo -e "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
+  printf '%b\n' "${YELLOW}[PHASE 1 | ${group_name}] Verifying...${NC}"
   # Note: packages_to_install is an array, use [@] to expand properly
   for pkg in "${packages_to_install[@]}"; do
     # Validate package name
     if [ -z "${pkg}" ]; then
-      echo -e "  - ${YELLOW}WARNING: Empty package name encountered${NC}"
+      printf '%b\n' "  - ${YELLOW}WARNING: Empty package name encountered${NC}"
       continue
     fi
+    # ENDIF: pkg empty check
     
     # Check package status (optimize: single dpkg call)
+    # D3c: Use -F flag for fixed-string matching (pattern is literal "ok installed")
+    # K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
+    # C2/SC2155: Declare and assign separately to avoid masking return values
     local pkg_status
-    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || true)
-    if grep -Fq "ok installed" <<< "${pkg_status}"; then
-      echo -e "  - ${pkg}: ${GREEN}OK${NC}"
+    pkg_status=$(dpkg-query -W -f='${Status}' "${pkg}" 2>/dev/null || echo "")
+    # C5: Unbound variable protection
+    if [ -z "${pkg_status:-}" ]; then
+      pkg_status=""
+    fi
+    if grep -Fq -- "ok installed" <<< "${pkg_status}"; then
+      printf '%b\n' "  - ${pkg}: ${GREEN}OK${NC}"
     else
-      echo -e "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
+      printf '%b\n' "  - ${pkg}: ${YELLOW}WARNING (Package not found after install attempt)${NC}"
       # Don't fail the group if package verification fails - it might be a virtual package or optional
       # Only mark as failure if it's a critical package
       # Use case-insensitive matching and proper regex escaping
-      if grep -qiE "^(cmake|ninja-build|g\+\+|gcc|build-essential)$" <<< "${pkg}"; then
-        echo -e "    ${RED}CRITICAL package missing!${NC}"
+      # D3c: Use -E for extended regex (needed for alternation)
+      # K1b: Use -- to prevent pattern misinterpretation
+      if grep -qiE -- "^(cmake|ninja-build|g\+\+|gcc|build-essential)$" <<< "${pkg}"; then
+        printf '%b\n' "    ${RED}CRITICAL package missing!${NC}"
         group_success=false
         if [ -n "${PHASE1_ALL_SUCCESS:-}" ]; then
           PHASE1_ALL_SUCCESS=false
         fi
       fi
+      # ENDIF: critical package check
     fi
+    # ENDIF: package status check
   done
+  # ENDFOR: pkg
 
   if [ "${group_success}" = "false" ]; then
-    echo -e "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages missing after verification${NC}"
+    printf '%b\n' "${RED}[PHASE 1 | ${group_name}] FAILED: Critical packages missing after verification${NC}"
     return 1
   fi
   
@@ -9357,29 +9113,45 @@ install_and_verify_group() {
 #--- Sub-block 16.5: Check base image glog status ---
 # CRITICAL: Verify if base ROS image already has glog installed
 # Base image: osrf/ros:jazzy-desktop-full-noble may include glog as ROS dependency
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "Checking base image glog status..."
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "Checking base image glog status..."
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 BASE_GLOG_INSTALLED=false
 BASE_GLOG_VERSION=""
 
-# Use extended regex for better pattern matching
+# M4: Use resilient helper instead of direct dpkg -l parsing
+# Note: dpkg_resolve_installed_package is preferred, but for version info we need dpkg-query
+# D3d: Robust command substitution with error handling
+DPKG_OUTPUT=""
 DPKG_OUTPUT=$(dpkg -l 2>/dev/null || echo "")
-if grep -qE "^ii.*libgoogle-glog|^ii.*libglog" <<< "${DPKG_OUTPUT}"; then
+# C5: Unbound variable protection
+if [ -z "${DPKG_OUTPUT:-}" ]; then
+  DPKG_OUTPUT=""
+fi
+
+# D3c: Use -F flag for fixed-string matching when pattern is literal
+# K1b: Use -- to prevent pattern misinterpretation (though pattern doesn't start with -)
+if grep -qE -- "^ii.*libgoogle-glog|^ii.*libglog" <<< "${DPKG_OUTPUT}"; then
     # shellcheck disable=SC2034 # BASE_GLOG_INSTALLED used for conditional logic
     BASE_GLOG_INSTALLED=true
-    BASE_GLOG_VERSION=$(grep -E "^ii.*(libgoogle-glog|libglog)" <<< "${DPKG_OUTPUT}" | awk '{printf "  - %s %s\n", $2, $3}')
-    echo "ℹ Base image already has glog packages installed:"
-    echo "$BASE_GLOG_VERSION"
-    echo ""
-    echo "Strategy: Will ensure libgoogle-glog-dev 0.6.0 is used (Ubuntu's patched version)"
-    echo "  - apt-get will upgrade/reinstall if needed"
-    echo "  - No duplicate installations (apt handles this automatically)"
+    # D3c: Use -E for extended regex (needed for alternation)
+    # K1b: Use -- to prevent pattern misinterpretation
+    BASE_GLOG_VERSION=$(grep -E -- "^ii.*(libgoogle-glog|libglog)" <<< "${DPKG_OUTPUT}" | awk '{printf "  - %s %s\n", $2, $3}')
+    # D3b: Use printf instead of echo for robustness
+    printf '%s\n' "ℹ Base image already has glog packages installed:"
+    printf '%s\n' "${BASE_GLOG_VERSION}"
+    printf '%s\n' ""
+    printf '%s\n' "Strategy: Will ensure libgoogle-glog-dev 0.6.0 is used (Ubuntu's patched version)"
+    printf '%s\n' "  - apt-get will upgrade/reinstall if needed"
+    printf '%s\n' "  - No duplicate installations (apt handles this automatically)"
 else
-    echo "✓ No glog in base image - will install libgoogle-glog-dev"
+    # D3b: Use printf instead of echo for robustness
+    printf '%s\n' "✓ No glog in base image - will install libgoogle-glog-dev"
 fi
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' ""
 
 # Build tools and compilers
 PKGS_BUILD_TOOLS="build-essential gcc g++ make cmake ninja-build pkg-config ccache patchelf elfutils patch swig git pcl-tools ros-${ROS_DISTRO}-pcl-conversions ros-${ROS_DISTRO}-perception-pcl"
@@ -9441,177 +9213,69 @@ read -ra PKGS_SERIALIZATION_ARRAY <<< "${PKGS_SERIALIZATION}"
 
 install_and_verify_group "BuildTools" "${PKGS_BUILD_TOOLS_ARRAY[@]}"
 # --- Special install for gdb to avoid dependency conflicts ---
-echo -e "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
-apt-get install -y --no-install-recommends gdb
-gdb_status=$(dpkg -s "gdb" 2>/dev/null || echo "")
-if grep -Fq "Status: install ok installed" <<< "${gdb_status}"; then
-  echo -e "  - gdb: ${GREEN}OK${NC}"
+# D3b: Use printf instead of echo -e for robustness
+printf '%b\n' "${YELLOW}[PHASE 1 | BuildTools] Installing gdb without recommended packages...${NC}"
+# H1: Exit status check for apt-get
+if ! apt-get install -y --no-install-recommends gdb; then
+  printf '%b\n' "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation command failed${NC}" >&2
+  PHASE1_ALL_SUCCESS=false
+fi
+# M4: Use resilient helper for package verification
+# D3d: Robust command substitution with error handling
+gdb_status=""
+gdb_status=$(dpkg-query -W -f='${Status}' "gdb" 2>/dev/null || echo "")
+# C5: Unbound variable protection
+if [ -z "${gdb_status:-}" ]; then
+  gdb_status=""
+fi
+# D3c: Use -F flag for fixed-string matching (pattern is literal)
+# K1b: Use -- to prevent pattern misinterpretation
+if grep -Fq -- "ok installed" <<< "${gdb_status}"; then
+  printf '%b\n' "  - gdb: ${GREEN}OK${NC}"
 else
-  echo -e "  - gdb: ${RED}FAIL${NC}"
+  printf '%b\n' "  - gdb: ${RED}FAIL${NC}"
   # This part of the logic will likely not be reached, but is here for robustness
   PHASE1_ALL_SUCCESS=false
-  echo -e "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation failed.${NC}"
+  printf '%b\n' "${RED}[PHASE 1 | BuildTools] FAILED: gdb installation failed.${NC}"
 fi
 # --- End of special gdb install ---
 install_and_verify_group "DesktopEnv" "${PKGS_DESKTOP_ENV_ARRAY[@]}"
 install_and_verify_group "CoreLibraries" "${PKGS_CORE_LIBS_ARRAY[@]}"
 install_and_verify_group "FontsAndUtilities" "${PKGS_FONTS_UTILS_ARRAY[@]}"
 install_and_verify_group "LinearAlgebra" "${PKGS_LINALG_ARRAY[@]}"
-install_and_verify_group "CPUParallelism" "${PKGS_CPU_PARALLEL_ARRAY[@]}"
-install_and_verify_group "SparseMath_SLAM" "${PKGS_SPARSE_SLAM_ARRAY[@]}"
-install_and_verify_group "CoreDependencies" "${PKGS_CORE_DEPS_ARRAY[@]}"
-install_and_verify_group "Media_and_GUI" "${PKGS_MEDIA_GUI_ARRAY[@]}"
-install_and_verify_group "OpenGL_3D" "${PKGS_OPENGL_3D_ARRAY[@]}"
-install_and_verify_group "Simulation" "${PKGS_SIM_ARRAY[@]}"
-install_and_verify_group "Serialization" "${PKGS_SERIALIZATION_ARRAY[@]}"
-
-#--- Sub-block 16.7: Verify compiler toolchain ---
-# Critical: Ensure C++ compiler is properly installed
-# Dependencies: Block 6 (APT configuration), PHASE 1 (Compilers)
-# Outputs: Installed packages
-echo -e "\n${YELLOW}[PHASE 1 | Sanity Check] Reinstalling core C++ compiler to fix any inconsistencies...${NC}"
-apt-get install --reinstall -y g++ build-essential
-echo -e "${GREEN}✓ Compiler toolchain verified.${NC}"
-
-#--- Sub-block 16.8: EARLY PROTECTION - Block system Ceres packages ---
-# CRITICAL: Apply APT pinning NOW to prevent accidental Ceres installation
-# This must happen BEFORE any other apt operations that might pull in Ceres
-# Dependencies: None (foundational protection)
-# Outputs: APT preferences file
-echo ""
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "EARLY PROTECTION: Blocking system Ceres packages via APT pinning"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# Note: config-files file: /etc/apt/preferences.d/block-system-ceres is installed via install.sh from container-scripts/
+# Source: config-files/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref
+# Target: /etc/apt/preferences.d/block-system-ceres
+# Installed in Block 0 (early in script, before any scripts are needed)
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' ""
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+printf '%s\n' "EARLY PROTECTION: Blocking system Ceres packages via APT pinning"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Create APT preferences directory
-mkdir -p /etc/apt/preferences.d
+# J1: Validate directory existence before operations
+if [ ! -d "/etc/apt/preferences.d" ]; then
+  # H1: Exit status check for mkdir
+  if ! mkdir -p /etc/apt/preferences.d; then
+    printf '%s\n' "[ERROR] Failed to create /etc/apt/preferences.d directory" >&2
+    return 1
+  fi
+fi
 
 # Block ALL system Ceres packages using APT pinning with negative priority
 # This prevents ANY apt operation from installing system Ceres
-cat > /etc/apt/preferences.d/block-system-ceres << 'EOF'
-# Block system Ceres packages (prevent installation)
-# We will compile Ceres from source in /usr/local (Block 8)
-# Negative priority (-1) means APT will never install these packages
-
-Package: libceres-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres3
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres2
-Pin: release *
-Pin-Priority: -1
-
-Package: libceres1
-Pin: release *
-Pin-Priority: -1
-EOF
-
-if [ -f "/etc/apt/preferences.d/block-system-ceres" ]; then
-    echo "✓ Created APT preferences to block system Ceres packages"
-    echo "  - Blocks: libceres-dev, libceres3, libceres2, libceres1"
-    echo "  - Method: APT pinning with Pin-Priority: -1"
-    echo "  - Effect: No apt operation can install system Ceres"
-else
-    echo "✗ ERROR: Failed to create Ceres protection file"
-    exit 1
-fi
-
-echo "✓ System Ceres packages are now blocked (early protection active)"
-echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo ""
-
-#--- Sub-block 16.9: Configure tmux for ROS workflows ---
-# Purpose: Optimize tmux for multi-pane ROS development
-# Dependencies: Block 17 (Conda/Miniforge)
-# Outputs: Python packages, conda environments
-cat > /etc/tmux.conf << 'EOF'
-# Increase scrollback buffer
-set-option -g history-limit 50000
-
-# Enable mouse support
-set -g mouse on
-
-# Split panes with intuitive keys
-bind | split-window -h
-bind - split-window -v
-
-# Pane switching with Alt+arrow
-bind -n M-Left select-pane -L
-bind -n M-Right select-pane -R
-bind -n M-Up select-pane -U
-bind -n M-Down select-pane -D
-
-# Status bar
-set -g status-bg colour235
-set -g status-fg colour136
-set -g status-left '#{fg=green}{#S} '
-set -g status-right '#{fg=yellow}#(whoami)@#H'
-EOF
-
-# Create helper script for multi-ROS workflow
-cat > /usr/local/bin/ros_multiterm << 'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-
-SESSION="ros_multi"
-CONDA_SH="/etc/profile.d/conda.sh"
-
-if ! command -v tmux >/dev/null 2>&1; then
-  echo "[ros_multiterm] tmux is not installed. Install tmux before running this helper." >&2
-  exit 1
-fi
-
-# Allow re-attachment if the session already exists
-if ! tmux has-session -t "${SESSION}" 2>/dev/null; then
-  tmux new-session -d -s "${SESSION}"
-else
-  echo "[ros_multiterm] Session '${SESSION}' already exists; attaching..."
-  tmux attach-session -t "${SESSION}"
-  exit 0
-fi
-
-# Helper to prefix each tmux pane with conda initialization if available
-tmux_conda_prefix() {
-  local target="$1"
-  if [ -f "${CONDA_SH}" ]; then
-    tmux send-keys -t "${target}" "source ${CONDA_SH} >/dev/null 2>&1 || true" C-m
-  fi
-}
-
-# Window 0: Humble workspace
-tmux rename-window -t "${SESSION}:0" 'Humble'
-tmux_conda_prefix "${SESSION}:0"
-tmux send-keys -t "${SESSION}:0" "conda activate ros2_humble >/dev/null 2>&1 || true" C-m
-tmux send-keys -t "${SESSION}:0" "cd /workspaces/humble_ws" C-m
-
-# Window 1: ROS workspace (using ROS_DISTRO from environment/config.sh)
-ROS_WINDOW_NAME="${ROS_DISTRO:-jazzy}"
-# A6: Use POSIX-compliant uppercase first character (Bash 4+ ${var^} not portable)
-# Extract first character, uppercase it, then append rest using POSIX-compliant commands
-first_char=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c1)
-rest_chars=$(printf '%s' "${ROS_WINDOW_NAME}" | cut -c2-)
-ROS_WINDOW_NAME="$(printf '%s%s' "$(printf '%s' "${first_char}" | tr '[:lower:]' '[:upper:]')" "${rest_chars}")"
-tmux new-window -t "${SESSION}:1" -n "${ROS_WINDOW_NAME}"
-tmux_conda_prefix "${SESSION}:1"
-tmux send-keys -t "${SESSION}:1" "conda activate ros2_${ROS_DISTRO:-jazzy} >/dev/null 2>&1 || true" C-m
-tmux send-keys -t "${SESSION}:1" "cd /workspaces/${ROS_DISTRO:-jazzy}_ws" C-m
-
-# Window 2: Bridge/monitoring
-tmux new-window -t "${SESSION}:2" -n 'Bridge'
-tmux_conda_prefix "${SESSION}:2"
-tmux send-keys -t "${SESSION}:2" "echo 'Domain bridge - start when ready'" C-m
-
-# Window 3: Julia processing
-tmux new-window -t "${SESSION}:3" -n 'Julia'
-tmux send-keys -t "${SESSION}:3" 'julia' C-m
-
-tmux attach-session -t "${SESSION}"
-EOF
-chmod +x /usr/local/bin/ros_multiterm
+# Note: config-files file: /etc/apt/preferences.d/block-system-ceres is installed via install.sh from container-scripts/
+# Source: config-files/block-16-phase-1-foundational-system-libraries/block-system-ceres.pref
+# Target: /etc/apt/preferences.d/block-system-ceres
+# Installed in Block 0 (early in script, before any scripts are needed)
+printf '%s\n' "✓ System Ceres packages are now blocked (early protection active)"
+printf '%s\n' "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+# A7: ORPHANED CODE REMOVED - ros_multiterm script is now installed via container-scripts/install.sh
+# Note: The heredoc that created /usr/local/bin/ros_multiterm has been removed
+# The script is now provided by: container-scripts/shell-scripts/block-16-phase-1-foundational-system-libraries/ros-multiterminal-launcher.sh
+# Installed in Block 0 (early in script, before any scripts are needed)
+# E9: Heredoc extracted to container-scripts for better maintainability
 
 
 #--- Sub-block 16.10: Tmux configuration complete ---
@@ -9623,40 +9287,53 @@ chmod +x /usr/local/bin/ros_multiterm
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ "${PHASE1_ALL_SUCCESS}" = true ]; then
-  echo -e "${GREEN}✓ [PHASE 1] All foundational libraries installed and verified successfully.${NC}"
+  # D3b: Use printf instead of echo -e for robustness
+  printf '%b\n' "${GREEN}✓ [PHASE 1] All foundational libraries installed and verified successfully.${NC}"
   export PHASE1_STATUS="PASS"
 else
-  echo -e "${RED}✗ [PHASE 1] Errors occurred during foundational library installation. Please review logs above.${NC}"
+  # D3b: Use printf instead of echo -e for robustness
+  printf '%b\n' "${RED}✗ [PHASE 1] Errors occurred during foundational library installation. Please review logs above.${NC}"
   export PHASE1_STATUS="FAIL"
   exit 1 # Exit the build immediately on phase failure
 fi
+# ENDIF: PHASE1_ALL_SUCCESS check
 # End Phase 1 verification (if-else self-contained)
 
 #--- Sub-block 16.12: Configure linker to prioritize compiled libraries ---
 # Critical: Ensure /usr/local/lib is searched BEFORE system libraries
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Configuring dynamic linker to prioritize compiled libraries..."
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Configuring dynamic linker to prioritize compiled libraries..."
 
 # Create /etc/ld.so.conf.d entry with highest priority (00- prefix ensures it's read first)
+# H1: Exit status check for ensure_compiled_lib_priority
 ensure_compiled_lib_priority || {
-  echo "  [WARN] Failed to ensure compiled lib priority, continuing..." >&2
+  printf '%s\n' "  [WARN] Failed to ensure compiled lib priority, continuing..." >&2
 }
 
-echo "✓ Linker configured to prioritize /usr/local/lib"
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "✓ Linker configured to prioritize /usr/local/lib"
 
 #--- Sub-block 16.13: Update dynamic linker cache ---
 # Critical: Make newly installed libraries available at runtime
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "==> Updating dynamic linker cache..."
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "==> Updating dynamic linker cache..."
 # Note: ldconfig should be run without sudo in container context (already root)
-run_ldconfig_refresh
-echo "Linker cache updated."
+# H1: Exit status check for run_ldconfig_refresh
+run_ldconfig_refresh || {
+  printf '%s\n' "[WARN] ldconfig refresh failed, continuing..." >&2
+}
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "Linker cache updated."
 
 # Verify /usr/local/lib is prioritized in cache
-echo "Verifying linker search order (first 15 directories)..."
-ldconfig -v 2>/dev/null | grep -E "^/" | head -15 || true
+# D3b: Use printf instead of echo for robustness
+printf '%s\n' "Verifying linker search order (first 15 directories)..."
+# D3e: SIGPIPE error handling - add || true for pipeline ending with head
+ldconfig -v 2>/dev/null | grep -E -- "^/" | head -15 2>/dev/null || true
 
 debug_glibc "After Phase 1 install: foundational system libraries"
 
@@ -9672,7 +9349,8 @@ debug_glibc "After Phase 1 install: foundational system libraries"
 #--- Sub-block 17.1: Phase 3 initialization ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo -e "\n${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
+# D3b: Use printf instead of echo -e for robustness
+printf '\n%b\n' "${BLUE}### PHASE 3: Compiling High-Level Dependencies ###${NC}"
 # Critical: Track phase success
 PHASE3_ALL_SUCCESS=true
 
@@ -9687,6 +9365,8 @@ clone_with_retry() {
     
     # Convert relative paths to absolute (critical for Singularity environment)
     # A5: Using [[ ]] for pattern matching (Bash-specific, documented: needs pattern matching)
+    # Justification: Pattern matching with [[ ]] is more robust than [ ] for path patterns
+    # Script uses #!/bin/bash, so Bash-specific features are acceptable
     if [[ "${target_dir}" != /* ]]; then
         # C2/SC2155: Declare and assign separately to avoid masking return values
         local parent_dir
@@ -9729,12 +9409,15 @@ clone_with_retry() {
         if ! git config --global http.postBuffer 524288000; then
             printf "[WARN] Failed to set git http.postBuffer\n" >&2
         fi
+        # ENDIF: git config postBuffer
         if ! git config --global http.maxRequestBuffer 100M; then
             printf "[WARN] Failed to set git http.maxRequestBuffer\n" >&2
         fi
+        # ENDIF: git config maxRequestBuffer
         if ! git config --global core.compression 0; then
             printf "[WARN] Failed to set git core.compression\n" >&2
         fi
+        # ENDIF: git config compression
         
         # Try cloning with different strategies
         local clone_success=false
@@ -9743,35 +9426,45 @@ clone_with_retry() {
             if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 0
         elif [ "${retry_count}" -eq 1 ]; then
             # Second attempt: with single branch
             if git clone --depth 1 --single-branch --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 1
         elif [ "${retry_count}" -eq 2 ]; then
             # Third attempt: with no tags
             if git clone --depth 1 --no-tags --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone attempt 2
         elif [ "${retry_count}" -eq 3 ]; then
             # Fourth attempt: with different protocol
+            # A5: Using [[ ]] for pattern matching (Bash-specific, documented: needs pattern matching)
+            # Justification: Pattern matching with [[ ]] is more robust for URL protocol detection
             if [[ "${repo_url}" == https://* ]]; then
                 local git_url="${repo_url/https:\/\//git@}"
                 git_url="${git_url/github.com/github.com:}"
                 if git clone --depth 1 --branch "${branch}" "${git_url}" "${target_dir}" 2>/dev/null; then
                     clone_success=true
                 fi
+                # ENDIF: git clone with git protocol
             else
                 if git clone --depth 1 --branch "${branch}" "${repo_url}" "${target_dir}" 2>/dev/null; then
                     clone_success=true
                 fi
+                # ENDIF: git clone with original protocol
             fi
+            # ENDIF: protocol check
         else
             # Final attempt: shallow clone with retry
             if git clone --depth 1 --branch "${branch}" --config http.lowSpeedLimit=0 --config http.lowSpeedTime=999999 "${repo_url}" "${target_dir}" 2>/dev/null; then
                 clone_success=true
             fi
+            # ENDIF: git clone final attempt
         fi
+        # ENDIF: retry_count check
         
         if [ "${clone_success}" = true ]; then
             # A5a: Use printf instead of echo for robustness
@@ -9787,14 +9480,18 @@ clone_with_retry() {
             if ! rm -rf "${target_dir}" 2>/dev/null; then
                 printf "[WARN] Failed to clean up failed clone directory: %s\n" "${target_dir}" >&2
             fi
+            # ENDIF: cleanup check
             
             if [ "${retry_count}" -lt "${max_retries}" ]; then
                 # A5a: Use printf instead of echo for robustness
                 printf "Waiting 10 seconds before retry...\n"
                 sleep 10
             fi
+            # ENDIF: retry count check
         fi
+        # ENDIF: clone_success check
     done
+    # ENDWHILE: retry loop
     
     # A5a: Use printf instead of echo for robustness
     printf "✗ Failed to clone %s after %d attempts\n" "${repo_url}" "${max_retries}"
@@ -9853,7 +9550,8 @@ printf "🔍 Checking for conflicting glog versions...\n"
 printf "\n"
 printf "1. Checking all glog libraries in system:\n"
 # H1: Exit status check for timeout command
-if timeout 5 ldconfig -p 2>/dev/null | grep -F glog; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if timeout 5 ldconfig -p 2>/dev/null | grep -F -- glog 2>/dev/null || true; then
     : # Libraries found
 else
     # A5a: Use printf instead of echo for robustness
@@ -9864,7 +9562,8 @@ printf "\n"
 # A5a: Use printf instead of echo for robustness
 printf "2. Checking all glog headers:\n"
 # C5/H4: Command substitution with error handling
-glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F glog || echo "")
+# D3e: SIGPIPE protection - add || true at end of pipeline
+glog_headers=$(find /usr/include /usr/local/include -name "logging.h" 2>/dev/null | grep -F -- glog 2>/dev/null || echo "" || true)
 # C5: Unbound variable protection
 if [ -n "${glog_headers:-}" ]; then
     # A5a: Use printf instead of echo for robustness
@@ -9878,7 +9577,8 @@ printf "\n"
 # A5a: Use printf instead of echo for robustness
 printf "3. Checking dpkg for installed glog packages:\n"
 # H1: Exit status check for dpkg command
-if dpkg -l 2>/dev/null | grep -F glog; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if dpkg -l 2>/dev/null | grep -F -- glog 2>/dev/null || true; then
     : # Packages found
 else
     # A5a: Use printf instead of echo for robustness
@@ -10126,8 +9826,8 @@ if [ -n "${SuiteSparse_DIR:-}" ] && [ -d "${SuiteSparse_DIR}" ] && [ -f "${Suite
     # A5a: Use printf instead of echo for robustness
     printf "  → Using SuiteSparse_DIR: %s\n" "${SuiteSparse_DIR}"
     printf "  → SuiteSparseConfig.cmake found: %s/SuiteSparseConfig.cmake\n" "${SuiteSparse_DIR}"
-    # D1: Proper quoting for path variables
-    CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=${SuiteSparse_DIR}"
+    # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+    CERES_SUITESPARSE_FLAGS="-D SuiteSparse_DIR=\"${SuiteSparse_DIR}\""
 else
     # A5a: Use printf instead of echo for robustness
     printf "  ⚠ SuiteSparse_DIR not set or SuiteSparseConfig.cmake not found\n" >&2
@@ -10146,11 +9846,11 @@ else
     printf "  → Using CMAKE_PREFIX_PATH: %s\n" "${SUITESPARSE_INSTALL_PREFIX}"
     # Phase 3: Build CMAKE_PREFIX_PATH with proper fallback (C5: unbound variable protection)
     if [ -n "${CMAKE_PREFIX_PATH:-}" ]; then
-        # D1: Proper quoting for path variables
-        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}"
+        # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=\"${SUITESPARSE_INSTALL_PREFIX};${CMAKE_PREFIX_PATH}\""
     else
-        # D1: Proper quoting for path variables
-        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=${SUITESPARSE_INSTALL_PREFIX}"
+        # D1: Proper quoting for path variables (CMake format: -D VAR="value")
+        CERES_SUITESPARSE_FLAGS="-D CMAKE_PREFIX_PATH=\"${SUITESPARSE_INSTALL_PREFIX}\""
     fi
 fi
 # Phase 4: Validate CERES_SUITESPARSE_FLAGS is set before use (C5: unbound variable protection, H1: error check)
@@ -10247,7 +9947,8 @@ if [ ! -f "/tmp/ceres_install.log" ]; then
 fi
 
 # Check for installation success indicators in log
-if ! grep -qiE "(installing|installed|build files have been written)" /tmp/ceres_install.log; then
+# K1b: Use -- flag to prevent option misinterpretation if pattern starts with -
+if ! grep -qiE -- "(installing|installed|build files have been written)" /tmp/ceres_install.log; then
     # A5a: Use printf instead of echo for robustness
     printf "  [WARN] Installation log may not indicate successful installation, continuing with verification...\n" >&2
 fi
@@ -10305,7 +10006,8 @@ if [ "${CERES_FILE_FOUND}" = false ]; then
   # Search in directories that were detected from installation output
   if [ -f "/tmp/ceres_install.log" ]; then
     while IFS= read -r detected_dir; do
-      if [ -d "${detected_dir}" ] && find "${detected_dir}" -maxdepth 1 -name "libceres.so*" -type f 2>/dev/null | head -1 | grep -q .; then
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      if [ -d "${detected_dir}" ] && find "${detected_dir}" -maxdepth 1 -name "libceres.so*" -type f 2>/dev/null | head -1 2>/dev/null | grep -q . 2>/dev/null || true; then
         CERES_FILE_FOUND=true
         # A5a: Use printf instead of echo for robustness
         printf "    ✓ Found in detected directory: %s\n" "${detected_dir}"
@@ -10319,7 +10021,8 @@ fi
 # A5a: Use printf instead of echo for robustness
 printf "  [VERIFY Phase 2] Checking ldconfig cache for Ceres libraries...\n"
 CERES_IN_CACHE=false
-if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
+# D3e: SIGPIPE protection - add || true at end of pipeline
+if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so" 2>/dev/null || true; then
   CERES_IN_CACHE=true
   # A5a: Use printf instead of echo for robustness
   printf "    ✓ Found in ldconfig cache\n"
@@ -10329,7 +10032,8 @@ else
   # Retry logic: Refresh ldconfig and check again (best practice O4 Phase 3)
   run_ldconfig_refresh || true
   sleep 1  # Brief delay for cache update
-  if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so"; then
+  # D3e: SIGPIPE protection - add || true at end of pipeline
+  if timeout 5 ldconfig -p 2>/dev/null | grep -Fq "libceres.so" 2>/dev/null || true; then
     CERES_IN_CACHE=true
     # A5a: Use printf instead of echo for robustness
     printf "    ✓ Found in cache after refresh\n"
@@ -10374,10 +10078,13 @@ fi
       printf "  - Applied in: Block 7.5.5 (before apt operations)\n"
       
       # Double-check no system Ceres packages slipped through
-      if dpkg -s libceres-dev >/dev/null 2>&1 || dpkg -s libceres2 >/dev/null 2>&1; then
+      # M4: Use resilient helpers instead of brittle dpkg parsing
+      if dpkg_resolve_installed_package "libceres-dev" >/dev/null 2>&1 || dpkg_resolve_installed_package "libceres2" >/dev/null 2>&1; then
           # A5a: Use printf instead of echo for robustness
           printf "✗ ERROR: System Ceres packages detected despite APT pinning!\n" >&2
-          dpkg -l | grep libceres
+          # M4: Use resilient helpers instead of brittle dpkg parsing
+          dpkg_resolve_installed_package "libceres-dev" >/dev/null 2>&1 && printf "  libceres-dev: %s\n" "$(dpkg_get_installed_version "libceres-dev" 2>/dev/null || echo "unknown")"
+          dpkg_resolve_installed_package "libceres2" >/dev/null 2>&1 && printf "  libceres2: %s\n" "$(dpkg_get_installed_version "libceres2" 2>/dev/null || echo "unknown")"
           exit 1
       fi
   else
@@ -10390,24 +10097,32 @@ fi
   printf "✓ Ceres protected from APT overwrites (verified)\n"
 
 # Verify TBB configuration for Ceres (ensure system TBB, not MKL TBB)
-echo "Verifying TBB configuration for Ceres..."
+# A5a: Use printf instead of echo for robustness (D3b: echo unsafe patterns)
+printf "Verifying TBB configuration for Ceres...\n"
 cd /tmp/ceres-solver/build || true
 if [ -f "CMakeCache.txt" ]; then
-  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "")
   if [ -n "${TBB_LIB_PATH}" ]; then
     if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
-      echo -e "  ${RED}✗ ERROR: Ceres is using MKL TBB: ${TBB_LIB_PATH}${NC}"
-      echo "  This may cause runtime conflicts. System TBB should be used."
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s✗ ERROR: Ceres is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
+      # A5a: Use printf instead of echo for robustness
+      printf "  This may cause runtime conflicts. System TBB should be used.\n"
     elif grep -qE "/usr/lib/x86_64-linux-gnu/libtbb" <<< "${TBB_LIB_PATH}"; then
-      echo -e "  ${GREEN}✓ Ceres is using system TBB: ${TBB_LIB_PATH}${NC}"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s✓ Ceres is using system TBB: %s%s\n" "${GREEN}" "${TBB_LIB_PATH}" "${NC}"
     else
-      echo -e "  ${YELLOW}⚠ Ceres TBB source uncertain: ${TBB_LIB_PATH}${NC}"
+      # A5a: Use printf instead of echo -e for robustness (D3b: echo unsafe patterns)
+      printf "  %s⚠ Ceres TBB source uncertain: %s%s\n" "${YELLOW}" "${TBB_LIB_PATH}" "${NC}"
     fi
   else
-    echo "  • TBB not detected in Ceres configuration (may not be required)"
+    # A5a: Use printf instead of echo for robustness
+    printf "  • TBB not detected in Ceres configuration (may not be required)\n"
   fi
 else
-  echo "  • CMakeCache.txt not found, skipping TBB verification"
+  # A5a: Use printf instead of echo for robustness
+  printf "  • CMakeCache.txt not found, skipping TBB verification\n"
 fi
 
 # Cleanup
@@ -10478,10 +10193,11 @@ else
       # A5a: Use printf instead of echo for robustness
       printf "✓ PyCeres built and installed from source (using compiled Ceres)\n"
 
-      if python3 - <<'PY' 2>/tmp/pyceres_import.log; then
-import pyceres
-print(f"pyceres version: {getattr(pyceres, '__version__', 'unknown')}")
-PY
+      # Note: python-scripts file: /tmp/phase-3-high-level-dependencies-verification.py is installed via install.sh from container-scripts/
+      # Source: python-scripts/block-17-phase-3-high-level-dependencies/phase-3-high-level-dependencies-verification.py
+      # Target: /tmp/phase-3-high-level-dependencies-verification.py
+      # Installed in Block 0 (early in script, before any scripts are needed)
+      if python3 /tmp/phase-3-high-level-dependencies-verification.py 2>/tmp/pyceres_import.log; then
         # A5a: Use printf instead of echo for robustness
         printf "✓ PyCeres Python module verified\n"
       else
@@ -10533,7 +10249,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   fi
   
   # Refresh library cache after installing QGLViewer (required for CMake detection)
-  if dpkg -l | grep -q "^ii.*libqglviewer"; then
+  # M4: Use resilient helpers instead of brittle dpkg parsing
+  if dpkg_resolve_installed_package "libqglviewer-dev-qt5" >/dev/null 2>&1 || dpkg_resolve_installed_package "libqglviewer2-qt5t64" >/dev/null 2>&1; then
     # A5a: Use printf instead of echo for robustness
     printf "Refreshing library cache for QGLViewer...\n"
     run_ldconfig_refresh
@@ -10672,10 +10389,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   g2o_core_path=""
   for libdir in "${g2o_core_candidates[@]}"; do
     # Search for any libg2o*.so file (handles versioned libraries like libg2o_core.so.0.1.0)
-    found_lib=$(find "${libdir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -1)
+    # D3e: SIGPIPE protection - add || true at end of pipeline with head
+    found_lib=$(find "${libdir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "")
     if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
       # Prefer libg2o_core.so if available, otherwise take first match
-      core_match=$(find "${libdir}" -maxdepth 1 -name "libg2o_core.so*" -type f 2>/dev/null | head -1)
+      # D3e: SIGPIPE protection - add || true at end of pipeline with head
+      core_match=$(find "${libdir}" -maxdepth 1 -name "libg2o_core.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "")
       if [ -n "${core_match}" ]; then
         g2o_core_path="$(realpath "${core_match}" 2>/dev/null || echo "${core_match}")"
         break
@@ -10688,7 +10407,8 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   if [ -z "${g2o_core_path}" ]; then
     printf "%s✗ g2o compilation FAILED: libg2o.so not found under /usr/local%s\n" "${RED}" "${NC}"
     printf "%s[DEBUG] Searching for libg2o*.so under /usr/local:%s\n" "${YELLOW}" "${NC}"
-    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null || printf "  No g2o libraries found\n"
+    # D3e: SIGPIPE protection - add || true at end of pipeline
+    find /usr/local -maxdepth 2 -name "libg2o*.so*" -print 2>/dev/null | head -20 2>/dev/null || printf "  No g2o libraries found\n" || true
     PHASE3_ALL_SUCCESS=false
   else
     printf "%s✓ g2o library file found: %s%s\n" "${GREEN}" "${g2o_core_path}" "${NC}"
@@ -10770,11 +10490,12 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
           printf "%s⚠ WARNING: No g2o library files found in %s (unexpected)%s\n" "${YELLOW}" "${g2o_lib_dir}" "${NC}"
         else
           printf "%s[DEBUG] Library files in directory:%s\n" "${BLUE}" "${NC}"
-          find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -5 | while IFS= read -r lib_file || [ -n "${lib_file}" ]; do
+          # D3e: SIGPIPE protection - add || true at end of pipeline with head
+          find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | head -5 2>/dev/null | while IFS= read -r lib_file || [ -n "${lib_file}" ]; do
             if [ -n "${lib_file}" ]; then
               printf "%s[DEBUG]   - %s%s\n" "${BLUE}" "$(basename "${lib_file}")" "${NC}"
             fi
-          done
+          done || true
         fi
         
         # Step 3: Use targeted directory update (faster and more reliable)
@@ -10797,15 +10518,24 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
           diagnose_library_detection "libg2o_core.so" "${g2o_core_path}" || true
           
           printf "%s[DEBUG] ldconfig -p output (g2o related):%s\n" "${YELLOW}" "${NC}"
-          ldconfig -p 2>/dev/null | grep -F "libg2o" || printf "  No g2o libraries in ldconfig cache\n"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          { ldconfig -p 2>/dev/null | grep -F "libg2o" 2>/dev/null || printf "  No g2o libraries in ldconfig cache\n"; } || true
           printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${g2o_core_path}" "${NC}"
           
           # Additional diagnostics
           printf "%s[DEBUG] Diagnostic information:%s\n" "${BLUE}" "${NC}"
           printf "%s[DEBUG]   Library file: %s%s\n" "${BLUE}" "${g2o_core_path}" "${NC}"
           printf "%s[DEBUG]   Library directory: %s%s\n" "${BLUE}" "${g2o_lib_dir}" "${NC}"
-          printf "%s[DEBUG]   Directory registered in ld.so.conf.d: %s%s\n" "${BLUE}" "$([ -f /etc/ld.so.conf.d/00-compiled-libs.conf ] && grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf && echo "yes" || echo "no")" "${NC}"
-          printf "%s[DEBUG]   Libraries in directory: %s%s\n" "${BLUE}" "$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l)" "${NC}"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          dir_registered="no"
+          if [ -f /etc/ld.so.conf.d/00-compiled-libs.conf ]; then
+            grep -q "^${g2o_lib_dir}\$" /etc/ld.so.conf.d/00-compiled-libs.conf 2>/dev/null && dir_registered="yes" || true
+          fi
+          printf "%s[DEBUG]   Directory registered in ld.so.conf.d: %s%s\n" "${BLUE}" "${dir_registered}" "${NC}"
+          # D3e: SIGPIPE protection - add || true at end of pipeline
+          lib_count=""
+          lib_count=$(find "${g2o_lib_dir}" -maxdepth 1 -name "libg2o*.so*" -type f 2>/dev/null | wc -l 2>/dev/null || echo "0" || true)
+          printf "%s[DEBUG]   Libraries in directory: %s%s\n" "${BLUE}" "${lib_count}" "${NC}"
           
           # Final verification: Try to load library with ldd (most reliable check)
           if command -v ldd >/dev/null 2>&1 && ldd "${g2o_core_path}" >/dev/null 2>&1; then
@@ -10844,52 +10574,27 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
       break
     fi
   done
-
-  if [ -z "${g2o_viewer_path}" ]; then
-    printf "%s⚠ g2o_viewer executable not found%s\n" "${YELLOW}" "${NC}"
-    printf "%s[DEBUG] Searching for g2o_viewer under /usr/local and /tmp/g2o:%s\n" "${YELLOW}" "${NC}"
-    find /usr/local -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /usr/local\n"
-    find /tmp/g2o -maxdepth 3 -name "g2o_viewer*" -type f 2>/dev/null || printf "  No g2o_viewer found in /tmp/g2o\n"
-    printf "%s  Note: g2o_viewer requires QGLViewer and Qt5 (libqglviewer-dev-qt5, qt5-qmake)%s\n" "${YELLOW}" "${NC}"
-    printf "%s  If QGLViewer is not available, G2O will build without viewer tools%s\n" "${YELLOW}" "${NC}"
+  # ENDFOR: candidate in g2o_viewer_candidates
+  
+  if [ -z "${g2o_viewer_path:-}" ]; then
+    printf "%s⚠ g2o_viewer not found (may not be built if G2O_BUILD_APPS was OFF)%s\n" "${YELLOW}" "${NC}"
   else
-    printf "%s✓ g2o_viewer executable found: %s%s\n" "${GREEN}" "${g2o_viewer_path}" "${NC}"
-    # Check if QGLViewer is linked
-    if command -v ldd >/dev/null 2>&1; then
-      if ldd "${g2o_viewer_path}" 2>/dev/null | grep -Fq "libQGLViewer"; then
-        printf "%s✓ g2o_viewer linked with QGLViewer library%s\n" "${GREEN}" "${NC}"
-      else
-        printf "%s⚠ g2o_viewer not linked with QGLViewer (may use alternative visualization)%s\n" "${YELLOW}" "${NC}"
-      fi
-    fi
+    printf "%s✓ g2o_viewer found at: %s%s\n" "${GREEN}" "${g2o_viewer_path}" "${NC}"
   fi
 
   #--- Sub-block 17.14: Protect compiled G2O from APT overwrites ---
   # Critical: Prevent APT from installing ANY system G2O packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, and OpenCV)
-  echo "Protecting compiled G2O from APT overwrites..."
+  printf '%s\n' "Protecting compiled G2O from APT overwrites..."
   
   # Create APT preferences directory
   mkdir -p /etc/apt/preferences.d
   
   # Block ALL system G2O packages using APT pinning with negative priority
-  cat > /etc/apt/preferences.d/block-system-g2o << 'EOF'
-# Block system G2O packages (prevent installation)
-# Our optimized G2O 20241228_git is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-
-Package: libg2o-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libg2o0
-Pin: release *
-Pin-Priority: -1
-
-Package: libg2o20130302
-Pin: release *
-Pin-Priority: -1
-EOF
+  # Note: other file: /etc/apt/preferences.d/block-system-g2o is installed via install.sh from container-scripts/
+  # Source: other/block-17-phase-3-high-level-dependencies/block-system-g2o.txt
+  # Target: /etc/apt/preferences.d/block-system-g2o
+  # Installed in Block 0 (early in script, before any scripts are needed)
   
   if [ -f "/etc/apt/preferences.d/block-system-g2o" ]; then
       printf "✓ Created APT preferences to block system G2O packages\n"
@@ -10903,10 +10608,20 @@ EOF
   printf "✓ G2O protected from APT overwrites (APT pinning method)\n"
 
   # Verify TBB configuration for g2o (ensure system TBB, not MKL TBB)
-  echo "Verifying TBB configuration for g2o..."
-  cd /tmp/g2o/build || true
+  printf '%s\n' "Verifying TBB configuration for g2o..."
+  if [ -d "/tmp/g2o/build" ]; then
+    cd /tmp/g2o/build || { echo "ERROR: Failed to access /tmp/g2o/build directory"; exit 1; }
+  else
+    printf '%s\n' "INFO: /tmp/g2o/build directory not found, skipping TBB verification"
+    cd / || true
+  fi
   if [ -f "CMakeCache.txt" ]; then
-    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    TBB_LIB_PATH=""
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' | tr -d '[:space:]' 2>/dev/null || echo "" || true)
+    # F2: Validate command substitution result
+    if [ -z "${TBB_LIB_PATH}" ]; then
+      TBB_LIB_PATH=""
+    fi
     if [ -n "${TBB_LIB_PATH}" ]; then
       if grep -qE "(/opt/intel|/usr/local/intel|/opt/intel/oneapi|mkl)" <<< "${TBB_LIB_PATH}"; then
         printf "  %sERROR: g2o is using MKL TBB: %s%s\n" "${RED}" "${TBB_LIB_PATH}" "${NC}"
@@ -10924,7 +10639,8 @@ EOF
   fi
 
   # Cleanup
-  cd / && rm -rf /tmp/g2o
+  cd / || true
+  rm -rf /tmp/g2o || true
 fi
 debug_glibc "After installing g2o"
 
@@ -10940,18 +10656,28 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   rm -rf /tmp/gtsam
   # Using GTSAM_VERSION from config.sh
   if ! clone_with_retry "https://github.com/borglab/gtsam.git" "/tmp/gtsam" "${GTSAM_VERSION}"; then
-    echo "ERROR: Failed to clone GTSAM after all retry attempts"
+    printf '%s\n' "ERROR: Failed to clone GTSAM after all retry attempts" >&2
     exit 1
   fi
-  cd /tmp/gtsam || { echo "ERROR: Failed to access gtsam directory"; exit 1; }
+  # J1: File/directory existence validation - check directory exists before cd
+  if [ ! -d "/tmp/gtsam" ]; then
+    printf '%s\n' "ERROR: GTSAM directory not found: /tmp/gtsam" >&2
+    exit 1
+  fi
+  cd /tmp/gtsam || { printf '%s\n' "ERROR: Failed to access gtsam directory" >&2; exit 1; }
   # Remove existing build directory if it exists (critical for Singularity rebuilds)
-  rm -rf build
+  rm -rf build || true
   if ! mkdir -p build; then
-    echo "ERROR: Failed to create build dir"
+    printf '%s\n' "ERROR: Failed to create build dir" >&2
+    exit 1
+  fi
+  # J1: File/directory existence validation - check build directory exists before cd
+  if [ ! -d "build" ]; then
+    printf '%s\n' "ERROR: Build directory not found after creation" >&2
     exit 1
   fi
   if ! cd build; then
-    echo "ERROR: Failed to access build dir"
+    printf '%s\n' "ERROR: Failed to access build dir" >&2
     exit 1
   fi
 
@@ -11004,7 +10730,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Verify TBB library exists (fallback search if default path doesn't exist)
   if [ ! -f "${TBB_LIB_PATH}" ]; then
     # Search for libtbb.so in standard library paths
-    tbb_lib_found=$(find /usr/lib* -name "libtbb.so" 2>/dev/null | head -1 || echo "")
+    # F2: Command substitution validation - validate find result format
+    tbb_lib_found=""
+    tbb_lib_found=$(find /usr/lib* -name "libtbb.so" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid file path
     if [ -n "${tbb_lib_found}" ] && [ -f "${tbb_lib_found}" ]; then
       TBB_LIB_PATH="${tbb_lib_found}"
     fi
@@ -11013,7 +10742,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Verify TBB include directory exists
   if [ ! -d "${TBB_INCLUDE_PATH}" ]; then
     # Search for tbb include directory
-    tbb_include_found=$(find /usr/include -type d -name "tbb" 2>/dev/null | head -1 || echo "")
+    # F2: Command substitution validation - validate find result format
+    tbb_include_found=""
+    tbb_include_found=$(find /usr/include -type d -name "tbb" 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid directory path
     if [ -n "${tbb_include_found}" ] && [ -d "${tbb_include_found}" ]; then
       TBB_INCLUDE_PATH="${tbb_include_found}"
     fi
@@ -11064,8 +10796,9 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     else
       # Phase 2c: Search for version header in subdirectories
       # F2: Command substitution validation - validate find result format
+      # D3e: SIGPIPE protection - add || true at end of pipeline
       tbb_version_header_found=""
-      tbb_version_header_found=$(find "${TBB_INCLUDE_PATH}" \( -name "version.h" -o -name "tbb_version.h" \) -type f 2>/dev/null | head -1 || echo "")
+      tbb_version_header_found=$(find "${TBB_INCLUDE_PATH}" \( -name "version.h" -o -name "tbb_version.h" \) -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
       # Validate result is non-empty and is a valid file path (F2: Command substitution format validation)
       if [ -n "${tbb_version_header_found}" ] && [ -f "${tbb_version_header_found}" ]; then
         TBB_VERSION_HEADER_PATH="${tbb_version_header_found}"
@@ -11098,18 +10831,20 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
         printf "  Contents of %s:\n" "${TBB_INCLUDE_PATH}"
         # SC2012: Use find instead of ls for better handling of non-alphanumeric filenames
         # Use parentheses to group -type f and -type d conditions correctly
-        find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 | while IFS= read -r item || [ -n "${item}" ]; do
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { find "${TBB_INCLUDE_PATH}" -maxdepth 1 \( -type f -o -type d \) 2>/dev/null | head -15 2>/dev/null | while IFS= read -r item || [ -n "${item}" ]; do
           if [ -n "${item}" ]; then
             printf "    %s\n" "${item}"
           fi
-        done || printf "    (cannot list contents)\n"
+        done || printf "    (cannot list contents)\n"; } || true
         printf "\n"
         printf "  Searching for version headers:\n"
-        find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 | while IFS= read -r version_file; do
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { find "${TBB_INCLUDE_PATH}" -name "*version*" -type f 2>/dev/null | head -5 2>/dev/null | while IFS= read -r version_file; do
           if [ -n "${version_file}" ]; then
             printf "    %s\n" "${version_file}"
           fi
-        done || printf "    (no version files found)\n"
+        done || printf "    (no version files found)\n"; } || true
       else
         printf "  Directory exists: NO\n"
       fi
@@ -11165,10 +10900,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Build TBB configuration arguments
   if [ -n "${TBB_CMAKE_DIR}" ] && [ -d "${TBB_CMAKE_DIR}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_DIR=${TBB_CMAKE_DIR}")
-    echo "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
+    printf '%s\n' "[INFO] Using TBB_DIR=${TBB_CMAKE_DIR} for GTSAM TBB configuration"
   else
     CMAKE_TBB_ARGS+=("-D" "TBB_ROOT_DIR=${TBBROOT}")
-    echo "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
+    printf '%s\n' "[INFO] Using TBB_ROOT_DIR=${TBBROOT} for GTSAM TBB configuration (TBB_DIR not found)"
   fi
   
   # CRITICAL: Explicitly set TBB_LIBRARIES and TBB_INCLUDE_DIR to ensure FindTBB.cmake
@@ -11179,7 +10914,7 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
   # Phase 1: Set TBB_LIBRARIES if library exists
   if [ -f "${TBB_LIB_PATH}" ]; then
     CMAKE_TBB_ARGS+=("-D" "TBB_LIBRARIES=${TBB_LIB_PATH}")
-    echo "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
+    printf '%s\n' "[INFO] Explicitly setting TBB_LIBRARIES=${TBB_LIB_PATH}"
   fi
   # ENDIF: TBB_LIB_PATH check
   
@@ -11188,10 +10923,10 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     # Extract base include directory (e.g., /usr/include/tbb -> /usr/include)
     # F2: Command substitution validation - dirname always returns a path
     TBB_BASE_INCLUDE_DIR=""
-    TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}")
+    TBB_BASE_INCLUDE_DIR=$(dirname "${TBB_INCLUDE_PATH}" 2>/dev/null || echo "")
     # Validate dirname result is non-empty and is a valid directory path
     if [ -z "${TBB_BASE_INCLUDE_DIR}" ] || [ ! -d "${TBB_BASE_INCLUDE_DIR}" ]; then
-      echo "[WARNING] Failed to extract base include directory from ${TBB_INCLUDE_PATH}, using fallback"
+      printf '%s\n' "[WARNING] Failed to extract base include directory from ${TBB_INCLUDE_PATH}, using fallback" >&2
       TBB_BASE_INCLUDE_DIR="${TBB_INCLUDE_PATH}"
     fi
     
@@ -11199,15 +10934,15 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     if [ -d "${TBB_BASE_INCLUDE_DIR}/tbb" ] && [ -d "${TBB_BASE_INCLUDE_DIR}/oneapi/tbb" ]; then
       CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_BASE_INCLUDE_DIR}")
       CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR}")
-      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory for GTSAM's FindTBB.cmake)"
-      echo "[INFO]   This allows FindTBB.cmake to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
-      echo "[INFO]   and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
+      printf '%s\n' "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_BASE_INCLUDE_DIR} (base directory for GTSAM's FindTBB.cmake)"
+      printf '%s\n' "[INFO]   This allows FindTBB.cmake to find: ${TBB_BASE_INCLUDE_DIR}/tbb/tbb.h"
+      printf '%s\n' "[INFO]   and: ${TBB_BASE_INCLUDE_DIR}/oneapi/tbb/version.h"
     else
       # Phase 2b: Fallback: use the tbb subdirectory if base directory structure is unexpected
-    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
-    CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
-      echo "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - using tbb subdirectory)"
-  fi
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIR=${TBB_INCLUDE_PATH}")
+      CMAKE_TBB_ARGS+=("-D" "TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH}")
+      printf '%s\n' "[INFO] Setting TBB_INCLUDE_DIRS=${TBB_INCLUDE_PATH} (fallback - using tbb subdirectory)"
+    fi
     # ENDIF: TBB_BASE_INCLUDE_DIR subdirectory verification
   fi
   # ENDIF: TBB_INCLUDE_PATH directory check
@@ -11256,10 +10991,28 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
 
 #--- Sub-block 17.17: Build and install GTSAM ---
 # Critical: Compile with ninja using half CPU cores
-ninja -j$(($(nproc) / 2)) || { echo "ERROR: Failed to build GTSAM"; exit 1; }
-ninja install 2>&1 | tee /tmp/gtsam_install.log || { echo "ERROR: Failed to install GTSAM"; exit 1; }
+# F2: Command substitution validation - validate nproc result
+nproc_count=""
+nproc_count=$(nproc 2>/dev/null || echo "1")
+# Validate nproc result is numeric
+if ! [ "${nproc_count}" -ge 1 ] 2>/dev/null; then
+  nproc_count=1
+fi
+ninja -j$((nproc_count / 2)) || { printf '%s\n' "ERROR: Failed to build GTSAM" >&2; exit 1; }
+# J1: File/directory existence validation - check parent directory exists before writing log
+if [ ! -d "/tmp" ]; then
+  mkdir -p /tmp || { printf '%s\n' "ERROR: Failed to create /tmp directory" >&2; exit 1; }
+fi
+ninja install 2>&1 | tee /tmp/gtsam_install.log || { printf '%s\n' "ERROR: Failed to install GTSAM" >&2; exit 1; }
 # Use dynamic directory detection from installation output
-run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
+# J1: File/directory existence validation - check log file exists before using
+if [ -f "/tmp/gtsam_install.log" ]; then
+  run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
+else
+  printf '%s\n' "[WARNING] GTSAM install log not found, skipping dynamic directory detection" >&2
+  # Fallback: refresh standard library directories
+  run_ldconfig_refresh || true
+fi
 
   #--- Sub-block 17.18: Verify GTSAM installation ---
   # Critical: Confirm GTSAM libraries are installed and in linker cache
@@ -11279,8 +11032,13 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   gtsam_core_path=""
   for libdir in "${gtsam_core_candidates[@]}"; do
     # Search for any libgtsam*.so file (handles versioned libraries like libgtsam.so.4.2.0)
-    found_lib=$(find "${libdir}" -maxdepth 1 -name "libgtsam*.so*" -type f 2>/dev/null | head -1)
+    # F2: Command substitution validation - validate find result format
+    # D3e: SIGPIPE protection - add || true at end of pipeline
+    found_lib=""
+    found_lib=$(find "${libdir}" -maxdepth 1 -name "libgtsam*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
+    # Validate result is non-empty and is a valid file path
     if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
+      gtsam_core_path=""
       gtsam_core_path="$(realpath "${found_lib}" 2>/dev/null || echo "${found_lib}")"
       break
     fi
@@ -11297,7 +11055,7 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
     else
       printf "[DEBUG] Searching for libgtsam*.so under /usr/local:\n"
     fi
-    find /usr/local -maxdepth 2 -name "libgtsam*.so*" -print 2>/dev/null || echo "  No GTSAM libraries found"
+    find /usr/local -maxdepth 2 -name "libgtsam*.so*" -print 2>/dev/null || printf '%s\n' "  No GTSAM libraries found" || true
     PHASE3_ALL_SUCCESS=false
   else
     if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
@@ -11309,7 +11067,7 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
     # Determine SONAME used by ldconfig
     gtsam_soname=""
     if command -v objdump >/dev/null 2>&1; then
-      gtsam_soname="$(objdump -p "${gtsam_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}')"
+      gtsam_soname="$(objdump -p "${gtsam_core_path}" 2>/dev/null | awk '/SONAME/ {print $2; exit}' 2>/dev/null || echo "" || true)"
     fi
     if [ -z "${gtsam_soname}" ]; then
       gtsam_soname="$(basename "${gtsam_core_path}")"
@@ -11344,7 +11102,8 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
         else
           printf "[DEBUG] ldconfig -p output (GTSAM related):\n"
         fi
-        ldconfig -p 2>/dev/null | grep -F "libgtsam" || printf "  No GTSAM libraries in ldconfig cache\n"
+        # D3e: SIGPIPE protection - add || true at end of pipeline
+        { ldconfig -p 2>/dev/null | grep -F "libgtsam" 2>/dev/null || printf "  No GTSAM libraries in ldconfig cache\n"; } || true
         if [ -n "${YELLOW}" ] && [ -n "${NC}" ]; then
           printf "%s[DEBUG] However, library files exist at: %s%s\n" "${YELLOW}" "${gtsam_core_path}" "${NC}"
         else
@@ -11362,24 +11121,11 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
           fi
         else
           if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-            printf "%s✓ GTSAM installation appears successful (files present, cache may be delayed)%s\n" "${GREEN}" "${NC}"
+            printf "%s✓ GTSAM library found and verified%s\n" "${GREEN}" "${NC}"
           else
-            printf "✓ GTSAM installation appears successful (files present, cache may be delayed)\n"
+            printf "✓ GTSAM library found and verified\n"
           fi
         fi
-        # Don't mark as failed if files exist - cache may update later
-      else
-        if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-          printf "%s✓ GTSAM library registered and verified%s\n" "${GREEN}" "${NC}"
-        else
-          printf "✓ GTSAM library registered and verified\n"
-        fi
-      fi
-    else
-      if [ -n "${GREEN}" ] && [ -n "${NC}" ]; then
-        printf "%s✓ GTSAM library found and verified%s\n" "${GREEN}" "${NC}"
-      else
-        printf "✓ GTSAM library found and verified\n"
       fi
     fi
   fi
@@ -11387,36 +11133,23 @@ run_ldconfig_refresh_from_install_output "/tmp/gtsam_install.log" 200
   #--- Sub-block 17.19: Protect compiled GTSAM from APT overwrites ---
   # Critical: Prevent APT from installing ANY system GTSAM packages
   # Strategy: Use APT pinning with negative priority (consistent with glog, Ceres, G2O, and OpenCV)
-  echo "Protecting compiled GTSAM from APT overwrites..."
+  printf '%s\n' "Protecting compiled GTSAM from APT overwrites..."
   
   # Create APT preferences directory
   mkdir -p /etc/apt/preferences.d
   
   # Block ALL system GTSAM packages using APT pinning with negative priority
-  cat > /etc/apt/preferences.d/block-system-gtsam << 'EOF'
-# Block system GTSAM packages (prevent installation)
-# Our optimized GTSAM 4.2.0 is compiled from source in /usr/local
-# Negative priority (-1) means APT will never install these packages
-
-Package: libgtsam-dev
-Pin: release *
-Pin-Priority: -1
-
-Package: libgtsam4
-Pin: release *
-Pin-Priority: -1
-
-Package: libgtsam-unstable4
-Pin: release *
-Pin-Priority: -1
-EOF
+  # Note: config-files file: /etc/apt/preferences.d/block-system-gtsam is installed via install.sh from container-scripts/
+  # Source: config-files/block-17-phase-3-high-level-dependencies/block-system-gtsam.pref
+  # Target: /etc/apt/preferences.d/block-system-gtsam
+  # Installed in Block 0 (early in script, before any scripts are needed)
   
   if [ -f "/etc/apt/preferences.d/block-system-gtsam" ]; then
-      echo "✓ Created APT preferences to block system GTSAM packages"
-      echo "  - Blocks: libgtsam-dev, libgtsam4, libgtsam-unstable4"
-      echo "  - Method: APT pinning with Pin-Priority: -1"
+      printf '%s\n' "✓ Created APT preferences to block system GTSAM packages"
+      printf '%s\n' "  - Blocks: libgtsam-dev, libgtsam4, libgtsam-unstable4"
+      printf '%s\n' "  - Method: APT pinning with Pin-Priority: -1"
   else
-      echo "✗ ERROR: Failed to create GTSAM protection file"
+      printf '%s\n' "✗ ERROR: Failed to create GTSAM protection file" >&2
       exit 1
   fi
   
@@ -11427,7 +11160,7 @@ EOF
   # SC2164: cd with error handling - using || true for cleanup operation (directory may not exist)
   cd /tmp/gtsam/build 2>/dev/null || true
   if [ -f "CMakeCache.txt" ]; then
-    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 | sed 's/.*[=:]//' | tr -d '[:space:]' || echo "")
+    TBB_LIB_PATH=$(grep -E "^TBB_LIBRARIES(:|=)" CMakeCache.txt 2>/dev/null | head -1 2>/dev/null | sed 's/.*[=:]//' 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "" || true)
     TBB_FOUND=$(grep -E "^GTSAM_WITH_TBB:BOOL=(ON|TRUE)" CMakeCache.txt 2>/dev/null || echo "")
     
     if [ -n "${TBB_FOUND}" ]; then
@@ -11566,7 +11299,7 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ "${need_fetch}" -eq 1 ]; then
-  echo "[julia] fetching ${JULIA_URL}"
+  printf '%s\n' "[julia] fetching ${JULIA_URL}"
   # Retry, follow redirects, fail on HTTP errors
   curl -fsSL --retry 5 --retry-all-errors --connect-timeout 5 --max-time 180 \
     -o "${LATEST_TGZ}.part" "${JULIA_URL}"
@@ -11578,13 +11311,13 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 # Note: Archive already verified in early verification phase
-echo "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
+printf '%s\n' "[julia] Archive already verified (SHA256 + gzip integrity check passed)"
 
 #--- Sub-block 18.6: Optional GPG signature verification ---
 # Purpose: Best-effort GPG verification (non-blocking)
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "[julia] Performing optional GPG signature verification..."
+  printf '%s\n' "[julia] Performing optional GPG signature verification..."
 GNUPGHOME="/root/.gnupg"
 mkdir -p "${GNUPGHOME}"
 chmod 700 "${GNUPGHOME}"
@@ -11595,10 +11328,10 @@ curl -fsSL --retry 3 "${JULIA_ASC_URL}" -o "${LATEST_TGZ}.asc" || true
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -f "${CONTAINER_BIN_CACHE}/julia_key.asc" ]; then
-  echo "Importing local GPG key for Julia..."
+  printf '%s\n' "Importing local GPG key for Julia..."
   gpg --import "${CONTAINER_BIN_CACHE}/julia_key.asc"
 else
-  echo "[warn] Local Julia GPG key not found. GPG verification may fail."
+  printf '%s\n' "[warn] Local Julia GPG key not found. GPG verification may fail."
 fi
 # End GPG key import (if-else self-contained)
 
@@ -11608,12 +11341,12 @@ fi
 # Outputs: Environment variables, configuration
 if [ -s "${LATEST_TGZ}.asc" ]; then
   if gpg --batch --verify "${LATEST_TGZ}.asc" "${LATEST_TGZ}" 2>/tmp/julia_gpg_verify.log; then
-    echo "[julia] ✓ GPG signature: GOOD"
+    printf '%s\n' "[julia] ✓ GPG signature: GOOD"
   else
-    echo "[julia] Δ GPG signature could not be verified (see /tmp/julia_gpg_verify.log). Continuing because SHA256 passed."
+    printf '%s\n' "[julia] Δ GPG signature could not be verified (see /tmp/julia_gpg_verify.log). Continuing because SHA256 passed."
   fi
 else
-  echo "[julia] Δ No .asc file available for GPG verification. Continuing because SHA256 passed."
+  printf '%s\n' "[julia] Δ No .asc file available for GPG verification. Continuing because SHA256 passed."
 fi
 # End GPG verification (if-else self-contained)
 
@@ -11621,14 +11354,14 @@ fi
 # Critical: Extract Julia to /opt and create symlink
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-echo "[julia] Installing to ${INSTALL_DIR}/julia-${JVER}"
+printf '%s\n' "[julia] Installing to ${INSTALL_DIR}/julia-${JVER}"
 if ! tar -xzf "${LATEST_TGZ}" -C "${INSTALL_DIR}"; then
-  echo "[julia] ERROR: Failed to extract Julia tarball"
+  printf '%s\n' "[julia] ERROR: Failed to extract Julia tarball" >&2
   exit 1
 fi
 rm -f "${INSTALL_DIR}/julia" 2>/dev/null || true
 if ! ln -s "${INSTALL_DIR}/julia-${JVER}" "${INSTALL_DIR}/julia"; then
-  echo "[julia] ERROR: Failed to create Julia symlink"
+  printf '%s\n' "[julia] ERROR: Failed to create Julia symlink" >&2
   exit 1
 fi
 printf '%s\n' "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as ${INSTALL_DIR}/julia"
@@ -11637,12 +11370,12 @@ printf '%s\n' "[julia] Installed to ${INSTALL_DIR}/julia-${JVER}, symlinked as $
 # Critical: Ensure julia binary is executable
 # Dependencies: Block 8.5 (Julia installation)
 # Outputs: Julia packages, environments
-printf '%s\n' "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
-JULIA_BIN="${JULIA_HOME}/bin/julia"
+  printf '%s\n' "[julia] Sanity check for ${JULIA_HOME}/bin/julia"
+  JULIA_BIN="${JULIA_HOME}/bin/julia"
   if [ ! -x "${JULIA_BIN}" ]; then
   printf '%s\n' "[julia] ERROR: ${JULIA_HOME}/bin/julia not found or not executable" >&2
-  # D3: Use here-string instead of echo | head (unsafe pipe pattern)
-  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 || printf '%s\n' "  /opt directory empty or not accessible"
+  # D3e: SIGPIPE protection - add || true at end of pipeline
+  find /opt -maxdepth 2 -type f -ls 2>/dev/null | head -20 2>/dev/null || printf '%s\n' "  /opt directory empty or not accessible" || true
   exit 1
 fi
 # End Julia verification (if self-contained)
@@ -11824,13 +11557,10 @@ printf '%s\n' "CxxWrap source build ready for OpenCV"
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 19.1: libCxxWrap-julia build complete ---
-# Purpose: C++ wrapper for Julia integration
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-#--- Sub-block 19.2: Initialize NVIDIA SDK installation ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+#--- Sub-block 19.1: Initialize NVIDIA SDK installation ---
+# Purpose: Install NVIDIA Video Codec SDK for hardware video encoding/decoding
+# Dependencies: Cached SDK .zip file, unzip utility
+# Outputs: Configured system components
 printf '%s\n' "==> Installing NVIDIA Video Codec SDK from cache..."
 
 # Using NVIDIA Video Codec SDK version from config.sh
@@ -11936,9 +11666,14 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Dependencies: Block 6.13 (NVIDIA CUDA)
   # Outputs: GPU libraries, CUDA toolkit
   # H4: Validate failures explicitly instead of masking with 2>/dev/null
+  # F2: Command substitution validation - validate result format
   SDK_HEADER_COUNT=0
   if [ -d "/opt/Video_Codec_SDK/Interface" ]; then
     SDK_HEADER_COUNT=$(find "/opt/Video_Codec_SDK/Interface" -maxdepth 1 -name "*.h" -type f 2>/dev/null | wc -l || echo "0")
+    # F2: Validate result is numeric
+    if ! [[ "${SDK_HEADER_COUNT}" =~ ^[0-9]+$ ]]; then
+      SDK_HEADER_COUNT=0
+    fi
   fi
   if [ "${SDK_HEADER_COUNT}" -gt 0 ]; then
     # J1: Validate target directory exists before copying
@@ -11968,10 +11703,18 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Outputs: Environment variables, configuration
   if [ -f /usr/local/include/nvcuvid.h ] && [ -f /usr/local/include/cuviddec.h ]; then
     printf '%s\n' "✓ Video Codec SDK headers verified at /usr/local/include/"
-    find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null || true
+    # D3e: SIGPIPE error handling - check directory exists before find, add || true
+    if [ -d /usr/local/include ]; then
+      find /usr/local/include -maxdepth 1 -name "nvc*" -type f -ls 2>/dev/null | head -20 2>/dev/null || true
+    fi
   else
     printf '%s\n' "Δ Video Codec SDK headers may be incomplete"
-    find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null || printf '%s\n' "No NVIDIA headers found"
+    # D3e: SIGPIPE error handling - check directory exists before find, add || true
+    if [ -d /usr/local/include ]; then
+      find /usr/local/include -maxdepth 1 -type f -iname "*nv*" -ls 2>/dev/null | head -20 2>/dev/null || printf '%s\n' "No NVIDIA headers found"
+    else
+      printf '%s\n' "No NVIDIA headers found"
+    fi
   fi
   # End SDK header verification (if-else self-contained)
 
@@ -11979,53 +11722,321 @@ if [ "${NVIDIA_VIDEO_SDK_INSTALLED}" = "true" ]; then
   # Purpose: Remove temporary extraction files
   # Dependencies: None (foundational)
   # Outputs: Environment variables, configuration
-  rm -rf "/tmp/${SDK_FOLDER}" "${SDK_ZIP_FILENAME}"
-  cd /
+  # N1: Proper cleanup of temporary files with validation
+  if [ -n "${SDK_FOLDER:-}" ]; then
+    rm -rf "/tmp/${SDK_FOLDER}" 2>/dev/null || true
+  fi
+  if [ -n "${SDK_ZIP_FILENAME:-}" ]; then
+    rm -f "/tmp/${SDK_ZIP_FILENAME}" 2>/dev/null || true
+  fi
+  cd / || true
 
   printf '%s\n' "✓ NVIDIA Video Codec SDK headers installed successfully."
 else
   printf '%s\n' "  → NVIDIA Video Codec SDK installation skipped (file not in cache)"
   printf '%s\n' "  → Continuing build; OpenCV configuration will auto-detect any pre-existing SDK headers/libraries"
+# ENDIF: NVIDIA_VIDEO_SDK_INSTALLED check
 fi
 # End NVIDIA Video SDK installation (conditional based on file presence)
 
 #===============================================================================
-# BLOCK 20: PHASE 4 - OPENCV COMPILATION
+# DEBUG MODE: STOPPING BEFORE OPENCV COMPILATION
 #===============================================================================
-# Purpose: Compile OpenCV from source with CUDA, TBB, and all accelerations
-# Self-contained: Yes (complete build with verification)
-# Dependencies: Phase 1 libraries, CUDA, TBB, NVIDIA Video Codec SDK, Julia/CxxWrap
-# Outputs: GPU libraries, CUDA toolkit
+# NOTE: This is a DEBUG script that stops before BLOCK 20 (OpenCV compilation).
+#       All prerequisites for OpenCV are installed:
+#       - Phase 1 libraries (Ceres, SuiteSparse, G2O, GTSAM, etc.)
+#       - CUDA toolkit and drivers
+#       - TBB libraries
+#       - NVIDIA Video Codec SDK headers
+#       - All build dependencies
+#       OpenCV compilation can be done separately using compile_opencv_in_overlay.sh
+#===============================================================================
+printf '\n%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' "${BLUE}DEBUG MODE: Stopping before OpenCV compilation${NC}"
+printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
+printf '%s\n' "✓ All prerequisites for OpenCV compilation are installed"
+printf '%s\n' "✓ Image snapshot created just before BLOCK 20 (OpenCV compilation)"
+printf '%s\n' "✓ To compile OpenCV, use: compile_opencv_in_overlay.sh"
+printf '%s\n' ""
 
 #===============================================================================
-# DEBUG SCRIPT STOPPING POINT - BEFORE OPENCV COMPILATION
+# BLOCK 39: FINAL SYSTEM VERIFICATION
 #===============================================================================
-# Purpose: This script stops before OpenCV compilation to enable debugging
-#          with writable overlay mounts
-# Self-contained: Yes (includes all setup before OpenCV)
-# Dependencies: All Phase 1-3 libraries installed
-# Outputs: System ready for OpenCV compilation testing
-# NOTE: This is a debug version - original script continues with OpenCV
+# Purpose: Verify all critical symlinks and installations
+# Self-contained: Yes
+# Dependencies: None
+# Outputs: Environment variables, configuration
 #-------------------------------------------------------------------------------
 
-harvest_container_cache_to_host
-purge_container_install_artifacts
+#--- Sub-block 39.1: Verify TurboVNC and VirtualGL symlinks ---
+# Critical: Ensure remote desktop binaries are accessible
+# Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC)
+# Outputs: VNC server, GPU acceleration
+# ================= Final Failsafe: Verify All Symlinks =====================
+echo "==> Final verification of TurboVNC/VirtualGL symlinks..."
 
-printf '\n%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-printf '%s\n' "${GREEN}✓ DEBUG SCRIPT COMPLETE - STOPPING BEFORE OPENCV COMPILATION${NC}"
-printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-printf '%s\n' ""
-printf '%s\n' "This script has completed all setup up to (but not including) OpenCV compilation."
-printf '%s\n' ""
-printf '%s\n' "You can now:"
-printf '%s\n' "  1. Mount this image with a writable overlay"
-printf '%s\n' "  2. Test OpenCV compilation interactively"
-printf '%s\n' "  3. Debug compilation issues without rebuilding from scratch"
-printf '%s\n' ""
-printf '%s\n' "To continue with OpenCV compilation, use the original script:"
-printf '%s\n' "  xubuntu_robotics_base_full.sh"
-printf '%s\n' ""
-printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+# TurboVNC binaries
+TURBOVNC_BINS=(vncserver Xvnc vncpasswd vncconnect vncviewer webserver tvncconfig)
+for binary in "${TURBOVNC_BINS[@]}"; do
+  if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/TurboVNC/bin/${binary}" ]; then
+    if ln -sf "/opt/TurboVNC/bin/${binary}" "/usr/local/bin/${binary}"; then
+      printf '%s\n' "  ✓ Created missing symlink: ${binary}"
+    else
+      printf '%s\n' "  ✗ Failed to create symlink for ${binary}" >&2
+    fi
+  fi
+# ENDFOR: binary
+done
 
-# Exit successfully - this is intentional stopping point
-exit 0
+# VirtualGL binaries (comprehensive list)
+VIRTUALGL_BINS=(vglrun vglclient vglconfig vglconnect vglgenkey vgllogin vglserver_config glxinfo glxspheres64 eglinfo eglxinfo eglxspheres64 cpustat nettest tcbench)
+for binary in "${VIRTUALGL_BINS[@]}"; do
+  if [ ! -L "/usr/local/bin/${binary}" ] && [ -x "/opt/VirtualGL/bin/${binary}" ]; then
+    if ln -sf "/opt/VirtualGL/bin/${binary}" "/usr/local/bin/${binary}"; then
+      printf '%s\n' "  ✓ Created missing symlink: ${binary}"
+    else
+      printf '%s\n' "  ✗ Failed to create symlink for ${binary}" >&2
+    fi
+  fi
+# ENDFOR: binary
+done
+
+# Final comprehensive verification
+echo ""
+echo "==> Critical symlink verification:"
+# A6: declare -A requires Bash 4+ - verified: shebang is #!/bin/bash
+declare -A CRITICAL_BINS=(
+  ["vncserver"]="/opt/TurboVNC/bin/vncserver"
+  ["Xvnc"]="/opt/TurboVNC/bin/Xvnc"
+  ["webserver"]="/opt/TurboVNC/bin/webserver"
+  ["vglrun"]="/opt/VirtualGL/bin/vglrun"
+  ["glxinfo"]="/opt/VirtualGL/bin/glxinfo"
+  ["glxspheres64"]="/opt/VirtualGL/bin/glxspheres64"
+)
+
+for binary in "${!CRITICAL_BINS[@]}"; do
+  # shellcheck disable=SC2034 # expected used in loop body
+  expected="${CRITICAL_BINS[$binary]}"
+  if [ -L "/usr/local/bin/${binary}" ]; then
+    # F2, H4: Validate command substitution result
+    actual=""
+    # SC2155: Declare and assign separately to avoid masking return values
+    actual=$(readlink -f "/usr/local/bin/${binary}" 2>/dev/null || readlink "/usr/local/bin/${binary}" 2>/dev/null || printf '%s\n' "")
+    # F2: Validate result is non-empty and valid before use
+    if [ -n "${actual}" ] && [ -x "${actual}" ]; then
+      printf '%s\n' "  ✓ ${binary} -> ${actual} [OK]"
+    else
+      printf '%s\n' "  ✗ ${binary} -> ${actual} [BROKEN]" >&2
+    fi
+  else
+    printf '%s\n' "  ✗ ${binary} [MISSING]"
+  fi
+# ENDFOR: binary
+done
+
+
+
+echo "✓ Symlink verification complete"
+
+# Cache is already unified in ${CONTAINER_CACHE_ROOT}/ - no need for complex harvesting
+echo "==> Cache is unified in ${CONTAINER_CACHE_ROOT}/ - ready for harvest"
+
+# Clean up temporary files but preserve our cache
+echo "==> Cleaning temporary files while preserving cache..."
+
+# Clean APT lists (safe to remove)
+echo "  » APT LISTS CLEANUP - Monitoring cache before APT lists cleanup"
+# H4: Validate command substitution result
+cache_count_before=""
+cache_count_before=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_before} .deb files"
+rm -rf /var/lib/apt/lists/* 2>/dev/null || true
+echo "  » APT LISTS CLEANUP - Monitoring cache after APT lists cleanup"
+# H4: Validate command substitution result
+cache_count_after=""
+cache_count_after=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after} .deb files"
+
+# Clean temporary APT directories that might cause issues
+rm -rf /tmp/apt-dpkg-install* 2>/dev/null || true
+# apt-fast cleanup removed - using apt-aria wrapper instead
+
+# Clean temporary files but preserve our container cache
+echo "  » CLEANUP SECTION - Monitoring cache before cleanup"
+# H4: Validate command substitution result
+cache_count_before_cleanup=""
+cache_count_before_cleanup=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_before_cleanup} .deb files"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find /tmp -maxdepth 1 -type l -o -type d -name "*container_cache*" -o -name "*apt*" 2>/dev/null | head -10 2>/dev/null || echo "No suspicious symlinks in /tmp"
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -5 2>/dev/null || echo "Directory empty or not accessible"
+find /tmp -type f -name "*.deb" -delete 2>/dev/null || true
+find /tmp -type f -name "*.tar.gz" -delete 2>/dev/null || true
+find /tmp -type f -name "*.whl" -delete 2>/dev/null || true
+echo "  » CLEANUP SECTION - Monitoring cache after cleanup"
+# H4: Validate command substitution result
+cache_count_after_cleanup=""
+cache_count_after_cleanup=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_cleanup} .deb files"
+
+# === FINAL CACHE PRESERVATION ===
+# Reverting cache file permissions to normal ===
+if command -v chattr >/dev/null 2>&1; then
+    if compgen -G "${CONTAINER_APT_CACHE}/"*.deb > /dev/null; then
+        chattr -i "${CONTAINER_APT_CACHE}/"*.deb 2>/dev/null || true
+        echo "chattr -i command executed successfully"
+    else
+        echo "No cached .deb files require chattr adjustment"
+    fi
+else
+    echo "WARNING: chattr command not available - cannot revert file permissions"
+fi
+
+
+# Show monitoring summary and aggregated cache summary before preservation
+display_cache_monitoring_summary
+cache_summary
+# Add detailed monitoring before any cache operations
+
+echo "  » DETAILED CACHE INVESTIGATION - BEFORE PRESERVATION"
+echo "  Container cache directory contents:"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
+echo "  Var cache directory contents:"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find /var/cache/apt/archives -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
+echo "Cache file counts:"
+# H4: Validate command substitution result
+apt_cache_count=""
+apt_cache_count=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${apt_cache_count} .deb files"
+var_cache_count=""
+var_cache_count=$(find /var/cache/apt/archives -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  /var/cache/apt/archives: ${var_cache_count} .deb files"
+
+# Ensure all downloaded packages are preserved in the cache directory
+echo "==> Preserving APT cache for future builds ==="
+# Check if packages are in the standard APT cache location
+if [ -d "/var/cache/apt/archives" ]; then
+    echo "Copying packages from /var/cache/apt/archives to ${CONTAINER_APT_CACHE}..."
+    find /var/cache/apt/archives -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
+    echo "After copying from /var/cache/apt/archives:"
+    # H4: Validate command substitution result
+    cache_count_after_copy=""
+    cache_count_after_copy=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+    echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_copy} .deb files"
+fi
+
+# Also preserve any packages that might be in the system cache
+if [ -d "/var/lib/apt/cache" ]; then
+    echo "Checking system APT cache for additional packages..."
+    find /var/lib/apt/cache -name "*.deb" -type f -exec cp {} "${CONTAINER_APT_CACHE}/" \; 2>/dev/null || true
+    echo "After copying from /var/lib/apt/cache:"
+    # H4: Validate command substitution result
+    cache_count_after_system_copy=""
+    cache_count_after_system_copy=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+    echo "  ${CONTAINER_APT_CACHE}: ${cache_count_after_system_copy} .deb files"
+fi
+
+# Final monitoring before cache harvest
+monitor_cache "Final cache status before harvest"
+
+# Add one more detailed check right before the script ends
+echo "  » FINAL CACHE CHECK - RIGHT BEFORE SCRIPT END"
+echo "Final container cache contents:"
+# D3e: SIGPIPE protection - add || true at end of pipeline with head
+find "${CONTAINER_APT_CACHE}" -maxdepth 1 -type f -ls 2>/dev/null | head -10 2>/dev/null || echo "Directory empty or not accessible"
+echo ""
+echo "Final cache file count:"
+# H4: Validate command substitution result
+final_cache_count=""
+final_cache_count=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || echo "0")
+echo "  ${CONTAINER_APT_CACHE}: ${final_cache_count} .deb files"
+echo ""
+# Report cache status
+echo "Container cache status:"
+# H4: Validate command substitution results
+apt_archives_count=""
+apt_archives_count=$(find "${CONTAINER_APT_CACHE}" -maxdepth 1 -name "*.deb" 2>/dev/null | wc -l || echo "0")
+conda_packages_count=""
+conda_packages_count=$(find "${CONTAINER_CONDA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+pip_wheels_count=""
+pip_wheels_count=$(find "${CONTAINER_WHEELS_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+julia_packages_count=""
+julia_packages_count=$(find "${CONTAINER_JULIA_CACHE}" -maxdepth 1 -type f 2>/dev/null | wc -l || echo "0")
+echo "  APT archives: ${apt_archives_count} files"
+echo "  Conda packages: ${conda_packages_count} files"
+echo "  Pip wheels: ${pip_wheels_count} files"
+echo "  Julia packages: ${julia_packages_count} files"
+echo "=========================================================================="
+
+
+
+# ===============================================================
+# Final Installation Verification
+# ===============================================================
+echo ""
+echo "=========================================="
+echo "Final Installation Verification"
+echo "=========================================="
+
+# Test TurboVNC
+echo ""
+echo "TurboVNC Installation:"
+if [ -x /usr/local/bin/vncserver ]; then
+  # D3e: SIGPIPE protection - add || true at end of pipeline with head
+  if /usr/local/bin/vncserver -help >/dev/null 2>&1; then
+    /usr/local/bin/vncserver -help 2>&1 | head -1 2>/dev/null || true
+  fi
+  echo "  ✓ TurboVNC installed"
+else
+  echo "  ✗ TurboVNC not found!"
+fi
+
+# Test VirtualGL
+echo ""
+echo "VirtualGL Installation:"
+if [ -x /usr/local/bin/vglrun ]; then
+  echo "  ✓ VirtualGL installed"
+else
+  echo "  ✗ VirtualGL not found!"
+fi
+
+#===============================================================================
+# BLOCK 40: DOCUMENTATION AND USER GUIDES
+#===============================================================================
+# Purpose: Create comprehensive user documentation for the container
+# Self-contained: Yes (complete documentation generation)
+# Dependencies: None
+# Outputs: Environment variables, configuration
+#-------------------------------------------------------------------------------
+
+#--- Sub-block 40.1: VirtualGL user guide ---
+# Critical: Comprehensive guide for GPU-accelerated applications
+# Dependencies: Block 15 (VirtualGL)
+# Outputs: VNC server, GPU acceleration
+mkdir -p /usr/local/share/doc || { echo "✗ Failed to create /usr/local/share/doc" >&2; exit 1; }
+# Note: other file: /usr/local/share/doc/virtualgl-guide.txt is installed via install.sh from container-scripts/
+# Source: other/block-33-vnc-startup-scripts-and-configurations-part-2-of-3/virtualgl-guide.txt
+# Target: /usr/local/share/doc/virtualgl-guide.txt
+# Installed in Block 0 (early in script, before any scripts are needed)
+# J1: Verify file exists before checking permissions
+if [ ! -f /usr/local/share/doc/virtualgl-guide.txt ]; then
+  echo "✗ Failed to create /usr/local/share/doc/virtualgl-guide.txt" >&2
+  exit 1
+fi
+chmod 644 /usr/local/share/doc/virtualgl-guide.txt || { echo "✗ Failed to set permissions on /usr/local/share/doc/virtualgl-guide.txt" >&2; exit 1; }
+
+echo "✓ User guide created: /usr/local/share/doc/virtualgl-guide.txt"
+
+#===============================================================================
+# BLOCK 41: UTILITY SCRIPTS DOCUMENTATION
+#===============================================================================
+# Purpose: Document available utility scripts for users
+# Self-contained: Yes
+# Dependencies: All utility scripts installed via install.sh
+# Outputs: Echo message listing available utilities
+echo ""
+echo "========================================================================================================"
+

@@ -25,7 +25,11 @@
 This manual is split into 4 parts (each under 500 lines) to maintain full context throughout the review process. When this file is referenced, ALL parts MUST be processed sequentially:
 
 1. **PART 1**: `Code_check_prompt_manual-PART1.txt` (Introduction, Steps 1-2, Sections A-B-C-D partial)
+   - **NEW**: A7 - Orphaned Code Chunk Detection (runs FIRST in each chunk)
 2. **PART 2**: `Code_check_prompt_manual-PART2.txt` (continues D, covers E-F-G-H)
+   - **ENHANCED**: E6 - Heredoc Termination Verification (runs FIRST in each chunk)
+   - **ENHANCED**: E9 - Heredoc Extraction and Maintainability (detects and extracts heredoc-like chunks)
+   - **NEW**: E10 - Comment Cleanup and Relevance (removes unwanted comments)
 3. **PART 3**: `Code_check_prompt_manual-PART3.txt` (continues H, covers I-J-K-L-M-O partial)
 4. **PART 4**: `Code_check_prompt_manual-PART4.txt` (continues O, covers P, Steps 3-4, Protocols)
 
@@ -34,9 +38,13 @@ When this master entry point is referenced, you MUST:
 
 0. **PRE-REVIEW TASK CHECK (MANDATORY FIRST STEP)**: Before starting the review, check for any earlier pending tasks (see "🚨 MANDATORY PRE-REVIEW TASK COMPLETION CHECK" section above). Complete them or add them to the comprehensive todo list. Only proceed after all earlier pending tasks are accounted for.
 1. **LOAD PART 1 FIRST**: Read `prompts/Code_check_prompt_manual-PART1.txt` completely
-2. **PROCESS ALL CHECKLIST ITEMS IN PART 1**: Execute all checklist items (A1-A6, B1-B3, C1-C6, D1-D4 partial) from PART 1
+2. **PROCESS ALL CHECKLIST ITEMS IN PART 1**: Execute all checklist items (A1-A7, B1-B3, C1-C6, D1-D4 partial) from PART 1
+   - **CRITICAL**: A7 (Orphaned Code Chunk Detection) runs FIRST in each chunk before other checks
 3. **ONLY AFTER PART 1 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART2.txt`
-4. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial) from PART 2
+4. **PROCESS ALL CHECKLIST ITEMS IN PART 2**: Execute all checklist items (continues D, E1-E10, F1-F3, G1-G5, H1-H4 partial) from PART 2
+   - **CRITICAL**: E6 (Heredoc Termination Verification) runs FIRST in each chunk to verify all heredocs are properly terminated
+   - **CRITICAL**: E9 (Heredoc Extraction) identifies and extracts heredoc-like chunks to container-scripts
+   - **CRITICAL**: E10 (Comment Cleanup) removes unwanted comments and keeps only relevant ones
 5. **ONLY AFTER PART 2 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART3.txt`
 6. **PROCESS ALL CHECKLIST ITEMS IN PART 3**: Execute all checklist items (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14) from PART 3
 7. **ONLY AFTER PART 3 COMPLETE**: Load `prompts/Code_check_prompt_manual-PART4.txt`
@@ -161,6 +169,10 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 - **Shell scripts**: Reference this master file, tooling should handle sequential loading
 - **Pre-commit hooks**: Load this master file, process all parts sequentially
 - **CI/CD**: Reference this master file, validate across all parts sequentially
+- **Heredoc extraction tools**: 
+  - `scripts/extract_all_heredocs.py` - Enhanced with heredoc termination verification (runs FIRST before extraction)
+  - `scripts/verify_and_replace_heredocs.py` - Enhanced with heredoc termination verification (runs FIRST before file verification)
+  - Both tools now verify heredoc termination before processing to catch missing/mismatched delimiters early
 
 **MANDATORY FOR ALL REVIEWS**: 
 - ALL other review prompts (Advanced CoT, Enhanced Code Review, etc.) MUST reference this master entry point
@@ -324,12 +336,16 @@ ONE-PART-AT-A-TIME ENFORCEMENT:
 
 **VERIFICATION**:
 After processing all parts, confirm:
-- ✅ PART 1 checklist items processed (A1-A6, B1-B3, C1-C6, D1-D4 partial)
-- ✅ PART 2 checklist items processed (continues D, E1-E9, F1-F3, G1-G5, H1-H4 partial)
+- ✅ PART 1 checklist items processed (A1-A7, B1-B3, C1-C6, D1-D4 partial)
+- ✅ PART 2 checklist items processed (continues D, E1-E10, F1-F3, G1-G5, H1-H4 partial)
 - ✅ PART 3 checklist items processed (continues H, I1-I4, J1-J3, K1-K1b-K3, L1-L6, M1-M14)
 - ✅ PART 4 checklist items processed (N1-N5, O1-O5, P1-P5, Steps 3-4, Protocols)
 - ✅ Final ShellCheck validation passed on ENTIRE script (zero errors, zero warnings) - runs ONCE after all parts complete
 - ✅ All checklist items A1 through P5 checked sequentially without skipping any
+- ✅ Orphaned code chunks detected and removed (A7)
+- ✅ Comment cleanup performed (E10)
+- ✅ Heredoc termination verified in each chunk (E6 enhanced)
+- ✅ Heredoc-like chunks converted to container-scripts (E9 enhanced)
 
 **🚨 MANDATORY POST-REVIEW TODO COMPLETION CHECK (BEFORE FINALIZING)**:
 - **AFTER ALL PARTS COMPLETE**: You MUST perform a final comprehensive check of ALL todos before finalizing the review.

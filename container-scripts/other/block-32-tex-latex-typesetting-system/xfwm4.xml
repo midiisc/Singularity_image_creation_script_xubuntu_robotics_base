@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="use_compositing" type="bool" value="false"/>
+    <property name="sync_to_vblank" type="bool" value="false"/>
+    <property name="frame_drawn" type="bool" value="false"/>
+    <property name="double_click_time" type="int" value="250"/>
+  </property>
+</channel>

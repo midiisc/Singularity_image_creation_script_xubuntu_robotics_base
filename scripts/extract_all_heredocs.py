@@ -65,8 +65,9 @@ class ComprehensiveHeredocExtractor:
         current_block_name = None
         
         for i, line in enumerate(lines, 1):
-            # Match block headers: # BLOCK N: NAME
-            match = re.match(r'^# BLOCK (\d+):\s*(.+)$', line)
+            # Match block headers: # BLOCK N: NAME or # BLOCK NA: NAME (e.g., 26A, 26B)
+            # Extract numeric part for grouping (26A -> 26, 26B -> 26)
+            match = re.match(r'^# BLOCK (\d+)[A-Z]?:\s*(.+)$', line)
             if match:
                 current_block = int(match.group(1))
                 current_block_name = match.group(2).strip()
@@ -87,7 +88,9 @@ class ComprehensiveHeredocExtractor:
             if i >= len(lines):
                 continue
             line = lines[i]
-            match = re.match(r'^# BLOCK (\d+):\s*(.+)$', line)
+            # Match block headers: # BLOCK N: NAME or # BLOCK NA: NAME (e.g., 26A, 26B)
+            # Extract numeric part for grouping (26A -> 26, 26B -> 26)
+            match = re.match(r'^# BLOCK (\d+)[A-Z]?:\s*(.+)$', line)
             if match:
                 current_block = int(match.group(1))
                 current_block_name = match.group(2).strip()
@@ -106,11 +109,14 @@ class ComprehensiveHeredocExtractor:
         -   EOF  (with indentation)
         - APS (on its own line)
         - CPS (on its own line)
+        
+        Returns:
+            Line index (0-based) where delimiter is found, or None if not found
         """
         # Look ahead up to 1000 lines (should be enough for any heredoc)
         max_lookahead = min(start_idx + 1000, len(lines))
         
-        for i in range(start_idx, max_lookahead):
+        for i in range(start_idx + 1, max_lookahead):
             line = lines[i]
             
             # Strategy 1: Exact match after stripping (most common case)
@@ -134,6 +140,91 @@ class ComprehensiveHeredocExtractor:
                 return i
         
         return None
+    
+    def verify_heredoc_termination(self, file_path: Path) -> List[Dict]:
+        """Verify all heredocs in a file are properly terminated.
+        
+        Returns:
+            List of dicts with 'line', 'delimiter', 'status' (missing/mismatched/ok)
+        """
+        if not file_path.exists():
+            return []
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+        
+        issues = []
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            line_num = i + 1
+            
+            # Match heredoc patterns
+            match1_quoted = re.search(r'cat\s+>>?\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\})\s+<<\s*[\'"]?([A-Z_][A-Z0-9_]*)[\'"]?', line)
+            match1_simple = re.search(r'cat\s+>>?\s+([^\s<>"\'$]+)\s+<<\s*[\'"]?([A-Z_][A-Z0-9_]*)[\'"]?', line)
+            match1 = match1_quoted or match1_simple
+            match2 = re.search(r'if\s+!?\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\}|[^\s<>"\'$]+)', line)
+            match3 = re.search(r'if\s+!?\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s*([^\s;]+)', line)
+            match4_braces = re.search(r'if\s+!?\s*\{\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\}|[^\s<>"\'$]+)', line)
+            match5 = re.search(r'(?:if\s+)?python3\s+(?:-\s+)?<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1', line)
+            
+            match = match1 or match2 or match3 or match4_braces or match5
+            if match:
+                # Extract delimiter
+                if match1:
+                    if match1_quoted:
+                        delimiter = match1_quoted.group(2)
+                    else:
+                        delimiter = match1_simple.group(2)
+                elif match2:
+                    delimiter = match2.group(2)
+                elif match3:
+                    delimiter = match3.group(2)
+                elif match4_braces:
+                    delimiter = match4_braces.group(2)
+                else:  # match5
+                    delimiter = match5.group(2)
+                
+                # Find end
+                end_line = self._find_heredoc_end(lines, i, delimiter)
+                if end_line is None:
+                    issues.append({
+                        'line': line_num,
+                        'delimiter': delimiter,
+                        'status': 'missing',
+                        'file': str(file_path)
+                    })
+                else:
+                    # Check for mismatched delimiter (case sensitivity)
+                    end_line_content = lines[end_line].strip()
+                    # Remove optional comment and whitespace
+                    end_delimiter = re.sub(r'\s*(#.*)?$', '', end_line_content)
+                    if end_delimiter != delimiter:
+                        issues.append({
+                            'line': line_num,
+                            'delimiter': delimiter,
+                            'end_line': end_line + 1,
+                            'end_delimiter': end_delimiter,
+                            'status': 'mismatched',
+                            'file': str(file_path)
+                        })
+                    else:
+                        # Check for trailing content (delimiter should be alone on line)
+                        if not re.match(rf'^\s*{re.escape(delimiter)}\s*(#.*)?\s*$', lines[end_line]):
+                            issues.append({
+                                'line': line_num,
+                                'delimiter': delimiter,
+                                'end_line': end_line + 1,
+                                'status': 'trailing_content',
+                                'file': str(file_path)
+                            })
+                
+                i += 1
+            else:
+                i += 1
+        
+        return issues
     
     def _detect_file_type(self, target_path: str, content: str) -> FileType:
         """Detect file type from target path and content."""
@@ -347,39 +438,71 @@ class ComprehensiveHeredocExtractor:
             
             # Match heredoc patterns
             # Pattern 1: cat > file <<'EOF' or cat >> file <<'EOF'
-            match1 = re.search(r'cat\s+>>?\s+([^\s<>"\'$]+(?:/[^\s<>"\'$]+)*|"[^"]+"|\'[^\']+\'|\$\{[^}]+\})\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\2', line)
+            # Robust pattern: matches any path (including dots) between 'cat >' and '<<'
+            # First try the original pattern for quoted paths and variables
+            match1_quoted = re.search(r'cat\s+>>?\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\})\s+<<\s*[\'"]?([A-Z_][A-Z0-9_]*)[\'"]?', line)
+            # Then try simple pattern for unquoted paths (handles dots, slashes, etc.)
+            # Fixed: delimiter quotes are optional and don't need to match
+            match1_simple = re.search(r'cat\s+>>?\s+([^\s<>"\'$]+)\s+<<\s*[\'"]?([A-Z_][A-Z0-9_]*)[\'"]?', line)
+            match1 = match1_quoted or match1_simple
             # Pattern 2: if ! cat <<'EOF' > file or if cat <<'EOF' > file
-            match2 = re.search(r'if\s+!?\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s+([^\s<>"\'$]+(?:/[^\s<>"\'$]+)*|"[^"]+"|\'[^\']+\'|\$\{[^}]+\})', line)
+            match2 = re.search(r'if\s+!?\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\}|[^\s<>"\'$]+)', line)
             # Pattern 3: if ! cat <<'EOF' > file (alternative format)
             match3 = re.search(r'if\s+!?\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s*([^\s;]+)', line)
+            # Pattern 4: if ! { cat <<'EOF' > file (with curly braces)
+            match4_braces = re.search(r'if\s+!?\s*\{\s*cat\s+<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1\s*>\s+("[^"]+"|\'[^\']+\'|\$\{[^}]+\}|[^\s<>"\'$]+)', line)
+            # Pattern 5: python3 << 'DELIMITER' or python3 << "DELIMITER" (inline Python scripts)
+            # Also handles: python3 - << 'DELIMITER' (with - flag)
+            match5 = re.search(r'(?:if\s+)?python3\s+(?:-\s+)?<<\s*([\'"]?)([A-Z_][A-Z0-9_]*)\1', line)
             
-            match = match1 or match2 or match3
+            match = match1 or match2 or match3 or match4_braces or match5
             if match:
                 # Extract components
+                is_python_heredoc = False
                 if match1:
-                    target_path = match1.group(1).strip("'\"")
-                    quoted = bool(match1.group(2))
-                    delimiter = match1.group(3)
+                    if match1_quoted:
+                        # Quoted/variable path pattern
+                        target_path = match1_quoted.group(1).strip("'\"")
+                        delimiter = match1_quoted.group(2)
+                        quoted = "'" in line or '"' in line  # Check if delimiter is quoted
+                    else:
+                        # Simple path pattern (handles dots in paths)
+                        target_path = match1_simple.group(1).strip("'\"")
+                        delimiter = match1_simple.group(2)
+                        quoted = "'" in line or '"' in line  # Check if delimiter is quoted
                 elif match2:
                     quoted = bool(match2.group(1))
                     delimiter = match2.group(2)
                     target_path = match2.group(3).strip("'\"")
-                else:  # match3
+                elif match3:
                     quoted = bool(match3.group(1))
                     delimiter = match3.group(2)
                     target_path = match3.group(3).strip("'\"")
+                elif match4_braces:
+                    quoted = bool(match4_braces.group(1))
+                    delimiter = match4_braces.group(2)
+                    target_path = match4_braces.group(3).strip("'\"")
+                else:  # match5 - python3 << heredoc
+                    is_python_heredoc = True
+                    quoted = bool(match5.group(1))
+                    delimiter = match5.group(2)
+                    # For python3 heredocs, there's no target file - generate one based on delimiter
+                    target_path = f"/tmp/{delimiter.lower().replace('_', '-')}.py"
                 
                 # Skip heredocs with variable paths (they're generated dynamically)
-                if re.search(r'\$\{[^}]+\}', target_path) or re.search(r'\$[A-Z_][A-Z0-9_]*', target_path):
-                    # Skip dynamic paths, but log for debugging
-                    i += 1
-                    continue
+                # But allow python3 heredocs (they don't have variable paths)
+                if not is_python_heredoc:
+                    if re.search(r'\$\{[^}]+\}', target_path) or re.search(r'\$[A-Z_][A-Z0-9_]*', target_path):
+                        # Skip dynamic paths, but log for debugging
+                        i += 1
+                        continue
                 
                 # Clean target path (for display purposes)
                 display_path = target_path
                 
                 # Find end of heredoc (robust search)
-                end_line = self._find_heredoc_end(lines, i + 1, delimiter)
+                # Start search from line after heredoc start (i+1)
+                end_line = self._find_heredoc_end(lines, i, delimiter)
                 if end_line is None:
                     # Try to find delimiter by looking for it more carefully
                     # Some heredocs might have the delimiter on a line with trailing content
@@ -396,6 +519,7 @@ class ComprehensiveHeredocExtractor:
                     
                     if end_line is None:
                         print(f"Warning: Could not find end of heredoc '{delimiter}' at line {line_num} in {file_path.name}")
+                        print(f"  This heredoc is NOT properly terminated and should be fixed before extraction")
                         i += 1
                         continue
                 
@@ -409,7 +533,11 @@ class ComprehensiveHeredocExtractor:
                     continue
                 
                 # Detect file type
-                file_type = self._detect_file_type(display_path, content)
+                # For python3 heredocs, force Python script type
+                if is_python_heredoc:
+                    file_type = FileType.PYTHON_SCRIPT
+                else:
+                    file_type = self._detect_file_type(display_path, content)
                 
                 # Get block info (only for post script)
                 if 'xubuntu_robotics_base_full.sh' in str(file_path):
@@ -419,16 +547,39 @@ class ComprehensiveHeredocExtractor:
                     block, block_name = None, "BUILD_SCRIPT"
                     for j in range(line_num - 1, max(0, line_num - 100), -1):
                         if j < len(lines):
-                            block_match = re.match(r'^# BLOCK (\d+):\s*(.+)$', lines[j])
+                            # Match block headers: # BLOCK N: NAME or # BLOCK NA: NAME (e.g., 26A, 26B)
+                            # Extract numeric part for grouping (26A -> 26, 26B -> 26)
+                            block_match = re.match(r'^# BLOCK (\d+)[A-Z]?:\s*(.+)$', lines[j])
                             if block_match:
                                 block = int(block_match.group(1))
                                 block_name = block_match.group(2).strip()
                                 break
                 
                 # Generate descriptive name
-                descriptive_name = self._generate_descriptive_name(
-                    display_path, content, file_type, block, block_name
-                )
+                # For python3 heredocs, generate name based on delimiter
+                if is_python_heredoc:
+                    # Map delimiter names to descriptive names
+                    delimiter_map = {
+                        'JAX_VERIFY': 'jax-installation-verification',
+                        'PYTORCH_VERIFY_EOF': 'pytorch-installation-verification',
+                        'PYTHON_PATCH': 'open3d-cmake-patch',
+                        'PY': 'python-script',  # Generic PY delimiter - will use block context
+                        'PY_VER': 'jax-version-extract',
+                        'PY_LIB': 'jaxlib-version-extract',
+                        'PY_VARIANT': 'cuda-variant-extract',
+                    }
+                    base_name = delimiter_map.get(delimiter, delimiter.lower().replace('_', '-'))
+                    # For generic PY, use block name to make it unique
+                    if delimiter == 'PY' and block and block_name:
+                        block_sanitized = self._sanitize_block_name(block_name)
+                        base_name = f"{block_sanitized}-verification"
+                    descriptive_name = f"{base_name}.py"
+                    # Update target_path to use descriptive name
+                    target_path = f"/tmp/{base_name}.py"
+                else:
+                    descriptive_name = self._generate_descriptive_name(
+                        display_path, content, file_type, block, block_name
+                    )
                 
                 # Determine permissions
                 if file_type == FileType.SHELL_SCRIPT:
@@ -474,15 +625,40 @@ class ComprehensiveHeredocExtractor:
         print(f"Found {len(self.blocks)} blocks")
         print()
         
+        # Verify heredoc termination FIRST (before extraction)
+        print("Step 1: Verifying heredoc termination...")
+        post_issues = self.verify_heredoc_termination(self.post_script)
+        build_issues = []
+        if self.build_script.exists():
+            build_issues = self.verify_heredoc_termination(self.build_script)
+        
+        total_issues = len(post_issues) + len(build_issues)
+        if total_issues > 0:
+            print(f"  WARNING: Found {total_issues} heredoc termination issues:")
+            for issue in post_issues[:10]:
+                if issue['status'] == 'missing':
+                    print(f"    Line {issue['line']}: Missing delimiter '{issue['delimiter']}'")
+                elif issue['status'] == 'mismatched':
+                    print(f"    Line {issue['line']}: Delimiter mismatch '{issue['delimiter']}' vs '{issue.get('end_delimiter', 'N/A')}'")
+                elif issue['status'] == 'trailing_content':
+                    print(f"    Line {issue['line']}: Delimiter '{issue['delimiter']}' has trailing content")
+            if total_issues > 10:
+                print(f"    ... and {total_issues - 10} more issues")
+            print("  Please fix termination issues before extraction")
+            print()
+        else:
+            print("  All heredocs properly terminated")
+            print()
+        
         # Extract from post script
-        print("Extracting from post script...")
+        print("Step 2: Extracting from post script...")
         post_files = self.extract_heredocs_from_file(self.post_script)
         print(f"Found {len(post_files)} heredoc files")
         self.files.extend(post_files)
         
         # Extract from build script
         if self.build_script.exists():
-            print("\nExtracting from build script...")
+            print("\nStep 3: Extracting from build script...")
             build_files = self.extract_heredocs_from_file(self.build_script)
             print(f"Found {len(build_files)} heredoc files")
             self.files.extend(build_files)
