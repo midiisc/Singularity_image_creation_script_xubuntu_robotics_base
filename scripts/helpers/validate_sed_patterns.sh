@@ -61,11 +61,11 @@ if [ -n "$MALFORMED_PATTERNS" ]; then
   echo -e "${YELLOW}FIX:${NC} Use 'sed s/[][]...' to match literal [ or ]"
   echo ""
   echo -e "${YELLOW}AFFECTED LINES:${NC}"
-  echo "$MALFORMED_PATTERNS" | sed 's/^/  /'
+  printf '%s\n' "$MALFORMED_PATTERNS" | sed 's/^/  /'
   echo ""
   echo -e "${YELLOW}EXPLANATION:${NC}"
-  echo "  - WRONG: sed 's/[[\/&]/\\&/g'  # Malformed bracket class"
-  echo "  - RIGHT: sed 's/[][\\\/&]/\\&/g'  # Correct: [][] matches [ or ]"
+  printf '%s\n' "  - WRONG: sed 's/[[\/&]/\\&/g'  # Malformed bracket class"
+  printf '%s\n' "  - RIGHT: sed 's/[][\\\/&]/\\&/g'  # Correct: [][] matches [ or ]"
   echo ""
 else
   echo -e "${GREEN}[✓]${NC} No malformed bracket expressions found"
@@ -139,7 +139,7 @@ if [ -n "$ESCAPING_PATTERNS" ]; then
     echo -e "${YELLOW}RECOMMENDATION:${NC} Standardize on a single pattern for consistency"
     echo ""
     echo -e "${YELLOW}PATTERNS FOUND:${NC}"
-    echo "$UNIQUE_PATTERNS" | sed 's/^/  /'
+    printf '%s\n' "$UNIQUE_PATTERNS" | sed 's/^/  /'
     echo ""
   else
     echo -e "${GREEN}[✓]${NC} Sed escaping patterns are consistent"

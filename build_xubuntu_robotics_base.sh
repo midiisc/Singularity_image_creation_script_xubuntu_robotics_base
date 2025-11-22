@@ -2932,7 +2932,7 @@ From: ${BASE_IMAGE}
     else
         # Fallback to auto-detection of versioned directory (D3e - SIGPIPE handling)
         DETECTED_CUDA=""
-        DETECTED_CUDA="$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 2>/dev/null || echo "")"
+        DETECTED_CUDA="$(find /usr/local -maxdepth 1 -type d -name "cuda-${CUDA_MAJOR}.*" 2>/dev/null | head -1 2>/dev/null || echo "")"
         if [ -n "\${DETECTED_CUDA}" ] && [ -d "\${DETECTED_CUDA}" ]; then
             export CUDA_HOME="\${DETECTED_CUDA}"
         else

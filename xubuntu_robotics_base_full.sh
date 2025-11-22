@@ -3098,7 +3098,8 @@ atomic_package_replace() {
 
         retry_count=$((retry_count + 1))
         # I1: Validate sleep duration (prevent negative or excessive values)
-        local sleep_duration=$((retry_count ** 2))
+        local sleep_duration
+        sleep_duration=$((retry_count ** 2))
         if [ "${sleep_duration:-0}" -gt 0 ] && [ "${sleep_duration:-0}" -le 3600 ]; then
             sleep "${sleep_duration}"
         else
@@ -3230,7 +3231,8 @@ acquire_package_lock() {
         fi
 
         # I1: Validate sleep duration
-        local sleep_duration=$((wait_count + 2))
+        local sleep_duration
+        sleep_duration=$((wait_count + 2))
         if [ "${sleep_duration:-0}" -gt 0 ] && [ "${sleep_duration:-0}" -le 60 ]; then
             sleep "${sleep_duration}"
         else
@@ -4214,7 +4216,7 @@ fi
 # Ensure consistent command names regardless of Debian/Ubuntu packaging quirks
 # M1: Verify commands exist before creating symlinks
 # J1: Validate target directory exists before creating symlinks
-    if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
+if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
         if command -v fdfind >/dev/null 2>&1 && ! command -v fd >/dev/null 2>&1; then
         # F2: Validate command substitution result
         fdfind_path=""
@@ -4231,6 +4233,7 @@ fi
             else
                 echo "[warn] ⚠ Failed to create /usr/local/bin/fd symlink"
             fi
+        fi
         fi
 
         if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
@@ -4250,10 +4253,11 @@ fi
                 echo "[warn] ⚠ Failed to create /usr/local/bin/bat symlink"
             fi
         fi
-    else
-        echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
-    fi
-    # ENDIF: symlink normalization for fd and bat
+        fi
+else
+    echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
+fi
+# ENDIF: symlink normalization for fd and bat
 
 debug_glibc "After installing advanced search & productivity CLI tools"
 
@@ -5572,8 +5576,11 @@ else
     if ! chmod 0644 /etc/profile.d/openblas.sh 2>/dev/null; then
         printf '%s\n' "  ${YELLOW}⚠ Failed to set permissions on /etc/profile.d/openblas.sh${NC}" >&2
     fi
+# ENDIF: chmod check
+fi
 # ENDIF: openblas.sh installation verification
 fi
+# ENDIF: OPENBLAS_INSTALL_PREFIX/lib/cmake/openblas directory and write check (closes if at line 5524)
 
 printf '%s\n' "  ${GREEN}✓ Library paths, CMake configs, and profile.d script configured${NC}"
 echo ""
@@ -6492,10 +6499,13 @@ if ! rm -rf /tmp/apt-dpkg-install-* 2>/dev/null; then
   :
 fi
 # Validate cleanup completed (optional verification for debugging)
-if [ -d /tmp/apt-dpkg-install-* ] 2>/dev/null; then
-  # Some directories may still exist (non-critical)
-  :
-fi
+# SC2144: Use for loop instead of glob with -d
+for dir in /tmp/apt-dpkg-install-*; do
+  if [ -d "${dir}" ] 2>/dev/null; then
+    # Some directories may still exist (non-critical)
+    break
+  fi
+done
 if ! rm -rf /var/cache/apt/archives/partial/* 2>/dev/null; then
   # Cleanup failure is non-critical, continue
   :
@@ -18245,6 +18255,9 @@ if [ "${BUILD_LLVM11_LOCALLY}" = "true" ] && [ -z "${CLANG_LIBDIR_11:-}" ] && [ 
         
         # A5a/D3b: Use printf instead of echo for robustness
         printf '%s\n' "Configuring libc++ build..."
+        # M8: CMake flag documentation - see docs/flags/LLVM_11.1.0_LIBCXX_CMAKE_FLAGS_DOCUMENTATION.md
+        # Library: LLVM 11.1.0 libc++/libc++abi (runtime-only build)
+        # Source: llvm/llvm-project, tag: llvmorg-11.1.0
         cmake ../llvm-project/runtimes \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX="${LOCAL_LLVM11_DIR}/install" \
@@ -20995,6 +21008,9 @@ if [ -x "${MINIFORGE_HOME}/bin/conda" ]; then
   fi
   # End verification (if-else blocks self-contained)
 fi
+# ENDIF: MINIFORGE_HOME/bin/conda check (nested if)
+fi
+# ENDIF: CONTAINER_BIN_CACHE/MINIFORGE_SH check (closes if at line 20333)
 # End conda base environment setup (if block self-contained)
 debug_glibc "After conda environment setup"
 
@@ -22926,74 +22942,81 @@ if [ "${ZENOH_INSTALLED}" = true ]; then
         fi
       fi
     fi
-# Note: json-configs file: /etc/zenoh/zenoh-router.json5 is installed via install.sh from container-scripts/
-# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-router.json5
-# Target: /etc/zenoh/zenoh-router.json5
-# Installed in Block 0 (early in script, before any scripts are needed)
-# Note: json-configs file: /etc/zenoh/zenoh-bridge-humble.json5 is installed via install.sh from container-scripts/
-# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-humble.json5
-# Target: /etc/zenoh/zenoh-bridge-humble.json5
-# Installed in Block 0 (early in script, before any scripts are needed)
+    # ENDIF: unzip check
+  fi
+  # ENDIF: ZENOH_ROS2DDS_DOWNLOAD_SUCCESS check
+  # Note: json-configs file: /etc/zenoh/zenoh-router.json5 is installed via install.sh from container-scripts/
+  # Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-router.json5
+  # Target: /etc/zenoh/zenoh-router.json5
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # Note: json-configs file: /etc/zenoh/zenoh-bridge-humble.json5 is installed via install.sh from container-scripts/
+  # Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-humble.json5
+  # Target: /etc/zenoh/zenoh-bridge-humble.json5
+  # Installed in Block 0 (early in script, before any scripts are needed)
 
   # Zenoh-DDS Bridge Configuration (Jazzy domain)
-# Note: json-configs file: /etc/zenoh/zenoh-bridge-jazzy.json5 is installed via install.sh from container-scripts/
-# Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-jazzy.json5
-# Target: /etc/zenoh/zenoh-bridge-jazzy.json5
-# Installed in Block 0 (early in script, before any scripts are needed)
+  # Note: json-configs file: /etc/zenoh/zenoh-bridge-jazzy.json5 is installed via install.sh from container-scripts/
+  # Source: json-configs/block-38-robotics-middleware-zenoh/zenoh-bridge-jazzy.json5
+  # Target: /etc/zenoh/zenoh-bridge-jazzy.json5
+  # Installed in Block 0 (early in script, before any scripts are needed)
 
-# Note: shell-scripts file: /usr/local/bin/zenoh_start is installed via install.sh from container-scripts/
-# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-startup.sh
-# Target: /usr/local/bin/zenoh_start
-# Installed in Block 0 (early in script, before any scripts are needed)
-# Note: shell-scripts file: /usr/local/bin/zenoh_stop is installed via install.sh from container-scripts/
-# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-shutdown.sh
-# Target: /usr/local/bin/zenoh_stop
-# Installed in Block 0 (early in script, before any scripts are needed)
-# J1: Verify file exists before chmod
-if [ -f "/usr/local/bin/zenoh_start" ]; then
-  chmod +x /usr/local/bin/zenoh_start || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
-fi
+  # Note: shell-scripts file: /usr/local/bin/zenoh_start is installed via install.sh from container-scripts/
+  # Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-startup.sh
+  # Target: /usr/local/bin/zenoh_start
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # Note: shell-scripts file: /usr/local/bin/zenoh_stop is installed via install.sh from container-scripts/
+  # Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-shutdown.sh
+  # Target: /usr/local/bin/zenoh_stop
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # J1: Verify file exists before chmod
+  if [ -f "/usr/local/bin/zenoh_start" ]; then
+    chmod +x /usr/local/bin/zenoh_start || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/zenoh_start" >&2; exit 1; }
+  fi
+  # ENDIF: zenoh_start file check
 
-# Zenoh stop script
-# Note: shell-scripts file: /usr/local/bin/zenoh_status is installed via install.sh from container-scripts/
-# Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-status-check.sh
-# Target: /usr/local/bin/zenoh_status
-# Installed in Block 0 (early in script, before any scripts are needed)
-echo "Zenoh Infrastructure Status:"
-echo "----------------------------"
-# Check router
-if pgrep -f "zenohd" > /dev/null; then
-  echo "✓ Zenoh Router: RUNNING"
-  echo "  REST API: http://localhost:8000"
-else
-  echo "✗ Zenoh Router: STOPPED"
-fi
-# Note: python-scripts file: /opt/scripts/zenoh_topic_bridge.py is installed via install.sh from container-scripts/
-# Source: python-scripts/block-38-robotics-middleware-zenoh/zenoh-topic-bridge.py
-# Target: /opt/scripts/zenoh_topic_bridge.py
-# Installed in Block 0 (early in script, before any scripts are needed)
-# Note: shell-scripts file: /usr/local/bin/ros_multiterm_zellij_zenoh is installed via install.sh from container-scripts/
-# Source: shell-scripts/block-38-robotics-middleware-zenoh/ros-multiterminal-zellij-launcher.sh
-# Target: /usr/local/bin/ros_multiterm_zellij_zenoh
-# Installed in Block 0 (early in script, before any scripts are needed)
-# J1: Verify file exists before chmod
-if [ -f "/usr/local/bin/ros_multiterm_zellij_zenoh" ]; then
-  chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
-fi
-
-# CLEANUP
-#--- Sub-block 38.10: Clean up Rust build artifacts ---
-# Purpose: Remove cargo cache to save space
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-    # Remove Zenoh build artifacts
-    rm -rf /opt/rust/cargo/registry
-    rm -rf /opt/rust/cargo/git
-    echo "✓ Zenoh installation and configuration complete"
+  # Zenoh stop script
+  # Note: shell-scripts file: /usr/local/bin/zenoh_status is installed via install.sh from container-scripts/
+  # Source: shell-scripts/block-38-robotics-middleware-zenoh/zenoh-router-bridge-status-check.sh
+  # Target: /usr/local/bin/zenoh_status
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  echo "Zenoh Infrastructure Status:"
+  echo "----------------------------"
+  # Check router
+  if pgrep -f "zenohd" > /dev/null; then
+    echo "✓ Zenoh Router: RUNNING"
+    echo "  REST API: http://localhost:8000"
   else
-    echo "⚠ Zenoh not installed - skipping configuration"
+    echo "✗ Zenoh Router: STOPPED"
+  fi
+  # ENDIF: zenohd process check
+  # Note: python-scripts file: /opt/scripts/zenoh_topic_bridge.py is installed via install.sh from container-scripts/
+  # Source: python-scripts/block-38-robotics-middleware-zenoh/zenoh-topic-bridge.py
+  # Target: /opt/scripts/zenoh_topic_bridge.py
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # Note: shell-scripts file: /usr/local/bin/ros_multiterm_zellij_zenoh is installed via install.sh from container-scripts/
+  # Source: shell-scripts/block-38-robotics-middleware-zenoh/ros-multiterminal-zellij-launcher.sh
+  # Target: /usr/local/bin/ros_multiterm_zellij_zenoh
+  # Installed in Block 0 (early in script, before any scripts are needed)
+  # J1: Verify file exists before chmod
+  if [ -f "/usr/local/bin/ros_multiterm_zellij_zenoh" ]; then
+    chmod +x /usr/local/bin/ros_multiterm_zellij_zenoh || { printf '%s\n' "✗ Failed to set executable bit on /usr/local/bin/ros_multiterm_zellij_zenoh" >&2; exit 1; }
+  fi
+  # ENDIF: ros_multiterm_zellij_zenoh file check
+
+  # CLEANUP
+  #--- Sub-block 38.10: Clean up Rust build artifacts ---
+  # Purpose: Remove cargo cache to save space
+  # Dependencies: None (foundational)
+  # Outputs: Environment variables, configuration
+  # Remove Zenoh build artifacts
+  rm -rf /opt/rust/cargo/registry
+  rm -rf /opt/rust/cargo/git
+  echo "✓ Zenoh installation and configuration complete"
+else
+  echo "⚠ Zenoh not installed - skipping configuration"
   echo "  Zenoh is optional and can be installed manually later if needed"
 fi
+# ENDIF: ZENOH_INSTALLED check
 
 # === Sioyek note (baseline) ===
 echo "==> Sioyek (manual AppImage install recommended)"
@@ -23245,6 +23268,7 @@ if [ -x /usr/local/bin/vglrun ]; then
 else
   echo "  ✗ VirtualGL not found!"
 fi
+# ENDIF: vglrun check
 
 #===============================================================================
 # BLOCK 40: DOCUMENTATION AND USER GUIDES

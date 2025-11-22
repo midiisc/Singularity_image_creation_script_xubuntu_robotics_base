@@ -66,7 +66,7 @@ echo -e "${BLUE}[FIX 1]${NC} Correcting malformed sed bracket classes..."
 echo ""
 
 # Count malformed patterns (excluding POSIX classes like [[:space:]])
-MALFORMED_COUNT=$(grep -E "sed 's/\[\[" "$SCRIPT_FILE" | grep -v '\[:' | wc -l || echo "0")
+MALFORMED_COUNT=$(grep -cE "sed 's/\[\[" "$SCRIPT_FILE" 2>/dev/null | grep -v '\[:' || echo "0")
 
 if [ "$MALFORMED_COUNT" -gt 0 ]; then
   echo -e "${YELLOW}[FOUND]${NC} $MALFORMED_COUNT malformed sed bracket expression(s)"
@@ -76,7 +76,7 @@ if [ "$MALFORMED_COUNT" -gt 0 ]; then
   echo -e "${BLUE}[PREVIEW]${NC} Lines to be fixed:"
   grep -nE "sed 's/\[\[" "$SCRIPT_FILE" | grep -v '\[:' | head -5 | sed 's/^/  /' || true
   if [ "$MALFORMED_COUNT" -gt 5 ]; then
-    echo "  ... ($(($MALFORMED_COUNT - 5)) more)"
+    echo "  ... ($((MALFORMED_COUNT - 5)) more)"
   fi
   echo ""
   
@@ -109,7 +109,7 @@ echo ""
 # More precise pattern matching using multiple greps
 MISSING_FALLBACKS=$(grep -nE '\$\([^)]*sed[^)]*\)' "$SCRIPT_FILE" | \
   grep -vE '\|\|\s*(echo|true|return)' | \
-  wc -l || echo "0")
+  grep -c . || echo "0")
 
 if [ "$MISSING_FALLBACKS" -gt 0 ]; then
   echo -e "${YELLOW}[FOUND]${NC} $MISSING_FALLBACKS command substitution(s) lacking error fallbacks"
@@ -120,7 +120,7 @@ if [ "$MISSING_FALLBACKS" -gt 0 ]; then
     grep -vE '\|\|\s*(echo|true|return)' | \
     head -5 | sed 's/^/  /' || true
   if [ "$MISSING_FALLBACKS" -gt 5 ]; then
-    echo "  ... ($(($MISSING_FALLBACKS - 5)) more)"
+    echo "  ... ($((MISSING_FALLBACKS - 5)) more)"
   fi
   echo ""
   

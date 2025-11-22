@@ -198,7 +198,7 @@ run_shellcheck() {
     # - SC2230: which is non-standard. Use builtin 'command -v' instead
     
     # Run shellcheck with comprehensive format and all checks
-    if shellcheck ${severity_args} -f gcc -e SC1090,SC1091 "${file}" >> "${AUDIT_REPORT}" 2>&1; then
+    if shellcheck "${severity_args}" -f gcc -e SC1090,SC1091 "${file}" >> "${AUDIT_REPORT}" 2>&1; then
         log_success "ShellCheck passed: ${file}"
         return 0
     else
@@ -336,7 +336,7 @@ shell_expansion_check() {
     fi
     
     # Check for command substitution errors
-    if grep -nE '`[^`]*$|\$\([^)]*$' "${file}" | grep -vE '^\s*#' >/dev/null 2>&1; then
+    if grep -nE "`[^`]*\$|\\$\\([^)]*\$" "${file}" | grep -vE '^\s*#' >/dev/null 2>&1; then
         log_warning "Potential unclosed command substitution in: ${file}"
         echo "  → Check command substitution: \$(command) or \`command\`" >> "${AUDIT_REPORT}"
         ((issues++)) || true
@@ -1055,21 +1055,23 @@ This audit runs automatically before every git commit. The agent automatically r
 EOF
 
     # Append prompt to audit report
-    echo "" >> "${AUDIT_REPORT}"
-    echo "=== CURSOR AI AGENT AUDIT ===" >> "${AUDIT_REPORT}"
-    echo "File: ${file}" >> "${AUDIT_REPORT}"
-    echo "Prompt saved to: ${prompt_file}" >> "${AUDIT_REPORT}"
-    echo "" >> "${AUDIT_REPORT}"
-    echo "HOW TO USE (Same as manually entering the prompt):" >> "${AUDIT_REPORT}"
-    echo "  1. Open the changed file in Cursor: ${file}" >> "${AUDIT_REPORT}"
-    echo "  2. Use Cmd+K (Mac) or Ctrl+K (Linux/Windows) to open Cursor AI" >> "${AUDIT_REPORT}"
-    echo "  3. Copy and paste the prompt from: ${prompt_file}" >> "${AUDIT_REPORT}"
-    echo "  4. Cursor AI will analyze and SUGGEST corrections (not auto-apply)" >> "${AUDIT_REPORT}"
-    echo "  5. Review suggestions and manually approve/reject each change" >> "${AUDIT_REPORT}"
-    echo "" >> "${AUDIT_REPORT}"
-    echo "ALTERNATIVE: Open prompt file and use Cmd/Ctrl+K directly" >> "${AUDIT_REPORT}"
-    echo "  The prompt file contains everything ready to use." >> "${AUDIT_REPORT}"
-    echo "" >> "${AUDIT_REPORT}"
+    {
+      echo ""
+      echo "=== CURSOR AI AGENT AUDIT ==="
+      echo "File: ${file}"
+      echo "Prompt saved to: ${prompt_file}"
+      echo ""
+      echo "HOW TO USE (Same as manually entering the prompt):"
+      echo "  1. Open the changed file in Cursor: ${file}"
+      echo "  2. Use Cmd+K (Mac) or Ctrl+K (Linux/Windows) to open Cursor AI"
+      echo "  3. Copy and paste the prompt from: ${prompt_file}"
+      echo "  4. Cursor AI will analyze and SUGGEST corrections (not auto-apply)"
+      echo "  5. Review suggestions and manually approve/reject each change"
+      echo ""
+      echo "ALTERNATIVE: Open prompt file and use Cmd/Ctrl+K directly"
+      echo "  The prompt file contains everything ready to use."
+      echo ""
+    } >> "${AUDIT_REPORT}"
     
     # Try to invoke Cursor AI if possible
     # Method 1: Check if cursor CLI exists
@@ -1171,7 +1173,7 @@ EOF
 {
   "command": "cursor.chat.audit",
   "file": "${file}",
-  "prompt": "$(cat "${prompt_file}" | sed 's/"/\\"/g' | tr '\n' ' ')"
+  "prompt": "$(sed 's/"/\\"/g' < "${prompt_file}" | tr '\n' ' ')"
 }
 EOF
     
@@ -1215,7 +1217,12 @@ unbound_variable_check() {
         sed 's/\${//;s/}//;s/\$//' | while IFS= read -r var_name; do
             # Check if variable is defined before this line
             # Look for: VAR=, export VAR=, local VAR=, declare VAR=, readonly VAR=
-            if ! sed -n "1,${line_num}p" "${file}" | grep -qE "^\s*(export\s+|local\s+|declare\s+|readonly\s+)?${var_name}\s*=|^\s*${var_name}\s*="; then
+            # SC2094: Use temp file to avoid reading and writing same file in pipeline
+            local temp_check_file
+            temp_check_file=$(mktemp)
+            sed -n "1,${line_num}p" "${file}" > "${temp_check_file}"
+            if ! grep -qE "^\s*(export\s+|local\s+|declare\s+|readonly\s+)?${var_name}\s*=|^\s*${var_name}\s*=" "${temp_check_file}"; then
+                rm -f "${temp_check_file}"
                 # Check if it's a default value pattern ${VAR:-default} or ${VAR:=default}
                 if echo "${line}" | grep -qE "\$\{${var_name}:-|\$\{${var_name}:="; then
                     continue  # This is safe, has default value
@@ -1224,6 +1231,8 @@ unbound_variable_check() {
                 echo "  → Line ${line_num}: Variable \${${var_name}} used but may not be defined" >> "${AUDIT_REPORT}"
                 echo "    Consider: \${${var_name}:-default} or define before use" >> "${AUDIT_REPORT}"
                 ((issues++)) || true
+            else
+                rm -f "${temp_check_file}"
             fi
         done
     done < "${file}"
@@ -1350,7 +1359,7 @@ variable_scope_check() {
                 echo "${line}"
                 echo ""
                 echo "# AFTER (Line ${line_num}) - CORRECTION:"
-                echo "${line}" | sed 's/^\s*local\s\+//'
+                printf '%s\n' "${line}" | sed 's/^\s*local\s\+//'
                 echo ""
                 echo "# [ ] Accept this correction"
                 echo "# [ ] Reject this correction"
@@ -1561,9 +1570,11 @@ audit_file() {
     fi
     
     if [ "${SKIP_REPORT_FILE}" != "true" ]; then
-        echo "" >> "${AUDIT_REPORT}"
-        echo "--- Auditing: ${file} ---" >> "${AUDIT_REPORT}"
-        echo "" >> "${AUDIT_REPORT}"
+        {
+          echo ""
+          echo "--- Auditing: ${file} ---"
+          echo ""
+        } >> "${AUDIT_REPORT}"
     fi
     
     log_info "Auditing shell script: ${file}"
@@ -1670,11 +1681,13 @@ main() {
     
     # Summary
     if [ "${SKIP_REPORT_FILE}" != "true" ]; then
-        echo "" >> "${AUDIT_REPORT}"
-        echo "=== Summary ===" >> "${AUDIT_REPORT}"
-        echo "Audited: $(echo "${staged_files}" | wc -l) file(s)" >> "${AUDIT_REPORT}"
-        echo "Status: $([ $FAILED -eq 0 ] && echo "PASSED" || echo "FAILED")" >> "${AUDIT_REPORT}"
-        echo "" >> "${AUDIT_REPORT}"
+        {
+          echo ""
+          echo "=== Summary ==="
+          echo "Audited: $(echo "${staged_files}" | wc -l) file(s)"
+          echo "Status: $([ $FAILED -eq 0 ] && echo "PASSED" || echo "FAILED")"
+          echo ""
+        } >> "${AUDIT_REPORT}"
     fi
     
     echo ""

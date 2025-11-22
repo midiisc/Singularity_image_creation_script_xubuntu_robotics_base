@@ -81,7 +81,7 @@ if [ -f "${OVERLAY_NAME}" ]; then
     echo ""
     
     # Prompt for deletion
-    read -p "Delete and recreate? (y/n): " REPLY
+    read -r -p "Delete and recreate? (y/n): " REPLY
     echo ""
     
     if [[ ! $REPLY =~ ^[Yy]$ ]]; then
@@ -155,9 +155,7 @@ if [ "$CREATION_METHOD" = "manual" ]; then
     
     # Format as ext3 (compatible with Singularity overlays)
     echo "Formatting as ${FILESYSTEM} filesystem..."
-    mkfs.${FILESYSTEM} -F "${OVERLAY_NAME}"
-    
-    if [ $? -ne 0 ]; then
+    if ! mkfs."${FILESYSTEM}" -F "${OVERLAY_NAME}"; then
         echo -e "${RED}Error: Failed to format overlay${NC}"
         rm -f "${OVERLAY_NAME}"
         exit 1
@@ -184,7 +182,7 @@ fi
 
 echo ""
 echo "Overlay file:"
-ls -lh "${OVERLAY_NAME}" | awk '{printf "  %s  %s  %s\n", $5, $6" "$7, $9}'
+find "${OVERLAY_NAME}" -maxdepth 0 -exec ls -lh {} \; | awk '{printf "  %s  %s  %s\n", $5, $6" "$7, $9}'
 
 # Get file info
 FILE_SIZE=$(du -h "${OVERLAY_NAME}" | cut -f1)

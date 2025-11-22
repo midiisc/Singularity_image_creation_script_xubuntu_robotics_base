@@ -294,7 +294,7 @@ auto_fix_header() {
             # Add module docstring
             {
                 echo '"""'
-                echo "$(basename "$file" | sed 's/\.[^.]*$//' | sed 's/_/ /g' | sed 's/\b\(.\)/\u\1/g')"
+                basename "$file" | sed 's/\.[^.]*$//' | sed 's/_/ /g' | sed 's/\b\(.\)/\u\1/g'
                 echo ""
                 echo "Purpose: Module for $(basename "$file" | sed 's/\.[^.]*$//' | sed 's/_/ /g')"
                 echo '"""'

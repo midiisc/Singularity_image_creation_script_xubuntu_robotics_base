@@ -128,17 +128,19 @@ parse_cmake_options() {
       local description="${BASH_REMATCH[2]}"
       local default_value="${BASH_REMATCH[3]}"
       
-      echo "### ${flag_name}" >> "${output_file}"
-      echo "" >> "${output_file}"
-      echo "- **Type:** BOOL (ON/OFF)" >> "${output_file}"
-      echo "- **Default:** \`${default_value}\`" >> "${output_file}"
-      echo "- **Description:** ${description}" >> "${output_file}"
-      echo "- **Source line:** ${lineno}" >> "${output_file}"
-      echo "" >> "${output_file}"
-      echo "\`\`\`cmake" >> "${output_file}"
-      echo "${line}" >> "${output_file}"
-      echo "\`\`\`" >> "${output_file}"
-      echo "" >> "${output_file}"
+      {
+        echo "### ${flag_name}"
+        echo ""
+        echo "- **Type:** BOOL (ON/OFF)"
+        echo "- **Default:** \`${default_value}\`"
+        echo "- **Description:** ${description}"
+        echo "- **Source line:** ${lineno}"
+        echo ""
+        echo "\`\`\`cmake"
+        echo "${line}"
+        echo "\`\`\`"
+        echo ""
+      } >> "${output_file}"
     fi
   done
 }
@@ -158,17 +160,19 @@ parse_cmake_variables() {
       local var_type="${BASH_REMATCH[3]}"
       local description="${BASH_REMATCH[4]}"
       
-      echo "### ${var_name}" >> "${output_file}"
-      echo "" >> "${output_file}"
-      echo "- **Type:** ${var_type}" >> "${output_file}"
-      echo "- **Default:** \`${default_value}\`" >> "${output_file}"
-      echo "- **Description:** ${description}" >> "${output_file}"
-      echo "- **Source line:** ${lineno}" >> "${output_file}"
-      echo "" >> "${output_file}"
-      echo "\`\`\`cmake" >> "${output_file}"
-      echo "${line}" >> "${output_file}"
-      echo "\`\`\`" >> "${output_file}"
-      echo "" >> "${output_file}"
+      {
+        echo "### ${var_name}"
+        echo ""
+        echo "- **Type:** ${var_type}"
+        echo "- **Default:** \`${default_value}\`"
+        echo "- **Description:** ${description}"
+        echo "- **Source line:** ${lineno}"
+        echo ""
+        echo "\`\`\`cmake"
+        echo "${line}"
+        echo "\`\`\`"
+        echo ""
+      } >> "${output_file}"
     fi
   done
 }

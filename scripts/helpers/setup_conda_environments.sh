@@ -184,7 +184,7 @@ register_r_kernel() {
     echo -e "${BLUE}Configuring R kernel for environment '${env_name}'...${NC}"
     
     # Install IRkernel in the environment
-    ${CONDA_ROOT}/envs/${env_name}/bin/R --quiet -e "
+    "${CONDA_ROOT}/envs/${env_name}/bin/R" --quiet -e "
         install.packages('IRkernel', repos='https://cloud.r-project.org/')
         IRkernel::installspec(name = 'ir', displayname = 'R')
     " 2>/dev/null || echo -e "${YELLOW}Warning: R kernel installation failed (non-critical)${NC}"
@@ -203,7 +203,9 @@ echo "  Writable overlay: $(df -h ${ENVS_DIR} | tail -1 | awk '{print $4}') avai
 echo ""
 
 # Initialize conda
-source ${CONDA_ROOT}/etc/profile.d/conda.sh
+# shellcheck disable=SC1091 # Source file is dynamically determined
+# shellcheck disable=SC1090
+source "${CONDA_ROOT}/etc/profile.d/conda.sh"
 
 # Setup SSL
 setup_ssl
@@ -258,7 +260,7 @@ echo "6) Custom selection"
 echo "7) Skip (environments already created)"
 echo ""
 
-read -p "Select option (1-7): " selection
+read -r -p "Select option (1-7): " selection
 
 case $selection in
     1)
@@ -282,19 +284,19 @@ case $selection in
         DO_JUPYTER=1
         ;;
     6)
-        read -p "Create robotics_jazzy? (y/n): " ans
+        read -r -p "Create robotics_jazzy? (y/n): " ans
         [ "$ans" = "y" ] && DO_ROBOTICS_JAZZY=1
         
-        read -p "Create robotics_humble? (y/n): " ans
+        read -r -p "Create robotics_humble? (y/n): " ans
         [ "$ans" = "y" ] && DO_ROBOTICS_HUMBLE=1
         
-        read -p "Create deep_learning? (y/n): " ans
+        read -r -p "Create deep_learning? (y/n): " ans
         [ "$ans" = "y" ] && DO_DEEP_LEARNING=1
         
-        read -p "Create ml_general? (y/n): " ans
+        read -r -p "Create ml_general? (y/n): " ans
         [ "$ans" = "y" ] && DO_ML_GENERAL=1
         
-        read -p "Create jupyter? (y/n): " ans
+        read -r -p "Create jupyter? (y/n): " ans
         [ "$ans" = "y" ] && DO_JUPYTER=1
         ;;
     7)

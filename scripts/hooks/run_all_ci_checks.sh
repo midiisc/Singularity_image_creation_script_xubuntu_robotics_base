@@ -598,7 +598,7 @@ main() {
           # SC2155: Declare and assign separately (already fixed by auto-fix script)
           local error_msg
           error_msg=""
-          error_msg=$(echo "${CHECK_ERRORS[$check]}" | sed 's/"/\\"/g' || echo "")
+          error_msg="${CHECK_ERRORS[$check]//\"/\\\"}"
           echo -n "    \"$check\": \"$error_msg\""
         done
         echo ""

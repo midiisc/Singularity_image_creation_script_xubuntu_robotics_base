@@ -460,7 +460,7 @@ extract_cmake_flags() {
         options=$(grep -nE "^[[:space:]]*option\(" "${cmake_file}" 2>/dev/null || true)
         echo "**Options**" >> "${CMAKE_FLAGS_FILE}"
         if [[ -n "$options" ]]; then
-            echo "$options" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
+            printf '%s\n' "$options" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
         else
             echo "- (none found)" >> "${CMAKE_FLAGS_FILE}"
         fi
@@ -470,7 +470,7 @@ extract_cmake_flags() {
         cache_entries=$(grep -nE "^[[:space:]]*set\([[:space:]]*CMAKE_[A-Z0-9_]*FLAGS" "${cmake_file}" 2>/dev/null || true)
         echo "**Global Compiler Flags**" >> "${CMAKE_FLAGS_FILE}"
         if [[ -n "$cache_entries" ]]; then
-            echo "$cache_entries" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
+            printf '%s\n' "$cache_entries" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
         else
             echo "- (none found)" >> "${CMAKE_FLAGS_FILE}"
         fi
@@ -480,7 +480,7 @@ extract_cmake_flags() {
         target_compile_opts=$(grep -nE "target_compile_(options|definitions)" "${cmake_file}" 2>/dev/null || true)
         echo "**Target Compile Options/Definitions**" >> "${CMAKE_FLAGS_FILE}"
         if [[ -n "$target_compile_opts" ]]; then
-            echo "$target_compile_opts" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
+            printf '%s\n' "$target_compile_opts" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
         else
             echo "- (none found)" >> "${CMAKE_FLAGS_FILE}"
         fi
@@ -490,7 +490,7 @@ extract_cmake_flags() {
         add_definitions=$(grep -nE "^[[:space:]]*add_definitions\(" "${cmake_file}" 2>/dev/null || true)
         echo "**add_definitions**" >> "${CMAKE_FLAGS_FILE}"
         if [[ -n "$add_definitions" ]]; then
-            echo "$add_definitions" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
+            printf '%s\n' "$add_definitions" | sed 's/^\([0-9]\+\):[[:space:]]*/- L\1: /' >> "${CMAKE_FLAGS_FILE}"
         else
             echo "- (none found)" >> "${CMAKE_FLAGS_FILE}"
         fi

@@ -68,6 +68,7 @@ fi
 
 # Source config.sh
 # shellcheck source=/dev/null
+# shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 
 # Verify OpenCV version is set
@@ -451,7 +452,7 @@ calculate_build_jobs() {
     # Ensure at least 1 job, but don't exceed number of cores
     if [ ${jobs} -lt 1 ]; then
         jobs=1
-    elif [ ${jobs} -gt ${num_cores} ]; then
+    elif [ "${jobs}" -gt "${num_cores}" ]; then
         jobs=${num_cores}
     fi
     

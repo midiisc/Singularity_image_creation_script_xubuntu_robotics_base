@@ -94,12 +94,12 @@ FALLBACK_ATTEMPT=0
 get_pending_jobs() {
   # Get pending jobs in this partition (not per-node, but partition-wide)
   local partition=$1
-  squeue -p $partition -h -t PENDING 2>/dev/null | wc -l
+  squeue -p "$partition" -h -t PENDING 2>/dev/null | wc -l
 }
 
 get_user_jobs_on_node() {
   # Fixed: Added -h flag and fixed typo
-  squeue -w $1 -u $USER -h 2>/dev/null | wc -l
+  squeue -w "$1" -u "$USER" -h 2>/dev/null | wc -l
 }
 
 #===============================================================================
@@ -114,7 +114,7 @@ find_best_nodes() {
   
   # Query with GPU allocation info
   local sinfo_data
-  sinfo_data=$(sinfo -p $PARTITION -h -o "%N|%T|%C|%O|%m|%e|%G")
+  sinfo_data=$(sinfo -p "$PARTITION" -h -o "%N|%T|%C|%O|%m|%e|%G")
   
   if [ -z "$sinfo_data" ]; then
     echo -e "${RED}ERROR: No nodes found${NC}" >&2
@@ -150,7 +150,7 @@ find_best_nodes() {
     # Get GPU allocation from scontrol (more accurate)
     local alloc_gpus=0
     local gpu_alloc_info
-    gpu_alloc_info=$(scontrol show node $node 2>/dev/null | grep "AllocTRES" | grep -oP 'gres/gpu=\K\d+' || echo "0")
+    gpu_alloc_info=$(scontrol show node "$node" 2>/dev/null | grep "AllocTRES" | grep -oP 'gres/gpu=\K\d+' || echo "0")
     alloc_gpus=${gpu_alloc_info:-0}
     local free_gpus
     free_gpus=$((gpu_count - alloc_gpus))
@@ -273,8 +273,8 @@ find_best_nodes() {
       "$node" "$state" "$cpus" "$cpu_load" "${free_mem_gb}GB" "${free_gpus}/${gpu_count}" "$final_score $rating" >&2
     
     # Store as integer (multiply by 1000 to preserve precision for sorting)
-    node_scores[$idx]=$((final_score * 1000))
-    node_names[$idx]=$node
+    node_scores[idx]=$((final_score * 1000))
+    node_names[idx]=$node
     idx=$((idx+1))
   done <<< "$sinfo_data"
   
@@ -283,8 +283,8 @@ find_best_nodes() {
   [ "$idx" -eq 0 ] && return 1
   
   # Sort nodes by score DESCENDING (highest first)
-  for ((i=0; i<$idx; i++)); do
-    for ((j=i+1; j<$idx; j++)); do
+  for ((i=0; i<idx; i++)); do
+    for ((j=i+1; j<idx; j++)); do
       if [ "${node_scores[$i]}" -lt "${node_scores[$j]}" ]; then
         local tmp=${node_scores[$i]}
         node_scores[$i]=${node_scores[$j]}
@@ -299,7 +299,7 @@ find_best_nodes() {
   
   # Check for excellent nodes
   local excellent_count=0
-  for ((i=0; i<$idx; i++)); do
+  for ((i=0; i<idx; i++)); do
     if [ "${node_scores[$i]}" -ge 90000 ]; then
       ((excellent_count++))
     fi
@@ -499,7 +499,7 @@ check_existing_jobs() {
   echo "  1) Cancel all existing jobs and start a new one" >&2
   echo "  2) Exit and keep existing jobs running" >&2
   echo "" >&2
-  read -p "Enter choice [1/2]: " user_choice
+  read -r -p "Enter choice [1/2]: " user_choice
   
   case "$user_choice" in
     1)
@@ -555,7 +555,7 @@ if ! check_existing_jobs; then
   exit 1
 fi
 
-TOP_NODES=$(find_best_nodes $MAX_FALLBACK_ATTEMPTS)
+TOP_NODES=$(find_best_nodes "$MAX_FALLBACK_ATTEMPTS")
 [ -z "$TOP_NODES" ] && exit 1
 
 read -ra NODE_ARRAY <<< "$TOP_NODES"
@@ -572,7 +572,7 @@ for FALLBACK_ATTEMPT in $(seq 0 $((${#NODE_ARRAY[@]} - 1))); do
   if try_launch_on_node "${NODE_ARRAY[$FALLBACK_ATTEMPT]}"; then
     exit 0
   fi
-  [ $FALLBACK_ATTEMPT -lt $((${#NODE_ARRAY[@]} - 1)) ] && sleep 2
+  [ "$FALLBACK_ATTEMPT" -lt $((${#NODE_ARRAY[@]} - 1)) ] && sleep 2
 done
 
 echo "" >&2

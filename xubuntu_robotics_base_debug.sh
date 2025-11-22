@@ -3101,7 +3101,8 @@ atomic_package_replace() {
 
         retry_count=$((retry_count + 1))
         # I1: Validate sleep duration (prevent negative or excessive values)
-        local sleep_duration=$((retry_count ** 2))
+        local sleep_duration
+        sleep_duration=$((retry_count ** 2))
         if [ "${sleep_duration:-0}" -gt 0 ] && [ "${sleep_duration:-0}" -le 3600 ]; then
             sleep "${sleep_duration}"
         else
@@ -3233,7 +3234,8 @@ acquire_package_lock() {
         fi
 
         # I1: Validate sleep duration
-        local sleep_duration=$((wait_count + 2))
+        local sleep_duration
+        sleep_duration=$((wait_count + 2))
         if [ "${sleep_duration:-0}" -gt 0 ] && [ "${sleep_duration:-0}" -le 60 ]; then
             sleep "${sleep_duration}"
         else
@@ -5563,6 +5565,10 @@ else()
 endif()
 EOF
 # ENDIF: OpenBLASConfigVersion.cmake creation
+else
+    printf '%s\n' "  ${YELLOW}⚠ Cannot write OpenBLAS CMake configs (directory not writable): ${OPENBLAS_INSTALL_PREFIX}/lib/cmake/openblas${NC}" >&2
+fi
+# ENDIF: OpenBLAS CMake config creation
 
 # Note: config-files file: /etc/profile.d/openblas.sh is installed via install.sh from container-scripts/
 # Source: config-files/block-12-openblas-compilation-and-installation/openblas.sh

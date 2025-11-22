@@ -227,6 +227,8 @@ detect_library_from_context() {
       else if (/[Oo]pen[Bb][Ll][Aa][Ss]|OpenBLAS/) library = "openblas"
       else if (/[Ss]uite[Ss]parse|SuiteSparse/) library = "suitesparse"
       else if (/nvtop|NVTOP/) library = "nvtop"
+      else if (/[Ll][Ii][Bb][Cc][Xx][Xx]|libc\+\+|LLVM.*libc|LLVM.*11\.1\.0/) library = "llvm"
+      else if (/LLVM|llvm.*project|llvmorg/) library = "llvm"
     }
     END { print library }
   ' "$script_file")
@@ -242,9 +244,21 @@ find_flag_documentation() {
   local library_name="$1"
   local flag_name="$2"
   
+  # Map library name to documentation file patterns
+  # Handle special cases like LLVM/libc++
+  local doc_pattern=""
+  case "${library_name}" in
+    llvm|libcxx|libc\+\+)
+      doc_pattern="*LLVM*LIBCXX*CMAKE*FLAGS*.md"
+      ;;
+    *)
+      doc_pattern="*${library_name}*CMAKE*FLAGS*.md"
+      ;;
+  esac
+  
   # Find most recent documentation file for this library
   local doc_files
-  doc_files=$(find "$DOCS_FLAGS_DIR" -type f -iname "*${library_name}*CMAKE*FLAGS*.md" 2>/dev/null | sort -r)
+  doc_files=$(find "$DOCS_FLAGS_DIR" -type f -iname "${doc_pattern}" 2>/dev/null | sort -r)
   
   if [ -z "$doc_files" ]; then
     echo "NO_DOCS"
