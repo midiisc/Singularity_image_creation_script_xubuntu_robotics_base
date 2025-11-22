@@ -31,8 +31,8 @@
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ -z "${BASH_VERSION:-}" ]; then
-    echo "ERROR: This script requires bash. Please run with: /bin/bash"
-    echo "Current shell: ${0}"
+    printf '%s\n' "ERROR: This script requires bash. Please run with: /bin/bash" >&2
+    printf '%s\n' "Current shell: ${0}" >&2
     exit 1
 fi
 # End if-fi block (self-contained)
@@ -51,8 +51,8 @@ set -euo pipefail  # -e: exit on error, -u: error on undefined var, -o pipefail:
 # Exported variables:
 #   DETECTED_SHELL_PATH, DETECTED_SHELL_NAME, DETECTED_BASH_VERSION, IS_BASH,
 #   SUPPORTS_PIPEFAIL, SUPPORTS_ERRTRACE
-DETECTED_SHELL_PATH="${SHELL:-$(ps -p $$ -o comm= 2>/dev/null || echo sh)}"
-DETECTED_SHELL_NAME="$(basename "${DETECTED_SHELL_PATH}" 2>/dev/null || echo sh)"
+DETECTED_SHELL_PATH="${SHELL:-$(ps -p $$ -o comm= 2>/dev/null || printf '%s\n' sh)}"
+DETECTED_SHELL_NAME="$(basename "${DETECTED_SHELL_PATH}" 2>/dev/null || printf '%s\n' sh)"
 DETECTED_BASH_VERSION="${BASH_VERSION:-}"
 if [ -n "${DETECTED_BASH_VERSION}" ]; then
     IS_BASH=1
@@ -60,9 +60,9 @@ else
     IS_BASH=0
 fi
 # Capability probes are executed in subshells to avoid altering current shell options
-SUPPORTS_PIPEFAIL="$( ( set -o pipefail ) >/dev/null 2>&1; echo $? )"
+SUPPORTS_PIPEFAIL="$( ( set -o pipefail ) >/dev/null 2>&1; printf '%s\n' "$?" )"
 if [ "${SUPPORTS_PIPEFAIL}" = "0" ]; then SUPPORTS_PIPEFAIL=1; else SUPPORTS_PIPEFAIL=0; fi
-SUPPORTS_ERRTRACE="$( ( set -o errtrace ) >/dev/null 2>&1; echo $? )"
+SUPPORTS_ERRTRACE="$( ( set -o errtrace ) >/dev/null 2>&1; printf '%s\n' "$?" )"
 if [ "${SUPPORTS_ERRTRACE}" = "0" ]; then SUPPORTS_ERRTRACE=1; else SUPPORTS_ERRTRACE=0; fi
 export DETECTED_SHELL_PATH DETECTED_SHELL_NAME DETECTED_BASH_VERSION IS_BASH SUPPORTS_PIPEFAIL SUPPORTS_ERRTRACE
 
@@ -73,10 +73,10 @@ enable_strict_mode_safely() {
         set -e
         set -u
         if [ "${SUPPORTS_PIPEFAIL}" -eq 1 ]; then
-            set -o pipefail || true
+            set -o pipefail
         fi
         if [ "${SUPPORTS_ERRTRACE}" -eq 1 ]; then
-            set -E -o errtrace || true
+            set -E -o errtrace
         fi
         # Attach a compact diagnostic handler; avoid referencing unset vars
         # SC2154: ec is assigned in trap command itself, false positive
@@ -114,8 +114,8 @@ CONFIG_FILE="${SCRIPT_DIR}/config.sh"
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 if [ ! -f "${CONFIG_FILE}" ]; then
-    echo "ERROR: Configuration file not found: ${CONFIG_FILE}"
-    echo "Please ensure config.sh exists in the same directory as this script."
+    printf '%s\n' "ERROR: Configuration file not found: ${CONFIG_FILE}" >&2
+    printf '%s\n' "Please ensure config.sh exists in the same directory as this script." >&2
     exit 1
 fi
 # End if-fi block (self-contained)
@@ -127,7 +127,7 @@ fi
 # shellcheck disable=SC1090
 source "${CONFIG_FILE}"
 
-echo "✓ Configuration loaded from ${CONFIG_FILE}"
+printf '%s\n' "✓ Configuration loaded from ${CONFIG_FILE}"
 
 #--- Sub-block 2.4: Load common functions ---
 # Critical: Source common functions for shared functionality
@@ -137,12 +137,12 @@ COMMON_FUNCTIONS="${SCRIPT_DIR}/scripts/common_functions.sh"
 if [ -f "${COMMON_FUNCTIONS}" ]; then
     # shellcheck disable=SC1090
     source "${COMMON_FUNCTIONS}"
-    echo "✓ Common functions loaded from ${COMMON_FUNCTIONS}"
+    printf '%s\n' "✓ Common functions loaded from ${COMMON_FUNCTIONS}"
 else
-    echo "⚠ Warning: Common functions file not found: ${COMMON_FUNCTIONS}"
-    echo "  Continuing without common functions (may cause errors if functions are called)"
+    printf '%s\n' "⚠ Warning: Common functions file not found: ${COMMON_FUNCTIONS}" >&2
+    printf '%s\n' "  Continuing without common functions (may cause errors if functions are called)" >&2
+# ENDIF: common_functions.sh existence check
 fi
-# ENDIF: common_functions.sh exists
 
 #===============================================================================
 # BLOCK 2.5: CONTAINER POST SCRIPT SELECTION
@@ -181,32 +181,39 @@ case "${POST_SCRIPT_MODE_NORMALIZED}" in
 esac
 
 if [ ! -f "${SELECTED_POST_SCRIPT_PATH}" ]; then
-    echo "ERROR: Selected container post script not found: ${SELECTED_POST_SCRIPT_PATH}"
+    printf '%s\n' "ERROR: Selected container post script not found: ${SELECTED_POST_SCRIPT_PATH}" >&2
     exit 1
+# ENDIF: SELECTED_POST_SCRIPT_PATH existence check
 fi
 
 SELECTED_POST_SCRIPT_BASENAME="$(basename "${SELECTED_POST_SCRIPT_PATH}")"
 
 POST_SCRIPT_CHANGE_SUMMARY=""
 if command -v git >/dev/null 2>&1; then
-    # SC2015: Intentional - we want || true to handle both cd failure and git log failure
-    # shellcheck disable=SC2015
-    POST_SCRIPT_CHANGE_SUMMARY="$(cd "${SCRIPT_DIR}" && git log -1 --pretty=format:'%h - %s (%cd)' --date=short -- "${SELECTED_POST_SCRIPT_BASENAME}" 2>/dev/null || true)"
-fi
+    # Validate git command succeeded and produced valid output (F2, H4)
+    POST_SCRIPT_CHANGE_SUMMARY="$(cd "${SCRIPT_DIR}" && git log -1 --pretty=format:'%h - %s (%cd)' --date=short -- "${SELECTED_POST_SCRIPT_BASENAME}" 2>/dev/null || printf '%s\n' "")"
+    # Validate result format (F2: command substitution format validation)
+    # D3: Use here-string instead of pipe for better performance and safety
+    if [ -n "${POST_SCRIPT_CHANGE_SUMMARY}" ] && ! grep -qE '^[0-9a-f]+ - .+ \([0-9]{4}-[0-9]{2}-[0-9]{2}\)$' <<< "${POST_SCRIPT_CHANGE_SUMMARY}"; then
+        # Invalid format - reset to empty for fallback
+        POST_SCRIPT_CHANGE_SUMMARY=""
+# ENDIF: POST_SCRIPT_CHANGE_SUMMARY format validation
+    fi
 # ENDIF: git command availability check
+fi
 if [ -z "${POST_SCRIPT_CHANGE_SUMMARY}" ]; then
     POST_SCRIPT_CHANGE_SUMMARY="No recorded changes detected for ${SELECTED_POST_SCRIPT_BASENAME}"
-fi
 # ENDIF: POST_SCRIPT_CHANGE_SUMMARY empty check
+fi
 # SC2034: Variable kept for potential future use in heredoc or command substitution
 # shellcheck disable=SC2034
 printf -v POST_SCRIPT_CHANGE_SUMMARY_ESCAPED '%q' "${POST_SCRIPT_CHANGE_SUMMARY}"
 
 export SELECTED_POST_SCRIPT_MODE SELECTED_POST_SCRIPT_PATH SELECTED_POST_SCRIPT_BASENAME
 
-echo ""
-echo "══════════════════════════════════════════════════════════════════════"
-echo "  Container Post Script Mode Selection"
+printf '%s\n' ""
+printf '%s\n' "══════════════════════════════════════════════════════════════════════"
+printf '%s\n' "  Container Post Script Mode Selection"
 printf '  Requested Mode : %s\n' "$(printf '%s' "${POST_SCRIPT_MODE_NORMALIZED}" | tr '[:lower:]' '[:upper:]')"
 printf '  Active Mode    : %s\n' "$(printf '%s' "${SELECTED_POST_SCRIPT_MODE}" | tr '[:lower:]' '[:upper:]')"
 printf '  Script Path    : %s\n' "${SELECTED_POST_SCRIPT_PATH}"
@@ -215,12 +222,14 @@ if [ "${SELECTED_POST_SCRIPT_MODE}" = "debug" ]; then
     printf '  Behavior       : Stops before OpenCV compilation for overlay debugging.\n'
 else
     printf '  Behavior       : Runs full image build including OpenCV compilation.\n'
+# ENDIF: SELECTED_POST_SCRIPT_MODE check
 fi
 if [ -n "${POST_SCRIPT_FALLBACK_REASON}" ]; then
     printf '  Note           : %s\n' "${POST_SCRIPT_FALLBACK_REASON}"
+# ENDIF: POST_SCRIPT_FALLBACK_REASON check
 fi
-echo "══════════════════════════════════════════════════════════════════════"
-echo ""
+printf '%s\n' "══════════════════════════════════════════════════════════════════════"
+printf '%s\n' ""
 
 # Consolidate build flag defaults for MKL migration artifacts
 DEFAULT_OPENBLAS_BUILD_FLAGS="DYNAMIC_ARCH=1 DYNAMIC_OLDER=1 TARGET=GENERIC USE_OPENMP=1 USE_TLS=1 NO_AFFINITY=1 NUM_THREADS=64 GEMM_MULTITHREAD_THRESHOLD=50 BUILD_LAPACK_DEPRECATED=1 NO_WARMUP=1 BINARY=64 CC=gcc FC=gfortran HOSTCC=gcc"
@@ -245,17 +254,18 @@ export OPENBLAS_BUILD_FLAGS OPENBLAS_INSTALL_PREFIX SUITESPARSE_CMAKE_FLAGS
 # Dependencies: None (foundational check)
 # Outputs: Error message if sudo unavailable
 if ! command -v sudo >/dev/null 2>&1; then
-    echo "ERROR: sudo is required for installing host tools but is not available"
-    echo "Please install sudo or run this script with appropriate privileges"
+    printf '%s\n' "ERROR: sudo is required for installing host tools but is not available" >&2
+    printf '%s\n' "Please install sudo or run this script with appropriate privileges" >&2
     exit 1
+# ENDIF: sudo command availability check
 fi
 
 # Test sudo access (non-interactive, may fail if password required)
 if ! sudo -n true 2>/dev/null; then
-    echo "WARNING: sudo access may require a password"
-    echo "The script will attempt to install tools, but may prompt for your password"
+    printf '%s\n' "WARNING: sudo access may require a password" >&2
+    printf '%s\n' "The script will attempt to install tools, but may prompt for your password" >&2
+# ENDIF: sudo non-interactive test
 fi
-# End if-fi block (self-contained)
 
 #--- Sub-block 3.2: Function to install missing tools ---
 # Purpose: Install tools if missing, with proper error handling
@@ -268,41 +278,46 @@ install_host_tool() {
     
     # Parameter validation
     if [ -z "${tool_name}" ] || [ -z "${package_name}" ] || [ -z "${description}" ]; then
-        echo "ERROR: install_host_tool() called with empty parameters" >&2
+        printf '%s\n' "ERROR: install_host_tool() called with empty parameters" >&2
         return 1
+# ENDIF: parameter validation
     fi
     
     # Check if tool already available
     if command -v "${tool_name}" >/dev/null 2>&1; then
-        echo "✓ ${description} (${tool_name}) already installed"
+        printf '%s\n' "✓ ${description} (${tool_name}) already installed"
         return 0
+# ENDIF: tool already available check
     fi
     
     # Attempt installation
-    echo "Installing ${description} (${package_name})..."
+    printf '%s\n' "Installing ${description} (${package_name})..."
     local install_output
     local install_status=0
     
     # Run installation and capture output for better error reporting
     install_output=$(sudo apt-get install -y --no-install-recommends "${package_name}" 2>&1) || install_status=$?
     
-    if [ ${install_status} -eq 0 ]; then
+    # D1: Quote arithmetic variable expansion
+    if [ "${install_status}" -eq 0 ]; then
         # Refresh command cache (hash -r) to ensure newly installed tools are found
         hash -r 2>/dev/null || true
         
         # Verify tool is now available
         if command -v "${tool_name}" >/dev/null 2>&1; then
-            echo "✓ Successfully installed ${description} (${tool_name})"
+            printf '%s\n' "✓ Successfully installed ${description} (${tool_name})"
             return 0
         else
-            echo "⚠ WARNING: ${package_name} installed but ${tool_name} not found in PATH" >&2
-            echo "Installation output: ${install_output}" >&2
+            printf '%s\n' "⚠ WARNING: ${package_name} installed but ${tool_name} not found in PATH" >&2
+            printf '%s\n' "Installation output: ${install_output}" >&2
             return 1
+# ENDIF: tool verification after installation
         fi
     else
-        echo "✗ ERROR: Failed to install ${package_name}" >&2
-        echo "Installation output: ${install_output}" >&2
+        printf '%s\n' "✗ ERROR: Failed to install ${package_name}" >&2
+        printf '%s\n' "Installation output: ${install_output}" >&2
         return 1
+# ENDIF: install_status check
     fi
 }
 # End function (self-contained)
@@ -311,11 +326,11 @@ install_host_tool() {
 # Purpose: Update APT package list once before installing tools (more efficient)
 # Dependencies: sudo access
 # Outputs: Updated package index
-echo "Updating package list..."
+printf '%s\n' "Updating package list..."
 if ! sudo apt-get update -qq 2>&1; then
-    echo "WARNING: apt-get update had issues, but continuing with installations..." >&2
+    printf '%s\n' "WARNING: apt-get update had issues, but continuing with installations..." >&2
+# ENDIF: apt-get update check
 fi
-# End if-fi block (self-contained)
 
 #--- Sub-block 3.4: Function to check find -printf support ---
 # Purpose: Test if find supports -printf in a portable way
@@ -333,6 +348,7 @@ check_find_printf_support() {
         # Test find -printf support
         if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
             test_result=0
+# ENDIF: find -printf test
         fi
         # Clean up test file
         rm -f "${test_file}" 2>/dev/null || true
@@ -343,6 +359,7 @@ check_find_printf_support() {
             # Test find -printf support
             if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
                 test_result=0
+# ENDIF: find -printf test (fallback)
             fi
             # Clean up test file
             rm -f "${test_file}" 2>/dev/null || true
@@ -353,11 +370,16 @@ check_find_printf_support() {
                 if touch "${test_file}" 2>/dev/null; then
                     if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
                         test_result=0
+# ENDIF: find -printf test (last resort)
                     fi
                     rm -f "${test_file}" 2>/dev/null || true
+# ENDIF: test file creation (last resort)
                 fi
+# ENDIF: /tmp directory check
             fi
+# ENDIF: test file creation (fallback)
         fi
+# ENDIF: mktemp test file creation
     fi
     
     return ${test_result}
@@ -368,14 +390,15 @@ check_find_printf_support() {
 # Critical: Install best-in-class tools for robust script operation
 # Dependencies: sudo access, BLOCK 3.3 (package list update)
 # Outputs: Installed packages
-echo "Checking and installing essential host tools..."
+printf '%s\n' "Checking and installing essential host tools..."
 
 # Tool 1: dpkg-deb (required for .deb package inspection)
 if ! install_host_tool "dpkg-deb" "dpkg-dev" "dpkg-deb tool"; then
-    echo ""
-    echo "ERROR: Failed to install dpkg-dev (required for .deb package inspection)" >&2
-    echo "Please install manually with: sudo apt update && sudo apt install dpkg-dev" >&2
+    printf '%s\n' "" >&2
+    printf '%s\n' "ERROR: Failed to install dpkg-dev (required for .deb package inspection)" >&2
+    printf '%s\n' "Please install manually with: sudo apt update && sudo apt install dpkg-dev" >&2
     exit 1
+# ENDIF: dpkg-deb installation check
 fi
 
 # Tool 2: pgrep (better than ps|grep for process management)
@@ -383,102 +406,119 @@ fi
 if ! install_host_tool "pgrep" "procps" "pgrep process finder"; then
     # Try alternative package name (some systems use procps-ng)
     if ! install_host_tool "pgrep" "procps-ng" "pgrep process finder"; then
-        echo ""
-        echo "ERROR: Failed to install pgrep (required for process management)" >&2
-        echo "Please install manually with: sudo apt update && sudo apt install procps" >&2
+        printf '%s\n' "" >&2
+        printf '%s\n' "ERROR: Failed to install pgrep (required for process management)" >&2
+        printf '%s\n' "Please install manually with: sudo apt update && sudo apt install procps" >&2
         exit 1
+# ENDIF: pgrep alternative package installation check
     fi
+# ENDIF: pgrep installation check
 fi
 
 # Tool 3: GNU findutils (for find -printf support)
 # Critical: Script uses find -printf directly, must be available
 if check_find_printf_support; then
-    echo "✓ GNU find with -printf support already available"
+    printf '%s\n' "✓ GNU find with -printf support already available"
 else
-    echo "Installing GNU findutils for better find command support..."
+    printf '%s\n' "Installing GNU findutils for better find command support..."
     # Note: Cannot use 'local' here as we're not in a function
     findutils_install_output=""
     findutils_install_status=0
     
     findutils_install_output=$(sudo apt-get install -y --no-install-recommends findutils 2>&1) || findutils_install_status=$?
     
-    if [ ${findutils_install_status} -eq 0 ]; then
+    # D1: Quote arithmetic variable expansion
+    if [ "${findutils_install_status}" -eq 0 ]; then
         # Refresh command cache
         hash -r 2>/dev/null || true
         
         # Verify find -printf now works
         if check_find_printf_support; then
-            echo "✓ Successfully installed GNU findutils"
+            printf '%s\n' "✓ Successfully installed GNU findutils"
         else
-            echo ""
-            echo "ERROR: findutils installed but find -printf not working" >&2
-            echo "Installation output: ${findutils_install_output}" >&2
-            echo "This may indicate a system compatibility issue" >&2
+            printf '%s\n' "" >&2
+            printf '%s\n' "ERROR: findutils installed but find -printf not working" >&2
+            printf '%s\n' "Installation output: ${findutils_install_output}" >&2
+            printf '%s\n' "This may indicate a system compatibility issue" >&2
             exit 1
+# ENDIF: find -printf verification after installation
         fi
     else
-        echo ""
-        echo "ERROR: Failed to install findutils (required for robust file operations)" >&2
-        echo "Installation output: ${findutils_install_output}" >&2
-        echo "Please install manually with: sudo apt update && sudo apt install findutils" >&2
+        printf '%s\n' "" >&2
+        printf '%s\n' "ERROR: Failed to install findutils (required for robust file operations)" >&2
+        printf '%s\n' "Installation output: ${findutils_install_output}" >&2
+        printf '%s\n' "Please install manually with: sudo apt update && sudo apt install findutils" >&2
         exit 1
+# ENDIF: findutils installation status check
     fi
+# ENDIF: check_find_printf_support check
 fi
 
 # Tool 4: aria2c (for fast parallel downloads)
 if ! install_host_tool "aria2c" "aria2" "aria2 download accelerator"; then
-    echo "⚠ WARNING: aria2c not available, will use curl/wget (slower downloads)" >&2
+    printf '%s\n' "⚠ WARNING: aria2c not available, will use curl/wget (slower downloads)" >&2
+# ENDIF: aria2c installation check
 fi
 
 # Tool 5: curl (essential download tool)
 if ! install_host_tool "curl" "curl" "curl download tool"; then
-    echo ""
-    echo "ERROR: curl is required but could not be installed" >&2
+    printf '%s\n' "" >&2
+    printf '%s\n' "ERROR: curl is required but could not be installed" >&2
     exit 1
+# ENDIF: curl installation check
 fi
 
 # Tool 6: wget (fallback download tool)
 if ! install_host_tool "wget" "wget" "wget download tool"; then
-    echo "⚠ WARNING: wget not available, curl will be used as fallback" >&2
+    printf '%s\n' "⚠ WARNING: wget not available, curl will be used as fallback" >&2
+# ENDIF: wget installation check
 fi
 
 # Tool 7: jq (JSON processor - useful for API responses)
 if ! install_host_tool "jq" "jq" "jq JSON processor"; then
-    echo "⚠ WARNING: jq not available (optional, for JSON processing)" >&2
+    printf '%s\n' "⚠ WARNING: jq not available (optional, for JSON processing)" >&2
+# ENDIF: jq installation check
 fi
 
 # Tool 8: rsync (for efficient file copying)
 if ! install_host_tool "rsync" "rsync" "rsync file sync tool"; then
-    echo "⚠ WARNING: rsync not available (will use cp fallback)" >&2
+    printf '%s\n' "⚠ WARNING: rsync not available (will use cp fallback)" >&2
+# ENDIF: rsync installation check
 fi
 
 # Tool 9: lsof (required for cleanup routines)
 if ! install_host_tool "lsof" "lsof" "lsof file descriptor inspector"; then
-    echo ""
-    echo "ERROR: lsof is required for cleanup routines but could not be installed" >&2
+    printf '%s\n' "" >&2
+    printf '%s\n' "ERROR: lsof is required for cleanup routines but could not be installed" >&2
     exit 1
+# ENDIF: lsof installation check
 fi
 
 # Tool 10: gpg (for fetching and exporting keys)
 if ! install_host_tool "gpg" "gnupg" "GnuPG (gpg)"; then
-    echo "⚠ WARNING: gpg not available (GPG key prefetch will be skipped)" >&2
+    printf '%s\n' "⚠ WARNING: gpg not available (GPG key prefetch will be skipped)" >&2
+# ENDIF: gpg installation check
 fi
 
 # Tool 11: coreutils (for numfmt and other utilities)
 if ! command -v numfmt >/dev/null 2>&1; then
     if ! install_host_tool "numfmt" "coreutils" "GNU coreutils (numfmt)"; then
-        echo "⚠ WARNING: coreutils (numfmt) not available; using fallback size formatting" >&2
+        printf '%s\n' "⚠ WARNING: coreutils (numfmt) not available; using fallback size formatting" >&2
+# ENDIF: numfmt installation check
     fi
+# ENDIF: numfmt command availability check
 fi
 
 # Tool 12: gawk (awk features across distros)
 if ! command -v awk >/dev/null 2>&1; then
     if ! install_host_tool "awk" "gawk" "GNU awk"; then
-        echo "⚠ WARNING: awk not available; some parsing features may degrade" >&2
+        printf '%s\n' "⚠ WARNING: awk not available; some parsing features may degrade" >&2
+# ENDIF: awk installation check
     fi
+# ENDIF: awk command availability check
 fi
 
-echo "✓ Host tool validation and installation complete"
+printf '%s\n' "✓ Host tool validation and installation complete"
 
 #===============================================================================
 # BLOCK 4: LOCALE AND ENVIRONMENT SETUP
@@ -916,7 +956,7 @@ strict_cleanup_our_dirs() {
     # End if-fi block
 
     local count
-    count=$(echo "${target_dirs}" | wc -l | tr -d '[:space:]')
+    count=$(wc -l <<< "${target_dirs}" | tr -d '[:space:]')
     count="${count:-0}"
     echo "Found ${count} directories"
 
@@ -992,16 +1032,6 @@ strict_cleanup_our_dirs() {
 }
 # End function (self-contained)
 
-#--- Sub-block: Section continuation (372) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block 10.1.1: Strict cleanup complete ---
-# Purpose: All temporary directories removed
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 11.2: Comprehensive cleanup function ---
 # Purpose: Complete cleanup of all container remnants, processes, and mounts
 # Dependencies: System (Container runtime)
@@ -1025,7 +1055,7 @@ comprehensive_cleanup() {
         local cmd
         cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
         if [ -n "${cmd}" ]; then
-            echo " > Killing PID ${pid}: $(echo "${cmd}" | cut -c1-60)"
+            echo " > Killing PID ${pid}: $(cut -c1-60 <<< "${cmd}")"
             sudo kill -9 "${pid}" 2>/dev/null || true
         fi
     done
@@ -1052,16 +1082,6 @@ comprehensive_cleanup() {
     fi
     # End if-else block (self-contained)
 
-#--- Sub-block: Section continuation (421) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 418 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # Clean temporary cache, NOT the actual image cache (preserve for future builds)
     if [ -d "${cache_base}" ]; then
         echo "   Cleaning ${cache_base}/cache/tmp..."
@@ -1108,11 +1128,6 @@ comprehensive_cleanup() {
         if [ -d "${dir}" ]; then
             echo "   Checking ${dir}..."
 
-#--- Sub-block: Section continuation (464) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
             # Find .sif files that are incomplete (being written, locked, or 0 bytes)
             find "${dir}" -maxdepth 2 -name "*.sif" 2>/dev/null | while IFS= read -r sif_file || [ -n "${sif_file}" ]; do
                 local sif_name
@@ -1120,17 +1135,7 @@ comprehensive_cleanup() {
                 local sif_size
                 sif_size=$(stat -c%s "${sif_file}" 2>/dev/null || echo "0")
 
-
-#--- Sub-block: Code section 463 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
                 # Check if file is incomplete/orphaned
-
-#--- Sub-block: Section 485 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
                 local is_orphaned=0
 
                 # Check 1: Zero size (failed build)
@@ -1142,8 +1147,9 @@ comprehensive_cleanup() {
                 # Check 2: File locked by a dead process
                 if sudo lsof "${sif_file}" 2>/dev/null | grep -q .; then
                     local pid
-                    pid=$(sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 | awk '{print $2}' | head -1 || echo "")
-                    if [ -n "${pid}" ] && ! ps -p "${pid}" > /dev/null 2>&1; then
+                    pid=$(sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 2>/dev/null | awk '{print $2}' 2>/dev/null | head -1 2>/dev/null || echo "")
+                    # Validate pid is numeric before checking process
+                    if [ -n "${pid}" ] && [[ "${pid}" =~ ^[0-9]+$ ]] && ! ps -p "${pid}" > /dev/null 2>&1; then
                         echo "      ✗ Orphaned (locked by dead PID ${pid}): ${sif_name}"
                         is_orphaned=1
                     fi
@@ -1154,16 +1160,6 @@ comprehensive_cleanup() {
                     echo "      ✗ Orphaned (partial/temp name): ${sif_name}"
                     is_orphaned=1
                 fi
-
-#--- Sub-block: Container cleanup procedures ---
-# Purpose: Remove temporary build artifacts
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: Cleanup logic ---
-# Purpose: Container cleanup procedures
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 
                 # Check 4: Very small size (< 10MB - likely incomplete)
                 if [ "${sif_size:-0}" -lt 10485760 ] && [ "${sif_size:-0}" -gt 0 ]; then
@@ -1176,13 +1172,14 @@ comprehensive_cleanup() {
                     echo "        Removing orphaned container: ${sif_file}"
                     sudo rm -f "${sif_file}" 2>/dev/null || {
                         echo "        → Failed to remove, trying force..."
-                        sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 | awk '{print $2}' | while IFS= read -r lock_pid || [ -n "${lock_pid}" ]; do
+                        sudo lsof "${sif_file}" 2>/dev/null | tail -n +2 2>/dev/null | awk '{print $2}' 2>/dev/null | while IFS= read -r lock_pid || [ -n "${lock_pid}" ]; do
                             sudo kill -9 "${lock_pid}" 2>/dev/null || true
-                        done
+                        done || true
                         sleep 1
                         sudo rm -f "${sif_file}" 2>/dev/null || echo "        → Still locked!"
                     }
                 else
+                    local human_size
                     if command -v numfmt >/dev/null 2>&1; then
                         human_size="$(numfmt --to=iec-i --suffix=B "${sif_size}" 2>/dev/null || echo "${sif_size}B")"
                     else
@@ -1198,21 +1195,6 @@ comprehensive_cleanup() {
     done
     # End for loop (self-contained)
 
-#--- Sub-block: Section 535 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: Section continuation (524) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 515 ---
-# Purpose: Continuing implementation
-# Dependencies: System (Container runtime)
-# Outputs: Configured system components
     # === Step 5: Clean session directories ===
     echo ""
     echo "5. Cleaning session directories..."
@@ -1245,7 +1227,8 @@ comprehensive_cleanup() {
         if [[ "$(basename "${pid_file}")" == "singularity"* ]] || [[ "$(basename "${pid_file}")" == "apptainer"* ]]; then
             local pid
             pid=$(cat "${pid_file}" 2>/dev/null || echo "")
-            if [ -n "${pid}" ]; then
+            # Validate pid is numeric before checking process
+            if [ -n "${pid}" ] && [[ "${pid}" =~ ^[0-9]+$ ]]; then
                 # Check if process is still running
                 if ! ps -p "${pid}" > /dev/null 2>&1; then
                     echo "   Removing stale PID file (process ${pid} dead): $(basename "${pid_file}")"
@@ -1261,26 +1244,11 @@ comprehensive_cleanup() {
                 }
             fi
             # End if-else block
-
-#--- Sub-block: Section 585 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
         fi
         # End outer if-fi block
     done
     # End while loop (self-contained)
 
-#--- Sub-block: Section continuation (575) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 563 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # === Step 8: Clean temporary overlay files ===
     echo ""
     echo "8. Cleaning temporary overlay files..."
@@ -1294,19 +1262,9 @@ comprehensive_cleanup() {
         if ! sudo lsof "${overlay_file}" 2>/dev/null | grep -q .; then
             echo "   Removing unused overlay: $(basename "${overlay_file}")"
             sudo rm -f "${overlay_file}" 2>/dev/null || true
-
-#--- Sub-block: Comprehensive cleanup ---
-# Critical: Ensure clean build environment
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
         fi
         # End if-fi block
     done
-
-#--- Sub-block: Cleanup continuation ---
-# Purpose: Additional cleanup steps
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # End while loop (self-contained)
 
     # === Step 9: Final verification ===
@@ -1340,11 +1298,6 @@ comprehensive_cleanup() {
     # End if-else block
 
     # Check 2: Orphaned processes
-
-#--- Sub-block: Section 635 ---
-# Purpose: Continued implementation
-# Dependencies: System (Container runtime)
-# Outputs: Configured system components
     local -a container_pids=()
     mapfile -t container_pids < <(pgrep -u "${USER}" -f "(singularity|apptainer)" 2>/dev/null || true)
     local remaining_procs="${#container_pids[@]}"
@@ -1355,7 +1308,7 @@ comprehensive_cleanup() {
             local cmd
             cmd=$(ps -p "${pid}" -o cmd= 2>/dev/null || echo "")
             if [ -n "${cmd}" ]; then
-                echo "    - PID ${pid}: $(echo "${cmd}" | cut -c1-60)"
+                echo "    - PID ${pid}: $(cut -c1-60 <<< "${cmd}")"
             fi
         done
         issues=$((issues + remaining_procs))
@@ -1364,16 +1317,6 @@ comprehensive_cleanup() {
     fi
     # End if-else block
 
-#--- Sub-block: Section continuation (629) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 614 ---
-# Purpose: Continuing implementation
-# Dependencies: System (Container runtime)
-# Outputs: Configured system components
     # Check 3: Orphaned mounts
     local remaining_mounts
     remaining_mounts=$(mount 2>/dev/null | awk -v user="${USER}" '
@@ -1412,10 +1355,6 @@ comprehensive_cleanup() {
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 10.2.1: Comprehensive cleanup complete ---
-# Purpose: All container remnants cleaned
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 12.1: Execute pre-build cleanup ---
 # Critical: Must succeed before build can proceed
 # Dependencies: None (foundational)
@@ -1567,17 +1506,20 @@ if [ ! -d "${LOG_FILE_DIR}" ]; then
         exit 1
     }
 fi
+# ENDIF: LOG_FILE_DIR existence check
 
 if [ ! -w "${LOG_FILE_DIR}" ] 2>/dev/null; then
     log_error "LOG_FILE directory is not writable: ${LOG_FILE_DIR}"
     exit 1
 fi
+# ENDIF: LOG_FILE_DIR writability check
 
 # Create log file if it doesn't exist
 touch "${LOG_FILE}" 2>/dev/null || {
     log_error "Cannot create log file: ${LOG_FILE}"
     exit 1
 }
+# ENDIF: LOG_FILE creation check
 
 # Set up output redirection with process substitution
 # Note: Guard the pipelines so non-zero statuses don't trip set -e
@@ -1586,21 +1528,23 @@ if [ "${ENABLE_LOG_ERROR_EXTRACTION:-0}" = "1" ]; then
 else
     exec > >(tee -a "${LOG_FILE}" || true) 2>&1
 fi
+# ENDIF: ENABLE_LOG_ERROR_EXTRACTION check
 
 # Log script start with detailed information
-echo "=============================================================================="
-echo "Build Script Start: $(date)"
-echo "Host shell diagnostics:"
-echo "  PID: $$, PPID: ${PPID:-unknown}"
-echo "  0: ${0:-unknown}"
-echo "  SHELL: ${SHELL:-unknown}"
-echo "  BASH_VERSION: ${BASH_VERSION:-n/a}"
-echo "  Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
-echo "Log File: ${LOG_FILE}"
-echo "Error Log: ${ERROR_LOG}"
-echo "Working directory: $(pwd)"
-echo "Script PID: $$"
-echo "=============================================================================="
+# D3b: Use printf instead of echo for variables to prevent flag interpretation
+printf '%s\n' "=============================================================================="
+printf '%s\n' "Build Script Start: $(date)"
+printf '%s\n' "Host shell diagnostics:"
+printf '%s\n' "  PID: $$, PPID: ${PPID:-unknown}"
+printf '%s\n' "  0: ${0:-unknown}"
+printf '%s\n' "  SHELL: ${SHELL:-unknown}"
+printf '%s\n' "  BASH_VERSION: ${BASH_VERSION:-n/a}"
+printf '%s\n' "  Process name: $(ps -p $$ -o comm= 2>/dev/null || printf '%s\n' unknown)"
+printf '%s\n' "Log File: ${LOG_FILE}"
+printf '%s\n' "Error Log: ${ERROR_LOG}"
+printf '%s\n' "Working directory: $(pwd)"
+printf '%s\n' "Script PID: $$"
+printf '%s\n' "=============================================================================="
 
 #===============================================================================
 # BLOCK 15: TEMPORARY DIRECTORY SETUP
@@ -1620,18 +1564,21 @@ BUILD_TMP_DIR=""
 # Critical: Determine where to place temporary build files
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-ROOT_AVAIL_GB=$(df -BG / 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
+# D3b: Use printf instead of echo in command substitution
+ROOT_AVAIL_GB=$(df -BG / 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
 # Validate numeric value
 if ! [[ "${ROOT_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
     log_error "Failed to determine available disk space in /"
     ROOT_AVAIL_GB=0
 fi
+# ENDIF: ROOT_AVAIL_GB numeric validation
 
 # Validate DISK_SPACE_REQUIRED_GB is numeric
 if ! [[ "${DISK_SPACE_REQUIRED_GB:-0}" =~ ^[0-9]+$ ]]; then
     log_error "DISK_SPACE_REQUIRED_GB is not a valid number: ${DISK_SPACE_REQUIRED_GB:-}"
     exit 1
 fi
+# ENDIF: DISK_SPACE_REQUIRED_GB numeric validation
 
 if (( ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
     # Use /tmp if sufficient space (faster, typically tmpfs)
@@ -1642,25 +1589,27 @@ else
     log_warning "Insufficient space (${ROOT_AVAIL_GB}GB) in /tmp. Checking home directory..."
 
     # Check home directory space
-    HOME_AVAIL_GB=$(df -BG "${HOME}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
+    # D3b: Use printf instead of echo in command substitution
+    HOME_AVAIL_GB=$(df -BG "${HOME}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
     # Validate numeric value
     if ! [[ "${HOME_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
         log_error "Failed to determine available disk space in ${HOME}"
         HOME_AVAIL_GB=0
     fi
+    # ENDIF: HOME_AVAIL_GB numeric validation
 
     if (( HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
         # Use home directory if sufficient space
-        BUILD_TMP_DIR="$HOME/${TRACEABLE_DIR_NAME}"
+        BUILD_TMP_DIR="${HOME}/${TRACEABLE_DIR_NAME}"
         log_success "Using home directory with ${HOME_AVAIL_GB}GB available: ${BUILD_TMP_DIR}"
     else
         # Critical: Cannot proceed without sufficient disk space
         log_error "Insufficient space in home (${HOME_AVAIL_GB}GB). Required: ${DISK_SPACE_REQUIRED_GB}GB."
         exit 1
     fi
-    # End nested if-else block
+    # ENDIF: HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
 fi
-# End outer if-else block (self-contained)
+# ENDIF: ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
 
 #--- Sub-block 15.3: Create and configure temporary directory ---
 # Critical: Create the selected directory and set permissions
@@ -1670,6 +1619,7 @@ if [ -z "${BUILD_TMP_DIR}" ]; then
     log_error "BUILD_TMP_DIR is not set"
     exit 1
 fi
+# ENDIF: BUILD_TMP_DIR empty check
 mkdir -p "${BUILD_TMP_DIR}" || {
     log_error "Failed to create temporary directory: ${BUILD_TMP_DIR}"
     exit 1
@@ -1678,6 +1628,7 @@ mkdir -p "${BUILD_TMP_DIR}" || {
 chmod 755 "${BUILD_TMP_DIR}" || {
     log_warning "Failed to set permissions on ${BUILD_TMP_DIR}, continuing..."
 }
+# ENDIF: chmod on BUILD_TMP_DIR
 
 # Critical: Export temp dir for both singularity and apptainer
 export SINGULARITY_TMPDIR="${BUILD_TMP_DIR}"
@@ -1704,22 +1655,22 @@ create_directory_with_permissions() {
     local description="$2"
 
     # Attempt to create directory
-    if mkdir -p "$dir_path" 2>/dev/null; then
-        chmod 755 "$dir_path" 2>/dev/null || true
+    if mkdir -p "${dir_path}" 2>/dev/null; then
+        chmod 755 "${dir_path}" 2>/dev/null || true
         # Verify directory exists and is writable
-        if [ -d "$dir_path" ] && [ -w "$dir_path" ]; then
-            log_success "Directory created: $description ($dir_path)"
+        if [ -d "${dir_path}" ] && [ -w "${dir_path}" ]; then
+            log_success "Directory created: ${description} (${dir_path})"
             return 0
         else
-            log_error "Directory created but not writable: $description ($dir_path)"
+            log_error "Directory created but not writable: ${description} (${dir_path})"
             return 1
         fi
-        # End nested if-else
+        # ENDIF: directory writability check
     else
-        log_error "Failed to create directory: $description ($dir_path)"
+        log_error "Failed to create directory: ${description} (${dir_path})"
         return 1
     fi
-    # End outer if-else
+    # ENDIF: directory creation attempt
 }
 # End function (self-contained)
 
@@ -1767,9 +1718,11 @@ if [ -z "${SIF_NAME:-}" ]; then
         ROS_DISTRO_CAPITALIZED="Unknown"
         log_warning "ROS_DISTRO not set, using 'Unknown' in image name"
     fi
+    # ENDIF: ROS_DISTRO check
     SIF_NAME="Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.sif"
     DEF_NAME="Ubuntu-${BASE_OS_VERSION:-24.04}-ROS2-${ROS_DISTRO_CAPITALIZED}-Perception-Robotics-Base.def"
 fi
+# ENDIF: SIF_NAME empty check
 # Ensure DEF_NAME is set if not already
 DEF_NAME="${DEF_NAME:-${SIF_NAME%.sif}.def}"
 
@@ -1784,7 +1737,7 @@ if [ -f "${DEF_NAME}" ]; then
 else
     log_with_timestamp "No existing definition file found"
 fi
-# End if-else block (self-contained)
+# ENDIF: DEF_NAME existence check
 
 #--- Sub-block 17.3: Create output directory ---
 # Dependencies: None (foundational)
@@ -1796,7 +1749,7 @@ if [ -d "${OUT_DIR}" ]; then
 else
     log_error "Failed to create output directory: ${OUT_DIR}"
 fi
-# End if-else block (self-contained)
+# ENDIF: OUT_DIR existence check
 
 #===============================================================================
 # BLOCK 18: HELPER FUNCTIONS
@@ -1858,7 +1811,7 @@ fetch() {
         elif [[ "${file_size_mb:-0}" -gt 50 ]]; then
             connections=6  # Medium files: moderate connections
         fi
-        # End if-elif-fi block
+        # ENDIF: file_size_mb connections calculation
 
         if aria2c --check-certificate=true --max-connection-per-server=${connections} --split=${connections} \
             --retry-wait=2 --timeout=30 --continue=true -o "$(basename "${dst}")" \
@@ -1871,7 +1824,7 @@ fetch() {
             warn "aria2c failed for ${url}; trying curl"
         fi
     fi
-    # End outer if-fi block
+    # ENDIF: aria2c availability check
 
     # Attempt 2: curl (fallback, widely available)
     if [ ! -s "${dst}" ]; then
@@ -1879,7 +1832,7 @@ fetch() {
             warn "curl failed for ${url}; trying wget"
         fi
     fi
-    # End if-fi block
+    # ENDIF: curl download attempt
 
     # Attempt 3: wget (most compatible fallback)
     if [ ! -s "${dst}" ] && command -v wget >/dev/null 2>&1; then
@@ -1887,25 +1840,15 @@ fetch() {
             warn "wget failed for ${url}"
         fi
     fi
-    # End if-fi block
+    # ENDIF: wget download attempt
 
-#--- Sub-block: Section continuation (922) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 904 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # Final verification: ensure file was downloaded
     if [ ! -s "${dst}" ]; then
         err "All download methods (aria2c, curl, wget) failed for '${url}'"
     else
         log "Cached $(basename "${dst}")"
     fi
-    # End if-else block
+    # ENDIF: download verification
 }
 # End function (self-contained)
 
@@ -1919,10 +1862,6 @@ fetch() {
 #-------------------------------------------------------------------------------
 
 
-#--- Sub-block 13.1.1: Fetch function complete ---
-# Purpose: Robust download with multiple fallbacks
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 19.1: Generate APT cache pruning script ---
 # Critical: Creates script to clean up APT cache while preserving essential files
 # Dependencies: None (foundational)
@@ -1965,7 +1904,8 @@ for pkg in "${BASES[@]}"; do
     ALL_FOR_PKG=()
     while IFS= read -r line; do
         [ -z "${line}" ] && continue
-        ALL_FOR_PKG+=("$(echo "${line}" | cut -d' ' -f2-)")
+        # D3: Use here-string instead of echo | cut for better performance and safety
+        ALL_FOR_PKG+=("$(cut -d' ' -f2- <<< "${line}")")
     done < <(find . -maxdepth 1 -type f -name "${pkg}_*.deb" -printf '%T@ %f\n' 2>/dev/null | sort -rn | cut -d' ' -f2- || true)
     if (( ${#ALL_FOR_PKG[@]} <= KEEP )); then continue; fi
 
@@ -1976,16 +1916,6 @@ for pkg in "${BASES[@]}"; do
     TO_REMOVE=()
   fi
 
-#--- Sub-block: Section continuation (991) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 970 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     if (( ${#TO_REMOVE[@]} > 0 )); then
         if [[ -n "$APPLY" ]]; then
             # Remove files directly from array (more portable than xargs)
@@ -2005,10 +1935,6 @@ APS
     chmod +x ./prune_apt_cache.sh
 
 
-#--- Sub-block 14.1.1: APT pruning script created ---
-# Purpose: Cache cleanup while preserving essentials
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 19.2: Generate Conda cache pruning script ---
 # Critical: Creates script to clean up Conda package cache
 # Dependencies: Block 17 (Conda/Miniforge)
@@ -2058,22 +1984,12 @@ for base in "${BASES[@]}"; do
     done < <(find . -maxdepth 1 -type f \( -name "${base}-*.conda" -o -name "${base}-*.tar.bz2" \) -printf '%f\n' 2>/dev/null | sort -rV || true)
     if (( ${#ALL_FOR_BASE[@]} <= KEEP )); then continue; fi
 
-#--- Sub-block: Section continuation (1053) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
     if (( (${#ALL_FOR_BASE[@]} - KEEP) > 0 )); then
     mapfile -t TO_REMOVE < <(printf '%s\n' "${ALL_FOR_BASE[@]}" | tail -n +$((KEEP+1)))
   else
     TO_REMOVE=()
   fi
 
-
-#--- Sub-block: Code section 1035 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     if (( ${#TO_REMOVE[@]} > 0 )); then
         if [[ -n "$APPLY" ]]; then
             # Remove files directly from array (more portable than xargs)
@@ -2087,7 +2003,11 @@ for base in "${BASES[@]}"; do
     fi
 done
 
-if [[ -n "$APPLY" ]] && (( removed_total > 0 )); then echo "[conda-prune] Removed ${removed_total} file(s)"; else echo "[conda-prune] Dry-run complete"; fi
+if [[ -n "$APPLY" ]] && (( removed_total > 0 )); then
+    printf '%s\n' "[conda-prune] Removed ${removed_total} file(s)"
+else
+    printf '%s\n' "[conda-prune] Dry-run complete"
+fi
 CPS
 # End heredoc (self-contained)
     chmod +x ./prune_conda_cache.sh
@@ -2103,14 +2023,10 @@ CPS
 #-------------------------------------------------------------------------------
 log_with_timestamp "Prefetching required artifacts to host cache..."
 
-
-#--- Sub-block 14.2.1: Conda pruning script created ---
-# Purpose: Conda cache cleanup
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 #--- Sub-block 20.1: Helper function to fetch and mark executable ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+# Purpose: Fetch binary from URL and mark as executable
+# Dependencies: fetch() function from common_functions.sh
+# Outputs: Executable binary file
 fetch_binary() {
     local url="${1:-}"
     local dst="${2:-}"
@@ -2130,82 +2046,74 @@ check_cache_complete() {
     # Check each required artifact
     # Validate cache directories exist before checking files
     if [ ! -d "${BIN_CACHE:-}" ] || [ ! -d "${DEB_CACHE:-}" ]; then
-        echo "2"  # Return non-zero count if cache directories don't exist
+        printf '%d\n' 2  # Return non-zero count if cache directories don't exist
         return 0
     fi
     
     [[ ! -f "${BIN_CACHE}/${MINIFORGE_SH}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${MICROMAMBA_BIN}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${YQ_BIN}" ]] && ((missing++))
-
-#--- Sub-block: Cache file validation ---
-# Purpose: Verify integrity of all cached files
-# Dependencies: PHASE 1 (Compilers)
-# Outputs: Configured system components
     [[ ! -f "${DEB_CACHE}/${TURBOVNC_DEB}" ]] && ((missing++))
     [[ ! -f "${DEB_CACHE}/${VIRTUALGL_DEB}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/drake.asc" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/${JULIA_TARBALL}" ]] && ((missing++))
     [[ ! -f "${BIN_CACHE}/julia_key.asc" ]] && ((missing++))
-    echo "${missing}"
-
-#--- Sub-block: Cache validation ---
-# Purpose: Verify cached files
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
+    printf '%d\n' "${missing}"
+# ENDFUNC: check_cache_complete
 }
 # End function (self-contained)
 
-# Cache integrity check and repair function
+# Purpose: Check cache integrity and repair corrupted or incomplete files
+# Parameters: None
+# Returns: 0 on success (always succeeds after repair)
 check_cache_integrity() {
-    echo "===> Checking cache integrity..."
+    printf '%s\n' "===> Checking cache integrity..."
     local issues=0
+    local zero_count
+    local incomplete_count
+    
     # Check for corrupted files
     for cache_dir in "${BIN_CACHE}" "${DEB_CACHE}" "${APT_ARCHIVE_CACHE}" "${CONDA_CACHE}" "${WHEELS_CACHE}" "${JULIA_CACHE}"; do
         if [ -d "${cache_dir}" ]; then
             # Check for zero-byte files (likely corrupted downloads)
-            local zero_count
-            zero_count=$(find "${cache_dir}" -type f -size 0 2>/dev/null | wc -l | tr -d '[:space:]')
+            zero_count=$(find "${cache_dir}" -type f -size 0 2>/dev/null | wc -l | tr -d '[:space:]') || zero_count=0
             if [[ "${zero_count:-0}" -gt 0 ]]; then
-                echo "  ✗ Found ${zero_count} zero-byte file(s) in $(basename "${cache_dir}")"
+                printf '%s\n' "  ✗ Found ${zero_count} zero-byte file(s) in $(basename "${cache_dir}")"
                 find "${cache_dir}" -type f -size 0 -delete 2>/dev/null || true
-                echo "    ✓ Removed zero-byte files"
+                printf '%s\n' "    ✓ Removed zero-byte files"
                 issues=$((issues + 1))
             fi
+# ENDIF: zero_count check
 
             # Check for incomplete downloads (files ending with .part, .tmp, etc.)
-            local incomplete_count
-            incomplete_count=$(find "${cache_dir}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l | tr -d '[:space:]')
+            incomplete_count=$(find "${cache_dir}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) 2>/dev/null | wc -l | tr -d '[:space:]') || incomplete_count=0
             if [[ "${incomplete_count:-0}" -gt 0 ]]; then
-                echo "  ✗ Found ${incomplete_count} incomplete download(s) in $(basename "${cache_dir}")"
+                printf '%s\n' "  ✗ Found ${incomplete_count} incomplete download(s) in $(basename "${cache_dir}")"
                 find "${cache_dir}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
-                echo "    ✓ Removed incomplete downloads"
+                printf '%s\n' "    ✓ Removed incomplete downloads"
                 issues=$((issues + 1))
             fi
+# ENDIF: incomplete_count check
         fi
+# ENDIF: cache_dir existence check
     done
+# ENDFOR: cache_dir
     if [[ "${issues:-0}" -eq 0 ]]; then
-        echo "  ✓ Cache integrity check passed"
+        printf '%s\n' "  ✓ Cache integrity check passed"
     else
-        echo "  ✓ Cache integrity issues repaired: ${issues} problem(s) fixed"
+        printf '%s\n' "  ✓ Cache integrity issues repaired: ${issues} problem(s) fixed"
     fi
+# ENDIF: issues check
     return 0 # Always return success after repair
+# ENDFUNC: check_cache_integrity
 }
 
-#--- Sub-block: Section continuation (1149) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 1122 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # Clean up any existing incomplete downloads and check cache integrity
-echo "===> Cleaning up any existing incomplete downloads..."
-find "${CACHE_DIR}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
-find "${CACHE_DIR}" -type f -size 0 -delete 2>/dev/null || true
+printf '%s\n' "===> Cleaning up any existing incomplete downloads..."
+if [ -d "${CACHE_DIR:-}" ]; then
+    find "${CACHE_DIR}" -type f \( -name "*.part" -o -name "*.tmp" -o -name "*.aria2" \) -delete 2>/dev/null || true
+    find "${CACHE_DIR}" -type f -size 0 -delete 2>/dev/null || true
+fi
 
 check_cache_integrity
 
@@ -2221,6 +2129,7 @@ check_cache_integrity
 # Define all required files with download URLs, validation methods, and optional flags
 # Format: ["filename"]="validation_method|download_url|param1|param2|param3|optional"
 # optional: "optional" if file is optional (NVIDIA Video SDK), empty if compulsory
+# Note: Associative arrays require Bash 4+ - verified in Block 1
 declare -A required_files=(
     ["micromamba-linux-64"]="binary|${MICROMAMBA_URL}|${MICROMAMBA_SHA256}|||"
     ["yq_linux_amd64"]="binary|${YQ_URL}|${YQ_SHA256}|||"
@@ -2236,12 +2145,14 @@ declare -A required_files=(
     ["Video_Codec_SDK_${NVIDIA_VIDEO_SDK_VERSION}.zip"]="zip|optional_manual|||optional"
 )
 
-# Function to check and download required files
+# Purpose: Check cache for all required files and download missing compulsory files
+# Parameters: None
+# Returns: 0 on success, 1 on fatal error
 check_and_download_required_files() {
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  COMPREHENSIVE CACHE CHECK AND DOWNLOAD"
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' "  COMPREHENSIVE CACHE CHECK AND DOWNLOAD"
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' ""
     
     local missing_compulsory=()
     local missing_optional=()
@@ -2251,8 +2162,8 @@ check_and_download_required_files() {
     # Ensure cache directories exist
     mkdir -p "${BIN_CACHE}" "${DEB_CACHE}" "${APT_ARCHIVE_CACHE}" "${CONDA_CACHE}" "${WHEELS_CACHE}" "${JULIA_CACHE}"
     
-    echo "Phase 1: Checking all required files in cache..."
-    echo ""
+    printf '%s\n' "Phase 1: Checking all required files in cache..."
+    printf '%s\n' ""
     
     # Check each required file
     for file_name in "${!required_files[@]}"; do
@@ -2287,31 +2198,33 @@ check_and_download_required_files() {
         
         # Check if file exists and is not empty
         if [ -f "${file_path}" ] && [ -s "${file_path}" ]; then
-            echo "  ✓ Found: ${file_name}"
+            printf '%s\n' "  ✓ Found: ${file_name}"
             found_files+=("${file_name}")
         else
             if [[ "${optional_flag}" == "optional" ]]; then
-                echo "  ⊙ Missing (optional): ${file_name}"
+                printf '%s\n' "  ⊙ Missing (optional): ${file_name}"
                 missing_optional+=("${file_name}")
                 optional_files+=("${file_name}")
             else
-                echo "  ✗ Missing (compulsory): ${file_name}"
+                printf '%s\n' "  ✗ Missing (compulsory): ${file_name}"
                 missing_compulsory+=("${file_name}")
             fi
+# ENDIF: file_path existence check
         fi
     done
+# ENDFOR: file_name (Phase 1)
     
-    echo ""
-    echo "Summary:"
-    echo "  Found: ${#found_files[@]} file(s)"
-    echo "  Missing (compulsory): ${#missing_compulsory[@]} file(s)"
-    echo "  Missing (optional): ${#missing_optional[@]} file(s)"
-    echo ""
+    printf '%s\n' ""
+    printf '%s\n' "Summary:"
+    printf '%s\n' "  Found: ${#found_files[@]} file(s)"
+    printf '%s\n' "  Missing (compulsory): ${#missing_compulsory[@]} file(s)"
+    printf '%s\n' "  Missing (optional): ${#missing_optional[@]} file(s)"
+    printf '%s\n' ""
     
     # Download missing compulsory files
     if [ ${#missing_compulsory[@]} -gt 0 ]; then
-        echo "Phase 2: Downloading ${#missing_compulsory[@]} missing compulsory file(s)..."
-        echo ""
+        printf '%s\n' "Phase 2: Downloading ${#missing_compulsory[@]} missing compulsory file(s)..."
+        printf '%s\n' ""
         
         for file_name in "${missing_compulsory[@]}"; do
             local file_info=""
@@ -2324,18 +2237,18 @@ check_and_download_required_files() {
             IFS="${old_ifs}"
             
             # Skip local files - they're generated/fetched elsewhere
-            if [[ "$validation_method" == "local" ]]; then
-                echo "  ⊙ Skipping $file_name (local file, handled separately)"
+            if [[ "${validation_method}" == "local" ]]; then
+                printf '%s\n' "  ⊙ Skipping ${file_name} (local file, handled separately)"
                 continue
             fi
             
             # Skip optional manual downloads (NVIDIA Video SDK)
-            if [[ "$file_url" == "optional_manual" ]]; then
-                echo "  ⊙ Skipping $file_name (requires manual download)"
+            if [[ "${file_url}" == "optional_manual" ]]; then
+                printf '%s\n' "  ⊙ Skipping ${file_name} (requires manual download)"
                 continue
             fi
             
-            echo "  → Downloading: $file_name"
+            printf '%s\n' "  → Downloading: ${file_name}"
             
             # Determine destination directory
             # Use case statement for better pattern matching reliability
@@ -2357,49 +2270,81 @@ check_and_download_required_files() {
             # Create parent directory if it doesn't exist
             mkdir -p "$(dirname "${dest_path}")"
             
-            # Download file with retry logic
+            # Download file with retry logic and HTTP error handling
             local download_success=false
+            local http_code
+            local curl_stderr
             for attempt in 1 2 3; do
-                if curl -fSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}.tmp" 2>/dev/null; then
-                    if [ -f "${dest_path}.tmp" ] && [ -s "${dest_path}.tmp" ]; then
-                        mv "${dest_path}.tmp" "${dest_path}"
-                        download_success=true
-                        echo "    ✓ Downloaded: ${file_name}"
-                        break
+                # Capture HTTP status code and stderr separately for proper error analysis
+                curl_stderr=$(mktemp "${BUILD_TMP_DIR:-/tmp}/curl_stderr.XXXXXX" 2>/dev/null || echo "/tmp/curl_stderr.$$")
+                http_code=$(curl -fSL --connect-timeout 30 --max-time 3600 -w "%{http_code}" -o "${dest_path}.tmp" "${file_url}" 2>"${curl_stderr}" || echo "000")
+                rm -f "${curl_stderr}" 2>/dev/null || true
+                
+                # Validate HTTP status code is 3-digit number
+                if [[ "${http_code}" =~ ^[0-9]{3}$ ]]; then
+                    # Check for HTTP success codes (200-299)
+                    if [[ "${http_code}" =~ ^2[0-9]{2}$ ]]; then
+                        if [ -f "${dest_path}.tmp" ] && [ -s "${dest_path}.tmp" ]; then
+                            mv "${dest_path}.tmp" "${dest_path}"
+                            download_success=true
+                            printf '%s\n' "    ✓ Downloaded: ${file_name}"
+                            break
+                        else
+                            printf '%s\n' "    ⚠ Download attempt ${attempt} produced empty file, retrying..."
+                            rm -f "${dest_path}.tmp" 2>/dev/null || true
+                        fi
+                    elif [[ "${http_code}" == "403" ]]; then
+                        printf '%s\n' "    ⚠ Download attempt ${attempt} failed with HTTP 403 (Forbidden/Blocked), retrying..."
+                        rm -f "${dest_path}.tmp" 2>/dev/null || true
+                    elif [[ "${http_code}" == "404" ]]; then
+                        printf '%s\n' "    ⚠ Download attempt ${attempt} failed with HTTP 404 (Not Found), retrying..."
+                        rm -f "${dest_path}.tmp" 2>/dev/null || true
+                    elif [[ "${http_code}" =~ ^5[0-9]{2}$ ]]; then
+                        printf '%s\n' "    ⚠ Download attempt ${attempt} failed with HTTP ${http_code} (Server Error), retrying..."
+                        rm -f "${dest_path}.tmp" 2>/dev/null || true
                     else
-                        echo "    ⚠ Download attempt ${attempt} produced empty file, retrying..."
+                        printf '%s\n' "    ⚠ Download attempt ${attempt} failed with HTTP ${http_code}, retrying..."
                         rm -f "${dest_path}.tmp" 2>/dev/null || true
                     fi
+                elif [[ "${http_code}" == "000" ]]; then
+                    printf '%s\n' "    ⚠ Download attempt ${attempt} failed (connection/timeout error), retrying..."
+                    rm -f "${dest_path}.tmp" 2>/dev/null || true
                 else
-                    echo "    ⚠ Download attempt ${attempt} failed, retrying..."
+                    printf '%s\n' "    ⚠ Download attempt ${attempt} failed (invalid HTTP code: ${http_code}), retrying..."
                     rm -f "${dest_path}.tmp" 2>/dev/null || true
                 fi
                 sleep 2
             done
             
             if [ "${download_success}" != "true" ]; then
-                echo ""
-                echo "═══════════════════════════════════════════════════════════════"
-                echo "  FATAL ERROR: Failed to download compulsory file"
-                echo "═══════════════════════════════════════════════════════════════"
-                echo "  File name: ${file_name}"
-                echo "  Expected location: ${dest_path}"
-                echo "  Source URL: ${file_url}"
-                echo ""
-                echo "  This is a compulsory file. The build cannot continue without it."
-                echo "  You may manually download this file and place it at:"
-                echo "    ${dest_path}"
-                echo "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' ""
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' "  FATAL ERROR: Failed to download compulsory file"
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' "  File name: ${file_name}"
+                printf '%s\n' "  Expected location: ${dest_path}"
+                printf '%s\n' "  Source URL: ${file_url}"
+                if [[ "${http_code:-000}" != "000" ]]; then
+                    printf '%s\n' "  HTTP status code: ${http_code}"
+                fi
+                printf '%s\n' ""
+                printf '%s\n' "  This is a compulsory file. The build cannot continue without it."
+                printf '%s\n' "  You may manually download this file and place it at:"
+                printf '%s\n' "    ${dest_path}"
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
                 exit 1
             fi
+# ENDIF: download_success check
         done
-        echo ""
+# ENDFOR: file_name (Phase 2)
+        printf '%s\n' ""
     fi
+# ENDIF: missing_compulsory check
     
     # Attempt to download missing optional files (but don't fail if download fails)
     if [ ${#missing_optional[@]} -gt 0 ]; then
-        echo "Phase 3: Attempting to download ${#missing_optional[@]} missing optional file(s)..."
-        echo ""
+        printf '%s\n' "Phase 3: Attempting to download ${#missing_optional[@]} missing optional file(s)..."
+        printf '%s\n' ""
         
         for file_name in "${missing_optional[@]}"; do
             local file_info=""
@@ -2412,15 +2357,15 @@ check_and_download_required_files() {
             IFS="${old_ifs}"
             
             # Skip optional manual downloads (NVIDIA Video SDK)
-            if [[ "$file_url" == "optional_manual" ]]; then
-                echo "  ⊙ Skipping $file_name (requires manual download from NVIDIA Developer website)"
-                echo "    This file is optional. If needed, download it manually from:"
-                echo "    https://developer.nvidia.com/nvidia-video-codec-sdk/download"
-                echo "    Place it in: ${BIN_CACHE}/${file_name}"
+            if [[ "${file_url}" == "optional_manual" ]]; then
+                printf '%s\n' "  ⊙ Skipping ${file_name} (requires manual download from NVIDIA Developer website)"
+                printf '%s\n' "    This file is optional. If needed, download it manually from:"
+                printf '%s\n' "    https://developer.nvidia.com/nvidia-video-codec-sdk/download"
+                printf '%s\n' "    Place it in: ${BIN_CACHE}/${file_name}"
                 continue
             fi
             
-            echo "  → Attempting download: $file_name"
+            printf '%s\n' "  → Attempting download: ${file_name}"
             
             # Determine destination directory
             # Use case statement for better pattern matching reliability
@@ -2436,38 +2381,53 @@ check_and_download_required_files() {
             # Create parent directory if it doesn't exist
             mkdir -p "$(dirname "${dest_path}")"
             
-            # Attempt download (non-fatal)
-            if curl -fSL --connect-timeout 30 --max-time 3600 "${file_url}" -o "${dest_path}.tmp" 2>/dev/null; then
+            # Attempt download (non-fatal) with HTTP error handling
+            local http_code
+            local curl_stderr
+            curl_stderr=$(mktemp "${BUILD_TMP_DIR:-/tmp}/curl_stderr.XXXXXX" 2>/dev/null || echo "/tmp/curl_stderr.$$")
+            http_code=$(curl -fSL --connect-timeout 30 --max-time 3600 -w "%{http_code}" -o "${dest_path}.tmp" "${file_url}" 2>"${curl_stderr}" || echo "000")
+            rm -f "${curl_stderr}" 2>/dev/null || true
+            
+            # Validate HTTP status code
+            if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [[ "${http_code}" =~ ^2[0-9]{2}$ ]]; then
                 if [ -f "${dest_path}.tmp" ] && [ -s "${dest_path}.tmp" ]; then
                     mv "${dest_path}.tmp" "${dest_path}"
-                    echo "    ✓ Downloaded: ${file_name}"
+                    printf '%s\n' "    ✓ Downloaded: ${file_name}"
                 else
-                    echo "    ⚠ Download produced empty file (optional file, continuing): ${file_name}"
+                    printf '%s\n' "    ⚠ Download produced empty file (optional file, continuing): ${file_name}"
                     rm -f "${dest_path}.tmp" 2>/dev/null || true
                 fi
             else
-                echo ""
-                echo "═══════════════════════════════════════════════════════════════"
-                echo "  WARNING: Failed to download optional file (non-fatal)"
-                echo "═══════════════════════════════════════════════════════════════"
-                echo "  File name: ${file_name}"
-                echo "  Expected location: ${dest_path}"
-                echo "  Source URL: ${file_url}"
-                echo ""
-                echo "  This is an optional file. The build will continue without it."
-                echo "  If needed, you may manually download this file and place it at:"
-                echo "    ${dest_path}"
-                echo "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' ""
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' "  WARNING: Failed to download optional file (non-fatal)"
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
+                printf '%s\n' "  File name: ${file_name}"
+                printf '%s\n' "  Expected location: ${dest_path}"
+                printf '%s\n' "  Source URL: ${file_url}"
+                if [[ "${http_code:-000}" != "000" ]] && [[ "${http_code}" =~ ^[0-9]{3}$ ]]; then
+                    printf '%s\n' "  HTTP status code: ${http_code}"
+                elif [[ "${http_code}" == "000" ]]; then
+                    printf '%s\n' "  Connection/timeout error occurred"
+                fi
+                printf '%s\n' ""
+                printf '%s\n' "  This is an optional file. The build will continue without it."
+                printf '%s\n' "  If needed, you may manually download this file and place it at:"
+                printf '%s\n' "    ${dest_path}"
+                printf '%s\n' "═══════════════════════════════════════════════════════════════"
                 rm -f "${dest_path}.tmp" 2>/dev/null || true
             fi
+# ENDIF: http_code check (optional)
         done
-        echo ""
+# ENDFOR: file_name (Phase 3)
+        printf '%s\n' ""
     fi
+# ENDIF: missing_optional check
     
     # Final summary
-    echo "═══════════════════════════════════════════════════════════════"
-    echo "  CACHE CHECK COMPLETE"
-    echo "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' "  CACHE CHECK COMPLETE"
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
     
     # Re-check all files after downloads
     local final_missing_compulsory=()
@@ -2500,6 +2460,7 @@ check_and_download_required_files() {
                 file_path="${BIN_CACHE}/${file_name}"
                 ;;
         esac
+# ENDCASE: file_name pattern matching
         
         if [ ! -f "${file_path}" ] || [ ! -s "${file_path}" ]; then
             if [[ "${optional_flag}" == "optional" ]] || [[ "${file_url}" == "optional_manual" ]]; then
@@ -2508,41 +2469,50 @@ check_and_download_required_files() {
                 final_missing_compulsory+=("${file_name}")
             fi
         fi
+# ENDIF: file_path existence check
     done
+# ENDFOR: file_name (Final check)
     
     if [ ${#final_missing_compulsory[@]} -gt 0 ]; then
-        echo ""
-        echo "  ✗ ERROR: ${#final_missing_compulsory[@]} compulsory file(s) still missing:"
+        printf '%s\n' ""
+        printf '%s\n' "  ✗ ERROR: ${#final_missing_compulsory[@]} compulsory file(s) still missing:"
         for file in "${final_missing_compulsory[@]}"; do
-            echo "    - ${file}"
+            printf '%s\n' "    - ${file}"
         done
-        echo ""
-        echo "  Build cannot continue. Please check network connection and try again."
+# ENDFOR: file (final_missing_compulsory)
+        printf '%s\n' ""
+        printf '%s\n' "  Build cannot continue. Please check network connection and try again."
         exit 1
     fi
+# ENDIF: final_missing_compulsory check
     
     if [ ${#final_missing_optional[@]} -gt 0 ]; then
-        echo ""
-        echo "  ⚠ WARNING: ${#final_missing_optional[@]} optional file(s) missing:"
+        printf '%s\n' ""
+        printf '%s\n' "  ⚠ WARNING: ${#final_missing_optional[@]} optional file(s) missing:"
         for file in "${final_missing_optional[@]}"; do
-            echo "    - ${file}"
+            printf '%s\n' "    - ${file}"
         done
-        echo ""
-        echo "  Build will continue, but features requiring these files will be disabled."
+# ENDFOR: file (final_missing_optional)
+        printf '%s\n' ""
+        printf '%s\n' "  Build will continue, but features requiring these files will be disabled."
     else
-        echo ""
-        echo "  ✓ All required files present in cache"
+        printf '%s\n' ""
+        printf '%s\n' "  ✓ All required files present in cache"
     fi
+# ENDIF: final_missing_optional check
     
-    echo "═══════════════════════════════════════════════════════════════"
-    echo ""
+    printf '%s\n' "═══════════════════════════════════════════════════════════════"
+    printf '%s\n' ""
 }
 
 # Run comprehensive cache check and download
 check_and_download_required_files
 
 # Skip downloads if all artifacts are cached (legacy check - kept for compatibility)
-CACHE_COMPLETE_RESULT="$(check_cache_complete 2>/dev/null || echo "1")"
+# Validate command substitution result (H4, F2)
+if ! CACHE_COMPLETE_RESULT="$(check_cache_complete 2>/dev/null || echo "1")"; then
+    CACHE_COMPLETE_RESULT="1"
+fi
 CACHE_COMPLETE_RESULT="${CACHE_COMPLETE_RESULT:-1}"
 if [[ "${CACHE_COMPLETE_RESULT}" -eq 0 ]]; then
     log "All artifacts already cached, skipping legacy download phase"
@@ -2551,16 +2521,6 @@ else
     export -f fetch fetch_binary log log_with_timestamp log_success log_warning log_error warn err
 
     # Define download tasks (legacy - most files should already be downloaded above)
-
-#--- Sub-block: Section 1200 ---
-# Purpose: Continued implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: File verification ---
-# Purpose: Check file integrity
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
     # Use a safer temporary file location with proper cleanup
     (
         set -euo pipefail
@@ -2570,42 +2530,57 @@ else
         }
         trap 'rm -f "${tasks_file}" 2>/dev/null || true' EXIT
     
-        cat > "${tasks_file}" << EOF
-MINIFORGE|${MINIFORGE_URL}|${BIN_CACHE}/${MINIFORGE_SH}|binary
-MICROMAMBA|${MICROMAMBA_URL}|${BIN_CACHE}/${MICROMAMBA_BIN}|binary
-YQ|${YQ_URL}|${BIN_CACHE}/${YQ_BIN}|binary
-TURBOVNC|${TURBOVNC_URL}|${DEB_CACHE}/${TURBOVNC_DEB}|deb
-VIRTUALGL|${VIRTUALGL_URL}|${DEB_CACHE}/${VIRTUALGL_DEB}|deb
-DRAKE_KEY|${DRAKE_ASC_URL}|${BIN_CACHE}/drake.asc|file
-JULIA|${JULIA_URL}|${BIN_CACHE}/${JULIA_TARBALL}|file
-NVIDIA_KEYRING|${NVIDIA_KEYRING_URL}|${DEB_CACHE}/${NVIDIA_KEYRING_DEB}|deb
-OPEN3D_WEBRTC|${OPEN3D_WEBRTC_URL}|${BIN_CACHE}/${OPEN3D_WEBRTC_FILE}|file
-EOF
+        # Generate download tasks list with variable expansion (E2, D1)
+        # Variables used: MINIFORGE_URL, MICROMAMBA_URL, YQ_URL, TURBOVNC_URL, VIRTUALGL_URL,
+        #                 DRAKE_ASC_URL, JULIA_URL, NVIDIA_KEYRING_URL, OPEN3D_WEBRTC_URL,
+        #                 BIN_CACHE, DEB_CACHE, MINIFORGE_SH, MICROMAMBA_BIN, YQ_BIN,
+        #                 TURBOVNC_DEB, VIRTUALGL_DEB, JULIA_TARBALL, NVIDIA_KEYRING_DEB, OPEN3D_WEBRTC_FILE
+        {
+            printf '%s|%s|%s/%s|binary\n' "MINIFORGE" "${MINIFORGE_URL}" "${BIN_CACHE}" "${MINIFORGE_SH}"
+            printf '%s|%s|%s/%s|binary\n' "MICROMAMBA" "${MICROMAMBA_URL}" "${BIN_CACHE}" "${MICROMAMBA_BIN}"
+            printf '%s|%s|%s/%s|binary\n' "YQ" "${YQ_URL}" "${BIN_CACHE}" "${YQ_BIN}"
+            printf '%s|%s|%s/%s|deb\n' "TURBOVNC" "${TURBOVNC_URL}" "${DEB_CACHE}" "${TURBOVNC_DEB}"
+            printf '%s|%s|%s/%s|deb\n' "VIRTUALGL" "${VIRTUALGL_URL}" "${DEB_CACHE}" "${VIRTUALGL_DEB}"
+            printf '%s|%s|%s/%s|file\n' "DRAKE_KEY" "${DRAKE_ASC_URL}" "${BIN_CACHE}" "drake.asc"
+            printf '%s|%s|%s/%s|file\n' "JULIA" "${JULIA_URL}" "${BIN_CACHE}" "${JULIA_TARBALL}"
+            printf '%s|%s|%s/%s|deb\n' "NVIDIA_KEYRING" "${NVIDIA_KEYRING_URL}" "${DEB_CACHE}" "${NVIDIA_KEYRING_DEB}"
+            printf '%s|%s|%s/%s|file\n' "OPEN3D_WEBRTC" "${OPEN3D_WEBRTC_URL}" "${BIN_CACHE}" "${OPEN3D_WEBRTC_FILE}"
+        } > "${tasks_file}"
 
         # Execute downloads in parallel (max 4 concurrent) - only for files not already downloaded
         log "Downloading any remaining artifacts in parallel..."
         # Process downloads sequentially for safety (parallel execution removed due to complexity with exported functions)
         # Note: This is safer than xargs with bash -c which has quoting/injection risks
         while IFS='|' read -r name url dst type || [ -n "${name:-}" ]; do
-            # Skip empty lines
+            # Skip empty lines (J1, J3)
             [ -z "${name:-}" ] && continue
-            # Validate required fields
-            [ -z "${url:-}" ] && continue
-            [ -z "${dst:-}" ] && continue
-            [ -z "${type:-}" ] && continue
-            # Skip if file already exists and is not empty
-            if [ -f "${dst}" ] && [ -s "${dst}" ]; then
-                echo "Skipping (already cached): ${name}"
-            else
-                echo "Starting download: ${name}"
-                if [[ "${type}" == "binary" ]]; then
-                    fetch_binary "${url}" "${dst}"
-                else
-                    fetch "${url}" "${dst}"
-                fi
-                echo "Completed download: ${name}"
+            # Validate required fields before proceeding (J1, C1)
+            if [ -z "${url:-}" ] || [ -z "${dst:-}" ] || [ -z "${type:-}" ]; then
+                log_warning "Skipping invalid download task (missing required fields): ${name:-unknown}"
+                continue
             fi
+            # Skip if file already exists and is not empty (J1)
+            if [ -f "${dst}" ] && [ -s "${dst}" ]; then
+                log "Skipping (already cached): ${name}"
+            else
+                log "Starting download: ${name}"
+                # Validate download type and execute with error handling (H4, K1)
+                if [[ "${type}" == "binary" ]]; then
+                    if ! fetch_binary "${url}" "${dst}"; then
+                        log_error "Failed to download binary: ${name}"
+                        continue
+                    fi
+                else
+                    if ! fetch "${url}" "${dst}"; then
+                        log_error "Failed to download file: ${name}"
+                        continue
+                    fi
+                fi
+                log_success "Completed download: ${name}"
+            fi
+            # ENDIF: file existence check
         done < "${tasks_file}"
+        # ENDWHILE: download tasks processing
     )
 fi
 
@@ -2620,30 +2595,50 @@ if [ ! -s "${JULIA_KEY_FILE}" ]; then
     # Method 1: Direct download from Julia's official URL (most reliable)
     GPG_FETCH_SUCCESS=false
     log "  Attempting direct download from ${JULIA_GPG_KEY_URL}..."
-    if curl -fsSL --retry 3 --connect-timeout 10 "${JULIA_GPG_KEY_URL}" -o "${JULIA_KEY_FILE}" 2>/dev/null; then
-        if [ -s "${JULIA_KEY_FILE}" ] && grep -q "BEGIN PGP PUBLIC KEY BLOCK" "${JULIA_KEY_FILE}"; then
+    # HTTP error handling with explicit status check (I4, H4)
+    http_code=""
+    http_code="$(curl -fsSL -w '%{http_code}' -o "${JULIA_KEY_FILE}" --retry 3 --connect-timeout 10 "${JULIA_GPG_KEY_URL}" 2>/dev/null || echo "000")"
+    # Validate HTTP status code (I4)
+    if [[ "${http_code}" =~ ^[0-9]{3}$ ]] && [ "${http_code}" -ge 200 ] && [ "${http_code}" -lt 300 ]; then
+        if [ -s "${JULIA_KEY_FILE}" ] && grep -Fq -- "BEGIN PGP PUBLIC KEY BLOCK" "${JULIA_KEY_FILE}"; then
             log_success "Successfully downloaded Julia GPG key from official URL"
             GPG_FETCH_SUCCESS=true
+        else
+            log_warning "Downloaded file is empty or invalid GPG key format"
         fi
+    else
+        log_warning "HTTP ${http_code:-unknown} received for GPG key download"
     fi
     
     # Method 2: Fallback to keyservers if direct download fails
     if [[ "${GPG_FETCH_SUCCESS}" == "false" ]]; then
         log "  Direct download failed. Trying keyservers..."
+        # Loop with explicit error handling (H4, I3)
         for attempt in 1 2; do
-            if gpg --keyserver https://keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" 2>/dev/null || \
-               gpg --keyserver https://keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" 2>/dev/null; then
+            # Validate gpg recv-keys commands with explicit error checking (H4)
+            gpg_recv_success=false
+            if gpg --keyserver https://keyserver.ubuntu.com --recv-keys "${JULIA_GPG_KEY_ID}" 2>/dev/null; then
+                gpg_recv_success=true
+            elif gpg --keyserver https://keys.openpgp.org --recv-keys "${JULIA_GPG_KEY_ID}" 2>/dev/null; then
+                gpg_recv_success=true
+            fi
+            if [[ "${gpg_recv_success}" == "true" ]]; then
                 # Export the key from the keyring to our cache file
-                gpg --export --armor "${JULIA_GPG_KEY_ID}" > "${JULIA_KEY_FILE}" 2>/dev/null
-                if [ -s "${JULIA_KEY_FILE}" ]; then
+                # Validate gpg export result before checking file (H4, F2)
+                if gpg --export --armor "${JULIA_GPG_KEY_ID}" > "${JULIA_KEY_FILE}" 2>/dev/null && [ -s "${JULIA_KEY_FILE}" ]; then
                     log_success "Successfully fetched Julia GPG key from keyserver"
                     GPG_FETCH_SUCCESS=true
                     break
                 fi
             fi
-            [ "${attempt}" -lt 2 ] && sleep 2
+            # Sleep between retry attempts (I1, I3)
+            if [ "${attempt}" -lt 2 ] && [[ "${GPG_FETCH_SUCCESS}" == "false" ]]; then
+                sleep 2
+            fi
         done
+        # ENDFOR: attempt
     fi
+    # ENDIF: GPG_FETCH_SUCCESS check
     
     if [[ "${GPG_FETCH_SUCCESS}" == "false" ]]; then
         log_warning "Failed to fetch Julia GPG key from all sources (URL and keyservers)."
@@ -2656,25 +2651,15 @@ if [ ! -s "${JULIA_KEY_FILE}" ]; then
         # Don't create marker file - let validation attempt keyserver if needed
     fi
 else
-    log "Using cached Julia GPG key: $(basename "${JULIA_KEY_FILE}")"
+    # Validate basename result (H4, F2, D1)
+    if cached_key_name="$(basename "${JULIA_KEY_FILE}" 2>/dev/null)" && [ -n "${cached_key_name}" ]; then
+        log "Using cached Julia GPG key: ${cached_key_name}"
+    else
+        log "Using cached Julia GPG key"
+    fi
 fi
 log "Prefetching complete."
 
-#--- Sub-block: Section continuation (1212) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-
-#--- Sub-block: Code section 1182 ---
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
-#--- Sub-block: Section 1250 ---
-# Purpose: Continued implementation
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 # --- Singularity Definition File Generation ---
 log_with_timestamp "Generating Singularity definition file: ${DEF_NAME}"
 # Always remove any stale def file from previous runs
@@ -2822,11 +2807,6 @@ From: ${BASE_IMAGE}
     mkdir -p "\${ROOTFS}/container_cache/julia_pkgs"
     mkdir -p "\${ROOTFS}/container_cache/wheels"
 
-#--- Sub-block: Section continuation (1742) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
     # Set proper permissions for cache directories
     chmod -R 755 "\${ROOTFS}/container_cache" 2>/dev/null || true
 
@@ -2834,11 +2814,6 @@ From: ${BASE_IMAGE}
     # No need to copy - bind mount provides direct access to host cache
     # This eliminates the time-consuming rsync copy step
 
-
-#--- Sub-block: Code section 1694 ---
-# Purpose: Continuing implementation
-# Dependencies: PHASE 1 (Compilers)
-# Outputs: Configured system components
     # Ensure proper ownership and permissions after copy
     chown -R root:root "\${ROOTFS}/container_cache" 2>/dev/null || true
     chmod -R 755 "\${ROOTFS}/container_cache" 2>/dev/null || true
@@ -2888,13 +2863,13 @@ From: ${BASE_IMAGE}
     echo "Time: \$(date)"
 
     echo "GLIBC version:"
-    /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 || echo "GLIBC version check failed"
+    /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || echo "GLIBC version check failed"
 
     echo "ldd version:"
-    (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 || true
+    (timeout 5 sh -c 'ldd --version 2>&1' || echo "ldd version check failed or timed out") | head -1 2>/dev/null || true
 
     echo "GCC version:"
-    gcc --version 2>/dev/null | head -1 || echo "GCC not installed yet"
+    gcc --version 2>/dev/null | head -1 2>/dev/null || echo "GCC not installed yet"
 
     echo "stdlib.h locations:"
     find /usr/include -name "stdlib.h" 2>/dev/null || echo "stdlib.h not found"
@@ -2902,13 +2877,8 @@ From: ${BASE_IMAGE}
     echo "cstdlib locations:"
     find /usr/include -name "cstdlib" 2>/dev/null || echo "cstdlib not found"
 
-
-#--- Sub-block 17.1.1: Definition file main sections ---
-# Purpose: Bootstrap, post-install, environment
-# Dependencies: PHASE 1 (Compilers)
-# Outputs: Configured system components
     echo "Compiler include paths:"
-    gcc -xc++ -E -v < /dev/null 2>&1 | grep "^ /" 2>/dev/null || echo "Cannot check (GCC not ready)"
+    gcc -xc++ -E -v < /dev/null 2>&1 | grep -- "^ /" 2>/dev/null || echo "Cannot check (GCC not ready)"
     echo "================================="
     echo "Test compile with stdlib.h:"
     echo '#include <stdlib.h>' > /tmp/test_c.c
@@ -2946,11 +2916,6 @@ From: ${BASE_IMAGE}
     # Suppress pip root warnings in container builds
     export PIP_ROOT_USER_ACTION=ignore
 
-#--- Sub-block: Section continuation (1820) ---
-# Purpose: Implementation details
-# Dependencies: Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
-
     # Configure Environment for CUDA Cross-Compilation
     # Set a dedicated, writable temporary directory for the CUDA compiler (nvcc)
     # to prevent issues with restrictive /tmp permissions on build hosts.
@@ -2959,25 +2924,22 @@ From: ${BASE_IMAGE}
     mkdir -p "\$TMPDIR"
     chmod 755 "\$TMPDIR"
 
-
-#--- Sub-block: Code section 1771 ---
-# Purpose: Continuing implementation
-# Dependencies: Block 17 (Conda/Miniforge), Block 8.5 (Julia installation), Block 6.13 (NVIDIA CUDA)
-# Outputs: GPU libraries, CUDA toolkit
     # Auto-detect CUDA installation (robust, version-agnostic)
     if [ -L /usr/local/cuda ]; then
         export CUDA_HOME=/usr/local/cuda
     elif [ -d "/usr/local/cuda-${CUDA_MAJOR}" ]; then
         export CUDA_HOME="/usr/local/cuda-${CUDA_MAJOR}"
     else
-        # Fallback to auto-detection of versioned directory
-        DETECTED_CUDA=\$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 || echo "")
+        # Fallback to auto-detection of versioned directory (D3e - SIGPIPE handling)
+        DETECTED_CUDA=""
+        DETECTED_CUDA="$(ls -d /usr/local/cuda-${CUDA_MAJOR}.* 2>/dev/null | head -1 2>/dev/null || echo "")"
         if [ -n "\${DETECTED_CUDA}" ] && [ -d "\${DETECTED_CUDA}" ]; then
             export CUDA_HOME="\${DETECTED_CUDA}"
         else
             export CUDA_HOME="/usr/local/cuda"
         fi
     fi
+    # ENDIF: CUDA installation detection
     export PATH="\${CUDA_HOME}/bin:\${PATH}"
     export LD_LIBRARY_PATH="\${CUDA_HOME}/lib64:\${LD_LIBRARY_PATH}"
 
@@ -3020,20 +2982,10 @@ From: ${BASE_IMAGE}
     # Robotics tools tests
     echo "test Mirror selection: nala and apt-aria wrapper available for fast downloads"
 
-#--- Sub-block: Section continuation (1872) ---
-# Purpose: Implementation details
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-
 # === %runscript Section ===
 %runscript
     exec /bin/bash -l
 
-
-#--- Sub-block: Code section 1816 ---
-# Purpose: Continuing implementation
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
 DEF
 # End heredoc (self-contained)
 log "Singularity definition file generated successfully."
@@ -3058,50 +3010,87 @@ if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
     log_error "Failed to ensure host cache directory exists: ${HOST_CACHE_BIND_SRC}"
     exit 1
 fi
+# ENDIF: host cache directory creation
 HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache"
 
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."
 	# High-signal debug context
-	log "Apptainer version: $(/usr/bin/apptainer --version 2>/dev/null || echo unknown)"
+	# D3d, H4: Validate command substitution result
+	APPTAINER_VERSION_OUTPUT=""
+	APPTAINER_VERSION_OUTPUT=$(/usr/bin/apptainer --version 2>/dev/null || echo "unknown")
+	if [ -z "${APPTAINER_VERSION_OUTPUT}" ]; then
+		APPTAINER_VERSION_OUTPUT="unknown"
+	fi
+	log "Apptainer version: ${APPTAINER_VERSION_OUTPUT}"
 	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
-	log "Apptainer env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
+	# D3e: Fix SIGPIPE risk in pipeline - use process substitution or add error handling
+	APPTAINER_ENV_OUTPUT=""
+	if APPTAINER_ENV_OUTPUT=$(env 2>/dev/null | grep -E '^(APPTAINER|SINGULARITY)_' 2>/dev/null || true); then
+		[ -n "${APPTAINER_ENV_OUTPUT}" ] || APPTAINER_ENV_OUTPUT="(none)"
+	else
+		APPTAINER_ENV_OUTPUT="(none)"
+	fi
+	log "Apptainer env: ${APPTAINER_ENV_OUTPUT}"
     APPTAINER_BINDPATH_NEW="${HOST_CACHE_BIND_SPEC}"
     if [ -n "${APPTAINER_BINDPATH:-}" ]; then
         APPTAINER_BINDPATH_NEW="${APPTAINER_BINDPATH_NEW},${APPTAINER_BINDPATH}"
     fi
+	# ENDIF: APPTAINER_BINDPATH check
 	# Echo full command before execution for easy tracing in logs
 	APPTAINER_CMD=(sudo env "APPTAINER_BINDPATH=${APPTAINER_BINDPATH_NEW}" /usr/bin/apptainer build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
 	log "Executing: ${APPTAINER_CMD[*]}"
 	# Prefer --debug if supported (non-fatal if not)
-	if /usr/bin/apptainer build --help 2>&1 | grep -q -- '--debug'; then
-		APPTAINER_CMD+=(--debug)
+	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
+	if APPTAINER_HELP_OUTPUT=$(/usr/bin/apptainer build --help 2>&1 || true); then
+		if grep -q -- '--debug' <<< "${APPTAINER_HELP_OUTPUT}" 2>/dev/null || true; then
+			APPTAINER_CMD+=(--debug)
+		fi
 	fi
+	# ENDIF: --debug support check
 	# Run the command (traced) and let ERR trap handle failures with context
 	set -x
 	"${APPTAINER_CMD[@]}"
 	{ set +x; } 2>/dev/null || true
 elif [ -x /usr/bin/singularity ]; then
     warn "apptainer not found, falling back to singularity."
-	log "Singularity version: $(/usr/bin/singularity --version 2>/dev/null || echo unknown)"
+	# D3d, H4: Validate command substitution result
+	SINGULARITY_VERSION_OUTPUT=""
+	SINGULARITY_VERSION_OUTPUT=$(/usr/bin/singularity --version 2>/dev/null || echo "unknown")
+	if [ -z "${SINGULARITY_VERSION_OUTPUT}" ]; then
+		SINGULARITY_VERSION_OUTPUT="unknown"
+	fi
+	log "Singularity version: ${SINGULARITY_VERSION_OUTPUT}"
 	log "Build tmp: ${BUILD_TMP_DIR} | Out: ${OUT_DIR} | Def: ${DEF_NAME}"
-	log "Singularity env: $(env | grep -E '^(APPTAINER|SINGULARITY)_' || true)"
+	# D3e: Fix SIGPIPE risk in pipeline - use process substitution or add error handling
+	SINGULARITY_ENV_OUTPUT=""
+	if SINGULARITY_ENV_OUTPUT=$(env 2>/dev/null | grep -E '^(APPTAINER|SINGULARITY)_' 2>/dev/null || true); then
+		[ -n "${SINGULARITY_ENV_OUTPUT}" ] || SINGULARITY_ENV_OUTPUT="(none)"
+	else
+		SINGULARITY_ENV_OUTPUT="(none)"
+	fi
+	log "Singularity env: ${SINGULARITY_ENV_OUTPUT}"
     SINGULARITY_BINDPATH_NEW="${HOST_CACHE_BIND_SPEC}"
     if [ -n "${SINGULARITY_BINDPATH:-}" ]; then
         SINGULARITY_BINDPATH_NEW="${SINGULARITY_BINDPATH_NEW},${SINGULARITY_BINDPATH}"
     fi
+	# ENDIF: SINGULARITY_BINDPATH check
 	SINGULARITY_CMD=(sudo env "SINGULARITY_BINDPATH=${SINGULARITY_BINDPATH_NEW}" /usr/bin/singularity build --tmpdir "${BUILD_TMP_DIR}" --force "${OUT_DIR}/${SIF_NAME}" "${DEF_NAME}")
 	log "Executing: ${SINGULARITY_CMD[*]}"
-	if /usr/bin/singularity build --help 2>&1 | grep -q -- '--debug'; then
-		SINGULARITY_CMD+=(--debug)
+	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
+	if SINGULARITY_HELP_OUTPUT=$(/usr/bin/singularity build --help 2>&1 || true); then
+		if grep -q -- '--debug' <<< "${SINGULARITY_HELP_OUTPUT}" 2>/dev/null || true; then
+			SINGULARITY_CMD+=(--debug)
+		fi
 	fi
+	# ENDIF: --debug support check
 	set -x
 	"${SINGULARITY_CMD[@]}"
 	{ set +x; } 2>/dev/null || true
 else
     err "Neither apptainer nor singularity found. Please install one to proceed."
 fi
-# End if-elif-else block (self-contained)
+# ENDIF: container runtime check (apptainer/singularity)
 
 log "================ Image building completed successfully ================"
 
@@ -3133,11 +3122,13 @@ if ! mkdir -p "${BUILD_OUTPUT_DIR}" 2>/dev/null; then
     log_error "Failed to create build output directory: ${BUILD_OUTPUT_DIR}"
     exit 1
 fi
+# ENDIF: build output directory creation
 
 if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
     log_error "Build output directory does not exist after creation: ${BUILD_OUTPUT_DIR}"
     exit 1
 fi
+# ENDIF: build output directory existence verification
 
 log_success "Build output directory created: ${BUILD_OUTPUT_DIR}"
 
@@ -3158,14 +3149,17 @@ if [ -f "${ORIGINAL_IMAGE_PATH}" ]; then
             log_warning "Move command succeeded but destination file not found, keeping original location"
             SIF_PATH="${ORIGINAL_IMAGE_PATH}"
         fi
+        # ENDIF: final image path verification
     else
         log_warning "Failed to move image file, keeping original location"
         SIF_PATH="${ORIGINAL_IMAGE_PATH}"
     fi
+    # ENDIF: image file move operation
 else
     log_error "Image file not found: ${ORIGINAL_IMAGE_PATH}"
     SIF_PATH="${ORIGINAL_IMAGE_PATH}"
 fi
+# ENDIF: original image path existence check
 
 #--- Sub-block 22.5.2.1: Move definition file to output directory ---
 # Dependencies: DEF_NAME exists, BUILD_OUTPUT_DIR exists
@@ -3177,9 +3171,11 @@ if [ -f "${DEF_NAME}" ]; then
     else
         log_warning "Failed to move definition file: ${DEF_NAME}"
     fi
+    # ENDIF: definition file move operation
 else
     log_warning "Definition file not found: ${DEF_NAME}"
 fi
+# ENDIF: definition file existence check
 
 #--- Sub-block 22.5.3: Move build logs to output directory ---
 # Dependencies: LOG_FILE and ERROR_LOG exist, BUILD_OUTPUT_DIR exists
@@ -3197,10 +3193,12 @@ else
         else
             log_warning "Failed to move build log: ${LOG_FILE}"
         fi
+        # ENDIF: build log move operation
     else
         log_warning "Build log file not found or not set: ${LOG_FILE:-<not set>}"
         BUILD_LOG_BASENAME=""
     fi
+    # ENDIF: build log file existence check
 
     if [ -f "${ERROR_LOG:-}" ] && [ -n "${ERROR_LOG:-}" ]; then
         log_with_timestamp "Moving error log to output directory..."
@@ -3211,27 +3209,40 @@ else
         else
             log_warning "Failed to move error log: ${ERROR_LOG}"
         fi
+        # ENDIF: error log move operation
     else
         log_warning "Error log file not found or not set: ${ERROR_LOG:-<not set>}"
         ERROR_LOG_BASENAME=""
     fi
+    # ENDIF: error log file existence check
 fi
+# ENDIF: build output directory existence check
 
 # Ensure basename variables are set even if files weren't moved
 if [ -z "${BUILD_LOG_BASENAME:-}" ]; then
     if [ -n "${LOG_FILE:-}" ]; then
-        BUILD_LOG_BASENAME=$(basename "${LOG_FILE}" 2>/dev/null || echo "unknown.log")
+        # D3d, H4: Validate command substitution result
+        BUILD_LOG_BASENAME_TMP=""
+        BUILD_LOG_BASENAME_TMP=$(basename "${LOG_FILE}" 2>/dev/null || echo "unknown.log")
+        BUILD_LOG_BASENAME="${BUILD_LOG_BASENAME_TMP:-unknown.log}"
     else
         BUILD_LOG_BASENAME="unknown.log"
     fi
+    # ENDIF: LOG_FILE existence check
 fi
+# ENDIF: BUILD_LOG_BASENAME check
 if [ -z "${ERROR_LOG_BASENAME:-}" ]; then
     if [ -n "${ERROR_LOG:-}" ]; then
-        ERROR_LOG_BASENAME=$(basename "${ERROR_LOG}" 2>/dev/null || echo "unknown.log")
+        # D3d, H4: Validate command substitution result
+        ERROR_LOG_BASENAME_TMP=""
+        ERROR_LOG_BASENAME_TMP=$(basename "${ERROR_LOG}" 2>/dev/null || echo "unknown.log")
+        ERROR_LOG_BASENAME="${ERROR_LOG_BASENAME_TMP:-unknown.log}"
     else
         ERROR_LOG_BASENAME="unknown.log"
     fi
+    # ENDIF: ERROR_LOG existence check
 fi
+# ENDIF: ERROR_LOG_BASENAME check
 
 #--- Sub-block 22.5.4: Generate BUILD_ARCHITECTURE.md ---
 # Dependencies: config.sh variables, BUILD_OUTPUT_DIR exists
@@ -3240,6 +3251,20 @@ if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
     log_error "Cannot generate BUILD_ARCHITECTURE.md: build output directory does not exist"
 else
 ARCHITECTURE_FILE="${BUILD_OUTPUT_DIR}/BUILD_ARCHITECTURE.md"
+# Validate parent directory exists before creating file (J1, H1)
+ARCHITECTURE_PARENT_DIR=$(dirname "${ARCHITECTURE_FILE}") || {
+    log_error "Failed to determine parent directory for: ${ARCHITECTURE_FILE}"
+    return 1
+}
+if [ ! -d "${ARCHITECTURE_PARENT_DIR}" ]; then
+    log_warning "Parent directory does not exist: ${ARCHITECTURE_PARENT_DIR}"
+    log_with_timestamp "Creating parent directory: ${ARCHITECTURE_PARENT_DIR}"
+    mkdir -p "${ARCHITECTURE_PARENT_DIR}" || {
+        log_error "Failed to create parent directory: ${ARCHITECTURE_PARENT_DIR}"
+        return 1
+    }
+    log_with_timestamp "Parent directory created successfully: ${ARCHITECTURE_PARENT_DIR}"
+fi
 if ! touch "${ARCHITECTURE_FILE}" 2>/dev/null; then
     log_error "Failed to create BUILD_ARCHITECTURE.md at ${ARCHITECTURE_FILE}"
 else
@@ -3258,6 +3283,7 @@ BUILD_END_TIME_NOW=$(date +%s 2>/dev/null || echo "0")
 if ! [[ "${BUILD_END_TIME_NOW}" =~ ^[0-9]+$ ]]; then
     BUILD_END_TIME_NOW=0
 fi
+# ENDIF: BUILD_END_TIME_NOW numeric validation
 if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
     BUILD_DURATION_NOW=$((BUILD_END_TIME_NOW - BUILD_START_TIME))
     # Ensure duration is non-negative
@@ -3265,69 +3291,103 @@ if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] 
         BUILD_DURATION_NOW=0
         log_warning "Build duration calculation resulted in negative value, using 0"
     fi
+    # ENDIF: build duration non-negative check
 else
     BUILD_DURATION_NOW=0
     log_warning "BUILD_START_TIME not set or invalid, duration calculation skipped"
 fi
+# ENDIF: BUILD_START_TIME validation
 BUILD_HOURS_NOW=$((BUILD_DURATION_NOW / 3600))
 BUILD_MINUTES_NOW=$(( (BUILD_DURATION_NOW % 3600) / 60))
 BUILD_SECONDS_NOW=$((BUILD_DURATION_NOW % 60))
 
 # Calculate image size safely - use SIF_PATH which is set correctly
+# D3d, H4, D3e: Validate command substitution and handle SIGPIPE risk
 IMAGE_SIZE_STR="unknown"
 if [ -f "${SIF_PATH:-}" ]; then
-    IMAGE_SIZE_STR=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
-    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
+    IMAGE_SIZE_TMP=""
+    IMAGE_SIZE_TMP=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 2>/dev/null || echo "unknown")
+    IMAGE_SIZE_STR="${IMAGE_SIZE_TMP:-unknown}"
 elif [ -f "${FINAL_IMAGE_PATH:-}" ]; then
-    IMAGE_SIZE_STR=$(du -sh "${FINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
-    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
+    IMAGE_SIZE_TMP=""
+    IMAGE_SIZE_TMP=$(du -sh "${FINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 2>/dev/null || echo "unknown")
+    IMAGE_SIZE_STR="${IMAGE_SIZE_TMP:-unknown}"
 elif [ -f "${ORIGINAL_IMAGE_PATH:-}" ]; then
-    IMAGE_SIZE_STR=$(du -sh "${ORIGINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
-    [ -z "${IMAGE_SIZE_STR}" ] && IMAGE_SIZE_STR="unknown"
+    IMAGE_SIZE_TMP=""
+    IMAGE_SIZE_TMP=$(du -sh "${ORIGINAL_IMAGE_PATH}" 2>/dev/null | cut -f1 2>/dev/null || echo "unknown")
+    IMAGE_SIZE_STR="${IMAGE_SIZE_TMP:-unknown}"
 fi
+# ENDIF: image size calculation
 
 # Ensure basename variables are set (already set above if logs were moved)
+# D3d, H4: Validate command substitution result
 if [ -z "${BUILD_LOG_BASENAME:-}" ]; then
-    BUILD_LOG_BASENAME=$(basename "${LOG_FILE:-unknown.log}" 2>/dev/null || echo "unknown.log")
+    BUILD_LOG_BASENAME_TMP=""
+    BUILD_LOG_BASENAME_TMP=$(basename "${LOG_FILE:-unknown.log}" 2>/dev/null || echo "unknown.log")
+    BUILD_LOG_BASENAME="${BUILD_LOG_BASENAME_TMP:-unknown.log}"
 fi
+# ENDIF: BUILD_LOG_BASENAME fallback
 if [ -z "${ERROR_LOG_BASENAME:-}" ]; then
-    ERROR_LOG_BASENAME=$(basename "${ERROR_LOG:-unknown.log}" 2>/dev/null || echo "unknown.log")
+    ERROR_LOG_BASENAME_TMP=""
+    ERROR_LOG_BASENAME_TMP=$(basename "${ERROR_LOG:-unknown.log}" 2>/dev/null || echo "unknown.log")
+    ERROR_LOG_BASENAME="${ERROR_LOG_BASENAME_TMP:-unknown.log}"
 fi
+# ENDIF: ERROR_LOG_BASENAME fallback
 
 # Calculate cache statistics early for use in BUILD_ARCHITECTURE.md
 # These may be recalculated later, but we need them now for documentation
+# D3d, H4, D3e: Validate command substitutions and handle SIGPIPE risk
 if [ -z "${CACHE_TOTAL_SIZE:-}" ]; then
-    CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR:-}" 2>/dev/null | cut -f1 || echo "0B")
-    [ -z "${CACHE_TOTAL_SIZE}" ] && CACHE_TOTAL_SIZE="0B"
+    CACHE_TOTAL_SIZE_TMP=""
+    CACHE_TOTAL_SIZE_TMP=$(du -sh "${CACHE_DIR:-}" 2>/dev/null | cut -f1 2>/dev/null || echo "0B")
+    CACHE_TOTAL_SIZE="${CACHE_TOTAL_SIZE_TMP:-0B}"
 fi
+# ENDIF: CACHE_TOTAL_SIZE calculation
 if [ -z "${APT_CACHE_SIZE:-}" ]; then
-    APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
-    [ -z "${APT_CACHE_SIZE}" ] && APT_CACHE_SIZE="0B"
+    APT_CACHE_SIZE_TMP=""
+    APT_CACHE_SIZE_TMP=$(du -sh "${APT_ARCHIVE_CACHE:-}" 2>/dev/null | cut -f1 2>/dev/null || echo "0B")
+    APT_CACHE_SIZE="${APT_CACHE_SIZE_TMP:-0B}"
 fi
+# ENDIF: APT_CACHE_SIZE calculation
 if [ -z "${CONDA_CACHE_SIZE:-}" ]; then
-    CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
-    [ -z "${CONDA_CACHE_SIZE}" ] && CONDA_CACHE_SIZE="0B"
+    CONDA_CACHE_SIZE_TMP=""
+    CONDA_CACHE_SIZE_TMP=$(du -sh "${CONDA_CACHE:-}" 2>/dev/null | cut -f1 2>/dev/null || echo "0B")
+    CONDA_CACHE_SIZE="${CONDA_CACHE_SIZE_TMP:-0B}"
 fi
+# ENDIF: CONDA_CACHE_SIZE calculation
 if [ -z "${WHEELS_CACHE_SIZE:-}" ]; then
-    WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
-    [ -z "${WHEELS_CACHE_SIZE}" ] && WHEELS_CACHE_SIZE="0B"
+    WHEELS_CACHE_SIZE_TMP=""
+    WHEELS_CACHE_SIZE_TMP=$(du -sh "${WHEELS_CACHE:-}" 2>/dev/null | cut -f1 2>/dev/null || echo "0B")
+    WHEELS_CACHE_SIZE="${WHEELS_CACHE_SIZE_TMP:-0B}"
 fi
+# ENDIF: WHEELS_CACHE_SIZE calculation
 if [ -z "${JULIA_CACHE_SIZE:-}" ]; then
-    JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 || echo "0B")
-    [ -z "${JULIA_CACHE_SIZE}" ] && JULIA_CACHE_SIZE="0B"
+    JULIA_CACHE_SIZE_TMP=""
+    JULIA_CACHE_SIZE_TMP=$(du -sh "${JULIA_CACHE:-}" 2>/dev/null | cut -f1 2>/dev/null || echo "0B")
+    JULIA_CACHE_SIZE="${JULIA_CACHE_SIZE_TMP:-0B}"
 fi
+# ENDIF: JULIA_CACHE_SIZE calculation
 if [ -z "${APT_CACHE_COUNT:-}" ] && [ -d "${APT_ARCHIVE_CACHE:-}" ]; then
-    APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
-    [ -z "${APT_CACHE_COUNT}" ] && APT_CACHE_COUNT="0"
+    # D3e: Fix SIGPIPE risk in pipeline
+    APT_CACHE_COUNT_TMP=""
+    APT_CACHE_COUNT_TMP=$(find "${APT_ARCHIVE_CACHE}" -name "*.deb" 2>/dev/null | wc -l 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "0")
+    APT_CACHE_COUNT="${APT_CACHE_COUNT_TMP:-0}"
 fi
+# ENDIF: APT_CACHE_COUNT calculation
 if [ -z "${CONDA_CACHE_COUNT:-}" ] && [ -d "${CONDA_CACHE:-}" ]; then
-    CONDA_CACHE_COUNT=$(find "${CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
-    [ -z "${CONDA_CACHE_COUNT}" ] && CONDA_CACHE_COUNT="0"
+    # D3e: Fix SIGPIPE risk in pipeline
+    CONDA_CACHE_COUNT_TMP=""
+    CONDA_CACHE_COUNT_TMP=$(find "${CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "0")
+    CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT_TMP:-0}"
 fi
+# ENDIF: CONDA_CACHE_COUNT calculation
 if [ -z "${WHEELS_CACHE_COUNT:-}" ] && [ -d "${WHEELS_CACHE:-}" ]; then
-    WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
-    [ -z "${WHEELS_CACHE_COUNT}" ] && WHEELS_CACHE_COUNT="0"
+    # D3e: Fix SIGPIPE risk in pipeline
+    WHEELS_CACHE_COUNT_TMP=""
+    WHEELS_CACHE_COUNT_TMP=$(find "${WHEELS_CACHE}" -name "*.whl" 2>/dev/null | wc -l 2>/dev/null | tr -d '[:space:]' 2>/dev/null || echo "0")
+    WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT_TMP:-0}"
 fi
+# ENDIF: WHEELS_CACHE_COUNT calculation
 
 # shellcheck disable=SC2129
 cat >> "${ARCHITECTURE_FILE}" << ARCH_INFO_EOF
@@ -3494,11 +3554,21 @@ Both logs are included in this directory for troubleshooting and review.
 
 ARCH_CACHE_EOF
 
+# Validate file was created successfully (H1, J1)
 if [ -f "${ARCHITECTURE_FILE}" ]; then
     log_success "BUILD_ARCHITECTURE.md generated: ${ARCHITECTURE_FILE}"
 else
-    log_error "Failed to generate BUILD_ARCHITECTURE.md"
+    log_error "Failed to generate BUILD_ARCHITECTURE.md: ${ARCHITECTURE_FILE}"
+    # Provide actionable error message (H1)
+    if [ ! -d "${ARCHITECTURE_PARENT_DIR}" ]; then
+        log_error "Parent directory does not exist: ${ARCHITECTURE_PARENT_DIR}"
+    elif [ ! -w "${ARCHITECTURE_PARENT_DIR}" ]; then
+        log_error "Parent directory is not writable: ${ARCHITECTURE_PARENT_DIR}"
+    else
+        log_error "File creation failed for unknown reason"
+    fi
 fi
+# ENDIF: ARCHITECTURE_FILE existence check
 fi  # End ARCHITECTURE_FILE creation attempt
 fi  # End of BUILD_OUTPUT_DIR check
 
@@ -3509,10 +3579,25 @@ if [ ! -d "${BUILD_OUTPUT_DIR}" ]; then
     log_error "Cannot generate README.md: build output directory does not exist"
 else
     README_FILE="${BUILD_OUTPUT_DIR}/README.md"
+    # Validate parent directory exists before creating file (J1, H1)
+    README_PARENT_DIR=$(dirname "${README_FILE}") || {
+        log_error "Failed to determine parent directory for: ${README_FILE}"
+        return 1
+    }
+    if [ ! -d "${README_PARENT_DIR}" ]; then
+        log_warning "Parent directory does not exist: ${README_PARENT_DIR}"
+        log_with_timestamp "Creating parent directory: ${README_PARENT_DIR}"
+        mkdir -p "${README_PARENT_DIR}" || {
+            log_error "Failed to create parent directory: ${README_PARENT_DIR}"
+            return 1
+        }
+        log_with_timestamp "Parent directory created successfully: ${README_PARENT_DIR}"
+    fi
     if ! touch "${README_FILE}" 2>/dev/null; then
         log_error "Failed to create README.md at ${README_FILE}"
     else
         log_with_timestamp "Generating README.md..."
+        # ENDIF: README_FILE creation
 
 cat > "${README_FILE}" << 'README_EOF'
 # Xubuntu Robotics Base Image - Usage Guide
@@ -4044,12 +4129,23 @@ For detailed software architecture and library versions, see `BUILD_ARCHITECTURE
 README_EOF
 
     fi
+    # ENDIF: README_FILE creation attempt
 
+# Validate file was created successfully (H1, J1)
 if [ -f "${README_FILE}" ]; then
     log_success "README.md generated: ${README_FILE}"
 else
-    log_error "Failed to generate README.md"
+    log_error "Failed to generate README.md: ${README_FILE}"
+    # Provide actionable error message (H1)
+    if [ ! -d "${README_PARENT_DIR}" ]; then
+        log_error "Parent directory does not exist: ${README_PARENT_DIR}"
+    elif [ ! -w "${README_PARENT_DIR}" ]; then
+        log_error "Parent directory is not writable: ${README_PARENT_DIR}"
+    else
+        log_error "File creation failed for unknown reason"
+    fi
 fi
+# ENDIF: README_FILE existence check
 fi  # End of BUILD_OUTPUT_DIR check
 
 #--- Sub-block 22.5.6: Update OUT_DIR reference for display ---
@@ -4087,19 +4183,31 @@ fi
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 log "Detailed build information"
-echo "Build Phase: Cache Harvesting"
-echo "Build completed at: $(date)"
-# Validate SIF_PATH exists before calculating size
-if [ -f "${SIF_PATH:-}" ]; then
-    image_size_display=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")
-    [ -z "${image_size_display}" ] && image_size_display="unknown"
-    echo "Image size: ${image_size_display}"
-    echo "Image location: ${SIF_PATH}"
+printf '%s\n' "Build Phase: Cache Harvesting"
+# Use printf for date output (D3b, A5) and validate command substitution (D3d, H1)
+build_completed_time=$(date +%s 2>/dev/null || printf '%s\n' "$(date +%s)")
+if [ -n "${build_completed_time}" ]; then
+    build_completed_str=$(date -d "@${build_completed_time}" 2>/dev/null || printf '%s\n' "$(date)")
 else
-    echo "Image size: unknown (SIF file not found)"
-    echo "Image location: ${SIF_PATH:-<not set>}"
+    build_completed_str=$(date 2>/dev/null || printf '%s\n' "unknown")
 fi
-echo "======================================================================"
+printf '%s\n' "Build completed at: ${build_completed_str}"
+# Validate SIF_PATH exists before calculating size (J1)
+if [ -f "${SIF_PATH:-}" ]; then
+    # Validate command substitution result (D3d, H1, F2)
+    image_size_display=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || printf '%s\n' "unknown")
+    # Ensure result is non-empty and valid (F2)
+    if [ -z "${image_size_display}" ] || [ "${image_size_display}" = "unknown" ]; then
+        image_size_display="unknown"
+    fi
+    printf '%s\n' "Image size: ${image_size_display}"
+    printf '%s\n' "Image location: ${SIF_PATH}"
+else
+    printf '%s\n' "Image size: unknown (SIF file not found)"
+    printf '%s\n' "Image location: ${SIF_PATH:-<not set>}"
+fi
+# ENDIF: SIF_PATH existence check
+printf '%s\n' "======================================================================"
 
 #===============================================================================
 # BLOCK 24: CACHE HARVESTING FROM CONTAINER
@@ -4119,10 +4227,27 @@ if [ -z "${SIF_PATH:-}" ]; then
     SIF_PATH="${OUT_DIR}/${SIF_NAME}"
 fi
 HOST_CACHE="${PWD}/container_cache"
+# Validate parent directory exists before creating (J1)
+HOST_CACHE_PARENT=$(dirname "${HOST_CACHE}")
+if [ ! -d "${HOST_CACHE_PARENT}" ]; then
+    log_warning "Parent directory does not exist: ${HOST_CACHE_PARENT}"
+    if ! mkdir -p "${HOST_CACHE_PARENT}" 2>/dev/null; then
+        log_error "Failed to create parent directory: ${HOST_CACHE_PARENT}"
+        exit 1
+    fi
+    log_success "Parent directory created successfully: ${HOST_CACHE_PARENT}"
+fi
+# Create host cache directory with error handling (H1, J1)
 if ! mkdir -p "${HOST_CACHE}" 2>/dev/null; then
     log_error "Failed to create host cache directory: ${HOST_CACHE}"
     exit 1
 fi
+# Validate directory was created successfully (J1)
+if [ ! -d "${HOST_CACHE}" ]; then
+    log_error "Host cache directory creation failed: ${HOST_CACHE}"
+    exit 1
+fi
+# ENDIF: HOST_CACHE directory creation
 
 # Check if apptainer is available, otherwise try singularity
 # Use full paths to avoid PATH issues
@@ -4158,136 +4283,218 @@ echo "=> Validating harvested cache..."
 issues=0
 
 # Check APT cache
+# Validate directory existence before find operation (J1)
 if [ -d "${HOST_CACHE}/apt/archives" ]; then
-    apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
+    # Validate command substitution result (D3d, H1, F2)
+    apt_count=$(find "${HOST_CACHE}/apt/archives" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
     apt_count="${apt_count:-0}"
-    if [[ "${apt_count}" -gt 0 ]]; then
-        echo "  ✓ APT cache: ${apt_count} .deb file(s) harvested"
+    # Validate apt_count is numeric (F2)
+    if [[ "${apt_count}" =~ ^[0-9]+$ ]] && [ "${apt_count}" -gt 0 ]; then
+        printf '%s\n' "  ✓ APT cache: ${apt_count} .deb file(s) harvested"
     else
-        echo "  ✗ APT cache: No .deb files found"
+        printf '%s\n' "  ✗ APT cache: No .deb files found"
         issues=$((issues + 1))
     fi
 else
-    echo "  ✗ APT cache: Directory not found"
+    printf '%s\n' "  ✗ APT cache: Directory not found"
     issues=$((issues + 1))
 fi
+# ENDIF: APT cache directory check
 
 # Check Conda cache
+# Validate directory existence before find operation (J1)
 if [ -d "${HOST_CACHE}/conda_pkgs" ]; then
-    conda_count=$(find "${HOST_CACHE}/conda_pkgs" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    # Validate command substitution result (D3d, H1, F2)
+    conda_count=$(find "${HOST_CACHE}/conda_pkgs" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
     conda_count="${conda_count:-0}"
-    if [[ "${conda_count}" -gt 0 ]]; then
-        echo "  ✓ Conda cache: ${conda_count} package(s) harvested"
+    # Validate conda_count is numeric (F2)
+    if [[ "${conda_count}" =~ ^[0-9]+$ ]] && [ "${conda_count}" -gt 0 ]; then
+        printf '%s\n' "  ✓ Conda cache: ${conda_count} package(s) harvested"
     else
-        echo "  ✗ Conda cache: No packages found"
+        printf '%s\n' "  ✗ Conda cache: No packages found"
     fi
 else
-    echo "  ✗ Conda cache: Directory not found"
+    printf '%s\n' "  ✗ Conda cache: Directory not found"
     issues=$((issues + 1))
 fi
+# ENDIF: Conda cache directory check
 
 # Check Pip wheels
+# Validate directory existence before find operation (J1)
 if [ -d "${HOST_CACHE}/wheels" ]; then
-    wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
+    # Validate command substitution result (D3d, H1, F2)
+    wheel_count=$(find "${HOST_CACHE}/wheels" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
     wheel_count="${wheel_count:-0}"
-    if [[ "${wheel_count}" -gt 0 ]]; then
-        echo "  ✓ Pip wheels: ${wheel_count} wheel(s) harvested"
+    # Validate wheel_count is numeric (F2)
+    if [[ "${wheel_count}" =~ ^[0-9]+$ ]] && [ "${wheel_count}" -gt 0 ]; then
+        printf '%s\n' "  ✓ Pip wheels: ${wheel_count} wheel(s) harvested"
     else
-        echo "  ✗ Pip wheels: No wheels found"
+        printf '%s\n' "  ✗ Pip wheels: No wheels found"
     fi
 else
-    echo "  ✗ Pip wheels: Directory not found"
+    printf '%s\n' "  ✗ Pip wheels: Directory not found"
 fi
+# ENDIF: Pip wheels directory check
 
 # Check Julia cache
+# Validate directory existence before du operation (J1)
 if [ -d "${HOST_CACHE}/julia_pkgs" ]; then
-    julia_size=$(du -sh "${HOST_CACHE}/julia_pkgs" 2>/dev/null | cut -f1 || echo "0B")
+    # Validate command substitution result (D3d, H1, F2)
+    julia_size=$(du -sh "${HOST_CACHE}/julia_pkgs" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
+    # Ensure result is non-empty (F2)
     if [ -z "${julia_size}" ]; then
         julia_size="0B"
     fi
-    if [[ "${julia_size}" != "0B" ]] && [[ "${julia_size}" != "unknown" ]]; then
-        echo "  ✓ Julia cache: ${julia_size} harvested"
+    # Validate julia_size format (F2)
+    if [[ "${julia_size}" != "0B" ]] && [[ "${julia_size}" != "unknown" ]] && [ -n "${julia_size}" ]; then
+        printf '%s\n' "  ✓ Julia cache: ${julia_size} harvested"
     else
-        echo "  ✗ Julia cache: No packages found"
+        printf '%s\n' "  ✗ Julia cache: No packages found"
     fi
 else
-    echo "  ✗ Julia cache: Directory not found"
+    printf '%s\n' "  ✗ Julia cache: Directory not found"
 fi
+# ENDIF: Julia cache directory check
+# Validate issues variable is numeric (F2, C1)
 issues="${issues:-0}"
-if [[ "${issues}" -eq 0 ]]; then
-    echo "✓ Cache harvest validation passed"
+if [[ "${issues}" =~ ^[0-9]+$ ]] && [ "${issues}" -eq 0 ]; then
+    printf '%s\n' "✓ Cache harvest validation passed"
 else
-    echo "✗ Cache harvest validation found ${issues} issue(s)"
+    printf '%s\n' "✗ Cache harvest validation found ${issues} issue(s)"
 fi
+# ENDIF: Cache validation summary
 
 # --- Prune Host Caches ---
+# Purpose: Prune host caches to manage disk space
+# Dependencies: prune_apt_cache.sh, prune_conda_cache.sh (optional)
 # NOTE: The original script assumes these pruning scripts exist at /usr/local/bin
 # on the HOST. This is unlikely. A robust implementation would define them
 # in the script or check for them. For a drop-in replacement, we call them as is.
 log_with_timestamp "========= Pruning Host Caches =========="
+# Validate script exists and is executable before running (J1, H1)
 if [ -x ./prune_apt_cache.sh ]; then
-    ./prune_apt_cache.sh --cache "${APT_ARCHIVE_CACHE}" --keep 2 --apply
+    # Validate APT_ARCHIVE_CACHE is set before use (C1)
+    if [ -n "${APT_ARCHIVE_CACHE:-}" ]; then
+        # Run with error handling (H1)
+        if ! ./prune_apt_cache.sh --cache "${APT_ARCHIVE_CACHE}" --keep 2 --apply 2>/dev/null; then
+            log_warning "APT cache pruning script failed (exit code: $?)"
+        fi
+    else
+        log_warning "APT_ARCHIVE_CACHE not set, skipping APT cache pruning"
+    fi
 else
     log_warning "./prune_apt_cache.sh not found or not executable. Skipping APT cache pruning."
 fi
+# ENDIF: prune_apt_cache.sh check
+# Validate script exists and is executable before running (J1, H1)
 if [ -x ./prune_conda_cache.sh ]; then
-    ./prune_conda_cache.sh --cache "${CONDA_CACHE}" --keep 2 --apply
+    # Validate CONDA_CACHE is set before use (C1)
+    if [ -n "${CONDA_CACHE:-}" ]; then
+        # Run with error handling (H1)
+        if ! ./prune_conda_cache.sh --cache "${CONDA_CACHE}" --keep 2 --apply 2>/dev/null; then
+            log_warning "Conda cache pruning script failed (exit code: $?)"
+        fi
+    else
+        log_warning "CONDA_CACHE not set, skipping Conda cache pruning"
+    fi
 else
     log_warning "./prune_conda_cache.sh not found or not executable. Skipping Conda cache pruning."
 fi
+# ENDIF: prune_conda_cache.sh check
 
 # Clean up prune scripts after use
+# Purpose: Remove temporary prune scripts created during build
+# Note: Cleanup failures are non-critical (N1, H4) - scripts may not exist if not created
 log_with_timestamp "Cleaning up temporary prune scripts..."
-rm -f ./prune_apt_cache.sh ./prune_conda_cache.sh 2>/dev/null || true
+# Validate files exist before removal (J1, N1)
+if [ -f ./prune_apt_cache.sh ]; then
+    # Cleanup operation - failure is non-critical (H4)
+    rm -f ./prune_apt_cache.sh 2>/dev/null || log_warning "Failed to remove ./prune_apt_cache.sh"
+fi
+if [ -f ./prune_conda_cache.sh ]; then
+    # Cleanup operation - failure is non-critical (H4)
+    rm -f ./prune_conda_cache.sh 2>/dev/null || log_warning "Failed to remove ./prune_conda_cache.sh"
+fi
+# ENDIF: Prune script cleanup
 
 # Clean up definition file after successful image creation
+# Purpose: Remove temporary definition file created during build
+# Note: Cleanup failures are non-critical (N1, H4) - file may not exist if not created
 log_with_timestamp "Cleaning up definition file..."
-rm -f "${DEF_NAME}" 2>/dev/null || true
+# Validate DEF_NAME is set and file exists before removal (C1, J1, N1)
+if [ -n "${DEF_NAME:-}" ] && [ -f "${DEF_NAME}" ]; then
+    # Cleanup operation - failure is non-critical (H4)
+    rm -f "${DEF_NAME}" 2>/dev/null || log_warning "Failed to remove definition file: ${DEF_NAME}"
+fi
+# ENDIF: Definition file cleanup
 log_success "========= Pruning Complete =========="
 # Turn off command tracing before the final summary
 set +x
 
 # === Final Build Summary ===
-echo ""
-echo "Build process finished."
+# Purpose: Display final build completion message
+printf '%s\n' ""
+printf '%s\n' "Build process finished."
 
 # === GPU ENVIRONMENT NOTICE ===
+# Purpose: Display GPU environment information to user
+# Dependencies: CUDA_VERSION, SELECTED_POST_SCRIPT_BASENAME
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
-echo -e "${YELLOW}======================================================================${NC}"
-echo -e "${YELLOW}IMPORTANT: GPU Environment Information${NC}"
-echo -e "${YELLOW}======================================================================${NC}"
-echo -e "${YELLOW}> This container image was built with the NVIDIA CUDA Toolkit ${CUDA_VERSION:-unknown}${NC}"
-echo -e "${YELLOW}> and a compatible cuDNN version baked directly into the image.${NC}"
-echo -e "${YELLOW}>${NC}"
-echo -e "${YELLOW}> To use this image with GPU acceleration (--nv), the host machine's${NC}"
-echo -e "${YELLOW}> MUST have an NVIDIA driver that supports CUDA ${CUDA_VERSION:-unknown} or newer.${NC}"
-echo -e "${YELLOW}>${NC}"
-echo -e "${YELLOW}> Check the host driver's max supported CUDA version with: nvidia-smi${NC}"
-echo -e "${YELLOW}>${NC}"
-echo -e "${YELLOW}> If your target cluster has a different CUDA version (e.g., 11.x),${NC}"
-echo -e "${YELLOW}> you must modify the package names in '${SELECTED_POST_SCRIPT_BASENAME}'${NC}"
-echo -e "${YELLOW}> and rebuild the container.${NC}"
-echo -e "${YELLOW}======================================================================${NC}"
+# Use printf instead of echo -e for POSIX compliance and safety (D3b, A5)
+printf '%s\n' "${YELLOW}======================================================================${NC}"
+printf '%s\n' "${YELLOW}IMPORTANT: GPU Environment Information${NC}"
+printf '%s\n' "${YELLOW}======================================================================${NC}"
+printf '%s\n' "${YELLOW}> This container image was built with the NVIDIA CUDA Toolkit ${CUDA_VERSION:-unknown}${NC}"
+printf '%s\n' "${YELLOW}> and a compatible cuDNN version baked directly into the image.${NC}"
+printf '%s\n' "${YELLOW}>${NC}"
+printf '%s\n' "${YELLOW}> To use this image with GPU acceleration (--nv), the host machine's${NC}"
+printf '%s\n' "${YELLOW}> MUST have an NVIDIA driver that supports CUDA ${CUDA_VERSION:-unknown} or newer.${NC}"
+printf '%s\n' "${YELLOW}>${NC}"
+printf '%s\n' "${YELLOW}> Check the host driver's max supported CUDA version with: nvidia-smi${NC}"
+printf '%s\n' "${YELLOW}>${NC}"
+printf '%s\n' "${YELLOW}> If your target cluster has a different CUDA version (e.g., 11.x),${NC}"
+printf '%s\n' "${YELLOW}> you must modify the package names in '${SELECTED_POST_SCRIPT_BASENAME}'${NC}"
+printf '%s\n' "${YELLOW}> and rebuild the container.${NC}"
+printf '%s\n' "${YELLOW}======================================================================${NC}"
 
-echo "Built image: ${SIF_PATH}"
+# Validate SIF_PATH is set before display (C1)
+if [ -n "${SIF_PATH:-}" ]; then
+    printf '%s\n' "Built image: ${SIF_PATH}"
+else
+    printf '%s\n' "Built image: <not set>"
+fi
+# Validate BUILD_OUTPUT_DIR is set before display (C1)
 if [ -n "${BUILD_OUTPUT_DIR:-}" ]; then
-    echo "Build output directory: ${BUILD_OUTPUT_DIR}"
+    printf '%s\n' "Build output directory: ${BUILD_OUTPUT_DIR}"
 fi
-echo ""
-echo "# Build Summary"
-echo "- Base system: Ubuntu ${BASE_OS_VERSION} with XFCE4"
-echo "- Package manager: apt-aria wrapper + mamba solver"
-echo "- Development: Python, Julia, C++ toolchains"
-echo "- Jupyter: Full environment with kernels"
-echo "- Robotics: Drake (ROS2 in separate image)"
-echo "- Graphics: VNC, VirtualGL, Blender, CAD tools"
-echo "- Documentation: TeX Live, LibreOffice"
-echo "- Caching: Comprehensive package caching system"
+printf '%s\n' ""
+printf '%s\n' "# Build Summary"
+# Validate BASE_OS_VERSION is set before use (C1)
+printf '%s\n' "- Base system: Ubuntu ${BASE_OS_VERSION:-unknown} with XFCE4"
+printf '%s\n' "- Package manager: apt-aria wrapper + mamba solver"
+printf '%s\n' "- Development: Python, Julia, C++ toolchains"
+printf '%s\n' "- Jupyter: Full environment with kernels"
+printf '%s\n' "- Robotics: Drake (ROS2 in separate image)"
+printf '%s\n' "- Graphics: VNC, VirtualGL, Blender, CAD tools"
+printf '%s\n' "- Documentation: TeX Live, LibreOffice"
+printf '%s\n' "- Caching: Comprehensive package caching system"
 log_with_timestamp "Host cache disk usage:"
+# Validate all cache directories are set before du operation (C1, J1)
 if [ -n "${BIN_CACHE:-}" ] && [ -n "${DEB_CACHE:-}" ] && [ -n "${APT_CACHE:-}" ] && [ -n "${CONDA_CACHE:-}" ] && [ -n "${JULIA_CACHE:-}" ] && [ -n "${WHEELS_CACHE:-}" ]; then
-    du -sh "${BIN_CACHE}" "${DEB_CACHE}" "${APT_CACHE}" "${CONDA_CACHE}" "${JULIA_CACHE}" "${WHEELS_CACHE}" 2>/dev/null || true
+    # Validate directories exist before du operation (J1)
+    cache_dirs=()
+    [ -d "${BIN_CACHE}" ] && cache_dirs+=("${BIN_CACHE}")
+    [ -d "${DEB_CACHE}" ] && cache_dirs+=("${DEB_CACHE}")
+    [ -d "${APT_CACHE}" ] && cache_dirs+=("${APT_CACHE}")
+    [ -d "${CONDA_CACHE}" ] && cache_dirs+=("${CONDA_CACHE}")
+    [ -d "${JULIA_CACHE}" ] && cache_dirs+=("${JULIA_CACHE}")
+    [ -d "${WHEELS_CACHE}" ] && cache_dirs+=("${WHEELS_CACHE}")
+    if [ ${#cache_dirs[@]} -gt 0 ]; then
+        du -sh "${cache_dirs[@]}" 2>/dev/null || log_warning "Failed to get cache disk usage"
+    fi
 fi
+# ENDIF: Cache directories check
 
 #===============================================================================
 # BLOCK 25: BUILD COMPLETION AND USAGE NOTES
@@ -4299,43 +4506,76 @@ fi
 #-------------------------------------------------------------------------------
 
 #--- Sub-block 25.1: Display usage notes ---
-echo "[note] To start a tuned VNC session inside the container:"
-echo "apptainer exec --nv \"${SIF_PATH}\" start_vnc_xfce.sh"
-echo "(Tunnel: ssh -L 5901:localhost:5901 <user>@<host>) -> VNC viewer to localhost:5901"
-
-echo "[note] Julia CUDA lazy precompile (run on GPU node):"
-echo "apptainer exec --nv \"${SIF_PATH}\" precompile_julia_cuda.sh"
-
-echo "[note] AppImages (FreeCAD, Ultimaker Cura, Mendeley) recommended:"
-echo "Download from official pages, then:"
-echo "chmod +x *.AppImage && mkdir -p ~/Applications && mv *.AppImage ~/Applications/"
-echo "# appimagedlauncher-cli integrate ~/Applications/*.AppImage (if installed)"
-
-echo "[note] Drake Python path if needed:"
-echo "export PYTHONPATH=${DRAKE_HOME}/lib/python3/dist-packages:\"\$PYTHONPATH\""
-echo "# Note: Python ${SYSTEM_PYTHON_VER} paths are set in %environment section"
-
-echo "[note] Drake is installed in base environment:"
-echo "- meldis: ${DRAKE_HOME}/bin/meldis"
-echo "- meshcat-server: ${DRAKE_HOME}/bin/meshcat-server"
-echo "- python -c 'import pydrake'"
-
-echo "[note] For Isaac Sim, Mujoco, and other simulators:"
-echo "- Install via conda/mamba environments or download from official sources"
-
-echo "[note] Mirror selection features:"
-echo "- nala and apt-aria wrapper for fast package downloads"
-echo "- Automatic selection of fastest mirrors"
-
-echo "[note] Package management:"
-echo "- mamba solver installed in conda for fast environment solving"
-echo "- micromamba available as separate fast alternative"
-echo "- Fallback to conda if mamba unavailable"
+# Purpose: Display usage instructions and notes for the built container
+# Dependencies: SIF_PATH, DRAKE_HOME, SYSTEM_PYTHON_VER
+# Validate SIF_PATH is set before use (C1)
+if [ -n "${SIF_PATH:-}" ]; then
+    printf '%s\n' "[note] To start a tuned VNC session inside the container:"
+    printf '%s\n' "apptainer exec --nv \"${SIF_PATH}\" start_vnc_xfce.sh"
+    printf '%s\n' "(Tunnel: ssh -L 5901:localhost:5901 <user>@<host>) -> VNC viewer to localhost:5901"
+    printf '%s\n' ""
+    printf '%s\n' "[note] Julia CUDA lazy precompile (run on GPU node):"
+    printf '%s\n' "apptainer exec --nv \"${SIF_PATH}\" precompile_julia_cuda.sh"
+else
+    printf '%s\n' "[note] To start a tuned VNC session inside the container:"
+    printf '%s\n' "apptainer exec --nv <image.sif> start_vnc_xfce.sh"
+    printf '%s\n' "(Tunnel: ssh -L 5901:localhost:5901 <user>@<host>) -> VNC viewer to localhost:5901"
+fi
+# ENDIF: SIF_PATH check
+printf '%s\n' ""
+printf '%s\n' "[note] AppImages (FreeCAD, Ultimaker Cura, Mendeley) recommended:"
+printf '%s\n' "Download from official pages, then:"
+printf '%s\n' "chmod +x *.AppImage && mkdir -p ~/Applications && mv *.AppImage ~/Applications/"
+printf '%s\n' "# appimagedlauncher-cli integrate ~/Applications/*.AppImage (if installed)"
+printf '%s\n' ""
+# Validate DRAKE_HOME and SYSTEM_PYTHON_VER are set before use (C1)
+if [ -n "${DRAKE_HOME:-}" ] && [ -n "${SYSTEM_PYTHON_VER:-}" ]; then
+    printf '%s\n' "[note] Drake Python path if needed:"
+    printf '%s\n' "export PYTHONPATH=${DRAKE_HOME}/lib/python3/dist-packages:\"\$PYTHONPATH\""
+    printf '%s\n' "# Note: Python ${SYSTEM_PYTHON_VER} paths are set in %environment section"
+    printf '%s\n' ""
+    printf '%s\n' "[note] Drake is installed in base environment:"
+    printf '%s\n' "- meldis: ${DRAKE_HOME}/bin/meldis"
+    printf '%s\n' "- meshcat-server: ${DRAKE_HOME}/bin/meshcat-server"
+    printf '%s\n' "- python -c 'import pydrake'"
+else
+    printf '%s\n' "[note] Drake Python path if needed:"
+    printf '%s\n' "export PYTHONPATH=\${DRAKE_HOME}/lib/python3/dist-packages:\"\$PYTHONPATH\""
+    printf '%s\n' "[note] Drake is installed in base environment"
+fi
+# ENDIF: DRAKE_HOME and SYSTEM_PYTHON_VER check
+printf '%s\n' ""
+printf '%s\n' "[note] For Isaac Sim, Mujoco, and other simulators:"
+printf '%s\n' "- Install via conda/mamba environments or download from official sources"
+printf '%s\n' ""
+printf '%s\n' "[note] Mirror selection features:"
+printf '%s\n' "- nala and apt-aria wrapper for fast package downloads"
+printf '%s\n' "- Automatic selection of fastest mirrors"
+printf '%s\n' ""
+printf '%s\n' "[note] Package management:"
+printf '%s\n' "- mamba solver installed in conda for fast environment solving"
+printf '%s\n' "- micromamba available as separate fast alternative"
+printf '%s\n' "- Fallback to conda if mamba unavailable"
 
 #--- Sub-block 25.2: Calculate build statistics ---
-BUILD_END_TIME=$(date +%s)
-if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] && [ "${BUILD_START_TIME:-0}" -gt 0 ]; then
+# Purpose: Calculate and display build duration and cache statistics
+# Dependencies: BUILD_START_TIME, cache directories
+# Validate command substitution result (D3d, H1, F2)
+BUILD_END_TIME=$(date +%s 2>/dev/null || printf '%s\n' "0")
+# Validate BUILD_END_TIME is numeric (F2)
+if [[ ! "${BUILD_END_TIME}" =~ ^[0-9]+$ ]]; then
+    BUILD_END_TIME=0
+    log_warning "Failed to get build end time, using 0"
+fi
+# Validate BUILD_START_TIME is set and numeric before calculation (C1, F2)
+if [ -n "${BUILD_START_TIME:-}" ] && [[ "${BUILD_START_TIME:-0}" =~ ^[0-9]+$ ]] && [ "${BUILD_START_TIME:-0}" -gt 0 ] && [ "${BUILD_END_TIME}" -gt 0 ]; then
+    # Validate arithmetic operation (F1)
     BUILD_DURATION=$((BUILD_END_TIME - BUILD_START_TIME))
+    # Ensure duration is non-negative (F2)
+    if [ "${BUILD_DURATION}" -lt 0 ]; then
+        BUILD_DURATION=0
+        log_warning "Build duration calculation resulted in negative value, using 0"
+    fi
     BUILD_HOURS=$((BUILD_DURATION / 3600))
     BUILD_MINUTES=$(( (BUILD_DURATION % 3600) / 60))
     BUILD_SECONDS=$((BUILD_DURATION % 60))
@@ -4346,64 +4586,139 @@ else
     BUILD_SECONDS=0
     log_warning "BUILD_START_TIME not set or invalid, duration calculation skipped"
 fi
+# ENDIF: BUILD_START_TIME validation
 
 # Cache statistics
-CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
-APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
-CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
-WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
-JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE:-/tmp}" 2>/dev/null | cut -f1 || echo "0B")
-
-APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE:-/tmp}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]')
-APT_CACHE_COUNT="${APT_CACHE_COUNT:-0}"
-CONDA_CACHE_COUNT=$(find "${CONDA_CACHE:-/tmp}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]')
-CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT:-0}"
-WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE:-/tmp}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]')
-WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT:-0}"
-
-echo ""
-echo "=============== BUILD SUMMARY ==============="
-echo "Container: ${SIF_PATH}"
-if [ -f "${SIF_PATH}" ]; then
-    echo "Size: $(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || echo "unknown")"
+# Purpose: Calculate cache sizes and counts for display
+# Validate command substitution results (D3d, H1, F2)
+# Validate CACHE_DIR exists before du operation (J1)
+if [ -n "${CACHE_DIR:-}" ] && [ -d "${CACHE_DIR}" ]; then
+    CACHE_TOTAL_SIZE=$(du -sh "${CACHE_DIR}" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
 else
-    echo "Size: unknown (file not found)"
+    CACHE_TOTAL_SIZE="0B"
 fi
-echo "Build time: ${BUILD_HOURS}h ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
-echo "Build completed: $(date)"
-echo ""
-echo "=============== CACHE STATISTICS ==============="
-echo "Total cache size: ${CACHE_TOTAL_SIZE}"
-echo "APT cache: ${APT_CACHE_SIZE} (${APT_CACHE_COUNT} .deb files)"
-echo "Conda cache: ${CONDA_CACHE_SIZE} (${CONDA_CACHE_COUNT} packages)"
-echo "Pip wheels: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)"
-echo "Julia cache: ${JULIA_CACHE_SIZE}"
-echo ""
-echo "=============== DETAILED CACHE ANALYSIS ==============="
-echo "APT cache directory: ${APT_ARCHIVE_CACHE:-not set}"
-echo "Conda cache directory: ${CONDA_CACHE:-not set}"
-echo "Pip wheels directory: ${WHEELS_CACHE:-not set}"
-echo "Julia cache directory: ${JULIA_CACHE:-not set}"
+# Validate APT_ARCHIVE_CACHE exists before du operation (J1)
+if [ -n "${APT_ARCHIVE_CACHE:-}" ] && [ -d "${APT_ARCHIVE_CACHE}" ]; then
+    APT_CACHE_SIZE=$(du -sh "${APT_ARCHIVE_CACHE}" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
+else
+    APT_CACHE_SIZE="0B"
+fi
+# Validate CONDA_CACHE exists before du operation (J1)
+if [ -n "${CONDA_CACHE:-}" ] && [ -d "${CONDA_CACHE}" ]; then
+    CONDA_CACHE_SIZE=$(du -sh "${CONDA_CACHE}" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
+else
+    CONDA_CACHE_SIZE="0B"
+fi
+# Validate WHEELS_CACHE exists before du operation (J1)
+if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}" ]; then
+    WHEELS_CACHE_SIZE=$(du -sh "${WHEELS_CACHE}" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
+else
+    WHEELS_CACHE_SIZE="0B"
+fi
+# Validate JULIA_CACHE exists before du operation (J1)
+if [ -n "${JULIA_CACHE:-}" ] && [ -d "${JULIA_CACHE}" ]; then
+    JULIA_CACHE_SIZE=$(du -sh "${JULIA_CACHE}" 2>/dev/null | cut -f1 || printf '%s\n' "0B")
+else
+    JULIA_CACHE_SIZE="0B"
+fi
+
+# Validate command substitution results and directory existence (D3d, H1, F2, J1)
+# Validate APT_ARCHIVE_CACHE exists before find operation (J1)
+if [ -n "${APT_ARCHIVE_CACHE:-}" ] && [ -d "${APT_ARCHIVE_CACHE}" ]; then
+    APT_CACHE_COUNT=$(find "${APT_ARCHIVE_CACHE}" -name "*.deb" 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
+else
+    APT_CACHE_COUNT="0"
+fi
+APT_CACHE_COUNT="${APT_CACHE_COUNT:-0}"
+# Validate APT_CACHE_COUNT is numeric (F2)
+if [[ ! "${APT_CACHE_COUNT}" =~ ^[0-9]+$ ]]; then
+    APT_CACHE_COUNT="0"
+fi
+# Validate CONDA_CACHE exists before find operation (J1)
+if [ -n "${CONDA_CACHE:-}" ] && [ -d "${CONDA_CACHE}" ]; then
+    CONDA_CACHE_COUNT=$(find "${CONDA_CACHE}" \( -name "*.conda" -o -name "*.tar.bz2" \) -type f 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
+else
+    CONDA_CACHE_COUNT="0"
+fi
+CONDA_CACHE_COUNT="${CONDA_CACHE_COUNT:-0}"
+# Validate CONDA_CACHE_COUNT is numeric (F2)
+if [[ ! "${CONDA_CACHE_COUNT}" =~ ^[0-9]+$ ]]; then
+    CONDA_CACHE_COUNT="0"
+fi
+# Validate WHEELS_CACHE exists before find operation (J1)
+if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}" ]; then
+    WHEELS_CACHE_COUNT=$(find "${WHEELS_CACHE}" -name "*.whl" 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
+else
+    WHEELS_CACHE_COUNT="0"
+fi
+WHEELS_CACHE_COUNT="${WHEELS_CACHE_COUNT:-0}"
+# Validate WHEELS_CACHE_COUNT is numeric (F2)
+if [[ ! "${WHEELS_CACHE_COUNT}" =~ ^[0-9]+$ ]]; then
+    WHEELS_CACHE_COUNT="0"
+fi
+
+printf '%s\n' ""
+printf '%s\n' "=============== BUILD SUMMARY ==============="
+# Validate SIF_PATH is set before display (C1)
+if [ -n "${SIF_PATH:-}" ]; then
+    printf '%s\n' "Container: ${SIF_PATH}"
+else
+    printf '%s\n' "Container: <not set>"
+fi
+# Validate SIF_PATH exists before calculating size (J1)
+if [ -n "${SIF_PATH:-}" ] && [ -f "${SIF_PATH}" ]; then
+    # Validate command substitution result (D3d, H1, F2)
+    sif_size=$(du -sh "${SIF_PATH}" 2>/dev/null | cut -f1 || printf '%s\n' "unknown")
+    printf '%s\n' "Size: ${sif_size}"
+else
+    printf '%s\n' "Size: unknown (file not found)"
+fi
+# ENDIF: SIF_PATH existence check
+printf '%s\n' "Build time: ${BUILD_HOURS}h ${BUILD_MINUTES}m ${BUILD_SECONDS}s"
+# Validate command substitution result (D3d, H1, F2)
+build_completed_time=$(date 2>/dev/null || printf '%s\n' "unknown")
+printf '%s\n' "Build completed: ${build_completed_time}"
+printf '%s\n' ""
+printf '%s\n' "=============== CACHE STATISTICS ==============="
+printf '%s\n' "Total cache size: ${CACHE_TOTAL_SIZE}"
+printf '%s\n' "APT cache: ${APT_CACHE_SIZE} (${APT_CACHE_COUNT} .deb files)"
+printf '%s\n' "Conda cache: ${CONDA_CACHE_SIZE} (${CONDA_CACHE_COUNT} packages)"
+printf '%s\n' "Pip wheels: ${WHEELS_CACHE_SIZE} (${WHEELS_CACHE_COUNT} wheels)"
+printf '%s\n' "Julia cache: ${JULIA_CACHE_SIZE}"
+printf '%s\n' ""
+printf '%s\n' "=============== DETAILED CACHE ANALYSIS ==============="
+printf '%s\n' "APT cache directory: ${APT_ARCHIVE_CACHE:-not set}"
+printf '%s\n' "Conda cache directory: ${CONDA_CACHE:-not set}"
+printf '%s\n' "Pip wheels directory: ${WHEELS_CACHE:-not set}"
+printf '%s\n' "Julia cache directory: ${JULIA_CACHE:-not set}"
 
 # Check for Open3D wheel specifically
+# Purpose: Display Open3D wheel information if cached
+# Dependencies: WHEELS_CACHE
 # Use tr to remove whitespace from wc -l output for robust numeric comparison
+# Validate WHEELS_CACHE is set and directory exists before find operation (C1, J1)
 if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}/open3d" ]; then
-    OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    # Validate command substitution result (D3d, H1, F2)
+    OPEN3D_WHEELS=$(find "${WHEELS_CACHE}/open3d" -name "open3d*.whl" -type f 2>/dev/null | wc -l | tr -d '[:space:]' || printf '%s\n' "0")
     OPEN3D_WHEELS="${OPEN3D_WHEELS:-0}"
+    # Validate OPEN3D_WHEELS is numeric and greater than 0 (F2)
     if [[ "${OPEN3D_WHEELS}" =~ ^[0-9]+$ ]] && [ "${OPEN3D_WHEELS}" -gt 0 ]; then
-        echo ""
-        echo "=============== OPEN3D WHEEL INFORMATION ==============="
-        # Safely get directory size, handle case where directory might not exist
+        printf '%s\n' ""
+        printf '%s\n' "=============== OPEN3D WHEEL INFORMATION ==============="
+        # Safely get directory size, handle case where directory might not exist (J1)
         if [ -d "${WHEELS_CACHE}/open3d" ]; then
-            OPEN3D_WHEEL_SIZE=$(du -sh "${WHEELS_CACHE}/open3d" 2>/dev/null | cut -f1 || echo "unknown")
+            # Validate command substitution result (D3d, H1, F2)
+            OPEN3D_WHEEL_SIZE=$(du -sh "${WHEELS_CACHE}/open3d" 2>/dev/null | cut -f1 || printf '%s\n' "unknown")
         else
             OPEN3D_WHEEL_SIZE="unknown"
         fi
-        echo "✓ Open3D CUDA wheel cached for reuse: ${OPEN3D_WHEELS} wheel(s) (${OPEN3D_WHEEL_SIZE})"
-        echo "  Location: ${WHEELS_CACHE}/open3d/"
-        echo "  This wheel can be used to install Open3D in conda environments and writable overlays"
+        printf '%s\n' "✓ Open3D CUDA wheel cached for reuse: ${OPEN3D_WHEELS} wheel(s) (${OPEN3D_WHEEL_SIZE})"
+        printf '%s\n' "  Location: ${WHEELS_CACHE}/open3d/"
+        printf '%s\n' "  This wheel can be used to install Open3D in conda environments and writable overlays"
         # Note: * is literal here for documentation purposes
-        echo "  Usage in conda environment: pip install --no-deps \"${WHEELS_CACHE}/open3d/open3d*.whl\""
-        echo "========================================================="
+        printf '%s\n' "  Usage in conda environment: pip install --no-deps \"${WHEELS_CACHE}/open3d/open3d*.whl\""
+        printf '%s\n' "========================================================="
     fi
+    # ENDIF: OPEN3D_WHEELS validation
 fi
+# ENDIF: WHEELS_CACHE/open3d directory check

@@ -128,7 +128,8 @@ export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
 export NVIDIA_KEYRING_VER="1.1-1"
 export CUDA_VERSION="12.6"
 export CUDA_MAJOR="${CUDA_VERSION%%.*}"
-export CUDA_MINOR="${CUDA_VERSION#"${CUDA_MAJOR}".}"
+# Extract minor version by removing everything up to and including first dot
+export CUDA_MINOR="${CUDA_VERSION#*.}"
 export CUDA_PKG_SUFFIX="${CUDA_VERSION//./-}"
 export CUDA_META_PACKAGE="cuda-${CUDA_PKG_SUFFIX}"
 export CUDA_TOOLKIT_PACKAGE="cuda-toolkit-${CUDA_PKG_SUFFIX}"
@@ -368,10 +369,10 @@ if [ -z "${ANALYZE_BUILD_LOG_SOURCED:-}" ]; then
         # shellcheck source=scripts/common_functions.sh
         source "${SCRIPT_DIR}/scripts/common_functions.sh"
         export ANALYZE_BUILD_LOG_SOURCED=1
-    fi
     # ENDIF: common_functions.sh exists
-fi
+    fi
 # ENDIF: ANALYZE_BUILD_LOG_SOURCED check
+fi
 
 # Legacy stub (forward to common function if available):
 analyze_build_log() {
@@ -381,6 +382,7 @@ analyze_build_log() {
     else
         echo "ERROR: analyze_build_log() not available. Source scripts/common_functions.sh first." >&2
         return 1
+    # ENDIF: analyze_build_log command/type check
     fi
 }
 

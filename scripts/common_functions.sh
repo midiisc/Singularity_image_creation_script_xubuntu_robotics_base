@@ -130,6 +130,8 @@ monitor_cache() {
         echo "${stage}|${container_apt}|${var_apt}|${conda_pkgs}|${wheels}|${julia_pkgs}" >> "${CACHE_MONITOR_DATA}"
     fi
     # ENDIF: CACHE_MONITOR_DATA file exists
+    
+    return 0
 }
 # End function (self-contained)
 
@@ -294,12 +296,13 @@ analyze_build_log() {
     local log_file="${1:-${LOG_FILE:-${BUILD_LOG_FILE:-}}}"
     local error_log="${2:-${ERROR_LOG:-${BUILD_ERROR_LOG:-}}}"
     
-    if [ -z "$log_file" ] || [ ! -f "$log_file" ]; then
+    # D1: Proper quoting for variables
+    if [ -z "${log_file}" ] || [ ! -f "${log_file}" ]; then
         return 0  # No log file to analyze
     fi
     # ENDIF: log_file exists check
     
-    if [ -z "$error_log" ]; then
+    if [ -z "${error_log}" ]; then
         return 0  # No error log specified
     fi
     # ENDIF: error_log specified check
@@ -308,6 +311,20 @@ analyze_build_log() {
     echo "═══════════════════════════════════════════════════════════════"
     echo "  Analyzing build log for errors and warnings..."
     echo "═══════════════════════════════════════════════════════════════"
+    
+    # J1: Validate parent directory exists before writing to error_log
+    local error_log_dir
+    error_log_dir=$(dirname "${error_log}")
+    if [ ! -d "${error_log_dir}" ]; then
+        printf '[WARNING] Parent directory does not exist: %s\n' "${error_log_dir}" >&2
+        printf '[INFO] Creating parent directory: %s\n' "${error_log_dir}" >&2
+        mkdir -p "${error_log_dir}" || {
+            printf '[ERROR] Failed to create parent directory: %s\n' "${error_log_dir}" >&2
+            return 1
+        }
+        printf '[INFO] Parent directory created successfully: %s\n' "${error_log_dir}" >&2
+    fi
+    # ENDIF: error_log_dir exists
     
     # Write new header with analysis timestamp
     {
@@ -370,8 +387,15 @@ analyze_build_log() {
         ["Phase 4"]="(PHASE 4|Phase 4|PHASE.*4)"
     )
     
+    # J1: Validate log_file exists and is readable before reading
+    if [ ! -r "${log_file}" ]; then
+        printf '[ERROR] Log file not readable: %s\n' "${log_file}" >&2
+        return 1
+    fi
+    # ENDIF: log_file is readable
+    
     # First pass: identify all error, warning, debug, and deprecation lines
-    while IFS= read -r line || [ -n "$line" ]; do
+    while IFS= read -r line || [ -n "${line}" ]; do
         line_num=$((line_num + 1))
         all_lines+=("$line")
         
@@ -379,7 +403,8 @@ analyze_build_log() {
         # current_context kept for potential future use in context reporting
         # shellcheck disable=SC2034
         for context_name in "${!context_patterns[@]}"; do
-            if grep -qiE "${context_patterns[$context_name]}" <<< "$line"; then
+            # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+            if grep -qiE -- "${context_patterns[$context_name]}" <<< "${line}"; then
                 current_context="$context_name"
                 context_stack+=("$context_name")
                 break
@@ -388,32 +413,36 @@ analyze_build_log() {
         # ENDFOR: context_name in context_patterns
         
         # Match error patterns (case-insensitive) - most specific first
-        if grep -qiE \
-            '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)' <<< "$line"; then
+        # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+        if grep -qiE -- \
+            '(^[[:space:]]*✗[[:space:]]+|^[[:space:]]*✖[[:space:]]+|^[[:space:]]*❌[[:space:]]+|error:|fatal error|compilation error|link error|build error|install error|runtime error|segmentation.*fault|core.*dump|assertion.*failed|assert.*failed|^ERROR|^FATAL|FAILED|FAILURE|unable to|cannot|missing|undefined reference|undefined symbol|NO SUCH|FILE NOT FOUND|DIRECTORY NOT FOUND|PACKAGE NOT FOUND|command not found|No such file|not found in PATH|exit.*code.*[1-9]|exit.*status.*[1-9]|exit code [1-9]|killed|aborted|abort|terminated|signal.*killed|permission.*denied|access.*denied|read.*only|write.*protect|disk.*full|no.*space|out.*of.*memory|OOM|Out of memory|memory.*exhausted|Cannot allocate|allocation.*failed|stack overflow|buffer.*overflow|null pointer|dereference|corruption|corrupted|invalid|malformed|parse.*error|syntax.*error|type.*error|connection.*refused|connection.*reset|bind.*failed|cannot bind|address.*in use|port.*in use|timeout.*error|deadlock|race.*condition|thread.*error|pthread.*error|mutex.*error|lock.*error|glibc.*error|libc.*error|SSL.*error|TLS.*error|certificate.*error|authentication.*failed|authorization.*failed|key.*not found|key.*invalid|signature.*invalid|checksum.*mismatch|hash.*mismatch|integrity.*failed|verification.*failed|CMake.*error|ninja.*error|make.*error|gcc.*error|g\+\+.*error|clang.*error|ld.*error|linker.*error|ar.*error|ranlib.*error|strip.*error|objcopy.*error|dpkg.*error|apt.*error|pip.*error|conda.*error|python.*error|ImportError|ModuleNotFoundError|AttributeError|NameError|TypeError|ValueError|KeyError|IndexError|RuntimeError|SystemError|OSError|IOError|FileNotFoundError|PermissionError|NotADirectoryError|IsADirectoryError)' <<< "${line}"; then
             # SC2206: Quote to prevent word splitting
             error_line_nums+=("$line_num")
             total_errors=$((total_errors + 1))
         # Match warning patterns (case-insensitive, but not errors)
-        elif grep -qiE \
-            '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)' <<< "$line"; then
+        # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+        elif grep -qiE -- \
+            '(^[[:space:]]*⚠[[:space:]]+|^[[:space:]]*⚠️[[:space:]]+|^WARNING|warning:|deprecated|obsolete|ignored|skipped|timeout|connection.*timeout|slow|performance.*issue|inefficient|suboptimal|not.*recommended|discouraged|legacy|old.*version|outdated|consider.*upgrading|future.*removal|will.*be.*removed|will.*stop.*working|may.*fail|might.*fail|potential.*issue|possible.*problem|unexpected|unusual|strange|odd|uncommon|rare|seldom|infrequent|minor.*issue|non.*critical|non.*fatal|low.*priority|low.*severity|SSL.*warning|certificate.*warning|authentication.*warning|security.*warning|trust.*warning|insecure|unencrypted|plaintext|unprotected|vulnerability|vulnerable|CVE|exploit|attack|unsafe|risky|hazard|danger|caution|careful|beware|risk|threat|exposure|leak|leaked|exposed|public|private.*key|password.*visible|credential.*exposed|secret.*exposed|token.*exposed|api.*key.*exposed)' <<< "${line}"; then
             # SC2206: Quote to prevent word splitting
             warning_line_nums+=("$line_num")
             total_warnings=$((total_warnings + 1))
         # Match debug flags and diagnostic output (non-fatal but informative)
-        elif grep -qiE \
-            '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)' <<< "$line"; then
+        # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+        elif grep -qiE -- \
+            '(^\[DEBUG\]|DEBUG:|DEBUG CHECKPOINT|debug checkpoint|debug:|debugging|diagnostic|DIAGNOSTIC|diagnosis|trace|TRACE|tracing|verbose|VERBOSE|VERBOSITY|v=[0-9]|verbosity|log.*level|LOG.*LEVEL|level.*[0-9]|enabling.*debug|debug.*enabled|debug.*mode|development.*mode|dev.*mode|testing.*mode|test.*mode|experimental|EXPERIMENTAL|beta|BETA|alpha|ALPHA|preview|PREVIEW|pre.*release|not.*production|production.*disabled|prod.*disabled|staging|STAGING|unstable|UNSTABLE|work.*in.*progress|WIP|under.*construction|under.*development|TODO|FIXME|XXX|HACK|NOTE:|NOTICE:|INFO:|INFORMATION:|FYI|for.*information|FYI|informational|informational.*message)' <<< "${line}"; then
             # SC2206: Quote to prevent word splitting
             debug_flag_line_nums+=("$line_num")
             total_debug_flags=$((total_debug_flags + 1))
         # Match deprecation warnings (specific pattern for future compatibility issues)
-        elif grep -qiE \
-            '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)' <<< "$line"; then
+        # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+        elif grep -qiE -- \
+            '(deprecated.*version|deprecated.*in.*version|will.*deprecate|deprecation.*warning|deprecated.*API|deprecated.*function|deprecated.*method|deprecated.*class|deprecated.*module|deprecated.*feature|deprecated.*option|deprecated.*flag|deprecated.*parameter|deprecated.*attribute|deprecated.*property|removed.*in|removal.*planned|EOL|end.*of.*life|end.*of.*support|no.*longer.*supported|discontinued|phase.*out|sunset|sunsetted|legacy.*mode|legacy.*support|backward.*compatibility|breaking.*change|incompatible.*change|API.*change|ABI.*change|interface.*change|signature.*change|behavior.*change)' <<< "${line}"; then
             # SC2206: Quote to prevent word splitting
             deprecation_line_nums+=("$line_num")
             total_deprecations=$((total_deprecations + 1))
         fi
         # ENDIF: error/warning/debug/deprecation pattern matching
-    done < "$log_file"
+    done < "${log_file}"
     # ENDWHILE: read log file
     
     # Second pass: extract error/warning blocks with context
@@ -423,8 +452,9 @@ analyze_build_log() {
         
         # Combine and sort line numbers
         # SC2207: Use mapfile instead of command substitution for array assignment
+        # D3e: Add error handling for pipeline to prevent SIGPIPE issues
         local all_issue_lines
-        mapfile -t all_issue_lines < <(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" | sort -n | uniq)
+        mapfile -t all_issue_lines < <(printf '%s\n' "${error_line_nums[@]}" "${warning_line_nums[@]}" "${debug_flag_line_nums[@]}" "${deprecation_line_nums[@]}" 2>/dev/null | sort -n 2>/dev/null | uniq 2>/dev/null || true)
         
         local last_extracted_line=0
         # current_context_line kept for potential future use in context tracking
@@ -434,7 +464,8 @@ analyze_build_log() {
         for issue_line in "${all_issue_lines[@]}"; do
             # Skip if we already extracted this area (within context window)
             # SC2086: Quote arithmetic variables for safety
-            if [ "$issue_line" -le "$last_extracted_line" ]; then
+            # J3: Validate numeric values before comparison
+            if [ "${issue_line}" -le "${last_extracted_line}" ] 2>/dev/null; then
                 continue
             fi
             # ENDIF: skip already extracted lines
@@ -447,17 +478,17 @@ analyze_build_log() {
             
             for err_line in "${error_line_nums[@]}"; do
                 # SC2086: Quote arithmetic variables for safety
-                if [ "$err_line" -eq "$issue_line" ]; then
+                if [ "${err_line}" -eq "${issue_line}" ] 2>/dev/null; then
                     is_error=true
                     break
                 fi
             done
             # ENDFOR: err_line in error_line_nums
             
-            if [ "$is_error" != true ]; then
+            if [ "${is_error}" != true ]; then
                 for warn_line in "${warning_line_nums[@]}"; do
                     # SC2086: Quote arithmetic variables for safety
-                    if [ "$warn_line" -eq "$issue_line" ]; then
+                    if [ "${warn_line}" -eq "${issue_line}" ] 2>/dev/null; then
                         is_warning=true
                         break
                     fi
@@ -466,10 +497,10 @@ analyze_build_log() {
             fi
             # ENDIF: not an error
             
-            if [ "$is_error" != true ] && [ "$is_warning" != true ]; then
+            if [ "${is_error}" != true ] && [ "${is_warning}" != true ]; then
                 for debug_line in "${debug_flag_line_nums[@]}"; do
                     # SC2086: Quote arithmetic variables for safety
-                    if [ "$debug_line" -eq "$issue_line" ]; then
+                    if [ "${debug_line}" -eq "${issue_line}" ] 2>/dev/null; then
                         is_debug=true
                         break
                     fi
@@ -478,10 +509,10 @@ analyze_build_log() {
             fi
             # ENDIF: not error or warning
             
-            if [ "$is_error" != true ] && [ "$is_warning" != true ] && [ "$is_debug" != true ]; then
+            if [ "${is_error}" != true ] && [ "${is_warning}" != true ] && [ "${is_debug}" != true ]; then
                 for dep_line in "${deprecation_line_nums[@]}"; do
                     # SC2086: Quote arithmetic variables for safety
-                    if [ "$dep_line" -eq "$issue_line" ]; then
+                    if [ "${dep_line}" -eq "${issue_line}" ] 2>/dev/null; then
                         is_deprecation=true
                         break
                     fi
@@ -494,14 +525,17 @@ analyze_build_log() {
             local context_for_issue="General Build"
             local i
             i=$((issue_line - 1))
-            while [ $i -gt 0 ] && [ $i -gt $((issue_line - 50)) ]; do
+            # J3: Validate i and issue_line are numeric before arithmetic
+            while [ "${i}" -gt 0 ] 2>/dev/null && [ "${i}" -gt $((issue_line - 50)) ] 2>/dev/null; do
                 for context_name in "${!context_patterns[@]}"; do
-                    if [ $i -le ${#all_lines[@]} ]; then
+                    # J3: Validate array bounds before access
+                    if [ "${i}" -le ${#all_lines[@]} ] 2>/dev/null && [ "${i}" -ge 1 ] 2>/dev/null; then
                         local idx
                         idx=$((i - 1))
-                        if [ $idx -ge 0 ]; then
-                            if grep -qiE "${context_patterns[$context_name]}" <<< "${all_lines[$idx]}"; then
-                                context_for_issue="$context_name"
+                        if [ "${idx}" -ge 0 ] 2>/dev/null && [ "${idx}" -lt ${#all_lines[@]} ] 2>/dev/null; then
+                            # K1b: Use -- to prevent pattern misinterpretation if pattern starts with -
+                            if grep -qiE -- "${context_patterns[$context_name]}" <<< "${all_lines[$idx]}" 2>/dev/null; then
+                                context_for_issue="${context_name}"
                                 break 2
                             fi
                         fi
@@ -513,65 +547,85 @@ analyze_build_log() {
             # ENDWHILE: find context
             
             # Calculate context range
+            # J3: Validate arithmetic operations
             local start_line
-            start_line=$((issue_line - context_lines))
-            if [ $start_line -lt 1 ]; then
+            if [ "${issue_line}" -ge 1 ] 2>/dev/null && [ "${context_lines}" -ge 0 ] 2>/dev/null; then
+                start_line=$((issue_line - context_lines))
+                if [ "${start_line}" -lt 1 ] 2>/dev/null; then
+                    start_line=1
+                fi
+            else
                 start_line=1
             fi
             # ENDIF: start_line validation
+            
             local end_line
-            end_line=$((issue_line + context_lines))
-            if [ $end_line -gt ${#all_lines[@]} ]; then
+            if [ "${issue_line}" -ge 1 ] 2>/dev/null && [ "${context_lines}" -ge 0 ] 2>/dev/null && [ ${#all_lines[@]} -gt 0 ] 2>/dev/null; then
+                end_line=$((issue_line + context_lines))
+                if [ "${end_line}" -gt ${#all_lines[@]} ] 2>/dev/null; then
+                    end_line=${#all_lines[@]}
+                fi
+            else
                 end_line=${#all_lines[@]}
             fi
             # ENDIF: end_line validation
             
-            # Write block header
+            # Write block header (append to error_log)
+            # J1: Parent directory already validated above, safe to append
             {
                 echo "───────────────────────────────────────────────────────────"
-                if [ "$is_error" = true ]; then
-                    echo "[ERROR] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_warning" = true ]; then
-                    echo "[WARNING] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_deprecation" = true ]; then
-                    echo "[DEPRECATION] Line $issue_line | Context: $context_for_issue"
-                elif [ "$is_debug" = true ]; then
-                    echo "[DEBUG FLAG] Line $issue_line | Context: $context_for_issue"
+                if [ "${is_error}" = true ]; then
+                    echo "[ERROR] Line ${issue_line} | Context: ${context_for_issue}"
+                elif [ "${is_warning}" = true ]; then
+                    echo "[WARNING] Line ${issue_line} | Context: ${context_for_issue}"
+                elif [ "${is_deprecation}" = true ]; then
+                    echo "[DEPRECATION] Line ${issue_line} | Context: ${context_for_issue}"
+                elif [ "${is_debug}" = true ]; then
+                    echo "[DEBUG FLAG] Line ${issue_line} | Context: ${context_for_issue}"
                 else
-                    echo "[ISSUE] Line $issue_line | Context: $context_for_issue"
+                    echo "[ISSUE] Line ${issue_line} | Context: ${context_for_issue}"
                 fi
                 echo "───────────────────────────────────────────────────────────"
                 echo ""
                 
                 # Extract context block (0-indexed array, so subtract 1)
+                # J3: Validate start_line and end_line are numeric before using in seq
                 local i
-                for i in $(seq "$start_line" "$end_line"); do
-                    local idx
-                    idx=$((i - 1))
-                    if [ "$idx" -ge 0 ] && [ "$idx" -lt ${#all_lines[@]} ]; then
-                        local marker=""
-                        if [ "$i" -eq "$issue_line" ]; then
-                            marker=" >>> "
-                        elif [ "$i" -lt "$issue_line" ]; then
-                            marker="     "
-                        else
-                            marker="     "
+                if [ "${start_line}" -ge 1 ] && [ "${end_line}" -ge "${start_line}" ] 2>/dev/null; then
+                    for i in $(seq "${start_line}" "${end_line}" 2>/dev/null || true); do
+                        local idx
+                        idx=$((i - 1))
+                        if [ "${idx}" -ge 0 ] && [ "${idx}" -lt ${#all_lines[@]} ] 2>/dev/null; then
+                            local marker=""
+                            if [ "${i}" -eq "${issue_line}" ] 2>/dev/null; then
+                                marker=" >>> "
+                            elif [ "${i}" -lt "${issue_line}" ] 2>/dev/null; then
+                                marker="     "
+                            else
+                                marker="     "
+                            fi
+                            printf "%6d%s%s\n" "${i}" "${marker}" "${all_lines[$idx]}"
                         fi
-                        printf "%6d%s%s\n" "$i" "$marker" "${all_lines[$idx]}"
-                    fi
-                done
-                # ENDFOR: i in context range
+                    done
+                    # ENDFOR: i in context range
+                fi
+                # ENDIF: start_line and end_line validation
                 echo ""
                 echo ""
             } >> "${error_log}"
             
-            last_extracted_line=$end_line
+            # J3: Validate end_line is numeric before assignment
+            if [ "${end_line}" -ge 0 ] 2>/dev/null; then
+                last_extracted_line=${end_line}
+            fi
+            # ENDIF: end_line validation
         done
         # ENDFOR: issue_line in all_issue_lines
         
         echo "  ✓ Error log analysis complete: ${error_log}"
     else
         echo "  ✓ No errors or warnings found in build log"
+        # J1: Parent directory already validated above, safe to append
         {
             echo "No errors or warnings detected in build log."
             echo ""
@@ -582,6 +636,7 @@ analyze_build_log() {
     # ENDIF: issues found
     
     # Append summary
+    # J1: Parent directory already validated above, safe to append
     {
         echo "========================================"
         echo "Summary:"
