@@ -78,6 +78,56 @@ A. Structure & Syntax
 - A2. Syntax correctness, indentation, formatting, line wrapping.
 - A3. Avoidance of deprecated or non-portable constructs unless justified.
 - A4. Declaration order: functions and variables are defined before first use (or accompanied by guards) to avoid relying on implicit forward declarations.
+- A4a. **COMMAND CONSTRUCTION BEST PRACTICES**: When writing code that constructs and executes commands, follow these practices to avoid argument count/structure errors by default:
+  - **EXPLICIT ARRAY CONSTRUCTION**: Always construct command arrays explicitly, step-by-step, not in a single line:
+    - **WRONG** (error-prone single-line construction):
+      ```bash
+      CMD=(sudo env "VAR=value" /usr/bin/apptainer build --tmpdir "${TMP}" --force "${OUT}" "${DEF}")
+      "${CMD[@]}"
+      ```
+    - **CORRECT** (explicit, maintainable construction):
+      ```bash
+      CMD=(sudo)
+      CMD+=(env)
+      CMD+=("VAR=value")
+      CMD+=(/usr/bin/apptainer)
+      CMD+=(build)
+      CMD+=(--tmpdir)
+      CMD+=("${TMP}")
+      CMD+=(--force)
+      CMD+=("${OUT}")      # Positional arg 1: IMAGE PATH
+      CMD+=("${DEF}")      # Positional arg 2: BUILD SPEC
+      "${CMD[@]}"
+      ```
+  - **DOCUMENT ARGUMENT REQUIREMENTS**: Always document expected argument count and types in comments:
+    ```bash
+    # CRITICAL: apptainer build accepts exactly 2 positional args: <IMAGE PATH> <BUILD SPEC>
+    # Construct command array correctly: sudo, env with VAR=value, apptainer, build, options, output, definition
+    ```
+  - **VALIDATE BEFORE EXECUTION**: Add validation checks before executing commands with known requirements:
+    ```bash
+    # Validation: Verify last 2 args are positional (not options)
+    local cmd_len=${#CMD[@]}
+    local last_arg="${CMD[$((cmd_len - 1))]}"
+    local second_last_arg="${CMD[$((cmd_len - 2))]}"
+    if [[ "${last_arg}" =~ ^- ]] || [[ "${second_last_arg}" =~ ^- ]]; then
+      echo "[ERROR] Last 2 arguments must be positional (IMAGE PATH and BUILD SPEC), not options"
+      exit 1
+    fi
+    ```
+  - **COMMON COMMAND REQUIREMENTS** (document when using):
+    - `apptainer build`: Exactly 2 positional args (`<IMAGE PATH> <BUILD SPEC>`)
+    - `singularity build`: Exactly 2 positional args (`<IMAGE PATH> <BUILD SPEC>`)
+    - `docker build`: 1 positional arg (`PATH`) + options like `-t TAG`
+    - `cmake`: 1 positional arg (`<path-to-source>`) + options
+    - `make`: 0+ targets (positional) + options
+  - **PREVENTIVE CODING PATTERNS**:
+    - Use explicit array construction to avoid parsing issues
+    - Add validation comments explaining argument requirements
+    - Validate command structure before execution (see M15 for detailed validation patterns)
+    - Test command construction with `echo "${CMD[*]}"` before execution to verify structure
+    - Use command-specific validation functions for complex commands
+  - **INTEGRATION**: This guidance should be followed when writing ANY code that constructs command arrays, especially for external tool invocations. See M15 for detailed validation requirements.
 - A5. **POSIX COMPLIANCE FOR MAXIMUM COMPATIBILITY**: Favor POSIX-safe command patterns; when Bash-specific constructs are required, document the justification and ensure degradations are gracefully handled:
   - **POSIX-SAFE COMMAND PATTERNS** (PREFERRED):
     - Use `[` instead of `[[` when possible (POSIX `[` vs Bash `[[`)

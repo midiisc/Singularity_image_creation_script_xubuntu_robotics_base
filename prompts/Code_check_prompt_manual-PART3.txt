@@ -606,6 +606,116 @@ M. Environment & Dependencies
   - **AUTOMATED ANALYSIS TOOL**: Use `prompts/Library-Analysis-Tool.md` to automate bundled component detection
 - M-TOOLS: When analyzing library dependencies, CMake flags, or bundled components, consider using `prompts/Library-Analysis-Tool.md` for automated comprehensive analysis before manual verification.
   - **APT SOURCES FORMAT**: Support both legacy and modern apt sources formats (legacy: `/etc/apt/sources.list` and `*.list` files; modern: `*.sources` deb822 format for Ubuntu 24.04+). Parse both `deb http://...` lines AND `URIs: http://...` fields from .sources files. Update mirror URLs in BOTH formats when modifying apt sources.
+- M15. **COMMAND ARGUMENT VALIDATION**: When constructing command arrays or executing external commands, validate argument count and structure BEFORE execution:
+  - **CRITICAL**: Many commands have strict argument requirements (e.g., `apptainer build` accepts exactly 2 positional args: `<IMAGE PATH> <BUILD SPEC>`)
+  - **MANDATORY VALIDATION**: Before executing commands with known argument requirements:
+    1. **Count positional arguments**: Verify the number of positional arguments matches command requirements
+    2. **Validate argument types**: Ensure positional arguments are files/paths (not options starting with `-`)
+    3. **Check option structure**: Verify options and their values are correctly structured
+    4. **Pre-execution validation**: Run validation checks BEFORE command execution to catch errors early
+  - **COMMON ERRORS TO PREVENT**:
+    - **Wrong argument count**: "accepts 2 args, received 3" → Validate positional arg count before execution
+    - **Options as positional args**: Options (starting with `-`) passed as positional arguments → Check last N args are not options
+    - **Missing required args**: Required positional arguments missing → Validate all required args present
+    - **Array construction errors**: Incorrect array construction causing argument parsing issues → Use explicit array construction
+  - **VALIDATION PATTERNS**:
+    - **WRONG** (no validation, incorrect array construction):
+      ```bash
+      # Single-line array construction can cause parsing issues
+      CMD=(sudo env "VAR=value" /usr/bin/apptainer build --tmpdir "${TMP}" --force "${OUTPUT}" "${DEF}")
+      "${CMD[@]}"  # May pass wrong number of args
+      ```
+    - **CORRECT** (explicit construction + validation):
+      ```bash
+      # Explicit step-by-step array construction
+      CMD=(sudo)
+      CMD+=(env)
+      CMD+=("VAR=value")
+      CMD+=(/usr/bin/apptainer)
+      CMD+=(build)
+      CMD+=(--tmpdir)
+      CMD+=("${TMP}")
+      CMD+=(--force)
+      CMD+=("${OUTPUT}")      # Positional arg 1
+      CMD+=("${DEF}")         # Positional arg 2
+      
+      # Validation: Verify last 2 args are positional (not options)
+      local cmd_len=${#CMD[@]}
+      local last_arg="${CMD[$((cmd_len - 1))]}"
+      local second_last_arg="${CMD[$((cmd_len - 2))]}"
+      if [[ "${last_arg}" =~ ^- ]] || [[ "${second_last_arg}" =~ ^- ]]; then
+        echo "[ERROR] Last 2 arguments must be positional, not options"
+        echo "[ERROR] Last: ${last_arg}, Second last: ${second_last_arg}"
+        exit 1
+      fi
+      
+      # Execute after validation
+      "${CMD[@]}"
+      ```
+    - **CORRECT** (command-specific validation):
+      ```bash
+      # For commands with known argument requirements, add specific validation
+      # apptainer build: exactly 2 positional args (IMAGE PATH, BUILD SPEC)
+      # singularity build: exactly 2 positional args (IMAGE PATH, BUILD SPEC)
+      # docker build: -t TAG, PATH (1 positional)
+      # cmake: [options] <path-to-source> (1 positional)
+      
+      # Example: apptainer/singularity build validation
+      validate_build_command() {
+        local cmd_array=("$@")
+        local positional_count=0
+        local in_build=false
+        
+        for arg in "${cmd_array[@]}"; do
+          if [[ "${arg}" == "build" ]]; then
+            in_build=true
+            continue
+          fi
+          if [[ "${in_build}" == true ]] && [[ ! "${arg}" =~ ^- ]]; then
+            # Skip option values (e.g., --tmpdir value)
+            local prev_idx=$((i - 1))
+            if [ $prev_idx -ge 0 ]; then
+              local prev_arg="${cmd_array[$prev_idx]}"
+              if [[ "${prev_arg}" =~ ^-- ]]; then
+                continue  # This is an option value, not positional
+              fi
+            fi
+            positional_count=$((positional_count + 1))
+          fi
+        done
+        
+        if [ "${positional_count}" -ne 2 ]; then
+          echo "[ERROR] apptainer/singularity build requires exactly 2 positional arguments"
+          echo "[ERROR] Found ${positional_count} positional arguments"
+          return 1
+        fi
+        return 0
+      }
+      
+      # Use validation before execution
+      if ! validate_build_command "${CMD[@]}"; then
+        exit 1
+      fi
+      "${CMD[@]}"
+      ```
+  - **BEST PRACTICES FOR COMMAND CONSTRUCTION**:
+    - **Explicit array construction**: Build command arrays step-by-step, not in single line
+    - **Document argument requirements**: Add comments explaining expected argument count and types
+    - **Validate before execution**: Always validate command structure before executing
+    - **Error messages**: Provide clear error messages showing what was expected vs what was found
+    - **Command-specific validation**: For commands with strict requirements, add specific validation functions
+  - **DETECTION METHODS**:
+    - **Pattern matching**: Look for command array constructions (`CMD=(...)`) and verify validation exists
+    - **Command help parsing**: Parse `command --help` output to extract argument requirements
+    - **Static analysis**: Count positional arguments in command arrays and verify against requirements
+    - **Runtime validation**: Add validation checks that run before command execution
+  - **AUTO-FIX STRATEGY**:
+    1. Identify command arrays without validation
+    2. Determine command argument requirements (from help, documentation, or known patterns)
+    3. Add validation function or inline checks before execution
+    4. Convert single-line array construction to explicit step-by-step construction
+    5. Add comments documenting argument requirements
+  - **INTEGRATION**: This check should run when processing command execution code (M section), especially for external tool invocations
 
 Helper Reference – Robust Package Checks
 ----------------------------------------
