@@ -540,6 +540,50 @@ check_shellcheck() {
 }
 
 ################################################################################
+# CHECK 8: MANIFEST.json Validation
+################################################################################
+
+check_manifest_validation() {
+  local check_name="check-manifest-validation"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} MANIFEST.json validation..."
+  
+  local manifest_path="${REPO_ROOT}/container-scripts/MANIFEST.json"
+  local validator_path="${REPO_ROOT}/container-scripts/validate_manifest.py"
+  
+  # Check if manifest exists
+  if [ ! -f "$manifest_path" ]; then
+    echo -e "${YELLOW}[SKIP]${NC} MANIFEST.json not found: ${manifest_path}"
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  # Check if validator exists
+  if [ ! -f "$validator_path" ]; then
+    echo -e "${YELLOW}[SKIP]${NC} validate_manifest.py not found: ${validator_path}"
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  # Run validation
+  local validation_output
+  if ! validation_output=$(cd "${REPO_ROOT}/container-scripts" && python3 validate_manifest.py 2>&1); then
+    echo -e "${RED}[✗]${NC} MANIFEST.json validation failed:"
+    echo -e "$validation_output" | head -30
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="MANIFEST.json validation errors found"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} MANIFEST.json validation passed"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
 # MAIN EXECUTION
 ################################################################################
 
@@ -555,6 +599,7 @@ main() {
   check_heredoc_syntax
   check_bash_compatibility
   check_shellcheck
+  check_manifest_validation
   
   # Summary
   echo ""

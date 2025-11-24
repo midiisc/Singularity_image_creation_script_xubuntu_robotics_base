@@ -117,6 +117,9 @@ def validate_file_entry(entry: Dict[str, Any], index: int, script_dir: Path, ver
     target = entry['target']
     if not isinstance(target, str) or len(target) == 0:
         errors.append(f"Entry {index}: 'target' must be a non-empty string")
+    elif not target.startswith('/'):
+        # install.sh requires absolute paths (see install.sh line 147)
+        errors.append(f"Entry {index}: 'target' must be an absolute path (start with '/'). Got: {target}")
     
     # Validate file_type
     valid_file_types = ['shell-scripts', 'config-files', 'other', 'json-configs']

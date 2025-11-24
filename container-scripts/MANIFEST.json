@@ -15,34 +15,6 @@
       "line_end": 20998,
       "delimiter": "JULIA_EOF",
       "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh"
-    },
-    {
-      "source": "shell-scripts/block-19-cache-pruning-scripts-generation/apt-cache-pruning-cleanup.sh",
-      "target": "./prune_apt_cache.sh",
-      "file_type": "shell-scripts",
-      "permissions": "0644",
-      "block": 19,
-      "block_name": "CACHE PRUNING SCRIPTS GENERATION",
-      "description": "shell-scripts file: ./prune_apt_cache.sh",
-      "dependencies": [],
-      "line_start": 1930,
-      "line_end": 2003,
-      "delimiter": "APS",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/build_xubuntu_robotics_base.sh"
-    },
-    {
-      "source": "shell-scripts/block-0-build-script/conda-cache-pruning-cleanup.sh",
-      "target": "./prune_conda_cache.sh",
-      "file_type": "shell-scripts",
-      "permissions": "0644",
-      "block": 0,
-      "block_name": "BUILD_SCRIPT",
-      "description": "shell-scripts file: ./prune_conda_cache.sh",
-      "dependencies": [],
-      "line_start": 2016,
-      "line_end": 2091,
-      "delimiter": "CPS",
-      "file_path": "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/build_xubuntu_robotics_base.sh"
     }
   ]
 }

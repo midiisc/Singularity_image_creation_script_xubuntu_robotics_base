@@ -4234,7 +4234,9 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/fd symlink"
             fi
         fi
+        # ENDIF: fdfind symlink creation
         fi
+        # ENDIF: fdfind command check
 
         if command -v batcat >/dev/null 2>&1 && ! command -v bat >/dev/null 2>&1; then
         # F2: Validate command substitution result
@@ -4253,7 +4255,9 @@ if [ -d /usr/local/bin ] && [ -w /usr/local/bin ]; then
                 echo "[warn] ⚠ Failed to create /usr/local/bin/bat symlink"
             fi
         fi
+        # ENDIF: batcat symlink creation
         fi
+        # ENDIF: batcat command check
 else
     echo "[warn] ⚠ /usr/local/bin directory not writable - cannot create symlinks"
 fi
