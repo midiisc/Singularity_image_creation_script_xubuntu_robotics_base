@@ -3259,6 +3259,7 @@ if [ -x /usr/bin/apptainer ]; then
 	# Echo full command before execution for easy tracing in logs
 	# CRITICAL: apptainer build accepts exactly 2 positional args: <IMAGE PATH> <BUILD SPEC>
 	# Construct command array correctly: sudo, env with VAR=value, apptainer, build, options, output, definition
+	# NOTE: Options must come BEFORE positional args: [local options...] <IMAGE PATH> <BUILD SPEC>
 	APPTAINER_CMD=(sudo)
 	APPTAINER_CMD+=(env)
 	APPTAINER_CMD+=("APPTAINER_BINDPATH=${APPTAINER_BINDPATH_NEW}")
@@ -3267,10 +3268,7 @@ if [ -x /usr/bin/apptainer ]; then
 	APPTAINER_CMD+=(--tmpdir)
 	APPTAINER_CMD+=("${BUILD_TMP_DIR}")
 	APPTAINER_CMD+=(--force)
-	APPTAINER_CMD+=("${OUT_DIR}/${SIF_NAME}")
-	APPTAINER_CMD+=("${DEF_NAME}")
-	log "Executing: ${APPTAINER_CMD[*]}"
-	# Prefer --debug if supported (non-fatal if not)
+	# Prefer --debug if supported (non-fatal if not) - MUST be added BEFORE positional args
 	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
 	if APPTAINER_HELP_OUTPUT=$(/usr/bin/apptainer build --help 2>&1 || true); then
 		if grep -q -- '--debug' <<< "${APPTAINER_HELP_OUTPUT}" 2>/dev/null || true; then
@@ -3278,6 +3276,10 @@ if [ -x /usr/bin/apptainer ]; then
 		fi
 	fi
 	# ENDIF: --debug support check
+	# Positional arguments MUST be last: <IMAGE PATH> <BUILD SPEC>
+	APPTAINER_CMD+=("${OUT_DIR}/${SIF_NAME}")
+	APPTAINER_CMD+=("${DEF_NAME}")
+	log "Executing: ${APPTAINER_CMD[*]}"
 	# Validation: Verify command structure before execution
 	# apptainer build expects exactly 2 positional args: <IMAGE PATH> <BUILD SPEC>
 	# Check that last 2 args are files (not options)
@@ -3321,6 +3323,7 @@ elif [ -x /usr/bin/singularity ]; then
 	# ENDIF: SINGULARITY_BINDPATH check
 	# CRITICAL: singularity build accepts exactly 2 positional args: <IMAGE PATH> <BUILD SPEC>
 	# Construct command array correctly: sudo, env with VAR=value, singularity, build, options, output, definition
+	# NOTE: Options must come BEFORE positional args: [local options...] <IMAGE PATH> <BUILD SPEC>
 	SINGULARITY_CMD=(sudo)
 	SINGULARITY_CMD+=(env)
 	SINGULARITY_CMD+=("SINGULARITY_BINDPATH=${SINGULARITY_BINDPATH_NEW}")
@@ -3329,9 +3332,7 @@ elif [ -x /usr/bin/singularity ]; then
 	SINGULARITY_CMD+=(--tmpdir)
 	SINGULARITY_CMD+=("${BUILD_TMP_DIR}")
 	SINGULARITY_CMD+=(--force)
-	SINGULARITY_CMD+=("${OUT_DIR}/${SIF_NAME}")
-	SINGULARITY_CMD+=("${DEF_NAME}")
-	log "Executing: ${SINGULARITY_CMD[*]}"
+	# Prefer --debug if supported (non-fatal if not) - MUST be added BEFORE positional args
 	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
 	if SINGULARITY_HELP_OUTPUT=$(/usr/bin/singularity build --help 2>&1 || true); then
 		if grep -q -- '--debug' <<< "${SINGULARITY_HELP_OUTPUT}" 2>/dev/null || true; then
@@ -3339,6 +3340,10 @@ elif [ -x /usr/bin/singularity ]; then
 		fi
 	fi
 	# ENDIF: --debug support check
+	# Positional arguments MUST be last: <IMAGE PATH> <BUILD SPEC>
+	SINGULARITY_CMD+=("${OUT_DIR}/${SIF_NAME}")
+	SINGULARITY_CMD+=("${DEF_NAME}")
+	log "Executing: ${SINGULARITY_CMD[*]}"
 	# Validation: Verify command structure before execution
 	# singularity build expects exactly 2 positional args: <IMAGE PATH> <BUILD SPEC>
 	# Check that last 2 args are files (not options)
