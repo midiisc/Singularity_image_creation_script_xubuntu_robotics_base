@@ -497,6 +497,19 @@ class ComprehensiveHeredocExtractor:
                         i += 1
                         continue
                 
+                # Skip temporary host-side scripts (not container scripts)
+                # These are created during build and cleaned up afterwards
+                temporary_scripts = [
+                    './prune_apt_cache.sh',
+                    './prune_conda_cache.sh',
+                    'prune_apt_cache.sh',
+                    'prune_conda_cache.sh',
+                ]
+                if target_path in temporary_scripts or any(temp in target_path for temp in temporary_scripts):
+                    # Skip temporary scripts - they're not container scripts
+                    i += 1
+                    continue
+                
                 # Clean target path (for display purposes)
                 display_path = target_path
                 
