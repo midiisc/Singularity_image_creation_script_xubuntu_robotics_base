@@ -244,7 +244,8 @@ export CACHE_KEEP_VERSIONS=2
 #===============================================================================
 # CACHE DIRECTORY STRUCTURE
 #===============================================================================
-export CACHE_DIR="${CACHE_DIR:-${PWD}/container_cache}"
+# Use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
+export CACHE_DIR="${CACHE_DIR:-${PWD:-$(pwd)}/container_cache}"
 export BIN_CACHE="${CACHE_DIR}/binaries"
 export DEB_CACHE="${CACHE_DIR}/debs"
 export APT_CACHE="${CACHE_DIR}/apt"
@@ -330,7 +331,8 @@ export CONTAINER_SCRIPTS_INSTALLER="install.sh"
 #===============================================================================
 # Output directory (defaults to current working directory, can be overridden)
 # Set OUT_DIR in environment to override
-export OUT_DIR="${OUT_DIR:-${PWD}}"
+# Use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
+export OUT_DIR="${OUT_DIR:-${PWD:-$(pwd)}}"
 
 # SIF (Singularity Image Format) file name
 # If not set, will be generated from ROS_DISTRO and BASE_OS_VERSION
@@ -365,11 +367,17 @@ export ENABLE_LOG_ERROR_EXTRACTION="${ENABLE_LOG_ERROR_EXTRACTION:-0}"
 # Use: source "${SCRIPT_DIR}/scripts/common_functions.sh" to access
 # For backwards compatibility, keeping stub that sources common functions if available:
 if [ -z "${ANALYZE_BUILD_LOG_SOURCED:-}" ]; then
-    if [ -f "${SCRIPT_DIR:-}/scripts/common_functions.sh" ]; then
+    # Try host-side path first (if SCRIPT_DIR is set)
+    if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/scripts/common_functions.sh" ]; then
         # shellcheck source=scripts/common_functions.sh
         source "${SCRIPT_DIR}/scripts/common_functions.sh"
         export ANALYZE_BUILD_LOG_SOURCED=1
-    # ENDIF: common_functions.sh exists
+    # Try container path (inside Singularity container)
+    elif [ -f "/scripts/common_functions.sh" ]; then
+        # shellcheck source=/scripts/common_functions.sh
+        source "/scripts/common_functions.sh"
+        export ANALYZE_BUILD_LOG_SOURCED=1
+    # ENDIF: common_functions.sh exists check
     fi
 # ENDIF: ANALYZE_BUILD_LOG_SOURCED check
 fi
