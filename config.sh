@@ -244,8 +244,17 @@ export CACHE_KEEP_VERSIONS=2
 #===============================================================================
 # CACHE DIRECTORY STRUCTURE
 #===============================================================================
-# Use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
-export CACHE_DIR="${CACHE_DIR:-${PWD:-$(pwd)}/container_cache}"
+# CRITICAL: Use SCRIPT_DIR if available (set by build script), otherwise fallback to PWD/pwd
+# This ensures cache directories are created relative to the script location, not current working directory
+# When sourced inside container, SCRIPT_DIR won't be set, so we use container-relative paths
+if [ -n "${SCRIPT_DIR:-}" ]; then
+    # Host-side: use SCRIPT_DIR (set by build_xubuntu_robotics_base.sh before sourcing config.sh)
+    export CACHE_DIR="${CACHE_DIR:-${SCRIPT_DIR}/container_cache}"
+else
+    # Container-side or fallback: use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
+    export CACHE_DIR="${CACHE_DIR:-${PWD:-$(pwd)}/container_cache}"
+fi
+# ENDIF: SCRIPT_DIR check
 export BIN_CACHE="${CACHE_DIR}/binaries"
 export DEB_CACHE="${CACHE_DIR}/debs"
 export APT_CACHE="${CACHE_DIR}/apt"

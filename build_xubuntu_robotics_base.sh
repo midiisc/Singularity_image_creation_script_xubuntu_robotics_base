@@ -108,6 +108,8 @@ enable_strict_mode_safely
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Export SCRIPT_DIR so config.sh can use it for CACHE_DIR (ensures cache is relative to script, not cwd)
+export SCRIPT_DIR
 CONFIG_FILE="${SCRIPT_DIR}/config.sh"
 
 #--- Sub-block 2.2: Validate config file exists ---
@@ -1654,38 +1656,166 @@ create_directory_with_permissions() {
     local dir_path="$1"
     local description="$2"
 
+    # Ensure parent directories are writable first (critical for nested directories)
+    local parent_dir
+    parent_dir="$(dirname "${dir_path}")"
+    # Only set parent permissions if parent is different from target (not root)
+    if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
+        chmod 755 "${parent_dir}" 2>/dev/null || true
+        # Test parent is writable
+        local parent_test="${parent_dir}/.parent_test_$$"
+        if ! touch "${parent_test}" 2>/dev/null; then
+            log_error "Parent directory not writable: ${parent_dir} (cannot create ${description})"
+            return 1
+        fi
+        rm -f "${parent_test}" 2>/dev/null || true
+    fi
+    # ENDIF: parent directory check
+
+    # Check if directory already exists and is writable (skip creation if already good)
+    if [ -d "${dir_path}" ]; then
+        # Try to fix permissions on existing directory
+        chmod 755 "${dir_path}" 2>/dev/null || true
+        local test_file="${dir_path}/.write_test_$$"
+        if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+            log_success "Directory already exists and is writable: ${description} (${dir_path})"
+            return 0
+        else
+            # Directory exists but not writable - try to fix
+            log_warning "Directory exists but not writable, attempting to fix permissions: ${dir_path}"
+            chmod 755 "${dir_path}" 2>/dev/null || true
+            # Also ensure parent is writable (might be the issue)
+            if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
+                chmod 755 "${parent_dir}" 2>/dev/null || true
+            fi
+            # ENDIF: parent directory fix
+            # Try write test again after fixing permissions
+            if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+                log_success "Directory permissions fixed: ${description} (${dir_path})"
+                return 0
+            else
+                # Directory exists but we can't make it writable - try removing and recreating if empty
+                local dir_empty
+                dir_empty=false
+                if [ -z "$(ls -A "${dir_path}" 2>/dev/null)" ]; then
+                    dir_empty=true
+                fi
+                # ENDIF: check if directory is empty
+                
+                if [ "${dir_empty}" = true ]; then
+                    log_warning "Removing non-writable empty directory to recreate: ${dir_path}"
+                    if rm -rf "${dir_path}" 2>/dev/null; then
+                        # Directory removed, will be recreated below
+                        log_warning "Removed non-writable directory, will recreate: ${dir_path}"
+                    else
+                        # Can't remove either - this is a real problem
+                        local error_msg
+                        error_msg="Directory exists but cannot be made writable or removed: ${description} (${dir_path})"
+                        if [ ! -w "${dir_path}" ]; then
+                            error_msg="${error_msg} (not writable by current user: $(id -un))"
+                        fi
+                        local owner_info
+                        owner_info="$(stat -c "%U:%G (%a)" "${dir_path}" 2>/dev/null || echo "unknown")"
+                        error_msg="${error_msg} (owner: ${owner_info})"
+                        log_error "${error_msg}"
+                        return 1
+                    fi
+                    # ENDIF: directory removal attempt
+                else
+                    # Directory is not empty - can't safely remove it
+                    local error_msg
+                    error_msg="Directory exists but cannot be made writable: ${description} (${dir_path})"
+                    if [ ! -w "${dir_path}" ]; then
+                        error_msg="${error_msg} (not writable by current user: $(id -un))"
+                    fi
+                    local owner_info
+                    owner_info="$(stat -c "%U:%G (%a)" "${dir_path}" 2>/dev/null || echo "unknown")"
+                    error_msg="${error_msg} (owner: ${owner_info}, directory not empty - cannot remove)"
+                    log_error "${error_msg}"
+                    return 1
+                fi
+                # ENDIF: directory empty check
+            fi
+            # ENDIF: retry after permission fix
+        fi
+        # ENDIF: existing directory writability check
+    fi
+    # ENDIF: directory exists check
+
     # Attempt to create directory (mkdir -p creates parent directories)
     if mkdir -p "${dir_path}" 2>/dev/null; then
-        # Ensure parent directories are also writable (critical for nested directories)
-        local parent_dir
-        parent_dir="$(dirname "${dir_path}")"
-        # Only set parent permissions if parent is different from target (not root)
-        if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
-            chmod 755 "${parent_dir}" 2>/dev/null || true
-        fi
-        # ENDIF: parent directory check
         # Set permissions on target directory
         chmod 755 "${dir_path}" 2>/dev/null || true
         # Verify directory exists and is writable (test with actual write operation)
         if [ -d "${dir_path}" ]; then
             # Test actual writability by attempting to create a test file
             local test_file="${dir_path}/.write_test_$$"
-            if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
-                log_success "Directory created: ${description} (${dir_path})"
-                return 0
-            else
-                # Retry: ensure permissions are set correctly and try again
-                chmod 755 "${dir_path}" 2>/dev/null || true
-                if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+            local touch_output
+            touch_output=""
+            # Capture touch error for diagnostics (but don't fail on error yet)
+            if touch "${test_file}" 2>&1; then
+                if rm -f "${test_file}" 2>/dev/null; then
                     log_success "Directory created: ${description} (${dir_path})"
                     return 0
                 else
-                    log_error "Directory created but not writable: ${description} (${dir_path})"
-                    return 1
+                    touch_output="rm failed"
                 fi
-                # ENDIF: retry write test
+            else
+                touch_output="$(touch "${test_file}" 2>&1 || true)"
             fi
-            # ENDIF: write test
+            # ENDIF: initial write test
+            
+            # Retry: ensure permissions are set correctly and try again
+            chmod 755 "${dir_path}" 2>/dev/null || true
+            # Also ensure parent is writable
+            if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
+                chmod 755 "${parent_dir}" 2>/dev/null || true
+            fi
+            # ENDIF: parent directory retry check
+            
+            # Retry write test
+            if touch "${test_file}" 2>&1 && rm -f "${test_file}" 2>/dev/null; then
+                log_success "Directory created: ${description} (${dir_path})"
+                return 0
+            else
+                # Capture retry error
+                if [ -z "${touch_output}" ]; then
+                    touch_output="$(touch "${test_file}" 2>&1 || true)"
+                fi
+                # ENDIF: capture retry error
+                # Last attempt: gather detailed diagnostics
+                local error_msg
+                error_msg="Directory created but not writable: ${description} (${dir_path})"
+                
+                # Check permissions
+                if [ ! -w "${dir_path}" ]; then
+                    error_msg="${error_msg} (not writable by current user: $(id -un))"
+                fi
+                
+                # Check ownership
+                local owner_info
+                owner_info="$(stat -c "%U:%G (%a)" "${dir_path}" 2>/dev/null || echo "unknown")"
+                error_msg="${error_msg} (owner: ${owner_info})"
+                
+                # Include captured touch error
+                if [ -n "${touch_output:-}" ]; then
+                    error_msg="${error_msg} (touch error: ${touch_output})"
+                fi
+                
+                # Check filesystem info
+                local fs_info
+                fs_info="$(df -T "${dir_path}" 2>/dev/null | tail -1 | awk '{print $2 " (" $6 " used)"}' || echo "unknown")"
+                error_msg="${error_msg} (filesystem: ${fs_info})"
+                
+                # Check disk space
+                local disk_avail
+                disk_avail="$(df -h "${dir_path}" 2>/dev/null | tail -1 | awk '{print $4}' || echo "unknown")"
+                error_msg="${error_msg} (available: ${disk_avail})"
+                
+                log_error "${error_msg}"
+                return 1
+            fi
+            # ENDIF: retry write test
         else
             log_error "Directory does not exist after creation: ${description} (${dir_path})"
             return 1
@@ -2970,6 +3100,14 @@ From: ${BASE_IMAGE}
 
     # Make the script executable and run it
     chmod +x /container_post_script.sh
+    echo "================================================"
+    echo "[DEBUG] Entering xubuntu container post-install script"
+    echo "[DEBUG] Script: /container_post_script.sh"
+    echo "[DEBUG] Timestamp: $(date +'%Y-%m-%d %H:%M:%S')"
+    echo "[DEBUG] Working directory: $(pwd)"
+    echo "[DEBUG] User: $(id -un) (UID: $(id -u), GID: $(id -g))"
+    echo "[DEBUG] Environment CACHE_DIR: ${CACHE_DIR:-not set}"
+    echo "================================================"
     /container_post_script.sh
     
     # Note: Container scripts are now installed early in the post script (Block 0)
