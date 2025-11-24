@@ -294,6 +294,48 @@ J. Edge Cases & Resiliency
   - **REQUIRED VALIDATION PATTERNS**:
     - **File read**: `[ -r "${FILE}" ] && [ -f "${FILE}" ]` (readable AND regular file)
     - **File write**: `[ -w "$(dirname "${FILE}")" ]` (parent directory writable)
+    - **CRITICAL - ACTUAL WRITE TEST**: The `-w` flag is unreliable. Always use actual `touch`/`rm` test:
+      ```bash
+      # WRONG (unreliable -w flag):
+      if [ -w "${DIR}" ]; then
+        echo "Directory is writable"
+      fi
+      
+      # CORRECT (actual write test):
+      local test_file="${DIR}/.write_test_$$"
+      if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+        echo "Directory is writable"
+      else
+        echo "[ERROR] Directory not writable: ${DIR}"
+        return 1
+      fi
+      ```
+    - **DIRECTORY CREATION WITH PERMISSIONS**: When creating directories, always verify writability with actual test:
+      ```bash
+      create_directory_with_permissions() {
+        local dir_path="$1"
+        # Ensure parent is writable first
+        local parent_dir="$(dirname "${dir_path}")"
+        if [ -d "${parent_dir}" ]; then
+          local parent_test="${parent_dir}/.parent_test_$$"
+          if ! touch "${parent_test}" 2>/dev/null; then
+            echo "[ERROR] Parent directory not writable: ${parent_dir}"
+            return 1
+          fi
+          rm -f "${parent_test}" 2>/dev/null || true
+        fi
+        # Create directory
+        mkdir -p "${dir_path}" || return 1
+        chmod 755 "${dir_path}" 2>/dev/null || true
+        # Verify with actual write test
+        local test_file="${dir_path}/.write_test_$$"
+        if ! touch "${test_file}" 2>&1 || ! rm -f "${test_file}" 2>/dev/null; then
+          echo "[ERROR] Directory created but not writable: ${dir_path}"
+          return 1
+        fi
+        return 0
+      }
+      ```
     - **Directory access**: `[ -d "${DIR}" ] && [ -x "${DIR}" ]` (exists AND executable/traversable)
     - **Symlink handling**: `[ -L "${LINK}" ] && [ -e "${LINK}" ]` (symlink exists AND target exists)
   - **EDGE CASES TO HANDLE**:
@@ -538,6 +580,20 @@ L. Performance & Maintainability
   - **MANDATORY**: `while ... do` → `# ENDWHILE: <condition description>` comment before `done`
   - **MANDATORY**: `case ... in` → `# ENDCASE: <case variable>` comment before `esac`
   - **PURPOSE**: Helps debug missing if-fi, for-done, while-done, case-esac pairings
+  - **CRITICAL - PROACTIVE PAIRING VERIFICATION**: Before syntax errors occur, verify all control structures are properly paired:
+    - **VALIDATION SCRIPT**: Count opening and closing statements:
+      ```bash
+      # Count if/fi pairs
+      if_count=$(grep -cE '^\s*if\s' script.sh || echo "0")
+      fi_count=$(grep -cE '^\s*fi\s*$' script.sh || echo "0")
+      if [ "${if_count}" -ne "${fi_count}" ]; then
+        echo "[ERROR] Mismatched if/fi: ${if_count} if, ${fi_count} fi"
+      fi
+      # Similar for for/done, while/done, case/esac
+      ```
+    - **ERROR PATTERN**: `syntax error: unexpected end of file` (usually missing `fi`, `done`, or `esac`)
+    - **PREVENTION**: Add ENDIF/ENDFOR/ENDWHILE/ENDCASE markers immediately after opening statement, verify pairing before closing
+    - **AUTO-FIX**: When adding nested structures, immediately add closing marker with comment to prevent forgetting
   - **AUTO-FIX**: Pre-commit hook automatically adds missing markers
   - **VALIDATION**: Control structure marker validator checks all pairs
 - L6. When documenting updates, call out the self-contained blocks you touched (e.g., loop, trap handler, function) and confirm their comments, whitespace, and readability were brought in line with project conventions.

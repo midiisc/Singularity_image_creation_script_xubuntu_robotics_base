@@ -498,6 +498,14 @@ C. Variables & Defaults
   - For environment variables that may not be set: `CACHE_DIR="${CONTAINER_APT_CACHE:-/var/cache/apt/archives}"`
   - Export critical variables in profile scripts: `/etc/profile.d/*.sh` and `/etc/environment`
   - Add fallback detection logic for missing environment variables before first use
+  - **CRITICAL - SCRIPT_DIR/PWD RESOLUTION**: When variables like `SCRIPT_DIR` or `PWD` may be unset in different contexts (host vs container):
+    - **PROBLEM**: `SCRIPT_DIR` may be unset when `config.sh` is sourced in container context
+    - **PROBLEM**: `PWD` may be unset in strict mode (`set -u`) or in certain shell contexts
+    - **SOLUTION**: Use fallback chain: `SCRIPT_DIR="${SCRIPT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"`
+    - **SOLUTION**: For path resolution, use: `CACHE_DIR="${CACHE_DIR:-${SCRIPT_DIR:-${PWD:-$(pwd)}}/container_cache}"`
+    - **SOLUTION**: Always prefer `SCRIPT_DIR` for path resolution over `PWD` for consistency
+    - **VALIDATION**: Check all path variables use proper fallbacks: `grep -nE '(SCRIPT_DIR|PWD|CACHE_DIR|OUT_DIR).*=' script.sh`
+    - **CONTAINER CONTEXT**: When sourcing config in container, ensure variables work without host-side `SCRIPT_DIR`
 - C6. **VARIABLE DUPLICATION & OVERWRITE PREVENTION**: Maintain dynamic symbol table and prevent unexpected variable reuse:
   - **MANDATORY**: Build and maintain a running symbol table tracking all variable declarations (name, scope: local/global/exported, line number, default value, purpose)
   - **CRITICAL**: Detect duplicate variable declarations - same variable name declared multiple times in same scope

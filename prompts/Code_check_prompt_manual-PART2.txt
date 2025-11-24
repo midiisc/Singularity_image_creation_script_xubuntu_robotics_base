@@ -508,6 +508,21 @@ E. Here-docs & Here-strings
       4. Replace original heredoc with call to `install.sh` or direct file reference
       5. Update `MANIFEST.json` with new file entry
       6. Run `scripts/extract_all_heredocs.py` to validate extraction
+    - **CRITICAL - MANIFEST.json VALIDATION**:
+      - **ABSOLUTE PATH REQUIREMENT**: All `target` paths in `MANIFEST.json` MUST be absolute (start with `/`)
+        - **VALIDATION**: `jq '.files[].target' MANIFEST.json | grep -v '^/'` should return nothing
+        - **ERROR PATTERN**: `Target file must be an absolute path: ./prune_apt_cache.sh`
+        - **FIX**: Change relative paths to absolute: `./prune_apt_cache.sh` → `/tmp/prune_apt_cache.sh`
+      - **TEMPORARY HOST-SIDE SCRIPT FILTERING**: Temporary host-side scripts (created during build, cleaned up afterwards) MUST NOT be in `MANIFEST.json`:
+        - **PATTERNS TO FILTER**: `prune_apt_cache.sh`, `prune_conda_cache.sh`, any script in `./` with `prune` or `cleanup` in name
+        - **VALIDATION**: Check `scripts/extract_all_heredocs.py` filters these scripts before adding to manifest
+        - **ERROR PATTERN**: `Target file must be an absolute path: ./prune_apt_cache.sh` (after jq install and Reading MANIFEST.json)
+        - **FIX**: Add filter in extraction script to skip temporary host-side scripts
+      - **CONTAINER-SCRIPTS COMPLETENESS**: All standalone files in `container-scripts/` directories MUST be in `MANIFEST.json`:
+        - **VALIDATION**: Compare files in `container-scripts/shell-scripts/`, `container-scripts/config-files/`, etc. with manifest entries
+        - **ERROR PATTERN**: `apt-aria wrapper not found, file missing` (file exists but not in manifest)
+        - **FIX**: Add missing files to `MANIFEST.json` with correct `source`, `target`, `file_type`, and `permissions`
+        - **AUTOMATION**: Run script to detect missing files: `find container-scripts -type f | while read f; do if ! jq -e ".files[] | select(.source == \"$(echo $f | sed 's|^container-scripts/||')\")" MANIFEST.json >/dev/null; then echo "Missing: $f"; fi; done`
     - **INTEGRATION WITH EXTRACTION TOOLS**:
       - Use `scripts/extract_all_heredocs.py` to detect and extract heredocs
       - Use `scripts/verify_and_replace_heredocs.py` to verify extracted files match originals
