@@ -32,7 +32,9 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
       vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
     fi
   else
-    vnc_display=$(ps aux 2>/dev/null | grep -oE 'Xvnc.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
+    vnc_display=$(# SC2009: Consider using pgrep instead
+            # SC2009: Using ps | grep for pattern extraction (pgrep doesn't support -oE for output matching)
+            ps aux 2>/dev/null | grep -oE 'Xvnc.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
   fi
   
   # Method 2: Check for vncserver processes
@@ -43,7 +45,9 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
         vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
       fi
     else
-      vnc_display=$(ps aux 2>/dev/null | grep -oE 'vncserver.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
+      vnc_display=$(# SC2009: Consider using pgrep instead
+            # SC2009: Using ps | grep for pattern extraction (pgrep doesn't support -oE for output matching)
+            ps aux 2>/dev/null | grep -oE 'vncserver.*:[0-9]+' | head -1 | grep -oE ':[0-9]+' | head -1)
     fi
   fi
   

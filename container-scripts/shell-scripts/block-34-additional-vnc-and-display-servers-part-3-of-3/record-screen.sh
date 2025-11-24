@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Screen recording with GPU encoding
 
-DISPLAY_NUM=${1:-1}
-OUTPUT=${2:-"screen_recording_$(date +%Y%m%d_%H%M%S).mp4"}
+DISPLAY_NUM="${1:-1}"
+OUTPUT="${2:-screen_recording_$(date +%Y%m%d_%H%M%S).mp4"}
 
 echo "Recording display :${DISPLAY_NUM} to ${OUTPUT}"
 echo "Press Ctrl+C to stop"
@@ -16,12 +16,12 @@ else
   echo "Using CPU encoder"
 fi
 
-DISPLAY=:${DISPLAY_NUM} ffmpeg \
+DISPLAY=":${DISPLAY_NUM}" ffmpeg \
   -f x11grab \
   -video_size 1920x1080 \
   -framerate 30 \
-  -i :${DISPLAY_NUM} \
-  -c:v ${ENCODER} \
+  -i ":${DISPLAY_NUM}" \
+  -c:v "${ENCODER}" \
   -preset medium \
   -crf 23 \
   "${OUTPUT}"

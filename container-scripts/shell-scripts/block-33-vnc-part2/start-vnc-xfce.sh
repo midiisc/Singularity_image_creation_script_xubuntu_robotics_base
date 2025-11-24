@@ -213,7 +213,8 @@ detect_vgl_display() {
         vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     else
-      vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
+      vnc_display=$(# SC2009: Consider using pgrep instead
+            ps aux 2>/dev/null | grep -v grep | grep -E -o 'Xvnc.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
     fi
     
     # Method 2: Check for vncserver processes
@@ -224,7 +225,8 @@ detect_vgl_display() {
           vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
         fi
       else
-        vnc_display=$(ps aux 2>/dev/null | grep -v grep | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
+        vnc_display=$(# SC2009: Consider using pgrep instead
+            ps aux 2>/dev/null | grep -v grep | grep -E -o 'vncserver.*:[0-9]+' | head -1 | grep -E -o ':[0-9]+' | head -1 || true)
       fi
     fi
     

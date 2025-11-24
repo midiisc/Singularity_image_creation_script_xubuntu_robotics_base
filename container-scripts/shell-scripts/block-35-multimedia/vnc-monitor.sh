@@ -9,12 +9,14 @@ echo "=========================================="
 echo ""
 
 echo "1. VNC Processes:"
-# Use pgrep instead of ps aux | grep for better reliability
+# Use pgrep instead of # SC2009: Consider using pgrep instead
+            ps aux | grep for better reliability
 if command -v pgrep >/dev/null 2>&1; then
     pgrep -af "Xvnc|websockify|xfce" 2>/dev/null || echo "  No matching processes found"
 else
     # Fallback to ps if pgrep not available
-    ps aux 2>/dev/null | grep -E "Xvnc|websockify|xfce" | grep -v grep || echo "  No matching processes found"
+    # SC2009: Consider using pgrep instead
+            ps aux 2>/dev/null | grep -E "Xvnc|websockify|xfce" | grep -v grep || echo "  No matching processes found"
 fi
 echo ""
 
@@ -38,7 +40,8 @@ fi
 echo ""
 
 echo "4. CPU Usage (VNC related):"
-# Use pgrep instead of ps aux | grep
+# Use pgrep instead of # SC2009: Consider using pgrep instead
+            ps aux | grep
 if command -v pgrep >/dev/null 2>&1; then
     mapfile -t vnc_pids < <(pgrep -f "Xvnc|websockify" 2>/dev/null || true)
     if [ "${#vnc_pids[@]}" -gt 0 ]; then
@@ -54,7 +57,8 @@ if command -v pgrep >/dev/null 2>&1; then
     fi
 else
     # Fallback to ps if pgrep not available
-    ps aux 2>/dev/null | grep -E "Xvnc|websockify" | grep -v grep | awk '{print $3}' | \
+    # SC2009: Consider using pgrep instead
+            ps aux 2>/dev/null | grep -E "Xvnc|websockify" | grep -v grep | awk '{print $3}' | \
       awk '{sum+=$1} END {if (NR>0) print "  Total CPU: " sum "%"; else print "  No VNC processes found"}'
 fi
 echo ""

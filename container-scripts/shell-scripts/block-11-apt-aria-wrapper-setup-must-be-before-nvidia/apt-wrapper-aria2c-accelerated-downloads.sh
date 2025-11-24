@@ -80,6 +80,7 @@ if is_install_command "$@"; then
     # Split APT_CACHE_OPTS properly to handle multiple arguments
     # Note: This requires proper handling of spaces in APT_CACHE_OPTS
     # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
+    # SC2086: Intentionally unquoted for word splitting (apt-get requires separate arguments)
     # F2: Capture both output and exit code separately for proper validation
     APT_OUTPUT=$(/usr/bin/apt-get ${APT_CACHE_OPTS} --print-uris -y "$@" 2>&1)
     APT_EXIT_CODE=$?
@@ -205,11 +206,13 @@ if is_install_command "$@"; then
 
     # Install from cache using apt-get (reliable and standard)
     # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
+    # SC2086: Intentionally unquoted for word splitting (apt-get requires separate arguments)
     echo "[apt-aria] Installing packages from cache..."
     exec /usr/bin/apt-get ${APT_CACHE_OPTS} -y "$@"
 else
     # Use regular apt-get with cache configuration for non-install commands
     # Note: APT_CACHE_OPTS is intentionally unquoted to allow word splitting for apt-get
+    # SC2086: Intentionally unquoted for word splitting (apt-get requires separate arguments)
     echo "[apt-aria] Using apt-get with cache configuration..."
     exec /usr/bin/apt-get ${APT_CACHE_OPTS} "$@"
 fi

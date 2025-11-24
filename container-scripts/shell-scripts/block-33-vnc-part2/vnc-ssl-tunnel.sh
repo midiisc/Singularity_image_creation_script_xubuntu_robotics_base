@@ -79,7 +79,8 @@ show_usage() {
 check_vnc_running() {
     local port="${1}"
     if ! ss -tuln 2>/dev/null | grep -q ":${port}\b"; then
-        echo -e "${RED}Error: VNC server not running on port ${port}${NC}"
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: VNC server not running on port ${port}${NC}"
         echo "Start VNC first with: start_vnc_xfce.sh"
         return 1
     fi

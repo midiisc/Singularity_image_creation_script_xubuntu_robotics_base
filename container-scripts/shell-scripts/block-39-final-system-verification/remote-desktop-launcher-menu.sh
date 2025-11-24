@@ -97,7 +97,8 @@ handle_choice() {
       if command -v pgrep >/dev/null 2>&1; then
         pgrep -af 'vnc|xpra|sunshine' 2>/dev/null || true
       else
-        ps aux 2>/dev/null | grep -E 'vnc|xpra|sunshine' | grep -v grep || true
+        # SC2009: Consider using pgrep instead
+            ps aux 2>/dev/null | grep -E 'vnc|xpra|sunshine' | grep -v grep || true
       fi
       ;;
     10)

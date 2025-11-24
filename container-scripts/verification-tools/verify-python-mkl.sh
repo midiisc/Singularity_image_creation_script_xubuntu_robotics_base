@@ -1,4 +1,5 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# shellcheck shell=bash
 #===============================================================================
 # Python MKL Verification Script
 #===============================================================================
@@ -17,9 +18,10 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-echo -e "${BLUE}===============================================================================${NC}"
-echo -e "${BLUE}Python MKL Verification${NC}"
-echo -e "${BLUE}===============================================================================${NC}"
+# A5a: Use printf instead of printf '%s\n' for robustness
+printf '%s\n' "${BLUE}===============================================================================${NC}"
+printf '%s\n' "${BLUE}Python MKL Verification${NC}"
+printf '%s\n' "${BLUE}===============================================================================${NC}"
 echo ""
 
 # Track overall status
@@ -31,26 +33,27 @@ check_python_mkl() {
     local import_name="${2:-$package_name}"
     local test_code="$3"
     
-    echo -e "${YELLOW}Checking ${package_name}...${NC}"
+    # A5a: Use printf instead of printf '%s\n' for robustness
+    printf '%s\n' "${YELLOW}Checking ${package_name}...${NC}"
     
     # Check if package can be imported
     if ! python3 -c "import ${import_name}" 2>/dev/null; then
-        echo -e "  ${RED}✗ ${package_name} not available${NC}"
+        printf '%s\n' "  ${RED}✗ ${package_name} not available${NC}"
         return 1
     fi
     
     # Run verification test
     if python3 -c "${test_code}" 2>/dev/null; then
-        echo -e "  ${GREEN}✓ ${package_name} MKL verification passed${NC}"
+        printf '%s\n' "  ${GREEN}✓ ${package_name} MKL verification passed${NC}"
         return 0
     else
-        echo -e "  ${RED}✗ ${package_name} MKL verification failed${NC}"
+        printf '%s\n' "  ${RED}✗ ${package_name} MKL verification failed${NC}"
         return 1
     fi
 }
 
 # Test 1: NumPy MKL backend
-echo -e "${BLUE}Test 1: NumPy MKL Backend${NC}"
+printf '%s\n' "${BLUE}Test 1: NumPy MKL Backend${NC}"
 if check_python_mkl "numpy" "numpy" "
 import numpy as np
 # Check if NumPy is using MKL
@@ -83,15 +86,15 @@ else:
     print('  LAPACK info:', lapack_info)
     exit(1)
 "; then
-    echo -e "  ${GREEN}✓ NumPy MKL backend verified${NC}"
+    printf '%s\n' "  ${GREEN}✓ NumPy MKL backend verified${NC}"
 else
-    echo -e "  ${RED}✗ NumPy MKL backend not detected${NC}"
+    printf '%s\n' "  ${RED}✗ NumPy MKL backend not detected${NC}"
     OVERALL_STATUS=1
 fi
 echo ""
 
 # Test 2: NumPy BLAS functionality
-echo -e "${BLUE}Test 2: NumPy BLAS Functionality${NC}"
+printf '%s\n' "${BLUE}Test 2: NumPy BLAS Functionality${NC}"
 if python3 << 'NUMPY_BLAS_TEST'
 import numpy as np
 import sys
@@ -114,15 +117,15 @@ except Exception as e:
     sys.exit(1)
 NUMPY_BLAS_TEST
 then
-    echo -e "  ${GREEN}✓ NumPy BLAS functionality verified${NC}"
+    printf '%s\n' "  ${GREEN}✓ NumPy BLAS functionality verified${NC}"
 else
-    echo -e "  ${RED}✗ NumPy BLAS functionality test failed${NC}"
+    printf '%s\n' "  ${RED}✗ NumPy BLAS functionality test failed${NC}"
     OVERALL_STATUS=1
 fi
 echo ""
 
 # Test 3: SciPy MKL backend
-echo -e "${BLUE}Test 3: SciPy MKL Backend${NC}"
+printf '%s\n' "${BLUE}Test 3: SciPy MKL Backend${NC}"
 if check_python_mkl "scipy" "scipy" "
 import scipy
 import numpy as np
@@ -151,15 +154,15 @@ else:
     print('  SciPy is NOT using MKL backend')
     exit(1)
 "; then
-    echo -e "  ${GREEN}✓ SciPy MKL backend verified${NC}"
+    printf '%s\n' "  ${GREEN}✓ SciPy MKL backend verified${NC}"
 else
-    echo -e "  ${YELLOW}⚠ SciPy MKL backend not detected (may use system BLAS/LAPACK)${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ SciPy MKL backend not detected (may use system BLAS/LAPACK)${NC}"
     # This is a warning, not a failure, as SciPy may use system BLAS/LAPACK
 fi
 echo ""
 
 # Test 4: SciPy LAPACK functionality
-echo -e "${BLUE}Test 4: SciPy LAPACK Functionality${NC}"
+printf '%s\n' "${BLUE}Test 4: SciPy LAPACK Functionality${NC}"
 if python3 << 'SCIPY_LAPACK_TEST'
 import scipy.linalg
 import numpy as np
@@ -187,91 +190,91 @@ except Exception as e:
     sys.exit(1)
 SCIPY_LAPACK_TEST
 then
-    echo -e "  ${GREEN}✓ SciPy LAPACK functionality verified${NC}"
+    printf '%s\n' "  ${GREEN}✓ SciPy LAPACK functionality verified${NC}"
 else
-    echo -e "  ${RED}✗ SciPy LAPACK functionality test failed${NC}"
+    printf '%s\n' "  ${RED}✗ SciPy LAPACK functionality test failed${NC}"
     OVERALL_STATUS=1
 fi
 echo ""
 
 # Test 5: MKL environment variables
-echo -e "${BLUE}Test 5: MKL Environment Variables${NC}"
+printf '%s\n' "${BLUE}Test 5: MKL Environment Variables${NC}"
 MKL_ENV_OK=true
 if [ -z "${MKLROOT:-}" ]; then
-    echo -e "  ${YELLOW}⚠ MKLROOT not set${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ MKLROOT not set${NC}"
     MKL_ENV_OK=false
 else
-    echo -e "  ${GREEN}✓ MKLROOT: ${MKLROOT}${NC}"
+    printf '%s\n' "  ${GREEN}✓ MKLROOT: ${MKLROOT}${NC}"
 fi
 
 if [ -z "${MKL_THREADING_LAYER:-}" ]; then
-    echo -e "  ${YELLOW}⚠ MKL_THREADING_LAYER not set (default: GNU)${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ MKL_THREADING_LAYER not set (default: GNU)${NC}"
 else
-    echo -e "  ${GREEN}✓ MKL_THREADING_LAYER: ${MKL_THREADING_LAYER}${NC}"
+    printf '%s\n' "  ${GREEN}✓ MKL_THREADING_LAYER: ${MKL_THREADING_LAYER}${NC}"
 fi
 
 if [ -z "${MKL_NUM_THREADS:-}" ]; then
-    echo -e "  ${YELLOW}⚠ MKL_NUM_THREADS not set${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ MKL_NUM_THREADS not set${NC}"
 else
-    echo -e "  ${GREEN}✓ MKL_NUM_THREADS: ${MKL_NUM_THREADS}${NC}"
+    printf '%s\n' "  ${GREEN}✓ MKL_NUM_THREADS: ${MKL_NUM_THREADS}${NC}"
 fi
 
 if [ "$MKL_ENV_OK" = true ]; then
-    echo -e "  ${GREEN}✓ MKL environment variables configured${NC}"
+    printf '%s\n' "  ${GREEN}✓ MKL environment variables configured${NC}"
 else
-    echo -e "  ${YELLOW}⚠ Some MKL environment variables not set${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ Some MKL environment variables not set${NC}"
 fi
 echo ""
 
 # Test 6: MKL library availability
-echo -e "${BLUE}Test 6: MKL Library Availability${NC}"
+printf '%s\n' "${BLUE}Test 6: MKL Library Availability${NC}"
 if [ -n "${MKLROOT:-}" ] && [ -d "${MKLROOT}/lib/intel64" ]; then
     MKL_LIB_COUNT=$(find "${MKLROOT}/lib/intel64" -name "libmkl*.so" 2>/dev/null | wc -l)
     if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
-        echo -e "  ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
-        echo -e "  ${GREEN}✓ MKL library directory: ${MKLROOT}/lib/intel64${NC}"
+        printf '%s\n' "  ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
+        printf '%s\n' "  ${GREEN}✓ MKL library directory: ${MKLROOT}/lib/intel64${NC}"
     else
-        echo -e "  ${RED}✗ MKL libraries not found in ${MKLROOT}/lib/intel64${NC}"
+        printf '%s\n' "  ${RED}✗ MKL libraries not found in ${MKLROOT}/lib/intel64${NC}"
         OVERALL_STATUS=1
     fi
 else
-    echo -e "  ${YELLOW}⚠ MKLROOT not set or MKL library directory not found${NC}"
-    echo -e "  ${YELLOW}  Expected: /opt/intel/oneapi/mkl/latest/lib/intel64${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ MKLROOT not set or MKL library directory not found${NC}"
+    printf '%s\n' "  ${YELLOW}  Expected: /opt/intel/oneapi/mkl/latest/lib/intel64${NC}"
 fi
 echo ""
 
 # Test 7: Python package linkage (ldd check)
-echo -e "${BLUE}Test 7: Python Package MKL Linkage (ldd)${NC}"
+printf '%s\n' "${BLUE}Test 7: Python Package MKL Linkage (ldd)${NC}"
 PYTHON_LIB_DIR=$(python3 -c "import sys; print(sys.executable)" | xargs dirname)/../lib
 NUMPY_SO=$(find "${PYTHON_LIB_DIR}" -name "_multiarray_umath*.so" 2>/dev/null | head -1)
 
 if [ -n "${NUMPY_SO}" ] && [ -f "${NUMPY_SO}" ]; then
     if ldd "${NUMPY_SO}" 2>/dev/null | grep -q "libmkl"; then
-        echo -e "  ${GREEN}✓ NumPy is linked against MKL libraries${NC}"
+        printf '%s\n' "  ${GREEN}✓ NumPy is linked against MKL libraries${NC}"
         ldd "${NUMPY_SO}" 2>/dev/null | grep "libmkl" | head -3 | while read -r line; do
-            echo -e "    ${GREEN}  ${line}${NC}"
+            printf '%s\n' "    ${GREEN}  ${line}${NC}"
         done
     else
-        echo -e "  ${RED}✗ NumPy is NOT linked against MKL libraries${NC}"
-        echo -e "  ${YELLOW}  NumPy may be using OpenBLAS or system BLAS${NC}"
+        printf '%s\n' "  ${RED}✗ NumPy is NOT linked against MKL libraries${NC}"
+        printf '%s\n' "  ${YELLOW}  NumPy may be using OpenBLAS or system BLAS${NC}"
         OVERALL_STATUS=1
     fi
 else
-    echo -e "  ${YELLOW}⚠ NumPy shared library not found for ldd check${NC}"
+    printf '%s\n' "  ${YELLOW}⚠ NumPy shared library not found for ldd check${NC}"
 fi
 echo ""
 
 # Summary
-echo -e "${BLUE}===============================================================================${NC}"
+printf '%s\n' "${BLUE}===============================================================================${NC}"
 if [ "${OVERALL_STATUS}" -eq 0 ]; then
-    echo -e "${GREEN}✓ Python MKL verification PASSED${NC}"
-    echo -e "${GREEN}  All Python packages are using MKL backend${NC}"
+    printf '%s\n' "${GREEN}✓ Python MKL verification PASSED${NC}"
+    printf '%s\n' "${GREEN}  All Python packages are using MKL backend${NC}"
     exit 0
 else
-    echo -e "${RED}✗ Python MKL verification FAILED${NC}"
-    echo -e "${RED}  Some Python packages are not using MKL backend${NC}"
-    echo -e "${YELLOW}  Note: NumPy/SciPy may use system BLAS/LAPACK if MKL is not properly configured${NC}"
+    printf '%s\n' "${RED}✗ Python MKL verification FAILED${NC}"
+    printf '%s\n' "${RED}  Some Python packages are not using MKL backend${NC}"
+    printf '%s\n' "${YELLOW}  Note: NumPy/SciPy may use system BLAS/LAPACK if MKL is not properly configured${NC}"
     exit 1
 fi
-echo -e "${BLUE}===============================================================================${NC}"
+printf '%s\n' "${BLUE}===============================================================================${NC}"
 

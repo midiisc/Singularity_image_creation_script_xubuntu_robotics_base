@@ -365,7 +365,8 @@ main() {
                 shift
                 ;;
             --script)
-                if [ $# -lt 2 ]; then
+                # D1-D4: Quote positional parameters
+                if [ "$#" -lt 2 ]; then
                     error_exit 1 "--script requires a file path argument"
                 fi
                 install_specific_file="$2"
