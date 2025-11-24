@@ -1654,18 +1654,43 @@ create_directory_with_permissions() {
     local dir_path="$1"
     local description="$2"
 
-    # Attempt to create directory
+    # Attempt to create directory (mkdir -p creates parent directories)
     if mkdir -p "${dir_path}" 2>/dev/null; then
+        # Ensure parent directories are also writable (critical for nested directories)
+        local parent_dir
+        parent_dir="$(dirname "${dir_path}")"
+        # Only set parent permissions if parent is different from target (not root)
+        if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
+            chmod 755 "${parent_dir}" 2>/dev/null || true
+        fi
+        # ENDIF: parent directory check
+        # Set permissions on target directory
         chmod 755 "${dir_path}" 2>/dev/null || true
-        # Verify directory exists and is writable
-        if [ -d "${dir_path}" ] && [ -w "${dir_path}" ]; then
-            log_success "Directory created: ${description} (${dir_path})"
-            return 0
+        # Verify directory exists and is writable (test with actual write operation)
+        if [ -d "${dir_path}" ]; then
+            # Test actual writability by attempting to create a test file
+            local test_file="${dir_path}/.write_test_$$"
+            if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+                log_success "Directory created: ${description} (${dir_path})"
+                return 0
+            else
+                # Retry: ensure permissions are set correctly and try again
+                chmod 755 "${dir_path}" 2>/dev/null || true
+                if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+                    log_success "Directory created: ${description} (${dir_path})"
+                    return 0
+                else
+                    log_error "Directory created but not writable: ${description} (${dir_path})"
+                    return 1
+                fi
+                # ENDIF: retry write test
+            fi
+            # ENDIF: write test
         else
-            log_error "Directory created but not writable: ${description} (${dir_path})"
+            log_error "Directory does not exist after creation: ${description} (${dir_path})"
             return 1
         fi
-        # ENDIF: directory writability check
+        # ENDIF: directory existence check
     else
         log_error "Failed to create directory: ${description} (${dir_path})"
         return 1
