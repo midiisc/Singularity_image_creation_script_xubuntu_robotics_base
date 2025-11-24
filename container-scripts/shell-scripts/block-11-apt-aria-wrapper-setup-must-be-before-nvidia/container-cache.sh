@@ -1,5 +1,6 @@
-#!/bin/bash
-# Container cache environment variables
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# Purpose: Container cache environment variables
 # These ensure apt-aria wrapper and other tools can find cache directories
 #
 # Rationale:

@@ -45,7 +45,8 @@ trap cleanup EXIT
 error_exit() {
     local exit_code="${1:-1}"
     local error_msg="${2:-Unknown error}"
-    echo -e "${RED}Error: ${error_msg}${NC}" >&2
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${RED}Error: ${error_msg}${NC}" >&2
     exit "${exit_code}"
 }
 
@@ -90,7 +91,8 @@ fi
 
 # Check if jq is available
 if ! command -v jq >/dev/null 2>&1; then
-    echo -e "${YELLOW}Warning: jq not found. Attempting to install...${NC}" >&2
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${YELLOW}Warning: jq not found. Attempting to install...${NC}" >&2
     if command -v apt-get >/dev/null 2>&1; then
         # Temporarily disable exit on error for apt-get operations
         set +e
@@ -125,13 +127,15 @@ install_file() {
     
     # Validate permissions format
     if ! validate_permissions "${permissions}"; then
-        echo -e "${RED}Error: Invalid permissions format: ${permissions} (expected octal like 0644 or 0755)${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: Invalid permissions format: ${permissions} (expected octal like 0644 or 0755)${NC}" >&2
         return 1
     fi
     
     # Validate source file path is safe (no path traversal)
     if ! validate_safe_path "${source_file}" "${SCRIPT_DIR}"; then
-        echo -e "${RED}Error: Unsafe source file path: ${source_file}${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: Unsafe source file path: ${source_file}${NC}" >&2
         return 1
     fi
     
@@ -139,13 +143,15 @@ install_file() {
     local source_path="${SCRIPT_DIR}/${source_file}"
     
     if [ ! -f "${source_path}" ]; then
-        echo -e "${RED}Error: Source file not found: ${source_path}${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: Source file not found: ${source_path}${NC}" >&2
         return 1
     fi
     
     # Validate target file path (must be absolute)
     if [[ ! "${target_file}" = /* ]]; then
-        echo -e "${RED}Error: Target file must be an absolute path: ${target_file}${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: Target file must be an absolute path: ${target_file}${NC}" >&2
         return 1
     fi
     
@@ -154,20 +160,23 @@ install_file() {
     target_dir="$(dirname "${target_file}")"
     if [ ! -d "${target_dir}" ]; then
         if ! mkdir -p "${target_dir}"; then
-            echo -e "${RED}Error: Failed to create directory ${target_dir}${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${RED}Error: Failed to create directory ${target_dir}${NC}" >&2
             return 1
         fi
     fi
     
     # Copy file to target location
     if ! cp "${source_path}" "${target_file}"; then
-        echo -e "${RED}Error: Failed to copy ${source_file} to ${target_file}${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${RED}Error: Failed to copy ${source_file} to ${target_file}${NC}" >&2
         return 1
     fi
     
     # Set permissions
     if ! chmod "${permissions}" "${target_file}"; then
-        echo -e "${YELLOW}Warning: Failed to set permissions ${permissions} on ${target_file}${NC}" >&2
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${YELLOW}Warning: Failed to set permissions ${permissions} on ${target_file}${NC}" >&2
         # Don't fail installation if chmod fails, but warn
     fi
     
@@ -175,11 +184,13 @@ install_file() {
     # (Python scripts are installed with 0644 but need to be executable)
     if [[ "${file_type}" == "python-scripts" ]] && [[ "${target_file}" =~ ^/(opt/scripts|usr/local/bin)/ ]]; then
         if ! chmod +x "${target_file}"; then
-            echo -e "${YELLOW}Warning: Failed to make Python script executable: ${target_file}${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Failed to make Python script executable: ${target_file}${NC}" >&2
         fi
     fi
     
-    echo -e "${GREEN}✓ Installed: ${source_file} -> ${target_file} (${permissions})${NC}"
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${GREEN}✓ Installed: ${source_file} -> ${target_file} (${permissions})${NC}"
     return 0
 }
 
@@ -189,7 +200,8 @@ install_all() {
     local installed=0
     local failed=0
     
-    echo -e "${BLUE}Reading MANIFEST.json...${NC}"
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${BLUE}Reading MANIFEST.json...${NC}"
     
     # Get total count with error handling
     if ! total=$(jq -r '.files | length' "${MANIFEST}" 2>/dev/null); then
@@ -201,7 +213,8 @@ install_all() {
         error_exit 1 "Invalid file count in MANIFEST.json: ${total}"
     fi
     
-    echo -e "${BLUE}Found ${total} files to install${NC}"
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${BLUE}Found ${total} files to install${NC}"
     echo ""
     
     # Process each file using process substitution to avoid subshell issues
@@ -219,39 +232,45 @@ install_all() {
         
         # Extract fields with error handling
         if ! source_file=$(echo "${file_entry}" | jq -r '.source // empty' 2>/dev/null); then
-            echo -e "${YELLOW}Warning: Failed to parse source field, skipping entry${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Failed to parse source field, skipping entry${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
         
         if ! target_file=$(echo "${file_entry}" | jq -r '.target // empty' 2>/dev/null); then
-            echo -e "${YELLOW}Warning: Failed to parse target field for ${source_file}, skipping${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Failed to parse target field for ${source_file}, skipping${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
         
         if ! permissions=$(echo "${file_entry}" | jq -r '.permissions // empty' 2>/dev/null); then
-            echo -e "${YELLOW}Warning: Failed to parse permissions field for ${source_file}, skipping${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Failed to parse permissions field for ${source_file}, skipping${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
         
         if ! file_type=$(echo "${file_entry}" | jq -r '.file_type // empty' 2>/dev/null); then
-            echo -e "${YELLOW}Warning: Failed to parse file_type field for ${source_file}, skipping${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Failed to parse file_type field for ${source_file}, skipping${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
         
         # Validate required fields are not empty
         if [ -z "${source_file}" ] || [ -z "${target_file}" ] || [ -z "${permissions}" ]; then
-            echo -e "${YELLOW}Warning: Missing required fields (source, target, or permissions), skipping entry${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Missing required fields (source, target, or permissions), skipping entry${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
         
         # Skip if source file doesn't exist
         if [ ! -f "${SCRIPT_DIR}/${source_file}" ]; then
-            echo -e "${YELLOW}Warning: Source file not found: ${source_file}${NC}" >&2
+            # A5a: Use printf instead of echo -e for robustness
+            printf '%s\n' "${YELLOW}Warning: Source file not found: ${source_file}${NC}" >&2
             failed=$((failed + 1))
             continue
         fi
@@ -265,16 +284,17 @@ install_all() {
     done < <(jq -c '.files[]' "${MANIFEST}" 2>/dev/null || error_exit 1 "Failed to read files array from MANIFEST.json")
     
     echo ""
-    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-    echo -e "${BLUE}Installation Summary${NC}"
-    echo -e "${BLUE}════════════════════════════════════════════════════════${NC}"
-    echo -e "Total files: ${total}"
-    echo -e "${GREEN}Installed: ${installed}${NC}"
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${BLUE}════════════════════════════════════════════════════════${NC}"
+    printf '%s\n' "${BLUE}Installation Summary${NC}"
+    printf '%s\n' "${BLUE}════════════════════════════════════════════════════════${NC}"
+    printf '%s\n' "Total files: ${total}"
+    printf '%s\n' "${GREEN}Installed: ${installed}${NC}"
     if [ "${failed}" -gt 0 ]; then
-        echo -e "${RED}Failed: ${failed}${NC}"
+        printf '%s\n' "${RED}Failed: ${failed}${NC}"
         return 1
     else
-        echo -e "${GREEN}✓ All files installed successfully!${NC}"
+        printf '%s\n' "${GREEN}✓ All files installed successfully!${NC}"
         return 0
     fi
 }
@@ -293,7 +313,8 @@ install_specific() {
         error_exit 1 "Unsafe source file path: ${source_file}"
     fi
     
-    echo -e "${BLUE}Installing specific file: ${source_file}${NC}"
+    # A5a: Use printf instead of echo -e for robustness
+    printf '%s\n' "${BLUE}Installing specific file: ${source_file}${NC}"
     
     # Find file in manifest with proper escaping
     local file_entry
@@ -376,7 +397,8 @@ main() {
         install_specific "${install_specific_file}"
     else
         # Default: install all
-        echo -e "${YELLOW}No option specified. Installing all files...${NC}"
+        # A5a: Use printf instead of echo -e for robustness
+        printf '%s\n' "${YELLOW}No option specified. Installing all files...${NC}"
         install_all
     fi
 }
