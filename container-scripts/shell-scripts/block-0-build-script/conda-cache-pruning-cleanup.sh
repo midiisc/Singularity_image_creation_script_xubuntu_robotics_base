@@ -4,8 +4,14 @@
 # Usage: prune_conda_cache.sh --cache /path/to/conda/pkgs --keep 2 [--apply]
 set -euo pipefail
 
+# Purpose: Prune conda package cache, keeping only the latest N artifacts per package
+# Parameters: --cache <path> --keep <N> [--apply]
+# Returns: 0 on success, 1-2 on error
+# Usage: prune_conda_cache.sh --cache /path/to/conda/pkgs --keep 2 [--apply]
+
 CACHE=""; KEEP="2"; APPLY=""
-while [[ $# -gt 0 ]]; do
+# D1-D4: Quote positional parameters
+while [[ "$#" -gt 0 ]]; do
   case "$1" in
     --cache) CACHE="$2"; shift 2;;
     --keep) KEEP="$2"; shift 2;;

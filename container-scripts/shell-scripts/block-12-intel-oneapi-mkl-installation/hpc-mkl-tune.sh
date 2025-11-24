@@ -1,7 +1,12 @@
-#!/bin/bash
-# HPC MKL/CUDA Runtime Tuning
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# Purpose: HPC MKL/CUDA Runtime Tuning
+# This file is sourced to configure thread affinity, MKL threading, and CUDA settings
 # Optimized for A6000 GPU and multi-core CPU systems
-# This script configures thread affinity, MKL threading, and CUDA settings for optimal HPC performance
+#
+# NOTE: This script is sourced, so strict mode (set -euo pipefail) is not enabled
+# to allow graceful handling when commands fail in interactive shells.
+# All operations are environment variable exports, which are safe without strict mode.
 
 # Thread Affinity Settings (OpenMP)
 # close: Bind threads close to the master thread
@@ -43,11 +48,12 @@ export OMP_DISPLAY_ENV="${OMP_DISPLAY_ENV:-FALSE}"
 export MKL_INTERFACE_LAYER="${MKL_INTERFACE_LAYER:-LP64,ILP64}"
 
 # Optional: Display configuration in interactive shells
+# A5a: Use printf instead of echo for robustness
 if [ -n "${PS1:-}" ]; then
-    echo "✅ HPC MKL/CUDA tuning configured"
-    echo "   OMP Threads: ${OMP_NUM_THREADS}"
-    echo "   MKL Threads: ${MKL_NUM_THREADS}"
-    echo "   MKL Dynamic: ${MKL_DYNAMIC}"
-    echo "   CUDA Connections: ${CUDA_DEVICE_MAX_CONNECTIONS}"
+    printf '%s\n' "✅ HPC MKL/CUDA tuning configured"
+    printf '%s\n' "   OMP Threads: ${OMP_NUM_THREADS}"
+    printf '%s\n' "   MKL Threads: ${MKL_NUM_THREADS}"
+    printf '%s\n' "   MKL Dynamic: ${MKL_DYNAMIC}"
+    printf '%s\n' "   CUDA Connections: ${CUDA_DEVICE_MAX_CONNECTIONS}"
 fi
 

@@ -18,7 +18,7 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# A5a: Use printf instead of printf '%s\n' for robustness
+# A5a: Use printf instead of echo -e for robustness
 printf '%s\n' "${BLUE}===============================================================================${NC}"
 printf '%s\n' "${BLUE}Python MKL Verification${NC}"
 printf '%s\n' "${BLUE}===============================================================================${NC}"
@@ -33,7 +33,7 @@ check_python_mkl() {
     local import_name="${2:-$package_name}"
     local test_code="$3"
     
-    # A5a: Use printf instead of printf '%s\n' for robustness
+    # A5a: Use printf instead of echo -e for robustness
     printf '%s\n' "${YELLOW}Checking ${package_name}...${NC}"
     
     # Check if package can be imported

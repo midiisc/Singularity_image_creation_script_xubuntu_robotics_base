@@ -3375,8 +3375,16 @@ validate_and_repair_cache() {
             continue
         fi
         # H1: Check exit code of chown operation
+        # Note: Ownership change may fail if directory is a mount point, read-only filesystem,
+        # or already owned by correct user. Check if directory is writable instead.
         if ! chown -R root:root "${dir}" 2>/dev/null; then
-            echo "[warn] ⚠ Failed to set ownership on: ${dir}"
+            # Check if directory is actually writable (ownership might not matter)
+            local test_file="${dir}/.write_test_$$"
+            if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+                echo "[warn] ⚠ Failed to set ownership on: ${dir} (but directory is writable - continuing)"
+            else
+                echo "[warn] ⚠ Failed to set ownership on: ${dir} (directory may not be writable)"
+            fi
         fi
         # H1: Check exit code of chmod operation
         if ! chmod -R 755 "${dir}" 2>/dev/null; then
@@ -4724,10 +4732,58 @@ else
 fi
 
 echo -e "${YELLOW}[12A.3] Configuring Intel MKL environment...${NC}"
-MKL_ENV_SCRIPT="/opt/intel/oneapi/mkl/latest/env/vars.sh"
-if [ ! -f "${MKL_ENV_SCRIPT}" ]; then
-    echo -e "  ${RED}✗ Expected MKL environment script not found at ${MKL_ENV_SCRIPT}${NC}"
-    exit 1
+# Search for MKL environment script in common locations
+MKL_ENV_SCRIPT=""
+MKL_ENV_CANDIDATES=(
+    "/opt/intel/oneapi/mkl/latest/env/vars.sh"
+    "/opt/intel/oneapi/mkl/2025.3/env/vars.sh"
+    "/opt/intel/oneapi/mkl/2025.2/env/vars.sh"
+    "/opt/intel/oneapi/mkl/2025.1/env/vars.sh"
+    "/opt/intel/oneapi/mkl/2024.2/env/vars.sh"
+    "/opt/intel/oneapi/mkl/2024.1/env/vars.sh"
+)
+
+# Try to find vars.sh script
+for candidate in "${MKL_ENV_CANDIDATES[@]}"; do
+    if [ -f "${candidate}" ]; then
+        MKL_ENV_SCRIPT="${candidate}"
+        break
+    fi
+done
+
+# If vars.sh not found, check if MKL is installed via alternative method
+if [ -z "${MKL_ENV_SCRIPT}" ]; then
+    echo -e "  ${YELLOW}⚠ MKL environment script (vars.sh) not found in expected locations${NC}"
+    echo -e "  ${YELLOW}  Searched: ${MKL_ENV_CANDIDATES[*]}${NC}"
+    
+    # Check if MKL libraries exist even without vars.sh
+    MKL_BASE="/opt/intel/oneapi/mkl"
+    if [ -d "${MKL_BASE}" ]; then
+        # Find the actual MKL installation directory
+        MKL_ACTUAL_DIR=$(find "${MKL_BASE}" -maxdepth 2 -type d -name "lib" -path "*/intel64" 2>/dev/null | head -1 | sed 's|/lib/intel64$||' || echo "")
+        if [ -n "${MKL_ACTUAL_DIR}" ] && [ -d "${MKL_ACTUAL_DIR}/lib/intel64" ]; then
+            echo -e "  ${GREEN}✓ MKL libraries found at: ${MKL_ACTUAL_DIR}/lib/intel64${NC}"
+            echo -e "  ${YELLOW}  Note: vars.sh script not found, but MKL appears to be installed${NC}"
+            echo -e "  ${YELLOW}  Environment will be configured via /etc/profile.d/intel-mkl.sh${NC}"
+            # Set MKLROOT based on found directory
+            export MKLROOT="${MKL_ACTUAL_DIR}"
+        else
+            echo -e "  ${RED}✗ MKL installation not found - checking if packages were installed...${NC}"
+            # Check if packages are installed
+            if dpkg -l | grep -q "intel-oneapi-mkl"; then
+                echo -e "  ${YELLOW}  ⚠ MKL packages are installed but structure differs from expected${NC}"
+                echo -e "  ${YELLOW}  Continuing with manual environment configuration...${NC}"
+            else
+                echo -e "  ${RED}✗ MKL packages not found in dpkg listing${NC}"
+                exit 1
+            fi
+        fi
+    else
+        echo -e "  ${RED}✗ MKL base directory not found at ${MKL_BASE}${NC}"
+        exit 1
+    fi
+else
+    echo -e "  ${GREEN}✓ Found MKL environment script: ${MKL_ENV_SCRIPT}${NC}"
 fi
 # ENDIF: MKL_ENV_SCRIPT existence check
 

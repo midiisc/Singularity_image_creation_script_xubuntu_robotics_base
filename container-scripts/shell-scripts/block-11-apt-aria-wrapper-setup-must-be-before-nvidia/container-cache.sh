@@ -8,6 +8,10 @@
 #   uniform behavior when tools are invoked outside the main build flow.
 # - Directories are created best-effort with errors suppressed to avoid
 #   blocking non-critical initialization paths.
+#
+# NOTE: This script is sourced, so strict mode (set -euo pipefail) is not enabled
+# to allow graceful handling when commands fail in interactive shells.
+# Individual operations use explicit error suppression (|| true) where appropriate.
 
 # Set default cache root if not already set
 export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"

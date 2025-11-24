@@ -91,11 +91,15 @@ EOF
 
 
 # --- Command Line Argument Parsing ---
+# Purpose: Parse command-line arguments and set configuration variables
+# Parameters: $@ = command-line arguments
+# Returns: None (sets global variables)
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case $1 in
       --vgl-display)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vgl-display" >&2
           exit 1
         fi
@@ -104,7 +108,8 @@ parse_arguments() {
         shift 2
         ;;
       --vgl-compress)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vgl-compress" >&2
           exit 1
         fi
@@ -112,7 +117,8 @@ parse_arguments() {
         shift 2
         ;;
       --vgl-readback)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vgl-readback" >&2
           exit 1
         fi
@@ -135,7 +141,8 @@ parse_arguments() {
         shift
         ;;
       --vnc-display)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vnc-display" >&2
           exit 1
         fi
@@ -145,7 +152,8 @@ parse_arguments() {
         shift 2
         ;;
       --vnc-geometry)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vnc-geometry" >&2
           exit 1
         fi
@@ -153,7 +161,8 @@ parse_arguments() {
         shift 2
         ;;
       --vnc-depth)
-        if [[ $# -lt 2 ]]; then
+        # D1-D4: Quote positional parameters
+        if [[ "$#" -lt 2 ]]; then
           echo "Missing value for --vnc-depth" >&2
           exit 1
         fi
@@ -191,6 +200,9 @@ parse_arguments() {
 }
 
 # --- VirtualGL Display Detection ---
+# Purpose: Auto-detect VNC display for VirtualGL configuration
+# Parameters: None (uses global variables VNC_DISPLAY_NUM, VGL_DISPLAY_FALLBACK)
+# Returns: None (sets global variable VGL_DISPLAY)
 detect_vgl_display() {
   # Official VirtualGL docs: When using TurboVNC with -vgl flag, VGL_DISPLAY should be set to the VNC display
   # Reference: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
@@ -220,9 +232,11 @@ detect_vgl_display() {
     # Method 2: Check for vncserver processes
     if [ -z "${vnc_display:-}" ]; then
       if command -v pgrep >/dev/null 2>&1; then
-        vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || true)
+        # F2: Capture both output and exit code separately
+        vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || echo "")
         if [ -n "${vnc_cmd}" ]; then
-          vnc_display=$(echo "${vnc_cmd}" | grep -E -o ':[0-9]+' | head -1 || true)
+          # D3: Use here-string instead of pipe pattern
+          vnc_display=$(grep -E -o ':[0-9]+' <<< "${vnc_cmd}" | head -1 || echo "")
         fi
       else
         vnc_display=$(# SC2009: Consider using pgrep instead
@@ -254,6 +268,9 @@ detect_vgl_display() {
 }
 
 # --- VirtualGL Configuration ---
+# Purpose: Configure VirtualGL environment variables based on user settings
+# Parameters: None (uses global configuration variables)
+# Returns: None (exports VirtualGL environment variables)
 configure_virtualgl() {
   if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     echo "Configuring VirtualGL..."
@@ -295,6 +312,9 @@ configure_virtualgl() {
 }
 
 # --- VirtualGL Test Function ---
+# Purpose: Test VirtualGL configuration and display OpenGL capabilities
+# Parameters: None (uses global variable VGL_DISPLAY)
+# Returns: 0 on success, 1 on failure
 test_virtualgl() {
   if [ "${VNC_VGL_INTEGRATION:-1}" = "1" ]; then
     echo "Testing VirtualGL configuration..."
@@ -342,6 +362,9 @@ parse_arguments "$@"
 # --- Ensure TurboVNC is in PATH ---
 
 # --- Cleanup function ---
+# Purpose: Clean up resources on script exit (VNC servers, processes)
+# Parameters: None
+# Returns: None
 cleanup() {
   echo ""
   echo "Shutting down VNC services..."
@@ -353,6 +376,9 @@ cleanup() {
 trap cleanup SIGINT SIGTERM EXIT
 
 # --- Check dependencies ---
+# Purpose: Verify all required dependencies are available
+# Parameters: None
+# Returns: 0 if all dependencies found, 1 if any missing (exits on failure)
 check_dependencies() {
   local missing=0
 
@@ -393,6 +419,9 @@ check_dependencies() {
 }
 
 # --- Check VirtualGL availability ---
+# Purpose: Check VirtualGL availability and GPU detection
+# Parameters: None
+# Returns: None (sets global variables, displays status)
 check_virtualgl() {
   local gpu_info=""
   echo "Checking VirtualGL availability..."
@@ -432,6 +461,9 @@ check_virtualgl() {
 }
 
 # --- Setup VNC configuration ---
+# Purpose: Create VNC configuration files and xstartup script
+# Parameters: None (uses global variables VNC_DISPLAY_NUM, VGL_DISPLAY, etc.)
+# Returns: 0 on success, 1 on failure
 setup_vnc_config() {
   if ! install -d -m 0700 "${HOME}/.vnc"; then
     echo "Failed to create ${HOME}/.vnc directory" >&2
@@ -526,6 +558,9 @@ fi
 }
 
 # --- Start VNC server ---
+# Purpose: Start TurboVNC server with VirtualGL integration
+# Parameters: None (uses global variables VNC_DISPLAY_NUM, GEOM, DEPTH, etc.)
+# Returns: 0 on success, 1 on failure (exits on failure)
 start_vnc_server() {
   echo "Starting TurboVNC server..."
   echo "  Display: :${VNC_DISPLAY_NUM}"
@@ -604,6 +639,9 @@ start_vnc_server() {
 
 
 # --- Check TurboVNC's built-in webserver ---
+# Purpose: Check if TurboVNC built-in webserver is running
+# Parameters: None (uses global variable TURBOVNC_WEB_PORT)
+# Returns: 0 if webserver detected, 1 if not found
 check_turbovnc_webserver() {
   # TurboVNC may start its own webserver automatically
   if ss -tuln 2>/dev/null | grep -q ":${TURBOVNC_WEB_PORT}\b"; then
@@ -616,6 +654,9 @@ check_turbovnc_webserver() {
 }
 
 # --- Start noVNC (websockify) ---
+# Purpose: Start noVNC websockify proxy for web-based VNC access
+# Parameters: None (uses global variables WEB_PORT, VNC_PORT, VNC_DISPLAY_NUM)
+# Returns: 0 on success, 1 on failure
 start_novnc() {
   echo "Starting noVNC (HTML5 VNC client)..."
 
@@ -685,6 +726,9 @@ start_novnc() {
 # Outputs: Environment variables, configuration
 
 # --- Display connection information ---
+# Purpose: Display connection information and instructions for accessing VNC
+# Parameters: None (uses global variables for ports, hostname, etc.)
+# Returns: None (outputs to stdout)
 display_connection_info() {
   local node=""
   local username=""
@@ -840,6 +884,9 @@ display_connection_info() {
 }
 
 # --- Monitor services ---
+# Purpose: Monitor VNC server and websockify processes, restart if needed
+# Parameters: None (uses global variables VNC_DISPLAY_NUM, WEBSOCKIFY_PID)
+# Returns: None (runs indefinitely until interrupted)
 monitor_services() {
   local check_count=0
 

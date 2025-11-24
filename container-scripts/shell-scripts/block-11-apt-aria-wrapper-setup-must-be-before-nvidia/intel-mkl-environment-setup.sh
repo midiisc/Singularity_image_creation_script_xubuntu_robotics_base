@@ -1,12 +1,19 @@
-#!/bin/bash
-# Intel MKL environment setup (auto-generated)
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# Purpose: Intel MKL environment setup
+# This file is sourced to configure MKL environment variables
+#
+# NOTE: This script is sourced, so strict mode (set -euo pipefail) is not enabled
+# to allow graceful handling when vars.sh is missing or commands fail.
+# Individual operations use explicit error suppression where appropriate.
 
 MKLROOT=/opt/intel/oneapi/mkl/latest
 export MKLROOT
 
+# Try to source Intel's vars.sh if available (provides additional environment setup)
 if [ -f "${MKLROOT}/env/vars.sh" ]; then
     # shellcheck disable=SC1090
-    . "${MKLROOT}/env/vars.sh" >/dev/null 2>&1
+    . "${MKLROOT}/env/vars.sh" >/dev/null 2>&1 || true
 fi
 
 export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"

@@ -153,21 +153,30 @@ if is_install_command "$@"; then
         fi
         echo "[apt-aria] Downloading ${uri_count} packages via aria2c..."
       echo "[apt-aria] Cache directory: ${CACHE}"
-      echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
+      # J1: Validate file exists before using
+      if [ ! -f "${URI_FILE}" ] || [ ! -r "${URI_FILE}" ]; then
+        echo "[apt-aria] ERROR: URI file not readable: ${URI_FILE}"
+        echo "[apt-aria] Falling back to apt-get"
+      else
+        echo "[apt-aria] aria2c command: aria2c --check-certificate=false -x16 -s16 -m3 -d ${CACHE} -i ${URI_FILE}"
 
       # Try multi-connection first with error suppression
       # H1: Check exit code of aria2c operation
+      aria2c_exit_code=0
       if ! aria2c --check-certificate=false -x16 -s16 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-        echo "[apt-aria] Multi-connection failed, trying single-connection..."
+        aria2c_exit_code=$?
+        echo "[apt-aria] Multi-connection failed (exit: ${aria2c_exit_code}), trying single-connection..."
         # Fallback: single-connection (handles servers that reject ranges, e.g. some PPAs)
         # H1: Check exit code of aria2c operation
         if ! aria2c --check-certificate=false -x1 -s1 -m3 -d "${CACHE}" -i "${URI_FILE}" 2>/dev/null; then
-          echo "[apt-aria] aria2c failed completely, falling back to apt-get"
+          aria2c_exit_code=$?
+          echo "[apt-aria] aria2c failed completely (exit: ${aria2c_exit_code}), falling back to apt-get"
         else
           echo "[apt-aria] Single-connection aria2c succeeded"
         fi
       else
         echo "[apt-aria] Multi-connection aria2c succeeded"
+      fi
       fi
       # H4: Validate rm operation result
       if [ -f "${URI_FILE}" ] && ! rm -f "${URI_FILE}" 2>/dev/null; then

@@ -27,9 +27,11 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   
   # Method 1: Check for Xvnc processes using pgrep
   if command -v pgrep >/dev/null 2>&1; then
-    vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1)
+    # F2: Capture both output and exit code separately
+    vnc_cmd=$(pgrep -af "Xvnc" 2>/dev/null | head -1 || echo "")
     if [ -n "${vnc_cmd}" ]; then
-      vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
+      # D3: Use here-string instead of pipe pattern
+      vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1 || echo "")
     fi
   else
     vnc_display=$(# SC2009: Consider using pgrep instead
@@ -40,9 +42,11 @@ if [ -z "${VGL_DISPLAY:-}" ]; then
   # Method 2: Check for vncserver processes
   if [ -z "${vnc_display}" ]; then
     if command -v pgrep >/dev/null 2>&1; then
-      vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1)
+      # F2: Capture both output and exit code separately
+      vnc_cmd=$(pgrep -af "vncserver" 2>/dev/null | head -1 || echo "")
       if [ -n "${vnc_cmd}" ]; then
-        vnc_display=$(echo "${vnc_cmd}" | grep -oE ':[0-9]+' | head -1)
+        # D3: Use here-string instead of pipe pattern
+        vnc_display=$(grep -oE ':[0-9]+' <<< "${vnc_cmd}" | head -1 || echo "")
       fi
     else
       vnc_display=$(# SC2009: Consider using pgrep instead

@@ -5,6 +5,10 @@
 # ============================================================================
 # VirtualGL Convenience Aliases and Functions
 # ============================================================================
+#
+# NOTE: This script is sourced, so strict mode (set -euo pipefail) is not enabled
+# to allow graceful handling when commands fail in interactive shells.
+# Individual functions use explicit error handling.
 
 # Ensure VirtualGL is in PATH
 
@@ -17,6 +21,8 @@ alias vmeshlab='vglrun meshlab'
 # Quick benchmark
 alias gpubench='vglrun glxspheres64'
 
+# Purpose: Query GPU OpenGL information using VirtualGL
+# Returns: 0 on success, 1 on failure
 gpuinfo() {
   if ! command -v vglrun >/dev/null 2>&1; then
     echo "VirtualGL not found"
@@ -26,15 +32,25 @@ gpuinfo() {
     echo "glxinfo not found"
     return 1
   fi
-  if ! { vglrun glxinfo | grep -E "OpenGL (vendor|renderer|version)"; }; then
+  # D3: Use here-string instead of unsafe pipe pattern
+  local glx_output
+  glx_output=$(vglrun glxinfo 2>&1 || echo "")
+  if [ -z "${glx_output:-}" ]; then
+    echo "Unable to query GPU OpenGL information"
+    return 1
+  fi
+  if ! grep -E "OpenGL (vendor|renderer|version)" <<< "${glx_output}"; then
     echo "Unable to query GPU OpenGL information"
     return 1
   fi
 }
 
-# Helper function: launch any app with VirtualGL
+# Purpose: Launch any application with VirtualGL
+# Parameters: $@ = command and arguments to run with vglrun
+# Returns: Exit code from vglrun command
 vgl() {
-  if [ $# -eq 0 ]; then
+  # D1-D4: Quote positional parameters
+  if [ "$#" -eq 0 ]; then
     echo "Usage: vgl <command> [args...]"
     echo "Example: vgl blender"
     return 1
@@ -42,7 +58,9 @@ vgl() {
   vglrun "$@"
 }
 
-# Helper function: compare software vs GPU rendering
+# Purpose: Compare software vs GPU rendering performance
+# Parameters: $1 = application name (default: glxspheres64)
+# Returns: 0 on success, 1 on failure
 compare_render() {
   local app="${1:-glxspheres64}"
   local timeout_available="no"
@@ -59,8 +77,10 @@ compare_render() {
 
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
+      # F2: Capture both output and exit code separately
       output="$(timeout 5 "${app}" 2>&1 || true)"
-      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+      # D3: Use here-string instead of pipe pattern
+      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
     else
       echo "   ${app} available but timing skipped (requires 'timeout')"
     fi
@@ -77,8 +97,10 @@ compare_render() {
 
   if command -v "${app}" >/dev/null 2>&1; then
     if [ "${timeout_available}" = "yes" ]; then
+      # F2: Capture both output and exit code separately
       output="$(timeout 5 vglrun "${app}" 2>&1 || true)"
-      printf '%s\n' "${output}" | grep -Ei 'fps|frames' | tail -1 || true
+      # D3: Use here-string instead of pipe pattern
+      grep -Ei 'fps|frames' <<< "${output}" | tail -1 || true
     else
       echo "   ${app} with VirtualGL available but timing skipped (requires 'timeout')"
     fi
