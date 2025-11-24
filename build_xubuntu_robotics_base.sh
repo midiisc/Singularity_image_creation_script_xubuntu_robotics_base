@@ -3268,16 +3268,6 @@ if [ -x /usr/bin/apptainer ]; then
 	APPTAINER_CMD+=(--tmpdir)
 	APPTAINER_CMD+=("${BUILD_TMP_DIR}")
 	APPTAINER_CMD+=(--force)
-	# Prefer --debug if supported (non-fatal if not) - MUST be added BEFORE positional args
-	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
-	# CRITICAL: Only check for actual --debug flag, not word "debug" in help text
-	if APPTAINER_HELP_OUTPUT=$(/usr/bin/apptainer build --help 2>&1 || true); then
-		# Check for --debug as a standalone flag (not just word "debug" in text)
-		if grep -qE '^\s+--debug\b' <<< "${APPTAINER_HELP_OUTPUT}" 2>/dev/null || true; then
-			APPTAINER_CMD+=(--debug)
-		fi
-	fi
-	# ENDIF: --debug support check
 	# Positional arguments MUST be last: <IMAGE PATH> <BUILD SPEC>
 	APPTAINER_CMD+=("${OUT_DIR}/${SIF_NAME}")
 	APPTAINER_CMD+=("${DEF_NAME}")
@@ -3334,16 +3324,6 @@ elif [ -x /usr/bin/singularity ]; then
 	SINGULARITY_CMD+=(--tmpdir)
 	SINGULARITY_CMD+=("${BUILD_TMP_DIR}")
 	SINGULARITY_CMD+=(--force)
-	# Prefer --debug if supported (non-fatal if not) - MUST be added BEFORE positional args
-	# D3e: Fix SIGPIPE risk - use process substitution or add error handling
-	# CRITICAL: Only check for actual --debug flag, not word "debug" in help text
-	if SINGULARITY_HELP_OUTPUT=$(/usr/bin/singularity build --help 2>&1 || true); then
-		# Check for --debug as a standalone flag (not just word "debug" in text)
-		if grep -qE '^\s+--debug\b' <<< "${SINGULARITY_HELP_OUTPUT}" 2>/dev/null || true; then
-			SINGULARITY_CMD+=(--debug)
-		fi
-	fi
-	# ENDIF: --debug support check
 	# Positional arguments MUST be last: <IMAGE PATH> <BUILD SPEC>
 	SINGULARITY_CMD+=("${OUT_DIR}/${SIF_NAME}")
 	SINGULARITY_CMD+=("${DEF_NAME}")
