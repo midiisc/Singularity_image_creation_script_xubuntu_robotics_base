@@ -15,8 +15,8 @@ Within each type, files are organized by block number.
 
 ## Total Files
 
-- **Total**: 3 files
-- **Shell scripts**: 2
+- **Total**: 1 files
+- **Shell scripts**: 0
 - **JSON configs**: 0
 - **Config files**: 0
 - **Layout configs**: 0
