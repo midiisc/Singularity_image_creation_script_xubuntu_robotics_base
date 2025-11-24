@@ -2312,9 +2312,16 @@ verify_fastest_mirror() {
     local slow_count
     slow_count=$(grep -c -- "deb.*archive\.ubuntu\.com" <<< "${sources_content}" 2>/dev/null || echo "0")
     # K1b: Use -- to prevent command argument misinterpretation when pattern might start with -
-    # Validate result is numeric
+    # Validate result is numeric and strip any newlines
+    slow_count=$(printf '%s' "${slow_count}" | tr -d '\n\r' || echo "0")
     if [ -z "${slow_count:-}" ] || ! [[ "${slow_count}" =~ ^[0-9]+$ ]]; then
       slow_count="0"
+    fi
+    
+    # Validate fast_count is numeric and strip any newlines
+    fast_count=$(printf '%s' "${fast_count}" | tr -d '\n\r' || echo "0")
+    if [ -z "${fast_count:-}" ] || ! [[ "${fast_count}" =~ ^[0-9]+$ ]]; then
+      fast_count="0"
     fi
     
     if [ "${slow_count:-0}" -gt 0 ]; then
@@ -3584,8 +3591,21 @@ if ! command -v add-apt-repository &> /dev/null; then
 fi
 # ENDIF: add-apt-repository availability
 # H1: Check exit codes of add-apt-repository operations
-if ! add-apt-repository -y universe 2>&1; then
-    echo "[warn] ⚠ Failed to add universe repository (may already exist)"
+# Check if universe is already enabled before trying to add it
+if grep -qE "^[^#]*universe" /etc/apt/sources.list /etc/apt/sources.list.d/*.list 2>/dev/null; then
+    echo "[info] ✓ Universe repository already enabled"
+else
+    if ! add-apt-repository -y universe 2>&1; then
+        echo "[warn] ⚠ Failed to add universe repository (may already exist or preferences file issue)"
+        # Try manual method as fallback
+        CODENAME=$(lsb_release -cs 2>/dev/null || echo "")
+        if [ -n "${CODENAME}" ]; then
+            echo "[info] Attempting manual universe repository addition..."
+            if ! grep -qE "^[^#]*universe" /etc/apt/sources.list 2>/dev/null; then
+                sed -i "s/^deb \(.*\) main$/deb \1 main universe/" /etc/apt/sources.list 2>/dev/null || true
+            fi
+        fi
+    fi
 fi
 if ! add-apt-repository -y ppa:mozillateam/ppa 2>&1; then
     echo "[warn] ⚠ Failed to add Mozilla PPA (may already exist)"
