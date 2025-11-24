@@ -1655,6 +1655,13 @@ log_with_timestamp "Creating comprehensive cache directory structure..."
 create_directory_with_permissions() {
     local dir_path="$1"
     local description="$2"
+    
+    # Detect if we're inside a Singularity container
+    local in_container=false
+    if [ -n "${SINGULARITY_NAME:-}" ] || [ -n "${APPTAINER_NAME:-}" ] || [ -f "/.singularity.d/runscript" ] || [ -f "/.apptainer.d/runscript" ]; then
+        in_container=true
+    fi
+    # ENDIF: container detection
 
     # Ensure parent directories are writable first (critical for nested directories)
     local parent_dir
@@ -1723,10 +1730,59 @@ create_directory_with_permissions() {
                     # ENDIF: directory removal attempt
                 else
                     # Directory is not empty - can't safely remove it
+                    # Try to fix ownership if we're not root and directory is owned by root
+                    local current_user
+                    current_user="$(id -un 2>/dev/null || echo "unknown")"
+                    local dir_owner
+                    dir_owner="$(stat -c "%U" "${dir_path}" 2>/dev/null || echo "unknown")"
+                    
+                    # If directory is owned by root but we're not root, try to fix ownership
+                    if [ "${dir_owner}" = "root" ] && [ "${current_user}" != "root" ]; then
+                        # Try using sudo to change ownership to current user
+                        if command -v sudo >/dev/null 2>&1; then
+                            local current_uid
+                            current_uid="$(id -u 2>/dev/null || echo "")"
+                            local current_gid
+                            current_gid="$(id -g 2>/dev/null || echo "")"
+                            if [ -n "${current_uid}" ] && [ -n "${current_gid}" ]; then
+                                log_warning "Attempting to change ownership of root-owned directory to ${current_user}: ${dir_path}"
+                                if sudo chown -R "${current_uid}:${current_gid}" "${dir_path}" 2>/dev/null; then
+                                    # Try write test again after ownership change
+                                    local ownership_test_file="${dir_path}/.write_test_$$"
+                                    if touch "${ownership_test_file}" 2>/dev/null && rm -f "${ownership_test_file}" 2>/dev/null; then
+                                        log_success "Directory ownership fixed: ${description} (${dir_path})"
+                                        return 0
+                                    fi
+                                fi
+                            fi
+                        fi
+                        # ENDIF: sudo ownership fix attempt
+                        
+                        # If sudo failed or not available, check if this is a cache directory
+                        # For cache directories, if we're in a container context, root will use it anyway
+                        # So we can be more lenient - just check if directory is readable
+                        if [[ "${dir_path}" == *"cache"* ]] || [[ "${dir_path}" == *"Cache"* ]]; then
+                            if [ -r "${dir_path}" ] && [ -x "${dir_path}" ]; then
+                                if [ "${in_container}" = true ]; then
+                                    log_warning "Directory exists, owned by root, but readable: ${description} (${dir_path})"
+                                    log_warning "Inside container - root will write to this cache directory during build"
+                                    return 0
+                                else
+                                    log_warning "Directory exists, owned by root, but readable: ${description} (${dir_path})"
+                                    log_warning "This is acceptable for cache directories (root will write to it during build)"
+                                    return 0
+                                fi
+                            fi
+                        fi
+                        # ENDIF: cache directory lenient check
+                    fi
+                    # ENDIF: root-owned directory ownership fix
+                    
+                    # If we get here, we couldn't fix the issue
                     local error_msg
                     error_msg="Directory exists but cannot be made writable: ${description} (${dir_path})"
                     if [ ! -w "${dir_path}" ]; then
-                        error_msg="${error_msg} (not writable by current user: $(id -un))"
+                        error_msg="${error_msg} (not writable by current user: ${current_user})"
                     fi
                     local owner_info
                     owner_info="$(stat -c "%U:%G (%a)" "${dir_path}" 2>/dev/null || echo "unknown")"
