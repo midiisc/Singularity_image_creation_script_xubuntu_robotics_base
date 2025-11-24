@@ -1,3 +1,8 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# Purpose: SuiteSparse library path configuration
+# This file is sourced to set SuiteSparse-related environment variables
+# shellcheck disable=SC1083,SC2086,SC2154
 export PATH=${SUITESPARSE_INSTALL_PREFIX}/bin:\${PATH}
 export LD_LIBRARY_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib:\${LD_LIBRARY_PATH}
 export PKG_CONFIG_PATH=${SUITESPARSE_INSTALL_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH}

@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
 # VirtualGL environment configuration
 # Official documentation: https://rawcdn.githack.com/VirtualGL/virtualgl/3.1.4/doc/index.html
 

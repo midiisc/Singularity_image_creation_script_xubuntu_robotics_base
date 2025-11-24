@@ -1,4 +1,7 @@
-
+#!/usr/bin/env bash
+# shellcheck shell=bash
+# Purpose: VirtualGL convenience aliases and functions
+# This file is sourced to provide VirtualGL aliases and helper functions
 # ============================================================================
 # VirtualGL Convenience Aliases and Functions
 # ============================================================================

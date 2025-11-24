@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
 # Drake Python bindings
 # NOTE: This is for system Python (${SYSTEM_PYTHON_VER:-3.12}) and ROS 2 ${ROS_DISTRO:-jazzy}
 # will be automatically unset when Conda environments activate

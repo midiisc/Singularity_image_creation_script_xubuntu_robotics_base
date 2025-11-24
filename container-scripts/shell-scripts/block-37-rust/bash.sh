@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
 
 # Modern Rust-based tool aliases (compiled from source)
 alias cat='bat --paging=never'

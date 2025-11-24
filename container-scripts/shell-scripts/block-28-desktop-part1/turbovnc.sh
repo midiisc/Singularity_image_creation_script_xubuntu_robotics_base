@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+# shellcheck shell=bash
 # TurboVNC environment
 # Binaries are symlinked to /usr/local/bin and available in PATH
 # Main commands: vncserver, vncviewer, vncpasswd, Xvnc
