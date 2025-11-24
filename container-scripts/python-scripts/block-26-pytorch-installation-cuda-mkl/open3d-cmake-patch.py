@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+"""
+Purpose: python scripts block 26 pytorch installation cuda mkl open3d cmake patch.py
+"""
 import re
 import sys
 

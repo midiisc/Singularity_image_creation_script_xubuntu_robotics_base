@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+"""
+Purpose: python scripts block 38 robotics middleware zenoh zenoh topic bridge.py
+"""
 # Zenoh topic bridge for ROS 2 Humble <-> Jazzy communication
 
 import sys

@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+"""
+Purpose: python scripts block 25 jax cuda installation reinforcement learning open3d cmake patch.py
+"""
 import re
 import sys
 

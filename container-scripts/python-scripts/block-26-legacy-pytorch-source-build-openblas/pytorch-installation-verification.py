@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+"""
+Purpose: python scripts block 26 legacy pytorch source build openblas pytorch installation verification.py
+"""
 import sys
 import torch
 
