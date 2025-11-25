@@ -4763,6 +4763,11 @@ else
                 # Check for vars.sh (may be missing in APT packages)
                 if [ -f "${MKL_ACTUAL_DIR}/env/vars.sh" ]; then
                     echo -e "    ${GREEN}✓ MKL vars.sh found: ${MKL_ACTUAL_DIR}/env/vars.sh${NC}"
+                    # Ensure vars.sh has read permissions (needed for sourcing)
+                    if [ ! -r "${MKL_ACTUAL_DIR}/env/vars.sh" ]; then
+                        chmod +r "${MKL_ACTUAL_DIR}/env/vars.sh" 2>/dev/null || true
+                        echo -e "    ${GREEN}✓ Fixed vars.sh read permissions${NC}"
+                    fi
                 else
                     echo -e "    ${YELLOW}⚠ MKL vars.sh not found (common with APT packages - will use fallback)${NC}"
                     echo -e "    ${YELLOW}  Note: Debian/Ubuntu APT packages may not include vars.sh${NC}"
