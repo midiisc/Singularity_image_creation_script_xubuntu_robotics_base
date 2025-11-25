@@ -127,6 +127,19 @@ fi
 # ENDIF: common_functions.sh exists
 
 #===============================================================================
+# TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)
+#===============================================================================
+# Purpose: Define color variables before Block 0 uses them
+# Dependencies: None (foundational)
+# Outputs: Color variables available for all blocks
+#-------------------------------------------------------------------------------
+BLUE='\033[1;34m'
+GREEN='\033[1;32m'
+RED='\033[1;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m' # No Color
+
+#===============================================================================
 # BLOCK 0: INSTALL CONTAINER SCRIPTS (EARLY - BEFORE ANY SCRIPTS ARE NEEDED)
 #===============================================================================
 # Purpose: Install all extracted scripts from container-scripts/ directory
@@ -608,11 +621,9 @@ export PHASE5_STATUS="NOT RUN"  # Cleanup and finalization
 #--- Sub-block 1.2: Terminal color codes ---
 # Dependencies: None (foundational)
 # Outputs: Environment variables, configuration
-BLUE='\033[1;34m'
-GREEN='\033[1;32m'
-RED='\033[1;31m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+# NOTE: Color variables are now defined before Block 0 (see above)
+# These definitions are kept here for reference but are redundant
+# BLUE, GREEN, RED, YELLOW, NC are already defined earlier
 
 #--- Sub-block 1.3: Environment setup ---
 # Critical: Non-interactive mode for apt operations
@@ -4636,11 +4647,40 @@ ONEAPI_SOURCE_LIST="/etc/apt/sources.list.d/oneAPI.list"
 
 # M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
+# Check both package status AND actual files to ensure MKL is truly installed
 mkl_check_output=""
-# Note: Using dpkg_resolve_installed_package would be preferred, but checking for pattern match
+mkl_package_installed=false
+mkl_files_exist=false
+
+# Check if package is marked as installed in dpkg
 mkl_check_output=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl" || echo "")
 if [ -n "${mkl_check_output:-}" ]; then
-    echo -e "${GREEN}✓ Intel oneAPI MKL already installed; skipping installation${NC}"
+    mkl_package_installed=true
+    echo -e "${YELLOW}⚠ Intel oneAPI MKL package found in dpkg listing${NC}"
+    echo -e "${YELLOW}  Verifying actual installation files exist...${NC}"
+    
+    # Verify actual files exist (package might be marked installed but files missing)
+    MKL_BASE="/opt/intel/oneapi/mkl"
+    if [ -d "${MKL_BASE}" ]; then
+        # Check for libraries
+        if find "${MKL_BASE}" -maxdepth 3 -name "libmkl*.so" -type f 2>/dev/null | head -1 | grep -q .; then
+            mkl_files_exist=true
+            echo -e "${GREEN}✓ MKL files verified - libraries found${NC}"
+        else
+            echo -e "${YELLOW}⚠ Package marked as installed but MKL libraries not found${NC}"
+            echo -e "${YELLOW}  Will reinstall to ensure files are present${NC}"
+            mkl_files_exist=false
+        fi
+    else
+        echo -e "${YELLOW}⚠ Package marked as installed but MKL directory not found${NC}"
+        echo -e "${YELLOW}  Will reinstall to ensure files are present${NC}"
+        mkl_files_exist=false
+    fi
+fi
+
+# Only skip installation if BOTH package is installed AND files exist
+if [ "${mkl_package_installed}" = true ] && [ "${mkl_files_exist}" = true ]; then
+    echo -e "${GREEN}✓ Intel oneAPI MKL already installed and verified; skipping installation${NC}"
 else
     echo -e "${YELLOW}[12A.1] Configuring Intel oneAPI APT repository...${NC}"
     # J1: Validate file exists before operations
@@ -4735,7 +4775,47 @@ else
     # H1: Check exit code of apt-get install operation
     # Make installation verbose to diagnose any issues
     echo "  Running: apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel"
+    echo "  Checking package availability first..."
+    
+    # Verify packages are available in repository before attempting installation
+    if ! apt-cache show intel-oneapi-mkl >/dev/null 2>&1; then
+        echo -e "  ${RED}✗ Package intel-oneapi-mkl not found in repository${NC}"
+        echo -e "  ${YELLOW}  Repository may not be configured correctly${NC}"
+        echo -e "  ${YELLOW}  Checking repository configuration...${NC}"
+        if [ -f "${ONEAPI_SOURCE_LIST}" ]; then
+            echo "  Repository file contents:"
+            cat "${ONEAPI_SOURCE_LIST}"
+        else
+            echo -e "  ${RED}✗ Repository file not found: ${ONEAPI_SOURCE_LIST}${NC}"
+        fi
+        exit 1
+    fi
+    
+    # Show package info for diagnostics
+    echo "  Package info:"
+    apt-cache show intel-oneapi-mkl 2>/dev/null | grep -E "^Package:|^Version:|^Size:" | head -3 || echo "    (package info unavailable)"
+    
+    # Perform installation with detailed logging
+    echo "  Starting installation (this may take several minutes)..."
+    INSTALL_START_TIME=$(date +%s)
     if apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" intel-oneapi-mkl intel-oneapi-mkl-devel 2>&1 | tee /tmp/mkl_install.log; then
+        INSTALL_END_TIME=$(date +%s)
+        INSTALL_DURATION=$((INSTALL_END_TIME - INSTALL_START_TIME))
+        echo "  Installation completed in ${INSTALL_DURATION} seconds"
+        
+        # Check if installation actually did anything (not just "already installed")
+        if grep -qiE "already the newest version|is already installed|0 upgraded, 0 newly installed" /tmp/mkl_install.log; then
+            echo -e "  ${YELLOW}⚠ Package reported as already installed - verifying files...${NC}"
+            # Will verify files in next step
+        fi
+        
+        # Warn if installation was suspiciously fast (MKL is a large package, should take time)
+        if [ "${INSTALL_DURATION}" -lt 10 ]; then
+            echo -e "  ${YELLOW}⚠ WARNING: Installation completed very quickly (${INSTALL_DURATION}s)${NC}"
+            echo -e "  ${YELLOW}  MKL is a large package - this may indicate installation was skipped${NC}"
+            echo -e "  ${YELLOW}  Will verify files exist in next step${NC}"
+        fi
+        
         echo -e "  ${GREEN}✓ Intel oneAPI MKL packages installed successfully${NC}"
         # Display installed version
         INSTALLED_MKL_VERSION=""
@@ -4908,6 +4988,8 @@ fi
 # Verify file was installed successfully
 if [ ! -f /etc/profile.d/intel-mkl.sh ]; then
     echo "[ERROR] ⚠ intel-mkl.sh file not found after installation"
+    echo "[ERROR] ⚠ Expected file from container-scripts installation in BLOCK 0"
+    echo "[ERROR] ⚠ Check BLOCK 0 output for install.sh errors"
     exit 1
 fi
 # H1: Check exit code of chmod operation
@@ -4915,12 +4997,33 @@ if ! chmod 0644 /etc/profile.d/intel-mkl.sh 2>/dev/null; then
     echo "[ERROR] ⚠ Failed to set permissions on intel-mkl.sh"
     exit 1
 fi
-# shellcheck disable=SC1091
-if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
-    echo "[ERROR] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
-    exit 1
+# Source the file, but preserve MKLROOT if already set (from dynamic discovery above)
+# The file has hardcoded MKLROOT=/opt/intel/oneapi/mkl/latest, but we may have detected a versioned path
+if [ -n "${MKLROOT:-}" ]; then
+    # MKLROOT already set from dynamic discovery - temporarily unset to let file set defaults, then restore
+    SAVED_MKLROOT="${MKLROOT}"
+    unset MKLROOT
+    # shellcheck disable=SC1091
+    if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+        echo "[ERROR] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
+        exit 1
+    fi
+    # Restore detected MKLROOT (may be more accurate than hardcoded /latest)
+    export MKLROOT="${SAVED_MKLROOT}"
+    # Update paths in the sourced environment to use detected MKLROOT
+    export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"
+    export LIBRARY_PATH="${MKLROOT}/lib/intel64:${LIBRARY_PATH:-}"
+    export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}"
+    export PKG_CONFIG_PATH="${MKLROOT}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+else
+    # MKLROOT not set - use file's defaults
+    # shellcheck disable=SC1091
+    if ! source /etc/profile.d/intel-mkl.sh 2>/dev/null; then
+        echo "[ERROR] ⚠ Failed to source /etc/profile.d/intel-mkl.sh"
+        exit 1
+    fi
 fi
-echo "✓ Intel MKL environment configured"
+echo "✓ Intel MKL environment configured (MKLROOT=${MKLROOT})"
 # ENDIF: intel-mkl.sh installation verification
 
 # Persist MKLROOT in /etc/environment for non-interactive shells
