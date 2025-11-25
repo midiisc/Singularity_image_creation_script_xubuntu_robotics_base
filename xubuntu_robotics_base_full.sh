@@ -4701,12 +4701,23 @@ else
                 echo "[ERROR] ⚠ oneAPI source list file not found after creation"
                 exit 1
             fi
+            # Verify repository entry was written correctly
+            echo "  Verifying repository configuration..."
+            if grep -Fq "apt.repos.intel.com/oneapi" "${ONEAPI_SOURCE_LIST}" 2>/dev/null; then
+                echo "  ✓ Repository entry verified:"
+                cat "${ONEAPI_SOURCE_LIST}"
+            else
+                echo "[ERROR] ⚠ Repository entry verification failed"
+                exit 1
+            fi
         else
             echo "[ERROR] ⚠ /etc/apt/sources.list.d directory not writable"
             exit 1
         fi
     else
         echo "  ✓ oneAPI repository already configured (${ONEAPI_SOURCE_LIST})"
+        echo "  Repository entry:"
+        cat "${ONEAPI_SOURCE_LIST}"
     fi
 
     echo "  Updating package indices for Intel oneAPI repository..."
@@ -4719,7 +4730,9 @@ else
     echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages (latest version)...${NC}"
     # Note: Installing without version pin installs the latest available version from the repository
     # H1: Check exit code of apt-get install operation
-    if apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel 2>&1; then
+    # Make installation verbose to diagnose any issues
+    echo "  Running: apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel"
+    if apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" intel-oneapi-mkl intel-oneapi-mkl-devel 2>&1 | tee /tmp/mkl_install.log; then
         echo -e "  ${GREEN}✓ Intel oneAPI MKL packages installed successfully${NC}"
         # Display installed version
         INSTALLED_MKL_VERSION=""
@@ -4738,34 +4751,60 @@ else
         MKL_VERIFY_PASSED=false
         MKL_BASE="/opt/intel/oneapi/mkl"
         
+        # Check actual installation paths based on local system structure
+        # On Ubuntu 24.04 with Intel oneAPI APT packages, structure is:
+        # /opt/intel/oneapi/mkl/2025.3/lib/ (libraries directly here)
+        # /opt/intel/oneapi/mkl/2025.3/lib/intel64 -> ../lib (symlink)
+        # /opt/intel/oneapi/mkl/latest -> 2025.3 (symlink)
+        
         # Check if MKL base directory exists
         if [ -d "${MKL_BASE}" ]; then
-            # Find actual MKL installation directory
-            MKL_ACTUAL_DIR=$(find "${MKL_BASE}" -maxdepth 2 -type d -name "lib" -path "*/intel64" 2>/dev/null | head -1 | sed 's|/lib/intel64$||' || echo "")
+            # Find versioned directory (e.g., 2025.3) or use latest symlink
+            MKL_VERSION_DIR=""
+            if [ -L "${MKL_BASE}/latest" ]; then
+                MKL_VERSION_DIR=$(readlink -f "${MKL_BASE}/latest" 2>/dev/null || echo "")
+            elif [ -d "${MKL_BASE}/2025.3" ]; then
+                MKL_VERSION_DIR="${MKL_BASE}/2025.3"
+            else
+                # Find any versioned directory
+                MKL_VERSION_DIR=$(find "${MKL_BASE}" -maxdepth 1 -type d -name "20*" 2>/dev/null | head -1 || echo "")
+            fi
             
-            if [ -n "${MKL_ACTUAL_DIR}" ] && [ -d "${MKL_ACTUAL_DIR}/lib/intel64" ]; then
-                # Check for MKL libraries
-                MKL_LIB_COUNT=$(find "${MKL_ACTUAL_DIR}/lib/intel64" -name "libmkl*.so" 2>/dev/null | wc -l)
-                if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
-                    echo -e "    ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
-                    MKL_VERIFY_PASSED=true
+            if [ -n "${MKL_VERSION_DIR}" ] && [ -d "${MKL_VERSION_DIR}" ]; then
+                echo -e "    ${GREEN}✓ Found MKL version directory: ${MKL_VERSION_DIR}${NC}"
+                
+                # Check for libraries - they're in lib/ directly, intel64 is a symlink
+                MKL_LIB_DIR="${MKL_VERSION_DIR}/lib"
+                if [ -d "${MKL_LIB_DIR}" ]; then
+                    # Count libraries (check both lib/ and lib/intel64 since intel64 is symlink)
+                    MKL_LIB_COUNT=$(find "${MKL_LIB_DIR}" -maxdepth 1 -name "libmkl*.so" 2>/dev/null | wc -l)
+                    if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
+                        echo -e "    ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries in ${MKL_LIB_DIR}${NC}"
+                        MKL_VERIFY_PASSED=true
+                    else
+                        echo -e "    ${RED}✗ MKL libraries not found in ${MKL_LIB_DIR}${NC}"
+                    fi
                 else
-                    echo -e "    ${RED}✗ MKL libraries not found in ${MKL_ACTUAL_DIR}/lib/intel64${NC}"
+                    echo -e "    ${RED}✗ MKL lib directory not found at ${MKL_LIB_DIR}${NC}"
                 fi
                 
                 # Check for MKL headers
-                if [ -d "${MKL_ACTUAL_DIR}/include" ] && [ -f "${MKL_ACTUAL_DIR}/include/mkl_cblas.h" ]; then
-                    echo -e "    ${GREEN}✓ MKL headers found${NC}"
+                if [ -d "${MKL_VERSION_DIR}/include" ]; then
+                    if [ -f "${MKL_VERSION_DIR}/include/mkl_cblas.h" ] || [ -f "${MKL_VERSION_DIR}/include/mkl/mkl_cblas.h" ]; then
+                        echo -e "    ${GREEN}✓ MKL headers found${NC}"
+                    else
+                        echo -e "    ${YELLOW}⚠ MKL headers directory exists but mkl_cblas.h not found${NC}"
+                    fi
                 else
-                    echo -e "    ${YELLOW}⚠ MKL headers not found (may be in different location)${NC}"
+                    echo -e "    ${YELLOW}⚠ MKL headers directory not found${NC}"
                 fi
                 
                 # Check for vars.sh (may be missing in APT packages)
-                if [ -f "${MKL_ACTUAL_DIR}/env/vars.sh" ]; then
-                    echo -e "    ${GREEN}✓ MKL vars.sh found: ${MKL_ACTUAL_DIR}/env/vars.sh${NC}"
+                if [ -f "${MKL_VERSION_DIR}/env/vars.sh" ]; then
+                    echo -e "    ${GREEN}✓ MKL vars.sh found: ${MKL_VERSION_DIR}/env/vars.sh${NC}"
                     # Ensure vars.sh has read permissions (needed for sourcing)
-                    if [ ! -r "${MKL_ACTUAL_DIR}/env/vars.sh" ]; then
-                        chmod +r "${MKL_ACTUAL_DIR}/env/vars.sh" 2>/dev/null || true
+                    if [ ! -r "${MKL_VERSION_DIR}/env/vars.sh" ]; then
+                        chmod +r "${MKL_VERSION_DIR}/env/vars.sh" 2>/dev/null || true
                         echo -e "    ${GREEN}✓ Fixed vars.sh read permissions${NC}"
                     fi
                 else
@@ -4774,16 +4813,22 @@ else
                     echo -e "    ${YELLOW}  Environment will be configured via /etc/profile.d/intel-mkl.sh${NC}"
                 fi
             else
-                echo -e "    ${RED}✗ MKL library directory not found${NC}"
+                echo -e "    ${RED}✗ MKL version directory not found in ${MKL_BASE}${NC}"
+                echo -e "    ${YELLOW}  Listing contents:${NC}"
+                ls -la "${MKL_BASE}" 2>/dev/null | head -10 || echo "      (cannot list directory)"
             fi
         else
             echo -e "    ${RED}✗ MKL base directory not found at ${MKL_BASE}${NC}"
+            echo -e "    ${YELLOW}  Checking installation log for errors...${NC}"
+            if [ -f /tmp/mkl_install.log ]; then
+                grep -i "error\|fail\|warning" /tmp/mkl_install.log | tail -10 || echo "      (no errors found in log)"
+            fi
         fi
         
         if [ "${MKL_VERIFY_PASSED}" = false ]; then
             echo -e "  ${RED}✗ MKL installation verification failed - libraries not found${NC}"
-            echo -e "  ${YELLOW}  Package installation succeeded but MKL files are missing${NC}"
-            echo -e "  ${YELLOW}  This may indicate a packaging issue or incomplete installation${NC}"
+            echo -e "  ${YELLOW}  Package installation may have failed or structure differs${NC}"
+            echo -e "  ${YELLOW}  Check /tmp/mkl_install.log for installation details${NC}"
             exit 1
         fi
     else
