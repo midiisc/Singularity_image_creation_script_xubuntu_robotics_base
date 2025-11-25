@@ -24,6 +24,69 @@ printf '%s\n' "${BLUE}Python MKL Verification${NC}"
 printf '%s\n' "${BLUE}===============================================================================${NC}"
 echo ""
 
+#===============================================================================
+# MKL Environment Setup
+#===============================================================================
+# Purpose: Set up MKL environment variables before verification
+# This is needed because verification scripts run standalone (not embedded in
+# main build script which already has environment set up)
+#===============================================================================
+
+# Try to source container MKL environment setup script first (if available)
+if [ -f "/etc/profile.d/intel-mkl.sh" ]; then
+    # shellcheck disable=SC1090
+    . "/etc/profile.d/intel-mkl.sh" >/dev/null 2>&1 || true
+fi
+
+# If MKLROOT still not set, try to source Intel's vars.sh
+if [ -z "${MKLROOT:-}" ]; then
+    # Try multiple possible locations for vars.sh
+    MKL_VARS_CANDIDATES=(
+        "/opt/intel/oneapi/mkl/latest/env/vars.sh"
+        "/opt/intel/oneapi/mkl/2024.1/env/vars.sh"
+        "/opt/intel/oneapi/mkl/2024.0/env/vars.sh"
+        "/opt/intel/oneapi/mkl/2023.2/env/vars.sh"
+        "/opt/intel/oneapi/mkl/2023.1/env/vars.sh"
+    )
+    
+    MKL_VARS_FOUND=""
+    for vars_path in "${MKL_VARS_CANDIDATES[@]}"; do
+        if [ -f "${vars_path}" ]; then
+            MKL_VARS_FOUND="${vars_path}"
+            printf '%s\n' "${YELLOW}  Sourcing MKL vars.sh: ${vars_path}${NC}"
+            # shellcheck disable=SC1090
+            source "${vars_path}" >/dev/null 2>&1 || true
+            break
+        fi
+    done
+    
+    # If vars.sh not found, try to detect MKL installation directory
+    if [ -z "${MKLROOT:-}" ]; then
+        MKL_BASE="/opt/intel/oneapi/mkl"
+        if [ -d "${MKL_BASE}" ]; then
+            # Find the actual MKL installation directory (could be latest, or versioned)
+            MKL_ACTUAL_DIR=$(find "${MKL_BASE}" -maxdepth 2 -type d -name "lib" -path "*/intel64" 2>/dev/null | head -1 | sed 's|/lib/intel64$||' || echo "")
+            if [ -n "${MKL_ACTUAL_DIR}" ] && [ -d "${MKL_ACTUAL_DIR}/lib/intel64" ]; then
+                export MKLROOT="${MKL_ACTUAL_DIR}"
+                printf '%s\n' "${GREEN}  ✓ MKL installation detected: ${MKLROOT}${NC}"
+            fi
+        fi
+    fi
+fi
+
+# Set default MKLROOT if still not set (fallback to expected location)
+if [ -z "${MKLROOT:-}" ]; then
+    if [ -d "/opt/intel/oneapi/mkl/latest" ]; then
+        export MKLROOT="/opt/intel/oneapi/mkl/latest"
+        printf '%s\n' "${YELLOW}  ⚠ MKLROOT not set, using default: ${MKLROOT}${NC}"
+    else
+        printf '%s\n' "${RED}  ✗ MKLROOT not set and could not be detected${NC}"
+        printf '%s\n' "${RED}  ✗ MKL base directory not found at /opt/intel/oneapi/mkl${NC}"
+        printf '%s\n' "${YELLOW}  Note: This script needs MKL environment to be set up${NC}"
+        printf '%s\n' "${YELLOW}  Try: source /etc/profile.d/intel-mkl.sh${NC}"
+    fi
+fi
+
 # Track overall status
 OVERALL_STATUS=0
 
@@ -228,18 +291,50 @@ echo ""
 
 # Test 6: MKL library availability
 printf '%s\n' "${BLUE}Test 6: MKL Library Availability${NC}"
-if [ -n "${MKLROOT:-}" ] && [ -d "${MKLROOT}/lib/intel64" ]; then
-    MKL_LIB_COUNT=$(find "${MKLROOT}/lib/intel64" -name "libmkl*.so" 2>/dev/null | wc -l)
-    if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
-        printf '%s\n' "  ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
-        printf '%s\n' "  ${GREEN}✓ MKL library directory: ${MKLROOT}/lib/intel64${NC}"
-    else
-        printf '%s\n' "  ${RED}✗ MKL libraries not found in ${MKLROOT}/lib/intel64${NC}"
+MKL_LIB_FOUND=false
+if [ -n "${MKLROOT:-}" ]; then
+    # Try multiple possible library directory locations
+    MKL_LIB_CANDIDATES=(
+        "${MKLROOT}/lib/intel64"
+        "${MKLROOT}/lib/intel64_lin"
+        "${MKLROOT}/lib/linux/intel64"
+        "${MKLROOT}/lib"
+    )
+    
+    for lib_dir in "${MKL_LIB_CANDIDATES[@]}"; do
+        if [ -d "${lib_dir}" ]; then
+            MKL_LIB_COUNT=$(find "${lib_dir}" -name "libmkl*.so" 2>/dev/null | wc -l)
+            if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
+                printf '%s\n' "  ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
+                printf '%s\n' "  ${GREEN}✓ MKL library directory: ${lib_dir}${NC}"
+                MKL_LIB_FOUND=true
+                break
+            fi
+        fi
+    done
+    
+    # If not found in expected locations, try to find anywhere under MKLROOT
+    if [ "${MKL_LIB_FOUND}" = false ]; then
+        found_lib=$(find "${MKLROOT}" -maxdepth 4 -type f \( -name "libmkl_rt.so" -o -name "libmkl_intel_lp64.so" \) -print -quit 2>/dev/null || echo "")
+        if [ -n "${found_lib}" ] && [ -f "${found_lib}" ]; then
+            lib_dir=$(dirname "${found_lib}")
+            MKL_LIB_COUNT=$(find "${lib_dir}" -name "libmkl*.so" 2>/dev/null | wc -l)
+            printf '%s\n' "  ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
+            printf '%s\n' "  ${GREEN}✓ MKL library directory: ${lib_dir}${NC}"
+            MKL_LIB_FOUND=true
+        fi
+    fi
+    
+    if [ "${MKL_LIB_FOUND}" = false ]; then
+        printf '%s\n' "  ${RED}✗ MKL libraries not found under ${MKLROOT}${NC}"
         OVERALL_STATUS=1
     fi
 else
-    printf '%s\n' "  ${YELLOW}⚠ MKLROOT not set or MKL library directory not found${NC}"
-    printf '%s\n' "  ${YELLOW}  Expected: /opt/intel/oneapi/mkl/latest/lib/intel64${NC}"
+    printf '%s\n' "  ${RED}✗ MKLROOT not set - cannot locate MKL libraries${NC}"
+    printf '%s\n' "  ${YELLOW}  Expected locations:${NC}"
+    printf '%s\n' "    - /opt/intel/oneapi/mkl/latest/lib/intel64${NC}"
+    printf '%s\n' "    - /opt/intel/oneapi/mkl/<version>/lib/intel64${NC}"
+    OVERALL_STATUS=1
 fi
 echo ""
 

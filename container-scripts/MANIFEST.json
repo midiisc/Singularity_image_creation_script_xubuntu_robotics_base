@@ -17,6 +17,48 @@
       "file_path": ""
     },
     {
+      "source": "verification-tools/verify-mkl-env.sh",
+      "target": "/usr/local/bin/verify-mkl-env.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION TOOLS",
+      "description": "verification-tools file: /usr/local/bin/verify-mkl-env.sh",
+      "dependencies": [],
+      "line_start": 0,
+      "line_end": 0,
+      "delimiter": "",
+      "file_path": ""
+    },
+    {
+      "source": "verification-tools/verify-cuda-mkl-linkage.sh",
+      "target": "/usr/local/bin/verify-cuda-mkl-linkage.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION TOOLS",
+      "description": "verification-tools file: /usr/local/bin/verify-cuda-mkl-linkage.sh",
+      "dependencies": [],
+      "line_start": 0,
+      "line_end": 0,
+      "delimiter": "",
+      "file_path": ""
+    },
+    {
+      "source": "verification-tools/verify-python-mkl.sh",
+      "target": "/usr/local/bin/verify-python-mkl.sh",
+      "file_type": "shell-scripts",
+      "permissions": "0755",
+      "block": 0,
+      "block_name": "VERIFICATION TOOLS",
+      "description": "verification-tools file: /usr/local/bin/verify-python-mkl.sh",
+      "dependencies": [],
+      "line_start": 0,
+      "line_end": 0,
+      "delimiter": "",
+      "file_path": ""
+    },
+    {
       "source": "config-files/apt-preferences/block-4-mirror-probing-early/cuda-repository-pin.pref",
       "target": "/etc/apt/preferences.d/cuda-repository-pin.pref",
       "file_type": "config-files",

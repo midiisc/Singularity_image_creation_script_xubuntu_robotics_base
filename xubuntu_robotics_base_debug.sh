@@ -4728,6 +4728,55 @@ else
             echo "[warn] ⚠ sync operation failed (non-fatal)"
         fi
         monitor_cache "After Intel oneAPI MKL installation"
+        
+        # Verify actual MKL files were installed (not just package registration)
+        echo -e "  ${YELLOW}[12A.2.1] Verifying MKL installation files...${NC}"
+        MKL_VERIFY_PASSED=false
+        MKL_BASE="/opt/intel/oneapi/mkl"
+        
+        # Check if MKL base directory exists
+        if [ -d "${MKL_BASE}" ]; then
+            # Find actual MKL installation directory
+            MKL_ACTUAL_DIR=$(find "${MKL_BASE}" -maxdepth 2 -type d -name "lib" -path "*/intel64" 2>/dev/null | head -1 | sed 's|/lib/intel64$||' || echo "")
+            
+            if [ -n "${MKL_ACTUAL_DIR}" ] && [ -d "${MKL_ACTUAL_DIR}/lib/intel64" ]; then
+                # Check for MKL libraries
+                MKL_LIB_COUNT=$(find "${MKL_ACTUAL_DIR}/lib/intel64" -name "libmkl*.so" 2>/dev/null | wc -l)
+                if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
+                    echo -e "    ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries${NC}"
+                    MKL_VERIFY_PASSED=true
+                else
+                    echo -e "    ${RED}✗ MKL libraries not found in ${MKL_ACTUAL_DIR}/lib/intel64${NC}"
+                fi
+                
+                # Check for MKL headers
+                if [ -d "${MKL_ACTUAL_DIR}/include" ] && [ -f "${MKL_ACTUAL_DIR}/include/mkl_cblas.h" ]; then
+                    echo -e "    ${GREEN}✓ MKL headers found${NC}"
+                else
+                    echo -e "    ${YELLOW}⚠ MKL headers not found (may be in different location)${NC}"
+                fi
+                
+                # Check for vars.sh (may be missing in APT packages)
+                if [ -f "${MKL_ACTUAL_DIR}/env/vars.sh" ]; then
+                    echo -e "    ${GREEN}✓ MKL vars.sh found: ${MKL_ACTUAL_DIR}/env/vars.sh${NC}"
+                else
+                    echo -e "    ${YELLOW}⚠ MKL vars.sh not found (common with APT packages - will use fallback)${NC}"
+                    echo -e "    ${YELLOW}  Note: Debian/Ubuntu APT packages may not include vars.sh${NC}"
+                    echo -e "    ${YELLOW}  Environment will be configured via /etc/profile.d/intel-mkl.sh${NC}"
+                fi
+            else
+                echo -e "    ${RED}✗ MKL library directory not found${NC}"
+            fi
+        else
+            echo -e "    ${RED}✗ MKL base directory not found at ${MKL_BASE}${NC}"
+        fi
+        
+        if [ "${MKL_VERIFY_PASSED}" = false ]; then
+            echo -e "  ${RED}✗ MKL installation verification failed - libraries not found${NC}"
+            echo -e "  ${YELLOW}  Package installation succeeded but MKL files are missing${NC}"
+            echo -e "  ${YELLOW}  This may indicate a packaging issue or incomplete installation${NC}"
+            exit 1
+        fi
     else
         echo -e "  ${RED}✗ Failed to install Intel oneAPI MKL packages${NC}"
         exit 1
@@ -4736,6 +4785,11 @@ fi
 
 echo -e "${YELLOW}[12A.3] Configuring Intel MKL environment...${NC}"
 # Search for MKL environment script in common locations
+# NOTE: vars.sh may be missing even with successful package installation because:
+#   - Debian/Ubuntu APT packages (intel-oneapi-mkl) may not include vars.sh
+#   - vars.sh is typically included in full Intel oneAPI installer, not APT packages
+#   - Package installation can succeed (libraries installed) without vars.sh
+#   - This is expected behavior - we use /etc/profile.d/intel-mkl.sh as fallback
 MKL_ENV_SCRIPT=""
 MKL_ENV_CANDIDATES=(
     "/opt/intel/oneapi/mkl/latest/env/vars.sh"
