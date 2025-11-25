@@ -4719,10 +4719,17 @@ else
         exit 1
     fi
 
-    echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages...${NC}"
+    echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages (latest version)...${NC}"
+    # Note: Installing without version pin installs the latest available version from the repository
     # H1: Check exit code of apt-get install operation
     if apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel 2>&1; then
         echo -e "  ${GREEN}✓ Intel oneAPI MKL packages installed successfully${NC}"
+        # Display installed version
+        INSTALLED_MKL_VERSION=""
+        INSTALLED_MKL_VERSION=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl\s" | awk '{print $3}' | head -1 || echo "")
+        if [ -n "${INSTALLED_MKL_VERSION:-}" ]; then
+            echo -e "  ${GREEN}✓ Installed version: ${INSTALLED_MKL_VERSION}${NC}"
+        fi
         # H1: Check exit code of sync operation
         if ! sync 2>/dev/null; then
             echo "[warn] ⚠ sync operation failed (non-fatal)"
