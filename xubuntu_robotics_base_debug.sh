@@ -4764,10 +4764,30 @@ else
     fi
 
     echo "  Updating package indices for Intel oneAPI repository..."
+    # Verify GPG key is valid before updating
+    if [ -f "${ONEAPI_KEYRING}" ]; then
+        echo "  Verifying GPG key validity..."
+        if gpg --no-default-keyring --keyring "${ONEAPI_KEYRING}" --list-keys >/dev/null 2>&1; then
+            echo "  ✓ GPG keyring is valid"
+        else
+            echo -e "  ${YELLOW}⚠ GPG keyring validation failed - repository may not be trusted${NC}"
+        fi
+    fi
     # H1: Check exit code of apt-get update operation
-    if ! apt-get update -o Acquire::Retries=3 2>&1; then
+    UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
+    UPDATE_STATUS=$?
+    if [ "${UPDATE_STATUS}" -ne 0 ]; then
         echo "[ERROR] ⚠ apt-get update failed for Intel oneAPI repository"
+        echo "Update output:"
+        echo "${UPDATE_OUTPUT}"
+        # Check for specific error messages
+        if echo "${UPDATE_OUTPUT}" | grep -qi "NO_PUBKEY\|GPG error\|signature"; then
+            echo -e "  ${RED}✗ GPG key verification failed${NC}"
+            echo -e "  ${YELLOW}  The repository may need the GPG key to be re-imported${NC}"
+        fi
         exit 1
+    else
+        echo "  ✓ Package indices updated successfully"
     fi
 
     echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages (latest version)...${NC}"
@@ -4780,7 +4800,7 @@ else
     # Verify packages are available in repository before attempting installation
     if ! apt-cache show intel-oneapi-mkl >/dev/null 2>&1; then
         echo -e "  ${RED}✗ Package intel-oneapi-mkl not found in repository${NC}"
-        echo -e "  ${YELLOW}  Repository may not be configured correctly${NC}"
+        echo -e "  ${YELLOW}  Repository may not be configured correctly or package name may have changed${NC}"
         echo -e "  ${YELLOW}  Checking repository configuration...${NC}"
         if [ -f "${ONEAPI_SOURCE_LIST}" ]; then
             echo "  Repository file contents:"
@@ -4788,6 +4808,37 @@ else
         else
             echo -e "  ${RED}✗ Repository file not found: ${ONEAPI_SOURCE_LIST}${NC}"
         fi
+        
+        # List available Intel packages to help diagnose the issue
+        echo -e "  ${YELLOW}  Searching for available Intel MKL packages...${NC}"
+        echo "  Available Intel packages matching 'mkl':"
+        apt-cache search mkl 2>/dev/null | grep -i intel | head -20 || echo "    (No Intel MKL packages found)"
+        
+        echo "  Available Intel packages matching 'oneapi':"
+        apt-cache search oneapi 2>/dev/null | grep -i intel | head -20 || echo "    (No Intel oneAPI packages found)"
+        
+        # Try alternative package names
+        echo -e "  ${YELLOW}  Trying alternative package names...${NC}"
+        ALTERNATIVE_PACKAGES=("intel-mkl" "mkl" "intel-oneapi-mkl-rt" "intel-oneapi-mkl-common")
+        FOUND_ALTERNATIVE=false
+        for alt_pkg in "${ALTERNATIVE_PACKAGES[@]}"; do
+            if apt-cache show "${alt_pkg}" >/dev/null 2>&1; then
+                echo -e "  ${GREEN}  ✓ Found alternative package: ${alt_pkg}${NC}"
+                FOUND_ALTERNATIVE=true
+            fi
+        done
+        
+        if [ "${FOUND_ALTERNATIVE}" = false ]; then
+            echo -e "  ${RED}  ✗ No alternative MKL packages found${NC}"
+        fi
+        
+        echo -e "  ${YELLOW}  Checking repository connectivity...${NC}"
+        if curl -s --head --fail "https://apt.repos.intel.com/oneapi/" >/dev/null 2>&1; then
+            echo -e "  ${GREEN}  ✓ Repository URL is accessible${NC}"
+        else
+            echo -e "  ${RED}  ✗ Repository URL may not be accessible${NC}"
+        fi
+        
         exit 1
     fi
     
