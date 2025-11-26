@@ -4653,7 +4653,7 @@ mkl_package_installed=false
 mkl_files_exist=false
 
 # Check if package is marked as installed in dpkg
-mkl_check_output=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl" || echo "")
+mkl_check_output=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+(intel-oneapi-mkl|intel-mkl)" || echo "")
 if [ -n "${mkl_check_output:-}" ]; then
     mkl_package_installed=true
     echo -e "${YELLOW}⚠ Intel oneAPI MKL package found in dpkg listing${NC}"
@@ -4683,45 +4683,33 @@ if [ "${mkl_package_installed}" = true ] && [ "${mkl_files_exist}" = true ]; the
     echo -e "${GREEN}✓ Intel oneAPI MKL already installed and verified; skipping installation${NC}"
 else
     echo -e "${YELLOW}[12A.1] Configuring Intel oneAPI APT repository...${NC}"
+    
+    # Install prerequisites as per official Intel instructions
+    # Official instructions: sudo apt install -y gpg-agent wget
+    echo "  Installing prerequisites (gpg-agent, wget)..."
+    if ! apt-get install -y --no-install-recommends gpg-agent wget >/dev/null 2>&1; then
+        echo "[ERROR] ⚠ Failed to install prerequisites (gpg-agent, wget)"
+        exit 1
+    fi
+    echo "  ✓ Prerequisites installed"
+    
     # J1: Validate file exists before operations
     if [ ! -f "${ONEAPI_KEYRING}" ]; then
-        echo "  Importing Intel oneAPI GPG key..."
-        # I4: HTTP error handling for curl operations
-        # F2: Validate command substitution result (curl output piped to gpg)
-        # H1: Check exit code of curl and gpg pipeline
-        gpg_key_output=""
-        # I4: Capture HTTP status code and handle errors
-        http_code=""
-        http_code=$(curl -w "%{http_code}" -fsSL -o /tmp/gpg_key_temp "${INTEL_ONEAPI_GPG_KEY_URL}" 2>&1 || echo "000")
-        # I4: Validate HTTP code is 3-digit number
-        if [[ ! "${http_code}" =~ ^[0-9]{3}$ ]]; then
-            echo "[ERROR] ⚠ Failed to download Intel oneAPI GPG key: Invalid HTTP response"
-            exit 1
-        fi
-        # I4: Check for HTTP errors (403, 404, 5xx)
-        if [ "${http_code}" = "403" ] || [ "${http_code}" = "404" ] || [ "${http_code}" -ge 500 ]; then
-            echo "[ERROR] ⚠ HTTP ${http_code} error downloading Intel oneAPI GPG key from ${INTEL_ONEAPI_GPG_KEY_URL}"
-            exit 1
-        fi
-        # I4: Read downloaded file
-        if [ -f /tmp/gpg_key_temp ]; then
-            gpg_key_output=$(cat /tmp/gpg_key_temp 2>/dev/null || echo "")
-            rm -f /tmp/gpg_key_temp 2>/dev/null || true
-        fi
-        if [ -n "${gpg_key_output:-}" ]; then
-            # D3: Use here-string instead of echo | grep (unsafe pipe pattern)
-            if gpg --dearmor 2>/dev/null <<< "${gpg_key_output}" | tee "${ONEAPI_KEYRING}" >/dev/null; then
-                # J1: Verify GPG key file was created successfully
-                if [ ! -f "${ONEAPI_KEYRING}" ]; then
-                    echo "[ERROR] ⚠ GPG key import succeeded but file not found"
-                    exit 1
-                fi
-            else
-                echo "[ERROR] ⚠ Failed to import Intel oneAPI GPG key"
+        echo "  Importing Intel oneAPI GPG key (following official Intel instructions)..."
+        # Official Intel instructions use: wget -O- ... | gpg --dearmor | sudo tee ...
+        # I4: HTTP error handling for wget operations
+        # H1: Check exit code of wget and gpg pipeline
+        # Use wget as per official Intel instructions (instead of curl)
+        if wget -O- "${INTEL_ONEAPI_GPG_KEY_URL}" 2>/dev/null | gpg --dearmor 2>/dev/null | tee "${ONEAPI_KEYRING}" >/dev/null; then
+            # J1: Verify GPG key file was created successfully
+            if [ ! -f "${ONEAPI_KEYRING}" ]; then
+                echo "[ERROR] ⚠ GPG key import succeeded but file not found"
                 exit 1
             fi
+            echo "  ✓ GPG key imported successfully"
         else
-            echo "[ERROR] ⚠ Failed to download Intel oneAPI GPG key from ${INTEL_ONEAPI_GPG_KEY_URL}"
+            echo "[ERROR] ⚠ Failed to import Intel oneAPI GPG key"
+            echo "  Attempted URL: ${INTEL_ONEAPI_GPG_KEY_URL}"
             exit 1
         fi
     else
@@ -4773,6 +4761,23 @@ else
             echo -e "  ${YELLOW}⚠ GPG keyring validation failed - repository may not be trusted${NC}"
         fi
     fi
+    # CRITICAL: Verify /var/lib/apt/lists/ is writable before apt-get update
+    # If this directory is read-only (e.g., container mount), apt-get update will
+    # appear to succeed but won't write package index files, causing apt-cache to fail
+    echo "  Verifying /var/lib/apt/lists/ is writable..."
+    if [ ! -d /var/lib/apt/lists ]; then
+        echo "[ERROR] ⚠ /var/lib/apt/lists directory does not exist"
+        exit 1
+    fi
+    if [ ! -w /var/lib/apt/lists ]; then
+        echo -e "  ${RED}✗ /var/lib/apt/lists is not writable${NC}"
+        echo -e "  ${YELLOW}  This prevents apt-get update from writing package index files${NC}"
+        echo "  Directory permissions:"
+        ls -ld /var/lib/apt/lists 2>/dev/null || true
+        echo -e "  ${YELLOW}  Container mount may be read-only - check Singularity/Apptainer mount options${NC}"
+        exit 1
+    fi
+    echo "  ✓ /var/lib/apt/lists is writable"
     # H1: Check exit code of apt-get update operation
     UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
     UPDATE_STATUS=$?
@@ -4787,19 +4792,61 @@ else
         fi
         exit 1
     else
-        echo "  ✓ Package indices updated successfully"
+        echo "  ✓ apt-get update completed"
+    fi
+    # CRITICAL: Verify that package index files were actually written
+    # Even if apt-get update exits with code 0, index files may not be written if directory is read-only
+    echo "  Verifying package index files were written..."
+    if ls /var/lib/apt/lists/*oneapi* >/dev/null 2>&1 || \
+       ls /var/lib/apt/lists/*intel*oneapi* >/dev/null 2>&1 || \
+       ls /var/lib/apt/lists/*apt.repos.intel.com* >/dev/null 2>&1; then
+        echo "  ✓ Package index files found for oneAPI repository"
+    else
+        echo -e "  ${RED}✗ Package index files not found after apt-get update${NC}"
+        echo -e "  ${YELLOW}  This indicates /var/lib/apt/lists/ may not be writable despite appearing writable${NC}"
+        echo "  Listing /var/lib/apt/lists/ contents:"
+        ls -la /var/lib/apt/lists/ 2>/dev/null | head -10 || echo "    (directory listing failed)"
+        echo "  Checking for any Intel-related index files:"
+        find /var/lib/apt/lists/ -name "*intel*" -o -name "*oneapi*" 2>/dev/null | head -5 || echo "    (no Intel/oneAPI index files found)"
+        echo -e "  ${YELLOW}  Container mount may be preventing writes - check Singularity/Apptainer configuration${NC}"
+        exit 1
     fi
 
     echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages (latest version)...${NC}"
     # Note: Installing without version pin installs the latest available version from the repository
     # H1: Check exit code of apt-get install operation
     # Make installation verbose to diagnose any issues
-    echo "  Running: apt-get install -y --no-install-recommends intel-oneapi-mkl intel-oneapi-mkl-devel"
-    echo "  Checking package availability first..."
     
-    # Verify packages are available in repository before attempting installation
-    if ! apt-cache show intel-oneapi-mkl >/dev/null 2>&1; then
+    # Determine which MKL package is available
+    MKL_PACKAGE=""
+    MKL_DEV_PACKAGE=""
+    
+    echo "  Checking package availability first..."
+    if apt-cache show intel-oneapi-mkl >/dev/null 2>&1; then
+        # Preferred: intel-oneapi-mkl is available
+        MKL_PACKAGE="intel-oneapi-mkl"
+        if apt-cache show intel-oneapi-mkl-devel >/dev/null 2>&1; then
+            MKL_DEV_PACKAGE="intel-oneapi-mkl-devel"
+        else
+            echo -e "  ${YELLOW}⚠ intel-oneapi-mkl-devel not found, will try intel-mkl-devel${NC}"
+            MKL_DEV_PACKAGE="intel-mkl-devel"
+        fi
+        echo -e "  ${GREEN}✓ Found preferred package: ${MKL_PACKAGE}${NC}"
+    elif apt-cache show intel-mkl >/dev/null 2>&1; then
+        # Fallback: intel-mkl is available
+        MKL_PACKAGE="intel-mkl"
+        if apt-cache show intel-mkl-devel >/dev/null 2>&1; then
+            MKL_DEV_PACKAGE="intel-mkl-devel"
+        else
+            echo -e "  ${YELLOW}⚠ intel-mkl-devel not found, will try without dev package${NC}"
+            MKL_DEV_PACKAGE=""
+        fi
+        echo -e "  ${GREEN}✓ Found alternative package: ${MKL_PACKAGE}${NC}"
+        echo -e "  ${YELLOW}  Note: Using intel-mkl instead of intel-oneapi-mkl${NC}"
+    else
+        # Neither package found - show diagnostics
         echo -e "  ${RED}✗ Package intel-oneapi-mkl not found in repository${NC}"
+        echo -e "  ${RED}✗ Package intel-mkl not found in repository${NC}"
         echo -e "  ${YELLOW}  Repository may not be configured correctly or package name may have changed${NC}"
         echo -e "  ${YELLOW}  Checking repository configuration...${NC}"
         if [ -f "${ONEAPI_SOURCE_LIST}" ]; then
@@ -4844,12 +4891,21 @@ else
     
     # Show package info for diagnostics
     echo "  Package info:"
-    apt-cache show intel-oneapi-mkl 2>/dev/null | grep -E "^Package:|^Version:|^Size:" | head -3 || echo "    (package info unavailable)"
+    apt-cache show "${MKL_PACKAGE}" 2>/dev/null | grep -E "^Package:|^Version:|^Size:" | head -3 || echo "    (package info unavailable)"
+    if [ -n "${MKL_DEV_PACKAGE}" ]; then
+        apt-cache show "${MKL_DEV_PACKAGE}" 2>/dev/null | grep -E "^Package:|^Version:|^Size:" | head -3 || echo "    (dev package info unavailable)"
+    fi
     
     # Perform installation with detailed logging
     echo "  Starting installation (this may take several minutes)..."
+    echo "  Running: apt-get install -y --no-install-recommends ${MKL_PACKAGE}${MKL_DEV_PACKAGE:+ }${MKL_DEV_PACKAGE}"
     INSTALL_START_TIME=$(date +%s)
-    if apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" intel-oneapi-mkl intel-oneapi-mkl-devel 2>&1 | tee /tmp/mkl_install.log; then
+    # Build install command based on available packages
+    INSTALL_PACKAGES="${MKL_PACKAGE}"
+    if [ -n "${MKL_DEV_PACKAGE}" ]; then
+        INSTALL_PACKAGES="${INSTALL_PACKAGES} ${MKL_DEV_PACKAGE}"
+    fi
+    if apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" ${INSTALL_PACKAGES} 2>&1 | tee /tmp/mkl_install.log; then
         INSTALL_END_TIME=$(date +%s)
         INSTALL_DURATION=$((INSTALL_END_TIME - INSTALL_START_TIME))
         echo "  Installation completed in ${INSTALL_DURATION} seconds"
@@ -4867,10 +4923,15 @@ else
             echo -e "  ${YELLOW}  Will verify files exist in next step${NC}"
         fi
         
-        echo -e "  ${GREEN}✓ Intel oneAPI MKL packages installed successfully${NC}"
+        echo -e "  ${GREEN}✓ Intel MKL packages installed successfully${NC}"
         # Display installed version
         INSTALLED_MKL_VERSION=""
-        INSTALLED_MKL_VERSION=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+intel-oneapi-mkl\s" | awk '{print $3}' | head -1 || echo "")
+        # Check for installed version using the actual package name
+        INSTALLED_MKL_VERSION=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+${MKL_PACKAGE}\s" | awk '{print $3}' | head -1 || echo "")
+        if [ -z "${INSTALLED_MKL_VERSION:-}" ]; then
+            # Fallback: try alternative package name pattern
+            INSTALLED_MKL_VERSION=$(dpkg -l 2>/dev/null | grep -iE "^ii\s+(intel-oneapi-mkl|intel-mkl)\s" | awk '{print $3}' | head -1 || echo "")
+        fi
         if [ -n "${INSTALLED_MKL_VERSION:-}" ]; then
             echo -e "  ${GREEN}✓ Installed version: ${INSTALLED_MKL_VERSION}${NC}"
         fi
@@ -5015,7 +5076,7 @@ if [ -z "${MKL_ENV_SCRIPT}" ]; then
         else
             echo -e "  ${RED}✗ MKL installation not found - checking if packages were installed...${NC}"
             # Check if packages are installed
-            if dpkg -l | grep -q "intel-oneapi-mkl"; then
+            if dpkg -l | grep -qiE "(intel-oneapi-mkl|intel-mkl)"; then
                 echo -e "  ${YELLOW}  ⚠ MKL packages are installed but structure differs from expected${NC}"
                 echo -e "  ${YELLOW}  Continuing with manual environment configuration...${NC}"
             else
