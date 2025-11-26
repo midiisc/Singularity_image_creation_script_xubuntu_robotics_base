@@ -3241,10 +3241,10 @@ mkdir -p "${HOST_CACHE_BIND_SRC}/binaries" \
 # Set proper permissions on host cache directory and all subdirectories
 # This is critical because bind mounts inherit host permissions
 chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
-    log_warn "Failed to set permissions on host cache directory (may need sudo): ${HOST_CACHE_BIND_SRC}"
+    log_warning "Failed to set permissions on host cache directory (may need sudo): ${HOST_CACHE_BIND_SRC}"
     # Try with sudo if regular chmod fails (user might not own the directory)
     sudo chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
-        log_warn "Failed to set permissions even with sudo - continuing anyway"
+        log_warning "Failed to set permissions even with sudo - continuing anyway"
     }
 }
 # Verify host cache directory is writable before bind mount

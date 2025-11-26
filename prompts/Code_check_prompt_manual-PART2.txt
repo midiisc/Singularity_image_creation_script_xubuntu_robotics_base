@@ -664,6 +664,74 @@ G. Functions & Modularization
 - G3. Proper use of `trap` within functions and restoration of environment on exit.
 - G4. Functions grouped logically; helper functions declared ahead of dependents or referenced safely via sourcing order checks.
 - G5. Each function is defined exactly once before first use; if discovered later in the file, relocate the definition earlier and remove duplicates, updating references to match the retained definition.
+- G6. **UNDEFINED FUNCTION CALL DETECTION - CRITICAL**: Verify all function calls reference defined functions:
+  - **MANDATORY**: Build function symbol table tracking all function definitions (name, line number, parameters, purpose)
+  - **CRITICAL**: Detect undefined function calls - function called but never defined in script or sourced files
+  - **REQUIRED**: For each function call, verify function exists in symbol table:
+    - If function not found → **ERROR**: Undefined function call (function doesn't exist or typo in name)
+    - If function found but wrong name → **ERROR**: Function name typo (e.g., `log_warn` vs `log_warning`)
+    - If function found in different file → **WARNING**: Verify file is sourced before function call
+  - **FUNCTION SYMBOL TABLE STRUCTURE**: Track for each function:
+    - Function name (case-sensitive, exact match required)
+    - Definition line number
+    - Parameters (if documented)
+    - Purpose/description (from comments or context)
+    - All call locations (line numbers)
+    - Source file (if sourced from external file)
+  - **DETECTION METHOD**:
+    1. Extract all function definitions: `grep -nE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)\s*\{' script.sh` or `grep -nE '^[[:space:]]*function\s+[a-zA-Z_][a-zA-Z0-9_]*' script.sh`
+    2. Extract all function calls: `grep -nE '\b[a-zA-Z_][a-zA-Z0-9_]*\s*\(' script.sh` (filter out built-ins, commands, variables)
+    3. Build function symbol table: For each definition, add to table
+    4. Cross-reference: For each call, check if function exists in table
+    5. Check sourced files: If function not found, verify it's defined in sourced files (check `source`/`.` statements)
+  - **COMMON ERRORS TO DETECT**:
+    - **ERROR 1**: Function name typo → `log_warn` called but function is `log_warning` (exact name mismatch)
+    - **ERROR 2**: Function never defined → `my_function` called but no definition found
+    - **ERROR 3**: Function defined after call → Function defined later in file but called earlier (violates G5)
+    - **ERROR 4**: Function in sourced file not sourced → Function called but source statement missing or after call
+    - **ERROR 5**: Case sensitivity mismatch → `LogError` called but function is `log_error` (Bash is case-sensitive)
+  - **VALIDATION PATTERNS**:
+    - **Pattern 1 - Typo**: `log_warn` called but function is `log_warning` → Fix: Use correct function name
+    - **Pattern 2 - Undefined**: `my_function` called but no definition → Fix: Define function or remove call
+    - **Pattern 3 - Wrong Order**: Function called before definition → Fix: Move definition earlier (G5)
+    - **Pattern 4 - Missing Source**: Function from external file called but file not sourced → Fix: Add source statement
+    - **Pattern 5 - Case Mismatch**: `LogError` vs `log_error` → Fix: Use correct case
+  - **CROSS-FILE TRACKING**: When code spans multiple files:
+    - Track functions defined in sourced files (check `source`/`.` statements)
+    - Verify sourced files are loaded before function calls
+    - Check function names match exactly (case-sensitive)
+  - **AUTO-FIX STRATEGY**:
+    - **Typo in function name**: Suggest correct function name based on similar names in symbol table
+    - **Undefined function**: If similar function exists, suggest using that; otherwise, flag as error
+    - **Wrong order**: Move function definition before first call (G5)
+    - **Missing source**: Add source statement before function call
+    - **Case mismatch**: Fix function name to match definition
+  - **EXAMPLE - WRONG** (undefined function):
+    ```bash
+    # Line 100: Function call
+    log_warn "Warning message"  # ERROR: Function log_warn doesn't exist
+    
+    # Line 500: Function definition (wrong name)
+    log_warning() {  # Function is log_warning, not log_warn
+      echo "[WARN] $*"
+    }
+    ```
+  - **EXAMPLE - CORRECT** (matching function name):
+    ```bash
+    # Line 100: Function definition
+    log_warning() {
+      echo "[WARN] $*"
+    }
+    
+    # Line 500: Function call (matches definition)
+    log_warning "Warning message"  # CORRECT: Function exists
+    ```
+  - **DETECTION COMMANDS**:
+    - Find all function definitions: `grep -nE '^[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\s*\(\)|^[[:space:]]*function\s+[a-zA-Z_]' script.sh`
+    - Find all function calls: `grep -nE '\b[a-zA-Z_][a-zA-Z0-9_]*\s*\(' script.sh | grep -vE '\b(if|while|for|case|test|\[|\[\[|command|builtin|eval|exec|source|\.|export|local|declare|readonly|set|unset|trap|wait|time|type|which|command|builtin)\s*\('`
+    - Build symbol table: Extract function names from definitions, track line numbers
+    - Cross-reference: For each call, check if function name exists in symbol table
+  - **INTEGRATION**: This check runs alongside G5 (function definition order) to ensure all function calls reference valid functions
 
 H. Error Handling & Observability
 - H1. Exit-status checks for all external commands and pipelines; logging of actionable error messages.
