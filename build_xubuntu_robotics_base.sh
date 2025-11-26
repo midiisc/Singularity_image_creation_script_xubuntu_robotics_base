@@ -3238,24 +3238,56 @@ mkdir -p "${HOST_CACHE_BIND_SRC}/binaries" \
          "${HOST_CACHE_BIND_SRC}/debs" \
          "${HOST_CACHE_BIND_SRC}/julia_pkgs" \
          "${HOST_CACHE_BIND_SRC}/wheels" 2>/dev/null || true
-# Set proper permissions on host cache directory and all subdirectories
-# This is critical because bind mounts inherit host permissions
-chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
-    log_warning "Failed to set permissions on host cache directory (may need sudo): ${HOST_CACHE_BIND_SRC}"
-    # Try with sudo if regular chmod fails (user might not own the directory)
-    sudo chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
-        log_warning "Failed to set permissions even with sudo - continuing anyway"
-    }
-}
-# Verify host cache directory is writable before bind mount
+# CRITICAL: Verify host cache directory is actually writable (this is what matters)
+# We check writability FIRST because permissions might look correct but directory might not be writable
+# Only attempt to fix permissions if the directory is not writable
 test_file="${HOST_CACHE_BIND_SRC}/.write_test_$$"
-if ! touch "${test_file}" 2>/dev/null; then
-    log_error "Host cache directory is not writable: ${HOST_CACHE_BIND_SRC}"
-    log_error "This will cause write failures inside the container after bind mount"
-    exit 1
+if touch "${test_file}" 2>/dev/null; then
+    # Directory is writable - clean up test file and continue
+    rm -f "${test_file}" 2>/dev/null || true
+    log "Host cache directory verified writable: ${HOST_CACHE_BIND_SRC}"
+    # Optionally set permissions to 755 for consistency (non-critical since it's already writable)
+    chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || true
+else
+    # Directory is NOT writable - attempt to fix permissions and ownership
+    log_warning "Host cache directory is not writable: ${HOST_CACHE_BIND_SRC}"
+    log_warning "Directory ownership: $(stat -c '%U:%G' "${HOST_CACHE_BIND_SRC}" 2>/dev/null || echo 'unknown')"
+    log_warning "Directory permissions: $(stat -c '%a' "${HOST_CACHE_BIND_SRC}" 2>/dev/null || echo 'unknown')"
+    log_warning "Attempting to fix with chmod..."
+    
+    # First attempt: try without sudo (most common case - user owns the directory)
+    if chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
+        log "Successfully set permissions without sudo"
+    else
+        log_warning "Regular chmod failed, attempting with sudo..."
+        # Try with sudo if regular chmod fails (user might not own the directory)
+        # Note: This may prompt for password if sudo requires it
+        if sudo chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
+            log "Successfully set permissions with sudo"
+        else
+            log_warning "chmod with sudo failed, attempting to fix ownership..."
+            # Last attempt: try sudo to fix ownership and permissions
+            if sudo chown -R "${USER:-$(whoami)}:${USER:-$(whoami)}" "${HOST_CACHE_BIND_SRC}" 2>/dev/null && \
+               sudo chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
+                log "Successfully fixed ownership and permissions with sudo"
+            else
+                log_error "Failed to fix permissions and ownership"
+                log_error "Please manually fix: sudo chown -R ${USER:-$(whoami)}:${USER:-$(whoami)} ${HOST_CACHE_BIND_SRC} && sudo chmod -R 755 ${HOST_CACHE_BIND_SRC}"
+            fi
+        fi
+    fi
+    
+    # Verify writability again after attempting fixes
+    if touch "${test_file}" 2>/dev/null; then
+        rm -f "${test_file}" 2>/dev/null || true
+        log "Host cache directory verified writable after fixes: ${HOST_CACHE_BIND_SRC}"
+    else
+        log_error "Host cache directory is still not writable after all fix attempts: ${HOST_CACHE_BIND_SRC}"
+        log_error "This will cause write failures inside the container after bind mount"
+        log_error "Please manually fix permissions: sudo chown -R ${USER:-$(whoami)}:${USER:-$(whoami)} ${HOST_CACHE_BIND_SRC} && sudo chmod -R 755 ${HOST_CACHE_BIND_SRC}"
+        exit 1
+    fi
 fi
-rm -f "${test_file}" 2>/dev/null || true
-log "Host cache directory verified writable: ${HOST_CACHE_BIND_SRC}"
 # ENDIF: host cache directory creation and permission setup
 # CRITICAL: Explicitly specify :rw mode for bind mount to ensure write permissions
 # Even though Apptainer/Singularity defaults to rw, being explicit prevents issues
