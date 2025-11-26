@@ -3225,12 +3225,41 @@ log_with_timestamp "Building SIF: ${OUT_DIR}/${SIF_NAME}"
 
 # Critical: Try apptainer first (preferred), fallback to singularity
 HOST_CACHE_BIND_SRC="${SCRIPT_DIR}/container_cache"
+# CRITICAL: Create host cache directory structure with proper permissions BEFORE bind mount
+# This ensures the bind-mounted directory has correct permissions inside the container
 if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
     log_error "Failed to ensure host cache directory exists: ${HOST_CACHE_BIND_SRC}"
     exit 1
 fi
-# ENDIF: host cache directory creation
-HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache"
+# Create all expected subdirectories in host cache to match container structure
+mkdir -p "${HOST_CACHE_BIND_SRC}/binaries" \
+         "${HOST_CACHE_BIND_SRC}/apt/archives" \
+         "${HOST_CACHE_BIND_SRC}/conda_pkgs" \
+         "${HOST_CACHE_BIND_SRC}/debs" \
+         "${HOST_CACHE_BIND_SRC}/julia_pkgs" \
+         "${HOST_CACHE_BIND_SRC}/wheels" 2>/dev/null || true
+# Set proper permissions on host cache directory and all subdirectories
+# This is critical because bind mounts inherit host permissions
+chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
+    log_warn "Failed to set permissions on host cache directory (may need sudo): ${HOST_CACHE_BIND_SRC}"
+    # Try with sudo if regular chmod fails (user might not own the directory)
+    sudo chmod -R 755 "${HOST_CACHE_BIND_SRC}" 2>/dev/null || {
+        log_warn "Failed to set permissions even with sudo - continuing anyway"
+    }
+}
+# Verify host cache directory is writable before bind mount
+test_file="${HOST_CACHE_BIND_SRC}/.write_test_$$"
+if ! touch "${test_file}" 2>/dev/null; then
+    log_error "Host cache directory is not writable: ${HOST_CACHE_BIND_SRC}"
+    log_error "This will cause write failures inside the container after bind mount"
+    exit 1
+fi
+rm -f "${test_file}" 2>/dev/null || true
+log "Host cache directory verified writable: ${HOST_CACHE_BIND_SRC}"
+# ENDIF: host cache directory creation and permission setup
+# CRITICAL: Explicitly specify :rw mode for bind mount to ensure write permissions
+# Even though Apptainer/Singularity defaults to rw, being explicit prevents issues
+HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache:rw"
 
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."

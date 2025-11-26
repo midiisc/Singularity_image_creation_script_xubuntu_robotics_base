@@ -3315,6 +3315,65 @@ debug_glibc "START - Before any apt operations"
 # Critical: All cache directories must exist before package operations
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
+#===============================================================================
+# SYSTEMATIC WRITABILITY ENSUREMENT FUNCTION
+#===============================================================================
+# Purpose: Ensure directory is actually writable (not just permission check)
+#          Tests actual file creation, not just permission bits
+#          Handles container overlay filesystem restrictions
+# Parameters: $1 = directory path, $2 = description
+# Returns: 0 on success, 1 on failure
+# Side effects: Creates directory, fixes permissions, tests writability
+ensure_directory_writable() {
+    local dir_path="$1"
+    local description="${2:-${dir_path}}"
+    
+    # Create directory if it doesn't exist
+    if [ ! -d "${dir_path}" ]; then
+        if ! mkdir -p "${dir_path}" 2>/dev/null; then
+            echo "[ERROR] ⚠ Failed to create directory: ${description} (${dir_path})"
+            return 1
+        fi
+    fi
+    
+    # Ensure parent directory is writable (critical for nested paths)
+    local parent_dir
+    parent_dir="$(dirname "${dir_path}")"
+    if [ "${parent_dir}" != "${dir_path}" ] && [ -d "${parent_dir}" ]; then
+        chmod 755 "${parent_dir}" 2>/dev/null || true
+        # Test parent writability
+        local parent_test="${parent_dir}/.parent_test_$$"
+        if ! touch "${parent_test}" 2>/dev/null; then
+            echo "[WARN] ⚠ Parent directory may not be writable: ${parent_dir}"
+        else
+            rm -f "${parent_test}" 2>/dev/null || true
+        fi
+    fi
+    
+    # Fix permissions explicitly
+    if ! chmod 755 "${dir_path}" 2>/dev/null; then
+        echo "[WARN] ⚠ Failed to set permissions on: ${description} (${dir_path})"
+    fi
+    
+    # CRITICAL: Test actual writability (not just permission check)
+    # Container overlay filesystems can have correct permissions but fail writes
+    local test_file="${dir_path}/.writability_test_$$"
+    if ! touch "${test_file}" 2>/dev/null; then
+        echo "[ERROR] ⚠ Directory appears writable but test file creation failed: ${description} (${dir_path})"
+        echo "  This indicates container mount restrictions - writes will fail silently"
+        echo "  Directory permissions:"
+        ls -ld "${dir_path}" 2>/dev/null || true
+        echo "  Mount information:"
+        mount | grep -E "$(echo "${dir_path}" | sed 's|/|\\/|g')" || echo "    (no relevant mounts found)"
+        return 1
+    fi
+    
+    # Clean up test file
+    rm -f "${test_file}" 2>/dev/null || true
+    return 0
+}
+# ENDFUNC: ensure_directory_writable
+
 echo "=> Creating all cache directories at the start of container build..."
 mkdir -p "${CONTAINER_APT_CACHE:-/container_cache/apt}"
 mkdir -p "${CONTAINER_BIN_CACHE:-/container_cache/bin}"
@@ -3336,16 +3395,71 @@ mkdir -p /root/.cache/julia
 mkdir -p /root/.local/share/julia
 # apt-fast cache directory removed - using apt-aria wrapper instead
 
-#--- Sub-block 8.4: Set cache directory permissions ---
-# Critical: Ensure all cache directories are writable
-# Dependencies: Block 17 (Conda/Miniforge), Block 8.5 (Julia installation)
-# Outputs: Python packages, conda environments
-chmod -R 755 /container_cache /root/.cache /var/cache/opt /usr/local/share/julia /root/.local 2>/dev/null || true
-# Only chmod MINIFORGE_HOME if it exists
-if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
-    chmod -R 755 "${MINIFORGE_HOME}" 2>/dev/null || true
+#--- Sub-block 8.4: SYSTEMATIC WRITABILITY ENSUREMENT FOR ALL SYSTEM DIRECTORIES ---
+# Critical: Ensure all directories that need writes during build are actually writable
+# Container overlay filesystems can make directories appear writable (permissions OK)
+# but actually fail writes due to mount restrictions. We test actual writability.
+# Dependencies: ensure_directory_writable function (defined above)
+# Outputs: All system directories verified writable
+echo "=> Systematically ensuring all system directories are writable..."
+
+# APT-related directories (critical for package management)
+ensure_directory_writable "/var/lib/apt/lists" "APT package index directory" || exit 1
+ensure_directory_writable "/var/lib/apt/lists/partial" "APT partial downloads" || exit 1
+ensure_directory_writable "/var/cache/apt/archives" "APT package cache" || exit 1
+ensure_directory_writable "/var/cache/apt/archives/partial" "APT partial package cache" || exit 1
+ensure_directory_writable "/etc/apt/sources.list.d" "APT repository configs" || exit 1
+ensure_directory_writable "/etc/apt/trusted.gpg.d" "APT GPG keys" || exit 1
+ensure_directory_writable "/etc/apt/preferences.d" "APT preferences" || exit 1
+
+# Library and system configuration directories
+ensure_directory_writable "/etc/ld.so.conf.d" "Library path configuration" || exit 1
+ensure_directory_writable "/usr/local/bin" "User-installed binaries" || exit 1
+ensure_directory_writable "/usr/local/lib" "User-installed libraries" || exit 1
+ensure_directory_writable "/usr/local/lib64" "User-installed 64-bit libraries" || exit 1
+ensure_directory_writable "/usr/local/share" "User-installed shared data" || exit 1
+ensure_directory_writable "/usr/local/include" "User-installed headers" || exit 1
+
+# Optional software installation directories
+ensure_directory_writable "/opt" "Optional software root" || exit 1
+if [ -n "${INSTALL_PREFIX:-}" ] && [ "${INSTALL_PREFIX}" != "/opt" ]; then
+    ensure_directory_writable "${INSTALL_PREFIX}" "Custom install prefix" || exit 1
 fi
-echo "✓ All cache directories created successfully"
+
+# Temporary directories
+ensure_directory_writable "/tmp" "Temporary files" || exit 1
+ensure_directory_writable "/var/tmp" "Persistent temporary files" || exit 1
+if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ]; then
+    ensure_directory_writable "${CONTAINER_BUILD_TMPDIR}" "Container build temp directory" || exit 1
+fi
+
+# User cache and local directories
+ensure_directory_writable "/root/.cache" "Root user cache" || exit 1
+ensure_directory_writable "/root/.local" "Root user local data" || exit 1
+ensure_directory_writable "/root/.cache/pip" "Pip cache" || exit 1
+ensure_directory_writable "/root/.cache/conda" "Conda cache" || exit 1
+ensure_directory_writable "/root/.cache/julia" "Julia cache" || exit 1
+ensure_directory_writable "/root/.local/share/julia" "Julia shared data" || exit 1
+
+# Container cache directories
+ensure_directory_writable "/container_cache" "Container cache root" || exit 1
+ensure_directory_writable "${CONTAINER_APT_CACHE:-/container_cache/apt/archives}" "Container APT cache" || exit 1
+ensure_directory_writable "${CONTAINER_BIN_CACHE:-/container_cache/binaries}" "Container binaries cache" || exit 1
+ensure_directory_writable "${CONTAINER_CONDA_CACHE:-/container_cache/conda_pkgs}" "Container Conda cache" || exit 1
+ensure_directory_writable "${CONTAINER_DEB_CACHE:-/container_cache/debs}" "Container DEB cache" || exit 1
+ensure_directory_writable "${CONTAINER_WHEELS_CACHE:-/container_cache/wheels}" "Container Python wheels cache" || exit 1
+ensure_directory_writable "${CONTAINER_JULIA_CACHE:-/container_cache/julia_pkgs}" "Container Julia cache" || exit 1
+
+# Additional system directories
+ensure_directory_writable "/usr/local/share/julia" "Julia shared data" || exit 1
+ensure_directory_writable "/var/log" "Log directory" || exit 1
+
+# Miniforge/Conda directories (if defined)
+if [ -n "${MINIFORGE_HOME:-}" ] && [ -d "${MINIFORGE_HOME}" ]; then
+    ensure_directory_writable "${MINIFORGE_HOME}" "Miniforge installation" || exit 1
+fi
+
+echo "✓ All system directories verified writable (tested with actual file creation)"
 
 #--- Sub-block 8.5: Cache validation and repair function ---
 # Purpose: Validate cache directory structure and permissions
@@ -4762,22 +4876,16 @@ else
         fi
     fi
     # CRITICAL: Verify /var/lib/apt/lists/ is writable before apt-get update
-    # If this directory is read-only (e.g., container mount), apt-get update will
-    # appear to succeed but won't write package index files, causing apt-cache to fail
+    # NOTE: apt-get update fails SILENTLY when it cannot write - it exits with code 0
+    # but doesn't write files. This is why we use ensure_directory_writable which tests actual writes.
     echo "  Verifying /var/lib/apt/lists/ is writable..."
-    if [ ! -d /var/lib/apt/lists ]; then
-        echo "[ERROR] ⚠ /var/lib/apt/lists directory does not exist"
-        exit 1
-    fi
-    if [ ! -w /var/lib/apt/lists ]; then
-        echo -e "  ${RED}✗ /var/lib/apt/lists is not writable${NC}"
-        echo -e "  ${YELLOW}  This prevents apt-get update from writing package index files${NC}"
-        echo "  Directory permissions:"
-        ls -ld /var/lib/apt/lists 2>/dev/null || true
+    if ! ensure_directory_writable "/var/lib/apt/lists" "APT package index directory"; then
+        echo -e "  ${RED}✗ /var/lib/apt/lists is NOT writable${NC}"
+        echo -e "  ${YELLOW}  This causes apt-get update to fail SILENTLY (exits 0 but writes nothing)${NC}"
         echo -e "  ${YELLOW}  Container mount may be read-only - check Singularity/Apptainer mount options${NC}"
         exit 1
     fi
-    echo "  ✓ /var/lib/apt/lists is writable"
+    echo "  ✓ /var/lib/apt/lists is writable (verified with test file)"
     # H1: Check exit code of apt-get update operation
     UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
     UPDATE_STATUS=$?
