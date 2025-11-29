@@ -3459,7 +3459,44 @@ if [ -n "${INSTALL_PREFIX:-}" ] && [ "${INSTALL_PREFIX}" != "/opt" ]; then
 fi
 
 # Temporary directories
-ensure_directory_writable "/tmp" "Temporary files" || exit 1
+# CRITICAL: Enhanced /tmp validation with disk space and mount option checks
+# This prevents apt-key temp file creation failures
+if ! ensure_directory_writable "/tmp" "Temporary files"; then
+    exit 1
+fi
+# Additional /tmp diagnostics for apt-key compatibility
+echo "[INFO] Verifying /tmp is suitable for apt-key operations..."
+TMP_SPACE_AVAIL=$(df -BG /tmp 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
+if [[ "${TMP_SPACE_AVAIL}" =~ ^[0-9]+$ ]]; then
+    if [ "${TMP_SPACE_AVAIL}" -lt 1 ]; then
+        echo "[ERROR] ⚠ /tmp has less than 1GB free (${TMP_SPACE_AVAIL}GB) - apt-key will fail"
+        echo "[ERROR] ⚠ This will cause 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
+        echo "[ACTION] Clean /tmp: find /tmp -type f -mtime +7 -delete"
+        exit 1
+    elif [ "${TMP_SPACE_AVAIL}" -lt 5 ]; then
+        echo "[WARN] ⚠ /tmp has less than 5GB free (${TMP_SPACE_AVAIL}GB) - may cause issues"
+    fi
+fi
+# Check mount options for /tmp
+TMP_MOUNT_INFO=$(mount | grep -E "^[^ ]+.*on /tmp " || echo "")
+if [ -n "${TMP_MOUNT_INFO}" ]; then
+    if echo "${TMP_MOUNT_INFO}" | grep -qE "(ro,|read-only)"; then
+        echo "[ERROR] ⚠ /tmp is mounted read-only - apt-key cannot create temp files"
+        exit 1
+    fi
+    if echo "${TMP_MOUNT_INFO}" | grep -q "noexec"; then
+        echo "[WARN] ⚠ /tmp has noexec mount option - may cause issues with some tools"
+    fi
+fi
+# Test apt-key-style temp file creation
+APT_CONF_TEST="/tmp/apt.conf.test_$$"
+if ! echo "test" > "${APT_CONF_TEST}" 2>/dev/null; then
+    echo "[ERROR] ⚠ Cannot create apt.conf-style temp files in /tmp"
+    echo "[ERROR] ⚠ This will cause 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
+    exit 1
+fi
+rm -f "${APT_CONF_TEST}" 2>/dev/null || true
+echo "✓ /tmp is suitable for apt-key operations"
 ensure_directory_writable "/var/tmp" "Persistent temporary files" || exit 1
 if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ]; then
     ensure_directory_writable "${CONTAINER_BUILD_TMPDIR}" "Container build temp directory" || exit 1
@@ -3729,6 +3766,31 @@ if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
     
     # Re-apply default mirror using reapply_fastest_mirror function
     reapply_fastest_mirror
+  # CRITICAL: Detect /tmp temp file creation failures (causes apt-key GPG errors)
+  elif [ -n "${apt_update_output:-}" ] && grep -qiE "Couldn't create temporary file.*apt\.conf|Couldn't create temporary file.*/tmp" <<< "${apt_update_output}"; then
+    echo "[ERROR] ⚠ CRITICAL: /tmp directory issue detected - cannot create apt temp files"
+    echo "[ERROR] ⚠ This causes 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
+    echo "[ERROR] ⚠ This also causes GPG signature verification failures"
+    echo ""
+    echo "[ACTION REQUIRED] Fix /tmp directory issues:"
+    echo "  1. Check disk space: df -h /tmp"
+    echo "  2. Check mount options: mount | grep tmp"
+    echo "  3. Clean /tmp: find /tmp -type f -mtime +7 -delete"
+    echo "  4. Fix permissions: chmod 1777 /tmp"
+    echo "  5. If running from host, run diagnostic: ./scripts/helpers/diagnose_build_environment.sh"
+    exit 1
+  # Detect GPG signature verification errors (often caused by temp file issues)
+  elif [ -n "${apt_update_output:-}" ] && grep -qiE "GPG error|signature verification|NO_PUBKEY" <<< "${apt_update_output}"; then
+    echo "[WARN] ⚠ GPG signature verification errors detected"
+    # Check if this is due to temp file issues
+    if [ -n "${apt_update_output:-}" ] && grep -qiE "Couldn't create temporary file" <<< "${apt_update_output}"; then
+      echo "[ERROR] ⚠ GPG errors are likely caused by /tmp temp file creation failures"
+      echo "[ERROR] ⚠ See /tmp diagnostics above"
+      exit 1
+    else
+      echo "[WARN] ⚠ GPG errors may be due to missing or expired keys"
+      echo "[WARN] ⚠ Continuing with warnings (old index files will be used)"
+    fi
   else
     echo "[warn] apt-get update had issues (may continue): ${apt_update_output}"
   fi
@@ -4293,6 +4355,68 @@ if ! /usr/bin/apt-get install -y --no-install-recommends \
     echo "[ERROR] ⚠ Failed to install core APT and system utilities"
     exit 1
 fi
+# CRITICAL: Enhanced findutils verification with full path testing and alias detection
+# This prevents "findutils installed but find -printf not working" errors
+echo "[INFO] Verifying findutils installation and find -printf support..."
+# Refresh command cache to ensure newly installed find is found
+hash -r 2>/dev/null || true
+# Check for findutils package
+if ! dpkg -l | grep -qE "^ii.*findutils"; then
+    echo "[ERROR] ⚠ findutils package is not installed"
+    exit 1
+fi
+# Check which find command is used
+FIND_PATH=$(command -v find 2>/dev/null || echo "not found")
+FIND_TYPE=$(type find 2>/dev/null || echo "unknown")
+echo "  'find' command path: ${FIND_PATH}"
+if echo "${FIND_TYPE}" | grep -q "alias"; then
+    echo "[WARN] ⚠ 'find' is aliased - this may override GNU find"
+    echo "  Alias: ${FIND_TYPE}"
+    echo "[WARN] ⚠ Consider: unalias find"
+fi
+# Test with full path to GNU find first
+TEST_FILE="/tmp/find_printf_test_$$"
+if touch "${TEST_FILE}" 2>/dev/null; then
+    if /usr/bin/find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
+        echo "✓ /usr/bin/find supports -printf"
+        # Ensure /usr/bin is in PATH before other directories
+        if [ "${FIND_PATH}" != "/usr/bin/find" ]; then
+            echo "[WARN] ⚠ PATH find (${FIND_PATH}) is not /usr/bin/find"
+            echo "[INFO] Updating PATH to prioritize /usr/bin..."
+            export PATH="/usr/bin:${PATH}"
+            hash -r 2>/dev/null || true
+            # Verify PATH find now works
+            if find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
+                echo "✓ PATH find now supports -printf after PATH update"
+            else
+                echo "[ERROR] ⚠ PATH find still does not support -printf after PATH update"
+                echo "[ERROR] ⚠ This may indicate a system compatibility issue"
+                rm -f "${TEST_FILE}" 2>/dev/null || true
+                exit 1
+            fi
+        else
+            echo "✓ PATH find is /usr/bin/find (correct)"
+        fi
+    else
+        echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
+        echo "[ERROR] ⚠ This indicates findutils installation failed or system incompatibility"
+        rm -f "${TEST_FILE}" 2>/dev/null || true
+        exit 1
+    fi
+    rm -f "${TEST_FILE}" 2>/dev/null || true
+else
+    echo "[WARN] ⚠ Could not create test file in /tmp (this is a /tmp issue, see earlier diagnostics)"
+    # Try to verify with existing file
+    if [ -f "/etc/passwd" ]; then
+        if /usr/bin/find /etc/passwd -printf '%p\n' >/dev/null 2>&1; then
+            echo "✓ /usr/bin/find supports -printf (verified with /etc/passwd)"
+        else
+            echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
+            exit 1
+        fi
+    fi
+fi
+echo "✓ findutils verification complete"
 # Verify procps (includes pgrep) is available
 # M1: Verify pgrep command exists
 if ! command -v pgrep >/dev/null 2>&1; then
