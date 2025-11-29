@@ -715,10 +715,12 @@ NC='\033[0m'          # No Color (reset)
 
 #--- Sub-block 7.1: Define cleanup target directories ---
 # Critical: Only these directories will be cleaned by cleanup functions
-# Dependencies: System (Container runtime)
+# Dependencies: SCRIPT_DIR (workspace directory)
 # Outputs: Configured system components
-OUR_TMP_DIR="/tmp/singularity_builds"      # Temp builds in /tmp
-OUR_HOME_DIR="${HOME}/singularity_builds"    # Fallback builds in home
+# Note: Workspace directory is preferred (set in BLOCK 15), but we clean all possible locations
+OUR_WORKSPACE_DIR="${SCRIPT_DIR}/tmp/singularity_builds"  # Preferred: workspace tmp directory
+OUR_TMP_DIR="/tmp/singularity_builds"      # Fallback: temp builds in /tmp
+OUR_HOME_DIR="${HOME}/singularity_builds"    # Final fallback: builds in home
 
 #===============================================================================
 # BLOCK 8: LOGGING FUNCTIONS
@@ -913,7 +915,7 @@ log "Detected container system: ${CONTAINER_CMD}"
 #===============================================================================
 # Purpose: Comprehensive cleanup of build artifacts and orphaned processes
 # Self-contained: Yes (complete functions with all loops/conditionals closed)
-# Dependencies: CONTAINER_CMD, OUR_TMP_DIR, OUR_HOME_DIR
+# Dependencies: CONTAINER_CMD, OUR_WORKSPACE_DIR, OUR_TMP_DIR, OUR_HOME_DIR
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
@@ -1068,6 +1070,7 @@ comprehensive_cleanup() {
     echo ""
     echo "2. Cleaning build temp directories in OUR folders..."
     # Critical: Remove all temporary build artifacts in controlled locations
+    strict_cleanup_our_dirs "$OUR_WORKSPACE_DIR"
     strict_cleanup_our_dirs "$OUR_TMP_DIR"
     strict_cleanup_our_dirs "$OUR_HOME_DIR"
 
@@ -1126,7 +1129,7 @@ comprehensive_cleanup() {
     echo "4. Identifying orphaned/incomplete containers..."
 
     # Critical: Check for incomplete .sif files in build directories
-    for dir in "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
+    for dir in "${OUR_WORKSPACE_DIR}" "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
         if [ -d "${dir}" ]; then
             echo "   Checking ${dir}..."
 
@@ -1277,7 +1280,7 @@ comprehensive_cleanup() {
     # Check 1: Remaining build-temp directories
     local -a cleanup_dirs=()
     local remaining_temps=0
-    for candidate_dir in "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
+    for candidate_dir in "${OUR_WORKSPACE_DIR}" "${OUR_TMP_DIR}" "${OUR_HOME_DIR}"; do
         if [ -d "${candidate_dir}" ]; then
             cleanup_dirs+=("${candidate_dir}")
         fi
@@ -1553,7 +1556,7 @@ printf '%s\n' "=================================================================
 #===============================================================================
 # Purpose: Configure build temporary directory with disk space validation
 # Self-contained: Yes (complete if-else with exit)
-# Dependencies: DISK_SPACE_REQUIRED_GB from config.sh
+# Dependencies: DISK_SPACE_REQUIRED_GB from config.sh, SCRIPT_DIR
 # Outputs: Configured system components
 #-------------------------------------------------------------------------------
 
@@ -1562,19 +1565,6 @@ log_with_timestamp "Configuring robust temporary directory for build..."
 TRACEABLE_DIR_NAME="singularity_builds"
 BUILD_TMP_DIR=""
 
-#--- Sub-block 15.1: Check disk space in root partition ---
-# Critical: Determine where to place temporary build files
-# Dependencies: None (foundational)
-# Outputs: Environment variables, configuration
-# D3b: Use printf instead of echo in command substitution
-ROOT_AVAIL_GB=$(df -BG / 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
-# Validate numeric value
-if ! [[ "${ROOT_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
-    log_error "Failed to determine available disk space in /"
-    ROOT_AVAIL_GB=0
-fi
-# ENDIF: ROOT_AVAIL_GB numeric validation
-
 # Validate DISK_SPACE_REQUIRED_GB is numeric
 if ! [[ "${DISK_SPACE_REQUIRED_GB:-0}" =~ ^[0-9]+$ ]]; then
     log_error "DISK_SPACE_REQUIRED_GB is not a valid number: ${DISK_SPACE_REQUIRED_GB:-}"
@@ -1582,36 +1572,75 @@ if ! [[ "${DISK_SPACE_REQUIRED_GB:-0}" =~ ^[0-9]+$ ]]; then
 fi
 # ENDIF: DISK_SPACE_REQUIRED_GB numeric validation
 
-if (( ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
-    # Use /tmp if sufficient space (faster, typically tmpfs)
-    BUILD_TMP_DIR="/tmp/${TRACEABLE_DIR_NAME}"
-    log_success "Sufficient space (${ROOT_AVAIL_GB}GB) in /tmp. Using: ${BUILD_TMP_DIR}"
-else
-    #--- Sub-block 15.2: Fallback to home directory ---
-    log_warning "Insufficient space (${ROOT_AVAIL_GB}GB) in /tmp. Checking home directory..."
-
-    # Check home directory space
-    # D3b: Use printf instead of echo in command substitution
-    HOME_AVAIL_GB=$(df -BG "${HOME}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
-    # Validate numeric value
-    if ! [[ "${HOME_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
-        log_error "Failed to determine available disk space in ${HOME}"
-        HOME_AVAIL_GB=0
-    fi
-    # ENDIF: HOME_AVAIL_GB numeric validation
-
-    if (( HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
-        # Use home directory if sufficient space
-        BUILD_TMP_DIR="${HOME}/${TRACEABLE_DIR_NAME}"
-        log_success "Using home directory with ${HOME_AVAIL_GB}GB available: ${BUILD_TMP_DIR}"
-    else
-        # Critical: Cannot proceed without sufficient disk space
-        log_error "Insufficient space in home (${HOME_AVAIL_GB}GB). Required: ${DISK_SPACE_REQUIRED_GB}GB."
-        exit 1
-    fi
-    # ENDIF: HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
+#--- Sub-block 15.1: Check disk space in workspace directory (preferred) ---
+# Critical: Use workspace directory (where script is launched) for build temp files
+# This leverages the home filesystem which typically has more space (e.g., 2.44 TB)
+# Dependencies: SCRIPT_DIR (workspace directory)
+# Outputs: Environment variables, configuration
+# D3b: Use printf instead of echo in command substitution
+WORKSPACE_TMP_DIR="${SCRIPT_DIR}/tmp/${TRACEABLE_DIR_NAME}"
+WORKSPACE_AVAIL_GB=$(df -BG "${SCRIPT_DIR}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
+# Validate numeric value
+if ! [[ "${WORKSPACE_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
+    log_warning "Failed to determine available disk space in workspace (${SCRIPT_DIR}), will check alternatives..."
+    WORKSPACE_AVAIL_GB=0
 fi
-# ENDIF: ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
+# ENDIF: WORKSPACE_AVAIL_GB numeric validation
+
+if (( WORKSPACE_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
+    # Use workspace directory if sufficient space (preferred - leverages home filesystem)
+    BUILD_TMP_DIR="${WORKSPACE_TMP_DIR}"
+    log_success "Sufficient space (${WORKSPACE_AVAIL_GB}GB) in workspace directory. Using: ${BUILD_TMP_DIR}"
+else
+    #--- Sub-block 15.2: Fallback to /tmp ---
+    log_warning "Insufficient space (${WORKSPACE_AVAIL_GB}GB) in workspace. Checking /tmp..."
+
+    # Check /tmp space
+    # D3b: Use printf instead of echo in command substitution
+    ROOT_AVAIL_GB=$(df -BG / 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
+    # Validate numeric value
+    if ! [[ "${ROOT_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
+        log_error "Failed to determine available disk space in /"
+        ROOT_AVAIL_GB=0
+    fi
+    # ENDIF: ROOT_AVAIL_GB numeric validation
+
+    if (( ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
+        # Use /tmp if sufficient space (fallback)
+        BUILD_TMP_DIR="/tmp/${TRACEABLE_DIR_NAME}"
+        log_success "Using /tmp with ${ROOT_AVAIL_GB}GB available: ${BUILD_TMP_DIR}"
+    else
+        #--- Sub-block 15.3: Final fallback to home directory ---
+        log_warning "Insufficient space (${ROOT_AVAIL_GB}GB) in /tmp. Checking home directory..."
+
+        # Check home directory space
+        # D3b: Use printf instead of echo in command substitution
+        HOME_AVAIL_GB=$(df -BG "${HOME}" 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || printf '%s\n' "0")
+        # Validate numeric value
+        if ! [[ "${HOME_AVAIL_GB}" =~ ^[0-9]+$ ]]; then
+            log_error "Failed to determine available disk space in ${HOME}"
+            HOME_AVAIL_GB=0
+        fi
+        # ENDIF: HOME_AVAIL_GB numeric validation
+
+        if (( HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB )); then
+            # Use home directory if sufficient space (final fallback)
+            BUILD_TMP_DIR="${HOME}/${TRACEABLE_DIR_NAME}"
+            log_success "Using home directory with ${HOME_AVAIL_GB}GB available: ${BUILD_TMP_DIR}"
+        else
+            # Critical: Cannot proceed without sufficient disk space
+            log_error "Insufficient space in all checked locations:"
+            log_error "  - Workspace (${SCRIPT_DIR}): ${WORKSPACE_AVAIL_GB}GB"
+            log_error "  - /tmp: ${ROOT_AVAIL_GB}GB"
+            log_error "  - Home (${HOME}): ${HOME_AVAIL_GB}GB"
+            log_error "Required: ${DISK_SPACE_REQUIRED_GB}GB"
+            exit 1
+        fi
+        # ENDIF: HOME_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
+    fi
+    # ENDIF: ROOT_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
+fi
+# ENDIF: WORKSPACE_AVAIL_GB >= DISK_SPACE_REQUIRED_GB check
 
 #--- Sub-block 15.3: Create and configure temporary directory ---
 # Critical: Create the selected directory and set permissions

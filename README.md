@@ -312,6 +312,9 @@ sudo chmod 1777 /tmp
 ### Other Requirements
 
 - **Disk Space**: 150 GB minimum available
+  - The build script will automatically use a `tmp/singularity_builds` directory in the workspace (where the script is launched)
+  - This leverages the home filesystem which typically has more space (e.g., 2.44 TB)
+  - Falls back to `/tmp` or `${HOME}/singularity_builds` if workspace lacks space
 - **RAM**: 16 GB recommended
 - **Container Runtime**: Singularity or Apptainer installed
 
