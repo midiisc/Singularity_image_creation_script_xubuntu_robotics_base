@@ -290,6 +290,31 @@ Edit `CUDA_ARCH` in `config.sh` to match your hardware.
   - Installs Python packages
   - Configures Jupyter kernels
 
+## ✅ Pre-Build Checks
+
+Before building the container, verify these system requirements:
+
+### /tmp Directory Permissions
+
+**Critical**: The `/tmp` directory must be world-writable for container builds to succeed.
+
+```bash
+# Check current permissions
+ls -ld /tmp
+# Should show: drwxrwxrwt ... /tmp (permissions ending in 'rwxrwt')
+
+# If permissions are incorrect (e.g., drwxr-xr-x), fix with:
+sudo chmod 1777 /tmp
+```
+
+**Why this matters**: Container builds require write access to `/tmp` for temporary files (especially apt-key operations). Incorrect permissions will cause build failures with "Permission denied" errors.
+
+### Other Requirements
+
+- **Disk Space**: 150 GB minimum available
+- **RAM**: 16 GB recommended
+- **Container Runtime**: Singularity or Apptainer installed
+
 ## 🚨 Known Issues & Notes
 
 1. **Python Bindings**:
@@ -308,6 +333,43 @@ Edit `CUDA_ARCH` in `config.sh` to match your hardware.
    - Cache can grow to 50+ GB
    - Clean old cache versions periodically
    - Keep 2 most recent versions by default
+
+## ❓ FAQ
+
+### Build Fails with "Permission denied" in /tmp
+
+**Symptom**: Build fails early with errors like "Couldn't create temporary file /tmp/apt.conf.XXXXXX" or "Permission denied" when accessing /tmp, even when running as root inside the container.
+
+**Solution**: Check and fix /tmp permissions on the **host system**:
+```bash
+# Check permissions
+ls -ld /tmp
+# If not drwxrwxrwt, fix with:
+sudo chmod 1777 /tmp
+```
+
+**Why This Happens Even As Root Inside Container**:
+
+You're correct that only `/container_cache` is bind-mounted. Everything else, including `/tmp`, is inside the container filesystem. However, `/tmp` write failures can still occur:
+
+1. **Base Image Permissions**: The container uses a Docker base image (`osrf/ros:jazzy-desktop-full-noble`). If the base Ubuntu/ROS Docker image has `/tmp` with incorrect permissions (e.g., 755 instead of 1777), those permissions are inherited when Singularity extracts the Docker image. The container's `/tmp` is part of the container filesystem, but it starts with whatever permissions the base image had.
+
+2. **Build Process Host /tmp Access**: During `singularity build`, the build process itself uses the **host's `/tmp`** for:
+   - Extracting Docker images
+   - Creating temporary overlay filesystems
+   - Storing build artifacts (controlled by `--tmpdir`, but some operations may still use host `/tmp`)
+   
+   If host `/tmp` has wrong permissions, the build process can fail before it even gets to the container's `/tmp`.
+
+3. **Container /tmp Permissions**: Even though `/tmp` is inside the container (not bind-mounted), if the base image had wrong permissions, those persist. The build script fixes this automatically, but if the fix fails (e.g., due to filesystem restrictions during build), writes will fail.
+
+**Root Cause**: 
+- **Host `/tmp`**: Must be world-writable (1777) because the build process uses it
+- **Container `/tmp`**: Inherits permissions from base Docker image, which may be incorrect. The build script automatically fixes container `/tmp` permissions, but if that fails, it uses alternative temp directories.
+
+**The Fix**: 
+- Fix host `/tmp` permissions: `sudo chmod 1777 /tmp`
+- The container build script will automatically detect and handle `/tmp` issues inside the container by using alternative directories if needed.
 
 ## 🚀 Version 2 Improvements
 

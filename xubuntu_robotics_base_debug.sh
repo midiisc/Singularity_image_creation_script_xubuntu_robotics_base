@@ -3462,45 +3462,34 @@ if [ -n "${INSTALL_PREFIX:-}" ] && [ "${INSTALL_PREFIX}" != "/opt" ]; then
 fi
 
 # Temporary directories
-# CRITICAL: Enhanced /tmp validation with disk space and mount option checks
-# This prevents apt-key temp file creation failures
-if ! ensure_directory_writable "/tmp" "Temporary files"; then
-    exit 1
-fi
-# Additional /tmp diagnostics for apt-key compatibility
-echo "[INFO] Verifying /tmp is suitable for apt-key operations..."
-TMP_SPACE_AVAIL=$(df -BG /tmp 2>/dev/null | awk 'NR==2 {print substr($4, 1, length($4)-1)}' || echo "0")
-if [[ "${TMP_SPACE_AVAIL}" =~ ^[0-9]+$ ]]; then
-    if [ "${TMP_SPACE_AVAIL}" -lt 1 ]; then
-        echo "[ERROR] ⚠ /tmp has less than 1GB free (${TMP_SPACE_AVAIL}GB) - apt-key will fail"
-        echo "[ERROR] ⚠ This will cause 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
-        echo "[ACTION] Clean /tmp: find /tmp -type f -mtime +7 -delete"
-        exit 1
-    elif [ "${TMP_SPACE_AVAIL}" -lt 5 ]; then
-        echo "[WARN] ⚠ /tmp has less than 5GB free (${TMP_SPACE_AVAIL}GB) - may cause issues"
-    fi
-fi
-# Check mount options for /tmp
-TMP_MOUNT_INFO=$(mount | grep -E "^[^ ]+.*on /tmp " || echo "")
-if [ -n "${TMP_MOUNT_INFO}" ]; then
-    if echo "${TMP_MOUNT_INFO}" | grep -qE "(ro,|read-only)"; then
-        echo "[ERROR] ⚠ /tmp is mounted read-only - apt-key cannot create temp files"
-        exit 1
-    fi
-    if echo "${TMP_MOUNT_INFO}" | grep -q "noexec"; then
-        echo "[WARN] ⚠ /tmp has noexec mount option - may cause issues with some tools"
-    fi
-fi
-# Test apt-key-style temp file creation
-APT_CONF_TEST="/tmp/apt.conf.test_$$"
-if ! echo "test" > "${APT_CONF_TEST}" 2>/dev/null; then
-    echo "[ERROR] ⚠ Cannot create apt.conf-style temp files in /tmp"
-    echo "[ERROR] ⚠ This will cause 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
-    exit 1
-fi
-rm -f "${APT_CONF_TEST}" 2>/dev/null || true
-echo "✓ /tmp is suitable for apt-key operations"
+# CRITICAL: Proactive APT temp directory configuration to avoid /tmp issues
+# Instead of detecting and fixing /tmp failures, we proactively use /var/tmp/apt-temp
+# which is more reliable in container environments (persistent, less restrictive)
+echo "[INFO] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
+APT_TMP_ALT="/var/tmp/apt-temp"
+
+# Ensure /var/tmp exists and is writable first
 ensure_directory_writable "/var/tmp" "Persistent temporary files" || exit 1
+
+# Create and configure APT alternative temp directory
+mkdir -p "${APT_TMP_ALT}" 2>/dev/null || true
+chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+
+if ensure_directory_writable "${APT_TMP_ALT}" "APT alternative temp directory"; then
+    echo "[INFO] Configuring APT to use alternative temp directory: ${APT_TMP_ALT}"
+    mkdir -p /etc/apt/apt.conf.d
+    echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";" > /etc/apt/apt.conf.d/99-tmpdir-alternative
+    echo "Acquire::TempDir \"${APT_TMP_ALT}\";" >> /etc/apt/apt.conf.d/99-tmpdir-alternative
+    export TMPDIR="${APT_TMP_ALT}"
+    echo "[INFO] ✓ APT configured to use ${APT_TMP_ALT} for temporary files (proactive configuration)"
+    echo "[INFO]   This avoids potential /tmp permission/mount issues in container environments"
+else
+    echo "[ERROR] ⚠ Cannot create writable temporary directory at ${APT_TMP_ALT} - build cannot continue"
+    exit 1
+fi
+
+# Also ensure /tmp has reasonable permissions as fallback (for other tools, not APT)
+chmod 1777 /tmp 2>/dev/null || true
 if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ]; then
     ensure_directory_writable "${CONTAINER_BUILD_TMPDIR}" "Container build temp directory" || exit 1
 fi
@@ -3770,18 +3759,47 @@ if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
     # Re-apply default mirror using reapply_fastest_mirror function
     reapply_fastest_mirror
   # CRITICAL: Detect /tmp temp file creation failures (causes apt-key GPG errors)
+  # NOTE: We already proactively configured APT to use /var/tmp/apt-temp, so this error
+  # indicates something unexpected (e.g., APT config not read, or tool bypassing APT config)
   elif [ -n "${apt_update_output:-}" ] && grep -qiE "Couldn't create temporary file.*apt\.conf|Couldn't create temporary file.*/tmp" <<< "${apt_update_output}"; then
-    echo "[ERROR] ⚠ CRITICAL: /tmp directory issue detected - cannot create apt temp files"
-    echo "[ERROR] ⚠ This causes 'Couldn't create temporary file /tmp/apt.conf.XXXXXX' errors"
-    echo "[ERROR] ⚠ This also causes GPG signature verification failures"
+    echo "[ERROR] ⚠ CRITICAL: /tmp directory issue detected despite proactive APT configuration"
+    echo "[ERROR] ⚠ This is unexpected since we configured APT to use /var/tmp/apt-temp"
+    echo "[ERROR] ⚠ This may indicate APT config wasn't read, or a tool is bypassing it"
     echo ""
-    echo "[ACTION REQUIRED] Fix /tmp directory issues:"
-    echo "  1. Check disk space: df -h /tmp"
-    echo "  2. Check mount options: mount | grep tmp"
-    echo "  3. Clean /tmp: find /tmp -type f -mtime +7 -delete"
-    echo "  4. Fix permissions: chmod 1777 /tmp"
-    echo "  5. If running from host, run diagnostic: ./scripts/helpers/diagnose_build_environment.sh"
-    exit 1
+    echo "[ACTION] Verifying APT configuration and retrying..."
+    
+    # Verify APT config exists and is correct
+    if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+        echo "[INFO] APT config file exists - verifying contents..."
+        cat /etc/apt/apt.conf.d/99-tmpdir-alternative || true
+    else
+        echo "[WARN] APT config file missing - recreating..."
+        APT_TMP_ALT="/var/tmp/apt-temp"
+        mkdir -p "${APT_TMP_ALT}" 2>/dev/null || true
+        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+        mkdir -p /etc/apt/apt.conf.d
+        echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";" > /etc/apt/apt.conf.d/99-tmpdir-alternative
+        echo "Acquire::TempDir \"${APT_TMP_ALT}\";" >> /etc/apt/apt.conf.d/99-tmpdir-alternative
+        export TMPDIR="${APT_TMP_ALT}"
+    fi
+    
+    # Retry apt-get update (should now use alternative directory)
+    echo "[INFO] Retrying apt-get update with verified APT configuration..."
+    apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
+    apt_update_exit_code=$?
+    if [ "${apt_update_exit_code}" -eq 0 ]; then
+        echo "[SUCCESS] ✓ apt-get update succeeded after verifying APT configuration"
+    else
+        echo "[ERROR] ⚠ apt-get update still failed after verifying configuration"
+        echo "[ERROR] ⚠ This indicates a deeper issue - checking diagnostics..."
+        echo "[ERROR] ⚠ Diagnostic information:"
+        echo "  - APT temp config: $(cat /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null || echo 'missing')"
+        echo "  - TMPDIR env var: ${TMPDIR:-<unset>}"
+        echo "  - /var/tmp/apt-temp exists: $([ -d /var/tmp/apt-temp ] && echo 'yes' || echo 'no')"
+        echo "  - /var/tmp/apt-temp writable: $([ -w /var/tmp/apt-temp ] && echo 'yes' || echo 'no')"
+        echo "[ERROR] ⚠ Output: ${apt_update_output}"
+        exit 1
+    fi
   # Detect GPG signature verification errors (often caused by temp file issues)
   elif [ -n "${apt_update_output:-}" ] && grep -qiE "GPG error|signature verification|NO_PUBKEY" <<< "${apt_update_output}"; then
     echo "[WARN] ⚠ GPG signature verification errors detected"
