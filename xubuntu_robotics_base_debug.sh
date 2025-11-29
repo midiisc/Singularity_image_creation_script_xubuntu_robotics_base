@@ -3361,10 +3361,45 @@ ensure_directory_writable() {
     if ! touch "${test_file}" 2>/dev/null; then
         echo "[ERROR] ⚠ Directory appears writable but test file creation failed: ${description} (${dir_path})"
         echo "  This indicates container mount restrictions - writes will fail silently"
+        echo ""
+        echo "  === DIAGNOSTIC INFORMATION ==="
         echo "  Directory permissions:"
         ls -ld "${dir_path}" 2>/dev/null || true
-        echo "  Mount information:"
+        echo ""
+        echo "  Filesystem type and mount options:"
+        df -T "${dir_path}" 2>/dev/null || true
+        echo ""
+        echo "  Mount information (all mounts):"
         mount | grep -E "$(echo "${dir_path}" | sed 's|/|\\/|g')" || echo "    (no relevant mounts found)"
+        echo ""
+        echo "  Parent directory mount info:"
+        local parent_dir
+        parent_dir="$(dirname "${dir_path}")"
+        if [ "${parent_dir}" != "${dir_path}" ]; then
+            mount | grep -E "$(echo "${parent_dir}" | sed 's|/|\\/|g')" || echo "    (no relevant mounts found)"
+        fi
+        echo ""
+        echo "  Container detection:"
+        if [ -n "${SINGULARITY_NAME:-}" ]; then
+            echo "    SINGULARITY_NAME=${SINGULARITY_NAME}"
+        fi
+        if [ -n "${APPTAINER_NAME:-}" ]; then
+            echo "    APPTAINER_NAME=${APPTAINER_NAME}"
+        fi
+        if [ -f "/.singularity.d/runscript" ]; then
+            echo "    Singularity container detected (/.singularity.d/runscript exists)"
+        fi
+        if [ -f "/.apptainer.d/runscript" ]; then
+            echo "    Apptainer container detected (/.apptainer.d/runscript exists)"
+        fi
+        echo ""
+        echo "  === TROUBLESHOOTING ==="
+        echo "  If using Singularity/Apptainer, check:"
+        echo "    1. Container build command includes --writable or --fakeroot"
+        echo "    2. No read-only bind mounts are overriding this directory"
+        echo "    3. Overlay filesystem is properly configured"
+        echo "    4. User has sufficient permissions in the host filesystem"
+        echo ""
         return 1
     fi
     
@@ -3674,8 +3709,11 @@ fi
 # ENDIF: apt lists directory writable
 # Update package lists from the new mirror with validation
 # F2: Capture both output and exit code separately for proper validation
+# H1: Temporarily disable errexit to capture exit code without triggering ERR trap
+set +e
 apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
 apt_update_exit_code=$?
+set -e
 # F2: Validate command substitution result
 if [ -z "${apt_update_output:-}" ] && [ "${apt_update_exit_code:-1}" -ne 0 ]; then
     echo "[warn] ⚠ apt-get update produced no output but exited with code ${apt_update_exit_code}"
@@ -4887,8 +4925,11 @@ else
     fi
     echo "  ✓ /var/lib/apt/lists is writable (verified with test file)"
     # H1: Check exit code of apt-get update operation
+    # H1: Temporarily disable errexit to capture exit code without triggering ERR trap
+    set +e
     UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
     UPDATE_STATUS=$?
+    set -e
     if [ "${UPDATE_STATUS}" -ne 0 ]; then
         echo "[ERROR] ⚠ apt-get update failed for Intel oneAPI repository"
         echo "Update output:"
@@ -4912,11 +4953,33 @@ else
     else
         echo -e "  ${RED}✗ Package index files not found after apt-get update${NC}"
         echo -e "  ${YELLOW}  This indicates /var/lib/apt/lists/ may not be writable despite appearing writable${NC}"
+        echo ""
+        echo "  === DIAGNOSTIC INFORMATION ==="
         echo "  Listing /var/lib/apt/lists/ contents:"
         ls -la /var/lib/apt/lists/ 2>/dev/null | head -10 || echo "    (directory listing failed)"
+        echo ""
         echo "  Checking for any Intel-related index files:"
         find /var/lib/apt/lists/ -name "*intel*" -o -name "*oneapi*" 2>/dev/null | head -5 || echo "    (no Intel/oneAPI index files found)"
+        echo ""
+        echo "  Filesystem type and mount options for /var/lib/apt/lists/:"
+        df -T /var/lib/apt/lists/ 2>/dev/null || true
+        echo ""
+        echo "  Mount information:"
+        mount | grep -E "/var/lib/apt" || echo "    (no relevant mounts found)"
+        echo ""
+        echo "  Testing writability again:"
+        if ! ensure_directory_writable "/var/lib/apt/lists" "APT package index directory"; then
+            echo -e "  ${RED}✗ Directory writability test FAILED${NC}"
+        else
+            echo -e "  ${YELLOW}⚠ Directory writability test PASSED but files not written - possible race condition or mount issue${NC}"
+        fi
+        echo ""
         echo -e "  ${YELLOW}  Container mount may be preventing writes - check Singularity/Apptainer configuration${NC}"
+        echo "  Troubleshooting:"
+        echo "    1. Ensure container is built with --writable or --fakeroot"
+        echo "    2. Check for read-only bind mounts: mount | grep -E '/var/lib/apt'"
+        echo "    3. Verify overlay filesystem is writable"
+        echo ""
         exit 1
     fi
 
@@ -12564,4 +12627,3 @@ echo "✓ User guide created: /usr/local/share/doc/virtualgl-guide.txt"
 # Outputs: Echo message listing available utilities
 echo ""
 echo "========================================================================================================"
-
