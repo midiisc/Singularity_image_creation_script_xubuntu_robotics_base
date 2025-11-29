@@ -3074,6 +3074,24 @@ From: ${BASE_IMAGE}
     echo "  Process name: $(ps -p $$ -o comm= 2>/dev/null || echo unknown)"
     echo "  bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
     umask 022
+    
+    # CRITICAL: Fix /tmp permissions IMMEDIATELY (before any operations)
+    # Base Docker images may have incorrect /tmp permissions (e.g., 755 instead of 1777)
+    # This must happen before sourcing config or running any commands
+    echo "[CRITICAL] Fixing /tmp permissions immediately..."
+    chmod 1777 /tmp 2>/dev/null || {
+        echo "[WARN] Failed to set /tmp permissions to 1777, trying alternative..."
+        mkdir -p /tmp 2>/dev/null || true
+        chmod 777 /tmp 2>/dev/null || true
+    }
+    # Verify /tmp is writable
+    if [ ! -w /tmp ]; then
+        echo "[ERROR] ⚠ /tmp is NOT writable - build cannot continue"
+        echo "[ERROR] Mount info: $(mount | grep -E '^[^ ]+.*on /tmp ' || echo 'no mount info')"
+        exit 1
+    fi
+    echo "✓ /tmp permissions fixed (1777)"
+    
     # Source configuration to make all variables available in %post section
     # This must happen BEFORE any validation code that uses these variables
     if [ -f /etc/config.sh ]; then
@@ -3251,6 +3269,24 @@ log "Singularity definition file generated successfully."
 # Dependencies: System (Container runtime)
 # Outputs: Configured system components
 log_with_timestamp "Building SIF: ${OUT_DIR}/${SIF_NAME}"
+
+# CRITICAL: Verify host /tmp permissions before starting build
+# The build process uses host /tmp for extracting Docker images and temporary files
+log "Verifying host /tmp permissions..."
+HOST_TMP_PERMS=$(stat -c "%a" /tmp 2>/dev/null || echo "unknown")
+if [ "${HOST_TMP_PERMS}" != "1777" ] && [ "${HOST_TMP_PERMS}" != "unknown" ]; then
+    log_warning "Host /tmp has incorrect permissions: ${HOST_TMP_PERMS} (expected: 1777)"
+    log_warning "Attempting to fix host /tmp permissions..."
+    if chmod 1777 /tmp 2>/dev/null; then
+        log_success "Host /tmp permissions fixed to 1777"
+    else
+        log_error "Failed to fix host /tmp permissions. Please run: sudo chmod 1777 /tmp"
+        log_error "Build may fail with permission errors if /tmp is not writable"
+        log_error "Continuing anyway, but errors may occur..."
+    fi
+else
+    log_success "Host /tmp permissions are correct: ${HOST_TMP_PERMS}"
+fi
 
 # Critical: Try apptainer first (preferred), fallback to singularity
 HOST_CACHE_BIND_SRC="${SCRIPT_DIR}/container_cache"

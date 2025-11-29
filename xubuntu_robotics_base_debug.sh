@@ -127,6 +127,33 @@ fi
 # ENDIF: common_functions.sh exists
 
 #===============================================================================
+# CRITICAL: FIX /tmp PERMISSIONS IMMEDIATELY (BEFORE ANY OPERATIONS)
+#===============================================================================
+# Purpose: Fix /tmp permissions as early as possible to prevent permission errors
+# This must happen BEFORE any apt operations, file operations, or tool usage
+# Dependencies: None (foundational - must be first)
+# Outputs: /tmp with correct permissions (1777)
+#-------------------------------------------------------------------------------
+printf '%s\n' "[CRITICAL] Fixing /tmp permissions immediately (before any operations)..."
+# Force /tmp to have correct permissions (world-writable with sticky bit)
+# This is critical because base Docker images may have incorrect /tmp permissions
+chmod 1777 /tmp 2>/dev/null || {
+    printf '%s\n' "[WARN] Failed to set /tmp permissions to 1777" >&2
+    # Try alternative: ensure /tmp exists and is at least writable
+    mkdir -p /tmp 2>/dev/null || true
+    chmod 777 /tmp 2>/dev/null || true
+}
+# Verify /tmp is writable (critical check)
+if [ ! -w /tmp ]; then
+    printf '%s\n' "[ERROR] ⚠ /tmp is NOT writable even after chmod attempt!" >&2
+    printf '%s\n' "[ERROR] This will cause build failures. Checking mount status..." >&2
+    mount | grep -E "^[^ ]+.*on /tmp " || printf '%s\n' "  (no mount info found)"
+    printf '%s\n' "[ERROR] Build cannot continue without writable /tmp" >&2
+    exit 1
+fi
+printf '%s\n' "✓ /tmp permissions fixed and verified (1777)"
+
+#===============================================================================
 # TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)
 #===============================================================================
 # Purpose: Define color variables before Block 0 uses them
