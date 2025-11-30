@@ -298,7 +298,8 @@ install_host_tool() {
     local install_status=0
     
     # Run installation and capture output for better error reporting
-    install_output=$(sudo apt-get install -y --no-install-recommends "${package_name}" 2>&1) || install_status=$?
+    # Use TMPDIR environment variable to ensure APT uses alternative temp directory if configured
+    install_output=$(sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get install -y --no-install-recommends "${package_name}" 2>&1) || install_status=$?
     
     # D1: Quote arithmetic variable expansion
     if [ "${install_status}" -eq 0 ]; then
@@ -328,8 +329,58 @@ install_host_tool() {
 # Purpose: Update APT package list once before installing tools (more efficient)
 # Dependencies: sudo access
 # Outputs: Updated package index
+
+# CRITICAL: Configure APT temp directory on HOST before running apt-get update
+# This prevents "Couldn't create temporary file /tmp/apt.conf.XXXXXX" errors on host
+printf '%s\n' "Configuring APT temp directory on host (avoiding /tmp issues)..."
+HOST_APT_TMP_ALT=""
+# Try /var/tmp/apt-temp first (most reliable)
+if mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.host_test_write_$$ 2>/dev/null; then
+    rm -f /var/tmp/apt-temp/.host_test_write_$$ 2>/dev/null || true
+    HOST_APT_TMP_ALT="/var/tmp/apt-temp"
+    printf '%s\n' "  ✓ Using /var/tmp/apt-temp for host APT operations"
+# Try ${SCRIPT_DIR}/container_cache/apt-temp (if container_cache exists)
+elif [ -d "${SCRIPT_DIR}/container_cache" ] && mkdir -p "${SCRIPT_DIR}/container_cache/apt-temp" 2>/dev/null && touch "${SCRIPT_DIR}/container_cache/apt-temp/.host_test_write_$$" 2>/dev/null; then
+    rm -f "${SCRIPT_DIR}/container_cache/apt-temp/.host_test_write_$$" 2>/dev/null || true
+    HOST_APT_TMP_ALT="${SCRIPT_DIR}/container_cache/apt-temp"
+    printf '%s\n' "  ✓ Using ${SCRIPT_DIR}/container_cache/apt-temp for host APT operations"
+# Fallback to /tmp/build-temp/apt-temp
+elif mkdir -p /tmp/build-temp/apt-temp 2>/dev/null && touch /tmp/build-temp/apt-temp/.host_test_write_$$ 2>/dev/null; then
+    rm -f /tmp/build-temp/apt-temp/.host_test_write_$$ 2>/dev/null || true
+    HOST_APT_TMP_ALT="/tmp/build-temp/apt-temp"
+    printf '%s\n' "  ✓ Using /tmp/build-temp/apt-temp for host APT operations"
+else
+    printf '%s\n' "  ⚠ WARNING: Could not find writable temp directory for host APT, will try /tmp (may fail)" >&2
+    HOST_APT_TMP_ALT="/tmp"
+fi
+
+# Configure APT on host to use alternative temp directory if we found one
+if [ -n "${HOST_APT_TMP_ALT}" ] && [ "${HOST_APT_TMP_ALT}" != "/tmp" ]; then
+    # Set proper permissions
+    chmod 1777 "${HOST_APT_TMP_ALT}" 2>/dev/null || chmod 777 "${HOST_APT_TMP_ALT}" 2>/dev/null || true
+    
+    # Create APT config file on host
+    mkdir -p /etc/apt/apt.conf.d 2>/dev/null || true
+    if [ -w /etc/apt/apt.conf.d ] || sudo sh -c '[ -w /etc/apt/apt.conf.d ]'; then
+        {
+            echo "Dir::Cache::Archives \"${HOST_APT_TMP_ALT}\";"
+            echo "Acquire::TempDir \"${HOST_APT_TMP_ALT}\";"
+        } | sudo tee /etc/apt/apt.conf.d/99-host-tmpdir-alternative >/dev/null 2>&1 || true
+        printf '%s\n' "  ✓ Host APT configured to use ${HOST_APT_TMP_ALT}"
+    else
+        printf '%s\n' "  ⚠ WARNING: Cannot write to /etc/apt/apt.conf.d, using TMPDIR environment variable instead" >&2
+    fi
+    
+    # Set TMPDIR environment variable for sudo commands
+    export TMPDIR="${HOST_APT_TMP_ALT}"
+    export TEMP="${HOST_APT_TMP_ALT}"
+    export TMP="${HOST_APT_TMP_ALT}"
+    printf '%s\n' "  ✓ TMPDIR/TEMP/TMP set to ${HOST_APT_TMP_ALT} for host operations"
+fi
+
 printf '%s\n' "Updating package list..."
-if ! sudo apt-get update -qq 2>&1; then
+# Use sudo with TMPDIR set to ensure APT uses alternative temp directory
+if ! sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get update -qq 2>&1; then
     printf '%s\n' "WARNING: apt-get update had issues, but continuing with installations..." >&2
 # ENDIF: apt-get update check
 fi
