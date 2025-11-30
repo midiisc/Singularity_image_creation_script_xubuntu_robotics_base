@@ -137,6 +137,8 @@ fi
 printf '%s\n' "[CRITICAL] Fixing /tmp permissions immediately (before any operations)..."
 # Force /tmp to have correct permissions (world-writable with sticky bit)
 # This is critical because base Docker images may have incorrect /tmp permissions
+# Note: We use a simple chmod here since ensure_tmp_permissions() is defined later
+# This initial fix will be re-verified and re-applied by ensure_tmp_permissions() when needed
 chmod 1777 /tmp 2>/dev/null || {
     printf '%s\n' "[WARN] Failed to set /tmp permissions to 1777" >&2
     # Try alternative: ensure /tmp exists and is at least writable
@@ -2689,6 +2691,10 @@ reapply_fastest_mirror() {
   # Clear apt state to force re-reading sources
   rm -f /var/lib/apt/lists/lock 2>/dev/null || true
   echo "[info] Running apt-get update to refresh package lists with new mirror..."
+  # CRITICAL: Re-verify /tmp permissions before apt-get (may have been reset)
+  ensure_tmp_permissions /tmp || {
+    echo "[ERROR] ⚠ Cannot fix /tmp permissions - apt-get update may fail" >&2
+  }
   # F2: Capture both output and exit code separately for proper validation
   local apt_update_output
   local apt_update_exit_code
@@ -3436,6 +3442,159 @@ ensure_directory_writable() {
 }
 # ENDFUNC: ensure_directory_writable
 
+#===============================================================================
+# PERSISTENT /tmp PERMISSIONS FIX FUNCTION
+#===============================================================================
+# Purpose: Ensure /tmp has 1777 permissions and re-apply if reset automatically
+#          This handles cases where permissions are reset by:
+#          - systemd-tmpfiles
+#          - tmpfs remounts
+#          - Container overlay recreation
+#          - Base image scripts
+# Parameters: None
+# Returns: 0 on success, 1 on failure
+# Side effects: Fixes /tmp permissions, verifies writability
+ensure_tmp_permissions() {
+    local tmp_path="${1:-/tmp}"
+    local current_perms
+    local expected_perms="1777"
+    
+    # Get current permissions (last 4 digits: mode)
+    current_perms=$(stat -c "%a" "${tmp_path}" 2>/dev/null || echo "unknown")
+    
+    # Check if permissions are already correct
+    if [ "${current_perms}" = "${expected_perms}" ]; then
+        # Even if permissions look correct, verify writability
+        if [ -w "${tmp_path}" ]; then
+            return 0
+        fi
+    fi
+    
+    # Permissions are wrong or directory is not writable - fix it
+    printf '%s\n' "[INFO] ${tmp_path} permissions are ${current_perms} (expected ${expected_perms}) - fixing..."
+    
+    # Ensure directory exists
+    mkdir -p "${tmp_path}" 2>/dev/null || true
+    
+    # Apply correct permissions
+    if ! chmod "${expected_perms}" "${tmp_path}" 2>/dev/null; then
+        printf '%s\n' "[WARN] Failed to set ${tmp_path} permissions to ${expected_perms}" >&2
+        # Try alternative: at least make it writable
+        chmod 777 "${tmp_path}" 2>/dev/null || true
+    fi
+    
+    # Verify permissions were actually set
+    current_perms=$(stat -c "%a" "${tmp_path}" 2>/dev/null || echo "unknown")
+    if [ "${current_perms}" != "${expected_perms}" ] && [ "${current_perms}" != "777" ]; then
+        printf '%s\n' "[WARN] ${tmp_path} permissions are still ${current_perms} after chmod attempt" >&2
+        printf '%s\n' "[WARN] This may indicate filesystem restrictions or automatic reset" >&2
+        
+        # Check mount options
+        local mount_info
+        mount_info=$(mount | grep -E "^[^ ]+.*on ${tmp_path} " || echo "")
+        if [ -n "${mount_info}" ]; then
+            printf '%s\n' "[INFO] Mount info: ${mount_info}" >&2
+            if echo "${mount_info}" | grep -qE "(ro|read-only)"; then
+                printf '%s\n' "[ERROR] ${tmp_path} is mounted read-only - cannot fix permissions" >&2
+                return 1
+            fi
+        fi
+    fi
+    
+    # CRITICAL: Test actual writability (not just permission check)
+    local test_file="${tmp_path}/.perm_test_$$"
+    if ! touch "${test_file}" 2>/dev/null; then
+        printf '%s\n' "[ERROR] ${tmp_path} is NOT writable even after permission fix!" >&2
+        printf '%s\n' "[ERROR] This indicates filesystem restrictions or mount issues" >&2
+        return 1
+    fi
+    
+    # Clean up test file
+    rm -f "${test_file}" 2>/dev/null || true
+    
+    # Log success
+    current_perms=$(stat -c "%a" "${tmp_path}" 2>/dev/null || echo "unknown")
+    if [ "${current_perms}" = "${expected_perms}" ]; then
+        printf '%s\n' "[INFO] ✓ ${tmp_path} permissions fixed and verified (${expected_perms})"
+    else
+        printf '%s\n' "[INFO] ✓ ${tmp_path} is writable (permissions: ${current_perms})"
+    fi
+    
+    return 0
+}
+# ENDFUNC: ensure_tmp_permissions
+
+#===============================================================================
+# FIND BEST WRITABLE TEMP DIRECTORY
+#===============================================================================
+# Purpose: Find a writable directory for APT temp files, preferring:
+#          1. /container_cache/apt-temp (bind-mounted from host, should be writable)
+#          2. Current working directory (if writable - may be script's host dir)
+#          3. /var/tmp/apt-temp (fallback)
+# Parameters: None
+# Returns: 0 on success, 1 on failure
+# Side effects: Sets APT_TMP_ALT global variable
+find_best_writable_temp_dir() {
+    local test_dirs=(
+        "/container_cache/apt-temp"
+        "${PWD:-$(pwd 2>/dev/null || echo /)}/apt-temp"
+        "/var/tmp/apt-temp"
+    )
+    
+    local best_dir=""
+    local test_file=""
+    
+    printf '%s\n' "[INFO] Searching for writable temp directory for APT..."
+    
+    # Try each directory in order of preference
+    for dir in "${test_dirs[@]}"; do
+        # Skip empty or invalid paths
+        if [ -z "${dir}" ] || [ "${dir}" = "/" ]; then
+            continue
+        fi
+        
+        # Create directory if it doesn't exist
+        mkdir -p "${dir}" 2>/dev/null || continue
+        
+        # Test actual writability (not just permission check)
+        test_file="${dir}/.writability_test_$$"
+        if touch "${test_file}" 2>/dev/null; then
+            # Success - this directory is writable
+            rm -f "${test_file}" 2>/dev/null || true
+            
+            # Get permissions for logging
+            local perms
+            perms=$(stat -c "%a" "${dir}" 2>/dev/null || echo "unknown")
+            
+            printf '%s\n' "[INFO] ✓ Found writable directory: ${dir} (permissions: ${perms})"
+            best_dir="${dir}"
+            break
+        else
+            printf '%s\n' "[INFO]   Directory not writable: ${dir}"
+        fi
+    done
+    
+    if [ -z "${best_dir}" ]; then
+        printf '%s\n' "[ERROR] ⚠ Could not find any writable temp directory!" >&2
+        printf '%s\n' "[ERROR] Tried:" >&2
+        for dir in "${test_dirs[@]}"; do
+            printf '%s\n' "[ERROR]   - ${dir}" >&2
+        done
+        return 1
+    fi
+    
+    # Set global variable
+    APT_TMP_ALT="${best_dir}"
+    
+    # Ensure it has proper permissions (1777 for temp directories)
+    ensure_tmp_permissions "${best_dir}" || {
+        printf '%s\n' "[WARN] ⚠ Could not set optimal permissions on ${best_dir}, but it is writable" >&2
+    }
+    
+    return 0
+}
+# ENDFUNC: find_best_writable_temp_dir
+
 echo "=> Creating all cache directories at the start of container build..."
 mkdir -p "${CONTAINER_APT_CACHE:-/container_cache/apt}"
 mkdir -p "${CONTAINER_BIN_CACHE:-/container_cache/bin}"
@@ -3490,17 +3649,19 @@ fi
 
 # Temporary directories
 # CRITICAL: Proactive APT temp directory configuration to avoid /tmp issues
-# Instead of detecting and fixing /tmp failures, we proactively use /var/tmp/apt-temp
-# which is more reliable in container environments (persistent, less restrictive)
+# Instead of using /tmp (which may have permission issues), find the best writable directory
+# Prefer: /container_cache/apt-temp > current working directory > /var/tmp/apt-temp
 echo "[INFO] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
-APT_TMP_ALT="/var/tmp/apt-temp"
+echo "[INFO] Searching for best writable temp directory (preferring bind-mounted /container_cache or script host dir)..."
 
-# Ensure /var/tmp exists and is writable first
-ensure_directory_writable "/var/tmp" "Persistent temporary files" || exit 1
+# Find the best writable temp directory
+if ! find_best_writable_temp_dir; then
+    echo "[ERROR] ⚠ Failed to find writable temp directory - build cannot continue"
+    exit 1
+fi
 
-# Create and configure APT alternative temp directory
-mkdir -p "${APT_TMP_ALT}" 2>/dev/null || true
-chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+# APT_TMP_ALT is now set by find_best_writable_temp_dir
+echo "[INFO] Using APT temp directory: ${APT_TMP_ALT}"
 
 if ensure_directory_writable "${APT_TMP_ALT}" "APT alternative temp directory"; then
     echo "[INFO] Configuring APT to use alternative temp directory: ${APT_TMP_ALT}"
@@ -3516,7 +3677,11 @@ else
 fi
 
 # Also ensure /tmp has reasonable permissions as fallback (for other tools, not APT)
-chmod 1777 /tmp 2>/dev/null || true
+# Use ensure_tmp_permissions to handle automatic permission resets
+ensure_tmp_permissions /tmp || {
+    echo "[WARN] ⚠ Failed to ensure /tmp permissions - trying fallback..." >&2
+    chmod 1777 /tmp 2>/dev/null || true
+}
 if [ -n "${CONTAINER_BUILD_TMPDIR:-}" ]; then
     ensure_directory_writable "${CONTAINER_BUILD_TMPDIR}" "Container build temp directory" || exit 1
 fi
@@ -3673,11 +3838,19 @@ if ! command -v curl &> /dev/null; then
     echo "[warn] curl not found in base image. Installing curl first..."
     # Use /usr/bin/apt-get directly to avoid any wrapper issues
     # H1: Check exit code of apt-get update operation
+    # CRITICAL: Re-verify /tmp permissions before apt-get (may have been reset)
+    ensure_tmp_permissions /tmp || {
+        echo "[WARN] ⚠ Cannot fix /tmp permissions - apt-get may fail" >&2
+    }
     if ! /usr/bin/apt-get update -o Acquire::Retries=3 2>&1; then
         echo "[ERROR] ⚠ apt-get update failed - cannot install curl"
         exit 1
     fi
     # H1: Check exit code of apt-get install operation
+    # CRITICAL: Re-verify /tmp permissions before install (may have been reset between update and install)
+    ensure_tmp_permissions /tmp || {
+        echo "[WARN] ⚠ Cannot fix /tmp permissions - apt-get install may fail" >&2
+    }
     if ! /usr/bin/apt-get install -y --no-install-recommends curl 2>&1; then
         echo "[ERROR] ⚠ Failed to install curl"
         exit 1
@@ -3801,17 +3974,36 @@ if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
         cat /etc/apt/apt.conf.d/99-tmpdir-alternative || true
     else
         echo "[WARN] APT config file missing - recreating..."
-        APT_TMP_ALT="/var/tmp/apt-temp"
-        mkdir -p "${APT_TMP_ALT}" 2>/dev/null || true
-        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+        # Use the same function to find best writable directory (preferring /container_cache or script host dir)
+        if ! find_best_writable_temp_dir; then
+            echo "[ERROR] ⚠ Failed to find writable temp directory for APT config recovery" >&2
+            # Last resort: try /var/tmp/apt-temp
+            APT_TMP_ALT="/var/tmp/apt-temp"
+            mkdir -p "${APT_TMP_ALT}" 2>/dev/null || true
+            ensure_tmp_permissions "${APT_TMP_ALT}" || {
+                echo "[WARN] ⚠ Failed to set ${APT_TMP_ALT} permissions - trying fallback..." >&2
+                chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+            }
+        fi
+        # APT_TMP_ALT is now set by find_best_writable_temp_dir or fallback above
         mkdir -p /etc/apt/apt.conf.d
         echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";" > /etc/apt/apt.conf.d/99-tmpdir-alternative
         echo "Acquire::TempDir \"${APT_TMP_ALT}\";" >> /etc/apt/apt.conf.d/99-tmpdir-alternative
         export TMPDIR="${APT_TMP_ALT}"
+        echo "[INFO] Recreated APT config using temp directory: ${APT_TMP_ALT}"
     fi
     
     # Retry apt-get update (should now use alternative directory)
     echo "[INFO] Retrying apt-get update with verified APT configuration..."
+    # CRITICAL: Re-verify /tmp and APT_TMP_ALT permissions before retry (may have been reset)
+    ensure_tmp_permissions /tmp || {
+        echo "[WARN] ⚠ Cannot fix /tmp permissions before retry" >&2
+    }
+    if [ -n "${APT_TMP_ALT:-}" ]; then
+        ensure_tmp_permissions "${APT_TMP_ALT}" || {
+            echo "[WARN] ⚠ Cannot fix ${APT_TMP_ALT} permissions before retry" >&2
+        }
+    fi
     apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
     apt_update_exit_code=$?
     if [ "${apt_update_exit_code}" -eq 0 ]; then
