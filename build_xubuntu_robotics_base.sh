@@ -3172,6 +3172,23 @@ From: ${BASE_IMAGE}
     # Set proper permissions
     chmod 1777 "\${APT_TMP_ALT}" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}" 2>/dev/null || true
     
+    # CRITICAL: Create required APT directory structure
+    # APT requires lists/partial directory for package index downloads
+    # APT also requires archives/partial directory for package downloads
+    mkdir -p "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || {
+        echo "[ERROR] ⚠ Failed to create APT lists directory structure at \${APT_TMP_ALT}/lists/partial"
+        exit 1
+    }
+    mkdir -p "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || {
+        echo "[ERROR] ⚠ Failed to create APT archives directory structure at \${APT_TMP_ALT}/archives/partial"
+        exit 1
+    }
+    chmod 755 "\${APT_TMP_ALT}/lists" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/lists" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT}/archives" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/archives" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || true
+    echo "  ✓ Created APT directory structure: \${APT_TMP_ALT}/lists/partial and \${APT_TMP_ALT}/archives/partial"
+    
     # Configure APT to use alternative temp directory (comprehensive configuration)
     mkdir -p /etc/apt/apt.conf.d
     {
