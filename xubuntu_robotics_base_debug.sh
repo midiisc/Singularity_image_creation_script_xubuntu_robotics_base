@@ -1007,7 +1007,8 @@ test_mirror() {
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
       # Use same approach for Release file
       # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
-      local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+      # Note: /var/tmp is also bind-mounted from host in Apptainer 1.4.1, use /opt as fallback
+      local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/opt}}"
       curl_stdout=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stdout="${curl_tmp_dir}/curl_stdout_release_$$"
       curl_stderr=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stderr="${curl_tmp_dir}/curl_stderr_release_$$"
       
@@ -1178,7 +1179,7 @@ run_ldconfig_refresh_dir() {
   fi
   
   # Verify directory contains library files before updating
-  local find_output
+  find_output=""
   # D3e: SIGPIPE protection - add || true at end of pipeline with head
   find_output=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
   if [ -z "${find_output}" ]; then
@@ -1211,15 +1212,15 @@ run_ldconfig_refresh_dir() {
   
   # Step 3: Verify the refresh worked by checking if libraries are now in cache
   echo "  [DEBUG] Step 3: Verifying libraries from ${target_dir} are in cache..."
-  local lib_count
+  lib_count=0
   lib_count=$(find "${target_dir}" -maxdepth 1 -name "*.so*" -type f 2>/dev/null | wc -l || echo "0")
   if [ "${lib_count}" -gt 0 ]; then
     # Try to find at least one library from this directory in the cache
-    local sample_lib
+    sample_lib=""
     # D3e: SIGPIPE protection - add || true at end of pipeline with head
     sample_lib=$(find "${target_dir}" -maxdepth 1 -name "*.so" -type f 2>/dev/null | head -1 2>/dev/null || echo "" || true)
     if [ -n "${sample_lib}" ]; then
-      local lib_basename
+      lib_basename=""
       # D3: Use here-string instead of basename | sed (unsafe pipe pattern)
       lib_basename=$(sed 's/\.[0-9].*$//' <<< "$(basename "${sample_lib}")" || echo "")
       if ldconfig -p 2>/dev/null | grep -qF "${lib_basename}"; then
@@ -2781,8 +2782,8 @@ reapply_fastest_mirror() {
     echo "[ERROR] ⚠ Cannot fix /tmp permissions - apt-get update may fail" >&2
   }
   # F2: Capture both output and exit code separately for proper validation
-  local apt_update_output
-  local apt_update_exit_code
+  apt_update_output=""
+  apt_update_exit_code=0
   apt_update_output=$(apt-get update -o Acquire::Retries=3 2>&1)
   apt_update_exit_code=$?
   # F2: Validate command substitution result (check exit code explicitly)
@@ -2793,8 +2794,8 @@ reapply_fastest_mirror() {
   # Check if apt-get update failed with 403 (blocked) or other access errors
   if [[ "${apt_update_exit_code:-1}" -ne 0 ]]; then
     # Check for various error conditions that indicate mirror is inaccessible
-    local mirror_failed=false
-    local error_reason=""
+    mirror_failed=false
+    error_reason=""
     
     if grep -qiE "(403|Forbidden|blocked|access denied|URL blocked)" <<< "${apt_update_output}"; then
       mirror_failed=true
@@ -2824,7 +2825,7 @@ reapply_fastest_mirror() {
       # Re-apply default mirror
       # CRITICAL: Must have error fallback to prevent unset variable with set -u
       # D4: Correct sed bracket expression escaping with error fallback
-      local fastest_mirror_sed_escaped
+      fastest_mirror_sed_escaped=""
       fastest_mirror_sed_escaped="$(printf '%s\n' "${FASTEST_MIRROR:-}" | sed 's/[][\\\/&]/\\&/g' || echo "")"
       
       # CRITICAL: Guard against empty escaped value (validate result format)
@@ -2878,8 +2879,8 @@ reapply_fastest_mirror() {
       
       echo "[info] Retrying apt-get update with default archive.ubuntu.com mirror..."
       # F2: Capture both output and exit code separately for proper validation
-      local retry_output
-      local retry_exit_code
+      retry_output=""
+      retry_exit_code=0
       retry_output=$(apt-get update -o Acquire::Retries=3 2>&1)
       retry_exit_code=$?
       # F2: Validate command substitution result
@@ -4247,8 +4248,9 @@ if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
     gpg_exit_code=0
     # I4: Capture HTTP status code separately using -w with newline separator
     # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
-    local gpg_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
-    local gpg_response_file="${gpg_tmp_dir}/virtualgl_gpg_response_$$.tmp"
+    # Note: /var/tmp is also bind-mounted from host in Apptainer 1.4.1, use /opt as fallback
+    gpg_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/opt}}"
+    gpg_response_file="${gpg_tmp_dir}/virtualgl_gpg_response_$$.tmp"
     http_code="000"
     if curl -w "\n%{http_code}" -fsSL --max-time 30 "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>/dev/null > "${gpg_response_file}"; then
         # I4: Extract HTTP code from last line of response
