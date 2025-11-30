@@ -3154,10 +3154,9 @@ From: ${BASE_IMAGE}
     echo "================================="
 }
     export MAKEFLAGS="-j\$(( \$(nproc) / 2 ))"
-    export TMPDIR="${CONTAINER_BUILD_TMPDIR}"
-    export SINGULARITY_TMPDIR="${CONTAINER_BUILD_TMPDIR}"
     mkdir -p "${CONTAINER_BUILD_TMPDIR}"
     chmod 1777 "${CONTAINER_BUILD_TMPDIR}"
+    export SINGULARITY_TMPDIR="${CONTAINER_BUILD_TMPDIR}"
 
     # Clean any stale locks
     rm -rf /var/lib/dpkg/lock-frontend
@@ -3165,6 +3164,7 @@ From: ${BASE_IMAGE}
     rm -rf /var/cache/apt/archives/lock
 
     # CRITICAL: Configure APT to use alternative temp directory BEFORE any APT operations
+    # MUST be done BEFORE setting TMPDIR to ensure APT uses the alternative directory
     # This prevents "Couldn't create temporary file /tmp/apt.conf.XXXXXX" errors
     # Prefer: /container_cache/apt-temp > ${CONTAINER_BUILD_TMPDIR}/apt-temp > /var/tmp/apt-temp
     echo "[CRITICAL] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
@@ -3228,22 +3228,56 @@ From: ${BASE_IMAGE}
             APT_TMP_ALT="/var/tmp/apt-temp"
             echo "  ✓ Using /var/tmp/apt-temp (fallback)"
         else
-            echo "[WARN] ⚠ Could not find writable temp directory for APT, will try /tmp (may fail)"
-            APT_TMP_ALT="/tmp"
+            echo "[ERROR] ⚠ CRITICAL: Could not find ANY writable temp directory for APT"
+            echo "[ERROR] ⚠ Tried: /container_cache/apt-temp, ${CONTAINER_BUILD_TMPDIR}/apt-temp, /var/tmp/apt-temp"
+            echo "[ERROR] ⚠ Cannot use /tmp due to permission issues - build cannot continue"
+            echo "[ERROR] ⚠ Please check filesystem permissions and ensure at least one temp location is writable"
+            exit 1
         fi
     fi
     
-    if [ -n "${APT_TMP_ALT}" ] && [ "${APT_TMP_ALT}" != "/tmp" ]; then
+    # CRITICAL: We MUST have a valid APT temp directory (never /tmp)
+    if [ -z "${APT_TMP_ALT}" ] || [ "${APT_TMP_ALT}" = "/tmp" ]; then
+        echo "[ERROR] ⚠ CRITICAL: APT temp directory configuration failed"
+        echo "[ERROR] ⚠ Cannot proceed without valid alternative to /tmp"
+        exit 1
+    fi
+    
+    # Configure APT to use alternative temp directory (ALWAYS, never /tmp)
+    if [ -n "${APT_TMP_ALT}" ]; then
         # Set proper permissions
         chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
         
-        # Configure APT to use alternative temp directory
+        # Set proper permissions
+        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
+        
+        # Configure APT to use alternative temp directory (comprehensive configuration)
         mkdir -p /etc/apt/apt.conf.d
-        echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";" > /etc/apt/apt.conf.d/99-tmpdir-alternative
-        echo "Acquire::TempDir \"${APT_TMP_ALT}\";" >> /etc/apt/apt.conf.d/99-tmpdir-alternative
+        {
+            echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";"
+            echo "Acquire::TempDir \"${APT_TMP_ALT}\";"
+            echo "Dir::State::lists \"${APT_TMP_ALT}/lists\";"
+            echo "Dir::Cache \"${APT_TMP_ALT}\";"
+        } > /etc/apt/apt.conf.d/99-tmpdir-alternative
+        
+        # CRITICAL: Set TMPDIR environment variable to APT temp directory
+        # This ensures ALL tools (not just APT) use the alternative temp directory
         export TMPDIR="${APT_TMP_ALT}"
+        export TEMP="${APT_TMP_ALT}"
+        export TMP="${APT_TMP_ALT}"
+        
         echo "  ✓ APT configured to use ${APT_TMP_ALT} for temporary files"
-        echo "  ✓ This avoids potential /tmp permission/mount issues in container environments"
+        echo "  ✓ TMPDIR/TEMP/TMP environment variables set to ${APT_TMP_ALT}"
+        echo "  ✓ This completely avoids /tmp permission/mount issues in container environments"
+        
+        # Verify APT configuration was written correctly
+        if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+            echo "  [DEBUG] APT configuration file contents:"
+            cat /etc/apt/apt.conf.d/99-tmpdir-alternative || true
+        else
+            echo "  [ERROR] APT configuration file was not created!"
+            exit 1
+        fi
     fi
 
     # FIX: Disable PEP 668 for container builds
@@ -5246,3 +5280,4 @@ if [ -n "${WHEELS_CACHE:-}" ] && [ -d "${WHEELS_CACHE}/open3d" ]; then
     # ENDIF: OPEN3D_WHEELS validation
 fi
 # ENDIF: WHEELS_CACHE/open3d directory check
+
