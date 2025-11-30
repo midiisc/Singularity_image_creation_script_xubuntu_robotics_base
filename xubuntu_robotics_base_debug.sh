@@ -4700,6 +4700,7 @@ if ! dpkg -l | grep -qE "^ii.*findutils"; then
     echo "[ERROR] ⚠ findutils package is not installed"
     exit 1
 fi
+echo "  ✓ findutils package is installed"
 # Check which find command is used
 FIND_PATH=$(command -v find 2>/dev/null || echo "not found")
 FIND_TYPE=$(type find 2>/dev/null || echo "unknown")
@@ -4708,18 +4709,25 @@ if echo "${FIND_TYPE}" | grep -q "alias"; then
     echo "[WARN] ⚠ 'find' is aliased - this may override GNU find"
     echo "  Alias: ${FIND_TYPE}"
     echo "[WARN] ⚠ Consider: unalias find"
+    unalias find 2>/dev/null || true
+    hash -r 2>/dev/null || true
+    FIND_PATH=$(command -v find 2>/dev/null || echo "not found")
+    echo "  Updated 'find' command path after unalias: ${FIND_PATH}"
 fi
-# Test with full path to GNU find first
-# CRITICAL: Use alternative temp directory if /tmp is not writable
-# Try APT_TMP_ALT (configured earlier), then TMPDIR, then /var/tmp, then /tmp
-TEST_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
-if [ ! -w "${TEST_DIR}" ] 2>/dev/null; then
-    TEST_DIR="/tmp"
+# Check if /usr/bin/find exists
+if [ ! -f "/usr/bin/find" ]; then
+    echo "[ERROR] ⚠ /usr/bin/find does not exist"
+    echo "[ERROR] ⚠ findutils package may be corrupted or incomplete"
+    exit 1
 fi
-TEST_FILE="${TEST_DIR}/find_printf_test_$$"
-if touch "${TEST_FILE}" 2>/dev/null; then
-    if /usr/bin/find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
-        echo "✓ /usr/bin/find supports -printf"
+echo "  ✓ /usr/bin/find exists"
+# CRITICAL: Test find -printf using existing files first (avoid temp file creation issues in containers)
+# In Singularity containers, /tmp may be read-only (bind-mounted), so prefer existing files
+TEST_FILE_EXISTING="/etc/passwd"
+if [ -f "${TEST_FILE_EXISTING}" ]; then
+    echo "  Testing /usr/bin/find -printf with existing file: ${TEST_FILE_EXISTING}"
+    if /usr/bin/find "${TEST_FILE_EXISTING}" -printf '%p\n' >/dev/null 2>&1; then
+        echo "  ✓ /usr/bin/find supports -printf (verified with ${TEST_FILE_EXISTING})"
         # Ensure /usr/bin is in PATH before other directories
         if [ "${FIND_PATH}" != "/usr/bin/find" ]; then
             echo "[WARN] ⚠ PATH find (${FIND_PATH}) is not /usr/bin/find"
@@ -4727,36 +4735,49 @@ if touch "${TEST_FILE}" 2>/dev/null; then
             export PATH="/usr/bin:${PATH}"
             hash -r 2>/dev/null || true
             # Verify PATH find now works
-            if find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
-                echo "✓ PATH find now supports -printf after PATH update"
+            NEW_FIND_PATH=$(command -v find 2>/dev/null || echo "not found")
+            echo "  Updated PATH find: ${NEW_FIND_PATH}"
+            if find "${TEST_FILE_EXISTING}" -printf '%p\n' >/dev/null 2>&1; then
+                echo "  ✓ PATH find now supports -printf after PATH update"
             else
-                echo "[ERROR] ⚠ PATH find still does not support -printf after PATH update"
-                echo "[ERROR] ⚠ This may indicate a system compatibility issue"
-                rm -f "${TEST_FILE}" 2>/dev/null || true
-                exit 1
+                echo "[WARN] ⚠ PATH find does not support -printf, but /usr/bin/find does"
+                echo "[INFO] Scripts will use /usr/bin/find directly when needed"
             fi
         else
-            echo "✓ PATH find is /usr/bin/find (correct)"
+            echo "  ✓ PATH find is /usr/bin/find (correct)"
         fi
     else
         echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
+        echo "[ERROR] ⚠ Testing find version..."
+        /usr/bin/find --version 2>&1 | head -1 || echo "  Cannot get find version"
         echo "[ERROR] ⚠ This indicates findutils installation failed or system incompatibility"
-        rm -f "${TEST_FILE}" 2>/dev/null || true
         exit 1
     fi
-    rm -f "${TEST_FILE}" 2>/dev/null || true
 else
-    echo "[WARN] ⚠ Could not create test file in ${TEST_DIR} (trying fallback verification)"
-    # Try to verify with existing file
-    if [ -f "/etc/passwd" ]; then
-        if /usr/bin/find /etc/passwd -printf '%p\n' >/dev/null 2>&1; then
-            echo "✓ /usr/bin/find supports -printf (verified with /etc/passwd)"
+    # Fallback: Try to create a test file if /etc/passwd doesn't exist (shouldn't happen)
+    echo "[WARN] ⚠ /etc/passwd not found, attempting to create test file..."
+    # Use APT_TMP_ALT if available (should be set earlier and be writable)
+    TEST_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+    if [ ! -w "${TEST_DIR}" ] 2>/dev/null; then
+        TEST_DIR="/tmp"
+    fi
+    echo "  Trying temp directory: ${TEST_DIR}"
+    mkdir -p "${TEST_DIR}" 2>/dev/null || true
+    TEST_FILE="${TEST_DIR}/find_printf_test_$$"
+    if touch "${TEST_FILE}" 2>/dev/null; then
+        echo "  ✓ Test file created: ${TEST_FILE}"
+        if /usr/bin/find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
+            echo "  ✓ /usr/bin/find supports -printf"
         else
             echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
+            /usr/bin/find --version 2>&1 | head -1 || echo "  Cannot get find version"
+            rm -f "${TEST_FILE}" 2>/dev/null || true
             exit 1
         fi
+        rm -f "${TEST_FILE}" 2>/dev/null || true
     else
-        echo "[ERROR] ⚠ Could not verify find -printf support (no test file location available)"
+        echo "[ERROR] ⚠ Could not create test file and /etc/passwd not available"
+        echo "[ERROR] ⚠ Cannot verify find -printf support"
         exit 1
     fi
 fi
