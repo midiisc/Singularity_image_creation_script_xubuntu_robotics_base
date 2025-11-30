@@ -3171,6 +3171,7 @@ From: ${BASE_IMAGE}
     APT_TMP_ALT=""
     # Try /container_cache/apt-temp first (bind-mounted from host, should be writable)
     # Check if /container_cache exists and is accessible
+    CONTAINER_CACHE_AVAILABLE=false
     if [ -d /container_cache ] || [ -L /container_cache ]; then
         echo "  [DEBUG] /container_cache exists (directory or symlink)"
         if [ -L /container_cache ]; then
@@ -3178,29 +3179,58 @@ From: ${BASE_IMAGE}
         fi
         if [ -w /container_cache ] 2>/dev/null; then
             echo "  [DEBUG] /container_cache is writable"
+            CONTAINER_CACHE_AVAILABLE=true
         else
             echo "  [DEBUG] /container_cache is NOT writable (permissions: $(stat -c '%a' /container_cache 2>/dev/null || echo 'unknown'))"
         fi
     else
         echo "  [DEBUG] /container_cache does not exist (bind mount may have failed)"
     fi
-    if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
-        rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
-        APT_TMP_ALT="/container_cache/apt-temp"
-        echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache)"
-    # Try ${CONTAINER_BUILD_TMPDIR}/apt-temp (already configured temp dir)
-    elif mkdir -p "${CONTAINER_BUILD_TMPDIR}/apt-temp" 2>/dev/null && touch "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null; then
-        rm -f "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null || true
-        APT_TMP_ALT="${CONTAINER_BUILD_TMPDIR}/apt-temp"
-        echo "  ✓ Using ${CONTAINER_BUILD_TMPDIR}/apt-temp (build temp dir)"
-    # Fallback to /var/tmp/apt-temp
-    elif mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
-        rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
-        APT_TMP_ALT="/var/tmp/apt-temp"
-        echo "  ✓ Using /var/tmp/apt-temp (fallback)"
-    else
-        echo "[WARN] ⚠ Could not find writable temp directory for APT, will try /tmp (may fail)"
-        APT_TMP_ALT="/tmp"
+    # Try to use /container_cache/apt-temp if available (should already exist from host setup)
+    if [ "${CONTAINER_CACHE_AVAILABLE}" = "true" ]; then
+        # Check if apt-temp already exists (created on host side)
+        if [ -d /container_cache/apt-temp ]; then
+            echo "  [DEBUG] /container_cache/apt-temp directory exists from host bind mount"
+            if touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+                rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+                APT_TMP_ALT="/container_cache/apt-temp"
+                echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache, pre-created on host)"
+            else
+                echo "  [DEBUG] /container_cache/apt-temp exists but is NOT writable, trying to create..."
+                # Try to create it if it doesn't work
+                if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+                    rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+                    APT_TMP_ALT="/container_cache/apt-temp"
+                    echo "  ✓ Using /container_cache/apt-temp (created in container)"
+                fi
+            fi
+        else
+            # Try to create it
+            if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+                rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+                APT_TMP_ALT="/container_cache/apt-temp"
+                echo "  ✓ Using /container_cache/apt-temp (created in container)"
+            else
+                echo "  [DEBUG] Failed to create /container_cache/apt-temp, will use fallback"
+            fi
+        fi
+    fi
+    # If /container_cache/apt-temp didn't work, try fallbacks
+    if [ -z "${APT_TMP_ALT}" ]; then
+        # Try ${CONTAINER_BUILD_TMPDIR}/apt-temp (already configured temp dir)
+        if mkdir -p "${CONTAINER_BUILD_TMPDIR}/apt-temp" 2>/dev/null && touch "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null; then
+            rm -f "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null || true
+            APT_TMP_ALT="${CONTAINER_BUILD_TMPDIR}/apt-temp"
+            echo "  ✓ Using ${CONTAINER_BUILD_TMPDIR}/apt-temp (build temp dir)"
+        # Fallback to /var/tmp/apt-temp
+        elif mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
+            rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
+            APT_TMP_ALT="/var/tmp/apt-temp"
+            echo "  ✓ Using /var/tmp/apt-temp (fallback)"
+        else
+            echo "[WARN] ⚠ Could not find writable temp directory for APT, will try /tmp (may fail)"
+            APT_TMP_ALT="/tmp"
+        fi
     fi
     
     if [ -n "${APT_TMP_ALT}" ] && [ "${APT_TMP_ALT}" != "/tmp" ]; then
@@ -3363,7 +3393,26 @@ if [ -L "${HOST_CACHE_BIND_SRC}" ]; then
     fi
     if [ -n "${HOST_CACHE_BIND_SRC_RESOLVED}" ] && [ -d "${HOST_CACHE_BIND_SRC_RESOLVED}" ]; then
         log "Resolved symlink: ${HOST_CACHE_BIND_SRC} -> ${HOST_CACHE_BIND_SRC_RESOLVED}"
-        HOST_CACHE_BIND_SRC="${HOST_CACHE_BIND_SRC_RESOLVED}"
+        # Verify resolved path is writable before using it
+        if [ -w "${HOST_CACHE_BIND_SRC_RESOLVED}" ] 2>/dev/null; then
+            HOST_CACHE_BIND_SRC="${HOST_CACHE_BIND_SRC_RESOLVED}"
+            log "Resolved path is writable, using resolved path for bind mount"
+        else
+            log_warning "Resolved path exists but is not writable: ${HOST_CACHE_BIND_SRC_RESOLVED}"
+            log_warning "Permissions: $(stat -c '%a' "${HOST_CACHE_BIND_SRC_RESOLVED}" 2>/dev/null || echo 'unknown')"
+            log_warning "Owner: $(stat -c '%U:%G' "${HOST_CACHE_BIND_SRC_RESOLVED}" 2>/dev/null || echo 'unknown')"
+            log_warning "Attempting to fix permissions on resolved path..."
+            if chmod 755 "${HOST_CACHE_BIND_SRC_RESOLVED}" 2>/dev/null || sudo chmod 755 "${HOST_CACHE_BIND_SRC_RESOLVED}" 2>/dev/null; then
+                if [ -w "${HOST_CACHE_BIND_SRC_RESOLVED}" ] 2>/dev/null; then
+                    HOST_CACHE_BIND_SRC="${HOST_CACHE_BIND_SRC_RESOLVED}"
+                    log "Resolved path is now writable after permission fix"
+                else
+                    log_warning "Resolved path still not writable after permission fix, using symlink path (may cause issues)"
+                fi
+            else
+                log_warning "Failed to fix permissions on resolved path, using symlink path (may cause issues)"
+            fi
+        fi
     else
         log_warning "Failed to resolve symlink ${HOST_CACHE_BIND_SRC}, using symlink path (may cause issues)"
     fi
@@ -3375,12 +3424,25 @@ if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
     exit 1
 fi
 # Create all expected subdirectories in host cache to match container structure
+# CRITICAL: Create apt-temp directory on host so it's available inside container via bind mount
 mkdir -p "${HOST_CACHE_BIND_SRC}/binaries" \
          "${HOST_CACHE_BIND_SRC}/apt/archives" \
+         "${HOST_CACHE_BIND_SRC}/apt-temp" \
          "${HOST_CACHE_BIND_SRC}/conda_pkgs" \
          "${HOST_CACHE_BIND_SRC}/debs" \
          "${HOST_CACHE_BIND_SRC}/julia_pkgs" \
          "${HOST_CACHE_BIND_SRC}/wheels" 2>/dev/null || true
+# CRITICAL: Ensure apt-temp directory is writable on host (will be bind-mounted to container)
+if [ -d "${HOST_CACHE_BIND_SRC}/apt-temp" ]; then
+    chmod 1777 "${HOST_CACHE_BIND_SRC}/apt-temp" 2>/dev/null || chmod 777 "${HOST_CACHE_BIND_SRC}/apt-temp" 2>/dev/null || true
+    # Verify it's writable
+    if touch "${HOST_CACHE_BIND_SRC}/apt-temp/.host_write_test_$$" 2>/dev/null; then
+        rm -f "${HOST_CACHE_BIND_SRC}/apt-temp/.host_write_test_$$" 2>/dev/null || true
+        log "Host apt-temp directory verified writable: ${HOST_CACHE_BIND_SRC}/apt-temp"
+    else
+        log_warning "Host apt-temp directory exists but may not be writable: ${HOST_CACHE_BIND_SRC}/apt-temp"
+    fi
+fi
 # CRITICAL: Verify host cache directory is actually writable (this is what matters)
 # We check writability FIRST because permissions might look correct but directory might not be writable
 # Only attempt to fix permissions if the directory is not writable
