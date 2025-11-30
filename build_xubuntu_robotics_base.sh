@@ -3083,25 +3083,75 @@ From: ${BASE_IMAGE}
     echo "  bash in PATH: $(command -v bash 2>/dev/null || echo 'not found')"
     umask 022
     
-    # CRITICAL: Fix /tmp permissions IMMEDIATELY (before any operations)
+    # CRITICAL: Configure APT temp directory IMMEDIATELY - BEFORE any other operations
+    # This MUST happen before sourcing config, fixing /tmp, or ANY APT operations
+    # The post script may call apt-get update/apt-key immediately, which will fail if /tmp is not writable
+    echo "[CRITICAL] Configuring APT to use alternative temporary directory FIRST (before any APT operations)..."
+    
+    # Find best writable temp directory (try common locations)
+    APT_TMP_ALT=""
+    # Try /var/tmp/apt-temp first (most reliable, doesn't depend on bind mounts)
+    if mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/var/tmp/apt-temp"
+        echo "  ✓ Using /var/tmp/apt-temp (most reliable option)"
+    # Try /container_cache/apt-temp (bind-mounted from host)
+    elif mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/container_cache/apt-temp"
+        echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache)"
+    # Try /tmp/build-temp/apt-temp (fallback)
+    elif mkdir -p /tmp/build-temp/apt-temp 2>/dev/null && touch /tmp/build-temp/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /tmp/build-temp/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/tmp/build-temp/apt-temp"
+        echo "  ✓ Using /tmp/build-temp/apt-temp (fallback)"
+    else
+        echo "[ERROR] ⚠ CRITICAL: Could not find ANY writable temp directory for APT"
+        echo "[ERROR] ⚠ Tried: /var/tmp/apt-temp, /container_cache/apt-temp, /tmp/build-temp/apt-temp"
+        echo "[ERROR] ⚠ Build cannot continue without a writable temp directory"
+        exit 1
+    fi
+    
+    # Set proper permissions
+    chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
+    
+    # Configure APT to use alternative temp directory (comprehensive configuration)
+    mkdir -p /etc/apt/apt.conf.d
+    {
+        echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";"
+        echo "Acquire::TempDir \"${APT_TMP_ALT}\";"
+        echo "Dir::State::lists \"${APT_TMP_ALT}/lists\";"
+        echo "Dir::Cache \"${APT_TMP_ALT}\";"
+    } > /etc/apt/apt.conf.d/99-tmpdir-alternative
+    
+    # CRITICAL: Set TMPDIR environment variable to APT temp directory
+    # This ensures ALL tools (not just APT) use the alternative temp directory
+    export TMPDIR="${APT_TMP_ALT}"
+    export TEMP="${APT_TMP_ALT}"
+    export TMP="${APT_TMP_ALT}"
+    
+    echo "  ✓ APT configured to use ${APT_TMP_ALT} for temporary files"
+    echo "  ✓ TMPDIR/TEMP/TMP environment variables set to ${APT_TMP_ALT}"
+    echo "  ✓ This completely avoids /tmp permission/mount issues"
+    
+    # CRITICAL: Fix /tmp permissions IMMEDIATELY (after APT config, before other operations)
     # Base Docker images may have incorrect /tmp permissions (e.g., 755 instead of 1777)
     # This must happen before sourcing config or running any commands
-    echo "[CRITICAL] Fixing /tmp permissions immediately..."
+    echo "[CRITICAL] Fixing /tmp permissions (for other tools, not APT)..."
     chmod 1777 /tmp 2>/dev/null || {
         echo "[WARN] Failed to set /tmp permissions to 1777, trying alternative..."
         mkdir -p /tmp 2>/dev/null || true
         chmod 777 /tmp 2>/dev/null || true
     }
-    # Verify /tmp is writable
+    # Verify /tmp is writable (for other tools, APT won't use it)
     if [ ! -w /tmp ]; then
-        echo "[ERROR] ⚠ /tmp is NOT writable - build cannot continue"
-        echo "[ERROR] Mount info: $(mount | grep -E '^[^ ]+.*on /tmp ' || echo 'no mount info')"
-        exit 1
+        echo "[WARN] ⚠ /tmp is NOT writable (but APT is configured to use ${APT_TMP_ALT})"
+    else
+        echo "✓ /tmp permissions fixed (1777)"
     fi
-    echo "✓ /tmp permissions fixed (1777)"
     
     # Source configuration to make all variables available in %post section
-    # This must happen BEFORE any validation code that uses these variables
+    # This must happen AFTER APT configuration to ensure APT config is in place
     if [ -f /etc/config.sh ]; then
         source /etc/config.sh
         export CONFIG_SOURCED=1
@@ -3163,157 +3213,24 @@ From: ${BASE_IMAGE}
     rm -rf /var/lib/dpkg/lock
     rm -rf /var/cache/apt/archives/lock
 
-    # CRITICAL: Configure APT to use alternative temp directory BEFORE any APT operations
-    # MUST be done BEFORE setting TMPDIR to ensure APT uses the alternative directory
+    # NOTE: APT temp directory configuration was moved to the VERY START of %post section
+    # (right after non-interactive variables) to ensure it's configured before ANY APT operations
     # This prevents "Couldn't create temporary file /tmp/apt.conf.XXXXXX" errors
-    # Prefer: /container_cache/apt-temp > ${CONTAINER_BUILD_TMPDIR}/apt-temp > /var/tmp/apt-temp
-    echo "[CRITICAL] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
-    echo "[DEBUG] Current environment variables:"
-    echo "  TMPDIR=${TMPDIR:-<unset>}"
-    echo "  TEMP=${TEMP:-<unset>}"
-    echo "  TMP=${TMP:-<unset>}"
-    echo "  CONTAINER_BUILD_TMPDIR=${CONTAINER_BUILD_TMPDIR:-<unset>}"
-    echo "[DEBUG] Checking /tmp status:"
-    echo "  /tmp exists: $([ -d /tmp ] && echo 'yes' || echo 'no')"
-    echo "  /tmp writable: $([ -w /tmp ] && echo 'yes' || echo 'no')"
-    echo "  /tmp permissions: $(stat -c '%a' /tmp 2>/dev/null || echo 'unknown')"
-    echo "  /tmp mount: $(mount | grep -E '^[^ ]+.*on /tmp ' || echo 'not mounted separately')"
-    APT_TMP_ALT=""
-    # Try /container_cache/apt-temp first (bind-mounted from host, should be writable)
-    # Check if /container_cache exists and is accessible
-    echo "[DEBUG] Checking candidate directories for APT temp:"
-    CONTAINER_CACHE_AVAILABLE=false
-    if [ -d /container_cache ] || [ -L /container_cache ]; then
-        echo "  [DEBUG] /container_cache exists (directory or symlink)"
-        if [ -L /container_cache ]; then
-            echo "  [DEBUG] /container_cache is a symlink: $(readlink /container_cache 2>/dev/null || echo 'unknown')"
-        fi
-        echo "  [DEBUG] /container_cache permissions: $(stat -c '%a' /container_cache 2>/dev/null || echo 'unknown')"
-        echo "  [DEBUG] /container_cache owner: $(stat -c '%U:%G' /container_cache 2>/dev/null || echo 'unknown')"
-        if [ -w /container_cache ] 2>/dev/null; then
-            echo "  [DEBUG] /container_cache is writable"
-            CONTAINER_CACHE_AVAILABLE=true
-        else
-            echo "  [DEBUG] /container_cache is NOT writable"
+    # The configuration is already in place at this point - verify it's still set
+    if [ -z "${APT_TMP_ALT:-}" ]; then
+        echo "[WARN] APT_TMP_ALT not set - this should have been configured at start of %post"
+        echo "[WARN] Attempting to read from APT config file..."
+        if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+            APT_TMP_ALT=$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative | sed 's/.*"\(.*\)".*/\1/' || echo "")
+            if [ -n "${APT_TMP_ALT}" ]; then
+                echo "[INFO] Found APT temp directory from config: ${APT_TMP_ALT}"
+                export TMPDIR="${APT_TMP_ALT}"
+                export TEMP="${APT_TMP_ALT}"
+                export TMP="${APT_TMP_ALT}"
+            fi
         fi
     else
-        echo "  [DEBUG] /container_cache does not exist (bind mount may have failed)"
-    fi
-    # Try to use /container_cache/apt-temp if available (should already exist from host setup)
-    if [ "${CONTAINER_CACHE_AVAILABLE}" = "true" ]; then
-        echo "  [DEBUG] Testing /container_cache/apt-temp..."
-        # Check if apt-temp already exists (created on host side)
-        if [ -d /container_cache/apt-temp ]; then
-            echo "  [DEBUG] /container_cache/apt-temp directory exists from host bind mount"
-            echo "  [DEBUG] /container_cache/apt-temp permissions: $(stat -c '%a' /container_cache/apt-temp 2>/dev/null || echo 'unknown')"
-            if touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
-                rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
-                APT_TMP_ALT="/container_cache/apt-temp"
-                echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache, pre-created on host)"
-            else
-                echo "  [DEBUG] /container_cache/apt-temp exists but is NOT writable, trying to create..."
-                # Try to create it if it doesn't work
-                if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
-                    rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
-                    APT_TMP_ALT="/container_cache/apt-temp"
-                    echo "  ✓ Using /container_cache/apt-temp (created in container)"
-                else
-                    echo "  [DEBUG] Failed to create/write to /container_cache/apt-temp"
-                fi
-            fi
-        else
-            echo "  [DEBUG] /container_cache/apt-temp does not exist, trying to create..."
-            # Try to create it
-            if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
-                rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
-                APT_TMP_ALT="/container_cache/apt-temp"
-                echo "  ✓ Using /container_cache/apt-temp (created in container)"
-            else
-                echo "  [DEBUG] Failed to create /container_cache/apt-temp: mkdir exit=$?, touch exit=$?"
-            fi
-        fi
-    fi
-    # If /container_cache/apt-temp didn't work, try fallbacks
-    if [ -z "${APT_TMP_ALT}" ]; then
-        echo "  [DEBUG] /container_cache/apt-temp not available, trying fallbacks..."
-        # Try ${CONTAINER_BUILD_TMPDIR}/apt-temp (already configured temp dir)
-        echo "  [DEBUG] Testing ${CONTAINER_BUILD_TMPDIR}/apt-temp..."
-        if mkdir -p "${CONTAINER_BUILD_TMPDIR}/apt-temp" 2>/dev/null && touch "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null; then
-            rm -f "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null || true
-            APT_TMP_ALT="${CONTAINER_BUILD_TMPDIR}/apt-temp"
-            echo "  ✓ Using ${CONTAINER_BUILD_TMPDIR}/apt-temp (build temp dir)"
-        # Fallback to /var/tmp/apt-temp
-        else
-            echo "  [DEBUG] ${CONTAINER_BUILD_TMPDIR}/apt-temp failed, testing /var/tmp/apt-temp..."
-            if mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
-                rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
-                APT_TMP_ALT="/var/tmp/apt-temp"
-                echo "  ✓ Using /var/tmp/apt-temp (fallback)"
-            else
-                echo "[ERROR] ⚠ CRITICAL: Could not find ANY writable temp directory for APT"
-                echo "[ERROR] ⚠ Tried: /container_cache/apt-temp, ${CONTAINER_BUILD_TMPDIR}/apt-temp, /var/tmp/apt-temp"
-                echo "[ERROR] ⚠ Cannot use /tmp due to permission issues - build cannot continue"
-                echo "[ERROR] ⚠ Please check filesystem permissions and ensure at least one temp location is writable"
-                exit 1
-            fi
-        fi
-    fi
-    
-    # CRITICAL: We MUST have a valid APT temp directory (never /tmp)
-    if [ -z "${APT_TMP_ALT}" ] || [ "${APT_TMP_ALT}" = "/tmp" ]; then
-        echo "[ERROR] ⚠ CRITICAL: APT temp directory configuration failed"
-        echo "[ERROR] ⚠ Cannot proceed without valid alternative to /tmp"
-        exit 1
-    fi
-    
-    # Configure APT to use alternative temp directory (ALWAYS, never /tmp)
-    if [ -n "${APT_TMP_ALT}" ]; then
-        # Set proper permissions
-        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
-        
-        # Set proper permissions
-        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
-        
-        # Configure APT to use alternative temp directory (comprehensive configuration)
-        mkdir -p /etc/apt/apt.conf.d
-        {
-            echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";"
-            echo "Acquire::TempDir \"${APT_TMP_ALT}\";"
-            echo "Dir::State::lists \"${APT_TMP_ALT}/lists\";"
-            echo "Dir::Cache \"${APT_TMP_ALT}\";"
-        } > /etc/apt/apt.conf.d/99-tmpdir-alternative
-        
-        # CRITICAL: Set TMPDIR environment variable to APT temp directory
-        # This ensures ALL tools (not just APT) use the alternative temp directory
-        export TMPDIR="${APT_TMP_ALT}"
-        export TEMP="${APT_TMP_ALT}"
-        export TMP="${APT_TMP_ALT}"
-        
-        echo "  ✓ APT configured to use ${APT_TMP_ALT} for temporary files"
-        echo "  ✓ TMPDIR/TEMP/TMP environment variables set to ${APT_TMP_ALT}"
-        echo "  ✓ This completely avoids /tmp permission/mount issues in container environments"
-        
-        # Verify APT configuration was written correctly
-        if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
-            echo "  [DEBUG] APT configuration file created successfully"
-            echo "  [DEBUG] APT configuration file contents:"
-            cat /etc/apt/apt.conf.d/99-tmpdir-alternative || true
-            echo "  [DEBUG] Verifying APT can read the configuration:"
-            apt-config dump | grep -E "(Dir::Cache|Acquire::TempDir)" || echo "  [WARN] APT config not visible in apt-config dump"
-        else
-            echo "  [ERROR] APT configuration file was not created!"
-            exit 1
-        fi
-        
-        # Final verification: show what APT will actually use
-        echo "  [DEBUG] Final verification - APT temp directory settings:"
-        echo "    Selected directory: ${APT_TMP_ALT}"
-        echo "    Directory exists: $([ -d "${APT_TMP_ALT}" ] && echo 'yes' || echo 'no')"
-        echo "    Directory writable: $([ -w "${APT_TMP_ALT}" ] && echo 'yes' || echo 'no')"
-        echo "    Directory permissions: $(stat -c '%a' "${APT_TMP_ALT}" 2>/dev/null || echo 'unknown')"
-        echo "    TMPDIR=${TMPDIR}"
-        echo "    TEMP=${TEMP}"
-        echo "    TMP=${TMP}"
+        echo "[INFO] APT temp directory configured: ${APT_TMP_ALT}"
     fi
 
     # FIX: Disable PEP 668 for container builds
