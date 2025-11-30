@@ -4651,7 +4651,13 @@ if echo "${FIND_TYPE}" | grep -q "alias"; then
     echo "[WARN] ⚠ Consider: unalias find"
 fi
 # Test with full path to GNU find first
-TEST_FILE="/tmp/find_printf_test_$$"
+# CRITICAL: Use alternative temp directory if /tmp is not writable
+# Try APT_TMP_ALT (configured earlier), then TMPDIR, then /var/tmp, then /tmp
+TEST_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+if [ ! -w "${TEST_DIR}" ] 2>/dev/null; then
+    TEST_DIR="/tmp"
+fi
+TEST_FILE="${TEST_DIR}/find_printf_test_$$"
 if touch "${TEST_FILE}" 2>/dev/null; then
     if /usr/bin/find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
         echo "✓ /usr/bin/find supports -printf"
@@ -4681,7 +4687,7 @@ if touch "${TEST_FILE}" 2>/dev/null; then
     fi
     rm -f "${TEST_FILE}" 2>/dev/null || true
 else
-    echo "[WARN] ⚠ Could not create test file in /tmp (this is a /tmp issue, see earlier diagnostics)"
+    echo "[WARN] ⚠ Could not create test file in ${TEST_DIR} (trying fallback verification)"
     # Try to verify with existing file
     if [ -f "/etc/passwd" ]; then
         if /usr/bin/find /etc/passwd -printf '%p\n' >/dev/null 2>&1; then
@@ -4690,6 +4696,9 @@ else
             echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
             exit 1
         fi
+    else
+        echo "[ERROR] ⚠ Could not verify find -printf support (no test file location available)"
+        exit 1
     fi
 fi
 echo "✓ findutils verification complete"
@@ -5183,10 +5192,10 @@ fi
 # Outputs: Intel MKL toolchain installed, environment hooks configured
 #-------------------------------------------------------------------------------
 
-echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}BLOCK 12A: Intel oneAPI MKL Installation${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
+printf '%b\n' "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%b\n' "${BLUE}BLOCK 12A: Intel oneAPI MKL Installation${NC}"
+printf '%b\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%s\n' ""
 
 : "${INTEL_ONEAPI_GPG_KEY_URL:?INTEL_ONEAPI_GPG_KEY_URL must be set in config.sh}"
 : "${INTEL_ONEAPI_APT_SOURCE:?INTEL_ONEAPI_APT_SOURCE must be set in config.sh}"
@@ -5600,7 +5609,7 @@ else
     fi
 fi
 
-echo -e "${YELLOW}[12A.3] Configuring Intel MKL environment...${NC}"
+printf '%b\n' "${YELLOW}[12A.3] Configuring Intel MKL environment...${NC}"
 # Search for MKL environment script in common locations
 # NOTE: vars.sh may be missing even with successful package installation because:
 #   - Debian/Ubuntu APT packages (intel-oneapi-mkl) may not include vars.sh
@@ -5725,7 +5734,7 @@ fi
 if ! run_ldconfig_refresh 2>&1; then
     echo "[warn] ⚠ ldconfig refresh failed (non-fatal)"
 fi
-echo -e "${GREEN}✓ Intel MKL installation and environment configuration complete${NC}"
+printf '%b\n' "${GREEN}✓ Intel MKL installation and environment configuration complete${NC}"
 
 # ------------------------------------------------------------------------------
 # Dynamic MKL directory discovery (supports versioned layouts like 2025.3)
@@ -5818,7 +5827,7 @@ export BLAS_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 export LAPACK_LIBRARIES="${MKL_BLAS_LIBRARIES}"
 
 #--- Sub-block 12A.4: Register MKL with alternatives system ---
-echo -e "${YELLOW}[12A.4] Registering Intel MKL with alternatives system...${NC}"
+printf '%b\n' "${YELLOW}[12A.4] Registering Intel MKL with alternatives system...${NC}"
 
 MKL_ALT_PRIORITY=200
 # J1: Validate file exists before operations
@@ -5896,16 +5905,16 @@ esac
 #   - No recompilation needed (existing binaries will use OpenBLAS automatically)
 #-------------------------------------------------------------------------------
 
-echo -e "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}BLOCK 6.12B: OpenBLAS Compilation and Installation${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%b\n' "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+printf '%b\n' "${BLUE}BLOCK 6.12B: OpenBLAS Compilation and Installation${NC}"
+printf '%b\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
 #--- Sub-block 12.1: Check base image for existing OpenBLAS ---
 # Purpose: Verify base image status (analysis shows no OpenBLAS exists)
 # Dependencies: None (foundational check)
 # Outputs: Status information
-echo -e "${YELLOW}[6.12B.1] Checking base image for existing OpenBLAS...${NC}"
+printf '%b\n' "${YELLOW}[6.12B.1] Checking base image for existing OpenBLAS...${NC}"
 BASE_OPENBLAS_FOUND=false
 # M4: Use resilient helper instead of brittle dpkg -l | grep parsing
 # F2: Validate command substitution result
@@ -5944,7 +5953,7 @@ echo ""
 # Dependencies: Block 6.12 (APT configuration), Block 6.12A (apt-aria wrapper)
 # Outputs: Installed packages
 # Note: Installing comprehensive prerequisites for both OpenBLAS and PyTorch compilation
-echo -e "${YELLOW}[6.12B.2] Installing build prerequisites for OpenBLAS and PyTorch...${NC}"
+printf '%b\n' "${YELLOW}[6.12B.2] Installing build prerequisites for OpenBLAS and PyTorch...${NC}"
 # H1: Check exit code of apt-get update operation
 if ! apt-get update -o Acquire::Retries=3 2>&1; then
     echo "[ERROR] ⚠ apt-get update failed"

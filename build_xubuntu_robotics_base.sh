@@ -392,47 +392,55 @@ fi
 check_find_printf_support() {
     # Create a temporary test file instead of using /dev/null
     # /dev/null may not exist in all environments (e.g., chroot)
+    # CRITICAL: Use alternative temp directory if /tmp is not writable
     local test_file
     local test_result=1
+    local test_dir="${HOST_APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
     
-    # Try to create a temporary file in /tmp
-    if test_file=$(mktemp -t find_test.XXXXXX 2>/dev/null); then
-        # Test file created successfully
-        # Test find -printf support
-        if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
-            test_result=0
-# ENDIF: find -printf test
-        fi
-        # Clean up test file
-        rm -f "${test_file}" 2>/dev/null || true
-    else
-        # Fallback: use /tmp with PID-based name
-        test_file="/tmp/find_test.$$"
+    # Try alternative temp directory first (if configured)
+    if [ -n "${HOST_APT_TMP_ALT:-}" ] && [ -w "${HOST_APT_TMP_ALT}" ] 2>/dev/null; then
+        test_file="${HOST_APT_TMP_ALT}/find_test.$$"
         if touch "${test_file}" 2>/dev/null; then
-            # Test find -printf support
             if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
                 test_result=0
-# ENDIF: find -printf test (fallback)
             fi
-            # Clean up test file
             rm -f "${test_file}" 2>/dev/null || true
-        else
-            # Last resort: test with current directory
-            if [ -d "/tmp" ] && [ -w "/tmp" ]; then
-                test_file="/tmp/find_test_check"
-                if touch "${test_file}" 2>/dev/null; then
-                    if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
-                        test_result=0
-# ENDIF: find -printf test (last resort)
-                    fi
-                    rm -f "${test_file}" 2>/dev/null || true
-# ENDIF: test file creation (last resort)
-                fi
-# ENDIF: /tmp directory check
+            if [ ${test_result} -eq 0 ]; then
+                return 0
             fi
-# ENDIF: test file creation (fallback)
         fi
-# ENDIF: mktemp test file creation
+    fi
+    
+    # Try to create a temporary file in /var/tmp (more reliable than /tmp)
+    if [ -w "${test_dir}" ] 2>/dev/null; then
+        test_file="${test_dir}/find_test.$$"
+        if touch "${test_file}" 2>/dev/null; then
+            if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
+                test_result=0
+            fi
+            rm -f "${test_file}" 2>/dev/null || true
+            if [ ${test_result} -eq 0 ]; then
+                return 0
+            fi
+        fi
+    fi
+    
+    # Fallback: try /tmp with mktemp
+    if test_file=$(mktemp -t find_test.XXXXXX 2>/dev/null); then
+        if find "${test_file}" -printf '%p\n' >/dev/null 2>&1; then
+            test_result=0
+        fi
+        rm -f "${test_file}" 2>/dev/null || true
+        if [ ${test_result} -eq 0 ]; then
+            return 0
+        fi
+    fi
+    
+    # Last resort: test with existing file
+    if [ -f "/etc/passwd" ]; then
+        if find "/etc/passwd" -printf '%p\n' >/dev/null 2>&1; then
+            test_result=0
+        fi
     fi
     
     return ${test_result}
