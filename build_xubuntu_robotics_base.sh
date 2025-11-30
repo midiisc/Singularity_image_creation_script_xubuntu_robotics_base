@@ -2977,6 +2977,8 @@ fi
 # CRITICAL: Temporarily disable 'set -u' for heredoc generation to avoid unbound variable errors
 # Variables set inside heredoc content (container %post section) are not available during heredoc generation
 # These variables are properly escaped (\${VAR}) to expand at container runtime, not during heredoc generation
+# MUST disable 'set -u' BEFORE the heredoc starts, as bash processes heredoc immediately
+# CRITICAL: Disable 'set -u' BEFORE the heredoc delimiter to prevent unbound variable errors
 set +u
 cat > "${DEF_NAME}" <<DEF
 Bootstrap: docker
