@@ -374,6 +374,40 @@ You're correct that only `/container_cache` is bind-mounted. Everything else, in
 - Fix host `/tmp` permissions: `sudo chmod 1777 /tmp`
 - The container build script will automatically detect and handle `/tmp` issues inside the container by using alternative directories if needed.
 
+### Build Fails with "Couldn't create temporary file /tmp/apt.conf.XXXXXX"
+
+**Symptom**: Build fails with errors like "Couldn't create temporary file /tmp/apt.conf.XXXXXX" during "Updating package list" step or during signature verification/apt-key operations.
+
+**Root Cause**: 
+- **Host-side issue**: The error occurs on the **host system** when running `sudo apt-get update` (before container build starts)
+- **Container-side issue**: The error can also occur inside the container during `%post` section if APT tries to use `/tmp` before alternative temp directory is configured
+- **Permission issues**: User running the script may not have write access to `/tmp` when using `sudo`
+- **Symlink issues**: If `container_cache` is a symlink, bind mount may not work correctly
+
+**Solution**:
+1. **Host-side fix** (automatic): The build script now configures APT on the host to use `/var/tmp/apt-temp` before running `apt-get update`
+2. **Container-side fix** (automatic): The build script configures APT inside the container to use alternative temp directory at the very start of `%post` section
+3. **Symlink fix** (automatic): The build script resolves `container_cache` symlink to actual path before bind mount
+4. **Manual fix** (if automatic fails): 
+   ```bash
+   # Fix host /tmp permissions
+   sudo chmod 1777 /tmp
+   
+   # Fix container_cache symlink target permissions
+   sudo chown -R $USER:$USER /home/test/Midhun/xubuntu_base_image_complete/container_cache/
+   sudo chmod -R 755 /home/test/Midhun/xubuntu_base_image_complete/container_cache/
+   ```
+
+**What the script does automatically**:
+- Configures APT temp directory on host before any `apt-get` operations
+- Configures APT temp directory inside container at start of `%post` section (before any APT operations)
+- Resolves `container_cache` symlink to actual path before bind mount
+- Creates `apt-temp` directory on host with proper permissions
+- Sets `TMPDIR`, `TEMP`, and `TMP` environment variables to alternative directory
+- Never falls back to `/tmp` - fails build with clear error if no alternative is available
+
+**Prevention**: The script now proactively avoids `/tmp` for all APT operations, using alternative directories that are guaranteed to be writable.
+
 ## 🚀 Version 2 Improvements
 
 Planned improvements for version 2 of the Singularity image creation script are documented in [`docs/planning/V2_IMPROVEMENTS.md`](docs/planning/V2_IMPROVEMENTS.md). These improvements will be implemented after V1 (with current features) is successfully compiled, tested, and released.

@@ -3196,7 +3196,7 @@ From: ${BASE_IMAGE}
     }
     # Verify /tmp is writable (for other tools, APT won't use it)
     if [ ! -w /tmp ]; then
-        echo "[WARN] ⚠ /tmp is NOT writable (but APT is configured to use ${APT_TMP_ALT})"
+        echo "[WARN] ⚠ /tmp is NOT writable (but APT is configured to use \${APT_TMP_ALT})"
     else
         echo "✓ /tmp permissions fixed (1777)"
     fi
@@ -3255,9 +3255,9 @@ From: ${BASE_IMAGE}
     echo "================================="
 }
     export MAKEFLAGS="-j\$(( \$(nproc) / 2 ))"
-    mkdir -p "${CONTAINER_BUILD_TMPDIR}"
-    chmod 1777 "${CONTAINER_BUILD_TMPDIR}"
-    export SINGULARITY_TMPDIR="${CONTAINER_BUILD_TMPDIR}"
+    mkdir -p "\${CONTAINER_BUILD_TMPDIR:-/tmp/build-temp}"
+    chmod 1777 "\${CONTAINER_BUILD_TMPDIR:-/tmp/build-temp}"
+    export SINGULARITY_TMPDIR="\${CONTAINER_BUILD_TMPDIR:-/tmp/build-temp}"
 
     # Clean any stale locks
     rm -rf /var/lib/dpkg/lock-frontend

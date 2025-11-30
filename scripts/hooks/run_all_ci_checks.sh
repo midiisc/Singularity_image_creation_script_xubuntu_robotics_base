@@ -485,7 +485,116 @@ check_bash_compatibility() {
 }
 
 ################################################################################
-# CHECK 7: ShellCheck Linting
+# CHECK 7: Unbound Variables in Heredocs
+################################################################################
+
+check_heredoc_unbound_vars() {
+  local check_name="check-heredoc-unbound-vars"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Unbound variables in heredocs..."
+  
+  local found_issues=false
+  local issues=()
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    # Find heredoc delimiters (unquoted, which expand variables)
+    local heredoc_lines
+    heredoc_lines=$(grep -nE '<<[A-Z_]+[^'\''"]' "$script_path" 2>/dev/null || true)
+    
+    if [ -z "$heredoc_lines" ]; then
+      continue
+    fi
+    
+    # For each heredoc, check for unbound variable patterns inside
+    while IFS= read -r heredoc_line; do
+      if [ -z "$heredoc_line" ]; then
+        continue
+      fi
+      
+      local line_num
+      line_num=$(echo "$heredoc_line" | cut -d: -f1)
+      local delimiter
+      delimiter=$(echo "$heredoc_line" | sed -nE 's/.*<<([A-Z_]+).*/\1/p')
+      
+      if [ -z "$delimiter" ]; then
+        continue
+      fi
+      
+      # Find the end of this heredoc
+      local end_line
+      end_line=$(awk -v start="$line_num" -v delim="$delimiter" '
+        NR > start && /^[[:space:]]*'"$delimiter"'[[:space:]]*$/ { print NR; exit }
+      ' "$script_path" 2>/dev/null || echo "")
+      
+      if [ -z "$end_line" ]; then
+        continue
+      fi
+      
+      # Check for unbound variable patterns in heredoc content (variables without defaults or escapes)
+      # Look for ${VAR} patterns that aren't escaped and don't have defaults
+      local heredoc_content
+      heredoc_content=$(sed -n "${line_num},${end_line}p" "$script_path" 2>/dev/null || true)
+      
+      # Find ${VAR} patterns that should be escaped (variables set inside heredoc content, not on host)
+      # Common patterns: ${APT_TMP_ALT}, ${CONTAINER_BUILD_TMPDIR} (if set in %post section)
+      local unbound_patterns
+      unbound_patterns=$(echo "$heredoc_content" | grep -nE '\$\{[A-Z_]+\}' | grep -vE '\$\{[A-Z_]+:-|\$\{[A-Z_]+\?\}' || true)
+      
+      if [ -n "$unbound_patterns" ]; then
+        while IFS= read -r pattern_line; do
+          if [ -n "$pattern_line" ]; then
+            local relative_line
+            relative_line=$(echo "$pattern_line" | cut -d: -f1)
+            local pattern_content
+            pattern_content=$(echo "$pattern_line" | cut -d: -f2-)
+            local var_name
+            var_name=$(echo "$pattern_content" | sed -nE 's/.*\$\{([A-Z_]+)\}.*/\1/p')
+            
+            # Check if this variable is set before the heredoc (should be expanded) or inside heredoc (should be escaped)
+            # For now, warn about common container variables that should be escaped
+            if [[ "$var_name" =~ ^(APT_TMP_ALT|CONTAINER_BUILD_TMPDIR|CONTAINER_CACHE_ROOT|CONTAINER_.*_CACHE)$ ]]; then
+              found_issues=true
+              local absolute_line=$((line_num + relative_line - 1))
+              issues+=("${script}:${absolute_line}: Variable \${${var_name}} in heredoc should be escaped as \\\${${var_name}} or use default \\\${${var_name}:-default}")
+            fi
+          fi
+        done <<< "$unbound_patterns"
+      fi
+    done <<< "$heredoc_lines"
+  done
+  
+  if [ "$found_issues" = true ]; then
+    echo -e "${RED}[✗]${NC} Found potential unbound variable issues in heredocs:"
+    for issue in "${issues[@]}"; do
+      echo -e "${RED}    ✗${NC} $issue"
+    done
+    echo -e "${YELLOW}[INFO]${NC} Variables set inside heredoc content (e.g., container %post section) should be escaped"
+    echo -e "${YELLOW}[INFO]${NC} Use \\\${VAR} to prevent expansion during heredoc generation"
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Unbound variable patterns in heredocs: ${issues[*]}"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} No unbound variable issues detected in heredocs"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 8: ShellCheck Linting
 ################################################################################
 
 check_shellcheck() {
@@ -597,6 +706,7 @@ main() {
   check_multi_phase_docs
   check_tbb_verification
   check_heredoc_syntax
+  check_heredoc_unbound_vars
   check_bash_compatibility
   check_shellcheck
   check_manifest_validation

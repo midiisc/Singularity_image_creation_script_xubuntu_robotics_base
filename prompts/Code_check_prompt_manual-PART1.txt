@@ -506,6 +506,15 @@ C. Variables & Defaults
     - **SOLUTION**: Always prefer `SCRIPT_DIR` for path resolution over `PWD` for consistency
     - **VALIDATION**: Check all path variables use proper fallbacks: `grep -nE '(SCRIPT_DIR|PWD|CACHE_DIR|OUT_DIR).*=' script.sh`
     - **CONTAINER CONTEXT**: When sourcing config in container, ensure variables work without host-side `SCRIPT_DIR`
+  - **CRITICAL - HEREDOC VARIABLE EXPANSION**: When using heredocs with `set -u` enabled, variables are expanded when heredoc is generated:
+    - **PROBLEM**: Variables defined inside heredoc content (e.g., container %post section) are not available when heredoc is generated on host
+    - **PROBLEM**: With `set -u`, unbound variable references in heredoc cause "unbound variable" errors during heredoc generation
+    - **SOLUTION**: Escape variables that should be expanded at runtime (inside container): `\${VAR}` instead of `${VAR}`
+    - **SOLUTION**: Use default values for variables that may not be set: `\${VAR:-default}` instead of `${VAR}`
+    - **SOLUTION**: Only expand variables at generation time if they're guaranteed to be set on host (e.g., `${BASE_IMAGE}` from config.sh)
+    - **DETECTION**: `grep -nE '<<[A-Z_]+\|cat.*<<[A-Z_]+' script.sh` to find heredocs, then check for `${VAR}` references inside
+    - **VALIDATION**: For each heredoc, identify which variables should be expanded at generation vs runtime, escape runtime variables
+    - **EXAMPLE**: In Singularity definition heredoc, `${BASE_IMAGE}` expands at generation (from config.sh), but `${APT_TMP_ALT}` must be escaped as `\${APT_TMP_ALT}` (set in %post section)
 - C6. **VARIABLE DUPLICATION & OVERWRITE PREVENTION**: Maintain dynamic symbol table and prevent unexpected variable reuse:
   - **MANDATORY**: Build and maintain a running symbol table tracking all variable declarations (name, scope: local/global/exported, line number, default value, purpose)
   - **CRITICAL**: Detect duplicate variable declarations - same variable name declared multiple times in same scope
