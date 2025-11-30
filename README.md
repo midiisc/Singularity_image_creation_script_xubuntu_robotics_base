@@ -353,26 +353,43 @@ sudo chmod 1777 /tmp
 
 **Why This Happens Even As Root Inside Container**:
 
-You're correct that only `/container_cache` is bind-mounted. Everything else, including `/tmp`, is inside the container filesystem. However, `/tmp` write failures can still occur:
+You're correct that only `/container_cache` is bind-mounted. Everything else, including `/tmp`, is inside the container filesystem. However, `/tmp` write failures can still occur even when running as root:
 
 1. **Base Image Permissions**: The container uses a Docker base image (`osrf/ros:jazzy-desktop-full-noble`). If the base Ubuntu/ROS Docker image has `/tmp` with incorrect permissions (e.g., 755 instead of 1777), those permissions are inherited when Singularity extracts the Docker image. The container's `/tmp` is part of the container filesystem, but it starts with whatever permissions the base image had.
 
-2. **Build Process Host /tmp Access**: During `singularity build`, the build process itself uses the **host's `/tmp`** for:
+2. **Container Overlay Filesystem Restrictions**: Singularity/Apptainer uses overlay filesystems during build. Even though you're root inside the container, the overlay filesystem may have restrictions:
+   - **Read-only base layer**: The base Docker image is typically mounted read-only
+   - **Overlay mount options**: The overlay may be mounted with restrictive options (noexec, nodev, nosuid)
+   - **Filesystem type**: If the overlay uses tmpfs or a read-only filesystem, writes to `/tmp` will fail even for root
+   - **Mount propagation**: Some mount options prevent writes even with correct permissions
+
+3. **Build Process Host /tmp Access**: During `singularity build`, the build process itself uses the **host's `/tmp`** for:
    - Extracting Docker images
    - Creating temporary overlay filesystems
    - Storing build artifacts (controlled by `--tmpdir`, but some operations may still use host `/tmp`)
    
    If host `/tmp` has wrong permissions, the build process can fail before it even gets to the container's `/tmp`.
 
-3. **Container /tmp Permissions**: Even though `/tmp` is inside the container (not bind-mounted), if the base image had wrong permissions, those persist. The build script fixes this automatically, but if the fix fails (e.g., due to filesystem restrictions during build), writes will fail.
+4. **chmod Limitations in Containers**: Even if you run `chmod 1777 /tmp` as root inside the container, it may fail silently if:
+   - The filesystem is read-only at the mount level
+   - The overlay doesn't support permission changes
+   - Security policies prevent permission modifications
 
-**Root Cause**: 
+**Root Cause Summary**: 
 - **Host `/tmp`**: Must be world-writable (1777) because the build process uses it
-- **Container `/tmp`**: Inherits permissions from base Docker image, which may be incorrect. The build script automatically fixes container `/tmp` permissions, but if that fails, it uses alternative temp directories.
+- **Container `/tmp`**: 
+  - Inherits permissions from base Docker image (may be incorrect)
+  - May be on read-only overlay filesystem
+  - May have mount restrictions that prevent writes even with correct permissions
+  - `chmod` may fail silently due to filesystem/mount restrictions
 
 **The Fix**: 
 - Fix host `/tmp` permissions: `sudo chmod 1777 /tmp`
-- The container build script will automatically detect and handle `/tmp` issues inside the container by using alternative directories if needed.
+- The container build script automatically:
+  - Detects `/tmp` writability issues
+  - Uses alternative temp directories (`/var/tmp/apt-temp`, `/container_cache/apt-temp`, `/tmp/build-temp/apt-temp`)
+  - Configures APT and all tools to use alternative directories
+  - Never falls back to `/tmp` if it's not writable
 
 ### Build Fails with "Couldn't create temporary file /tmp/apt.conf.XXXXXX"
 

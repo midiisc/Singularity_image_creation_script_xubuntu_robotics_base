@@ -750,10 +750,12 @@ debug_glibc() {
   # Use command substitution with fallback for temporary file creation
   # Note: This occurs in non-strict mode context (pipefail disabled), so || fallback is acceptable
   # SC2155: Declare and assign separately to avoid masking return values
+  # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+  local test_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
   local tmp_src
-  tmp_src=$(mktemp -t glibc_testXXXX.c 2>/dev/null) || tmp_src="/tmp/glibc_test_$$.c"
+  tmp_src=$(mktemp -t glibc_testXXXX.c 2>/dev/null) || tmp_src="${test_tmp_dir}/glibc_test_$$.c"
   local tmp_bin
-  tmp_bin=$(mktemp -t glibc_testXXXX 2>/dev/null) || tmp_bin="/tmp/glibc_test_$$"
+  tmp_bin=$(mktemp -t glibc_testXXXX 2>/dev/null) || tmp_bin="${test_tmp_dir}/glibc_test_$$"
   {
     echo '#include <stdlib.h>'
     echo 'int main(void) { return 0; }'
@@ -895,9 +897,11 @@ test_mirror() {
     # Check HTTP status code to detect 403 (blocked), 404, etc.
     # Note: curl returns non-zero exit code for 4xx/5xx, but still writes HTTP code to stdout
     # Use separate files to capture stdout (format string) and stderr (errors)
+    # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+    local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
     local curl_stdout curl_stderr
-    curl_stdout=$(mktemp) || curl_stdout="/tmp/curl_stdout_$$"
-    curl_stderr=$(mktemp) || curl_stderr="/tmp/curl_stderr_$$"
+    curl_stdout=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stdout="${curl_tmp_dir}/curl_stdout_$$"
+    curl_stderr=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stderr="${curl_tmp_dir}/curl_stderr_$$"
     
     LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 25 --connect-timeout 8 --retry 1 -L "${URL}/dists/${CODENAME}/main/binary-amd64/Packages.gz" > "${curl_stdout}" 2> "${curl_stderr}"
     CURL_EXIT_CODE=$?
@@ -961,8 +965,10 @@ test_mirror() {
     # If large file fails, try Release file as fallback
     if [[ "${CURL_EXIT_CODE:-1}" -ne 0 ]] || [[ -z "${CURL_OUTPUT:-}" ]] || [[ "${CURL_OUTPUT:-}" == "0.000000" ]]; then
       # Use same approach for Release file
-      curl_stdout=$(mktemp) || curl_stdout="/tmp/curl_stdout_release_$$"
-      curl_stderr=$(mktemp) || curl_stderr="/tmp/curl_stderr_release_$$"
+      # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+      local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+      curl_stdout=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stdout="${curl_tmp_dir}/curl_stdout_release_$$"
+      curl_stderr=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stderr="${curl_tmp_dir}/curl_stderr_release_$$"
       
       LC_NUMERIC=C curl -s -w '%{http_code}|%{time_total}\n' -o /dev/null -m 10 --connect-timeout 5 --retry 1 "${URL}/dists/${CODENAME}/Release" > "${curl_stdout}" 2> "${curl_stderr}"
       CURL_EXIT_CODE=$?
@@ -1900,9 +1906,11 @@ probe_and_set_mirrors() {
   printf '%s\n' "[info] Detected Ubuntu codename: ${CODENAME}"
   
   # Create temporary file for probe results with error checking
+  # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+  local probe_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
   local probe_results_file
-  if ! probe_results_file="$(mktemp 2>/dev/null)"; then
-    probe_results_file="/tmp/mirror_probe_$$.tmp"
+  if ! probe_results_file="$(mktemp -p "${probe_tmp_dir}" 2>/dev/null)"; then
+    probe_results_file="${probe_tmp_dir}/mirror_probe_$$.tmp"
     if ! : > "${probe_results_file}"; then
       echo "[error] Failed to create temporary file for probe results"
       return 1
@@ -3077,7 +3085,8 @@ export JULIA_DEPOT_PATH="${CACHE_ROOT}/julia_pkgs:/usr/local/share/julia"  # Jul
 # Dependencies: Block 17 (Conda/Miniforge)
 # Outputs: Python packages, conda environments
 setup_conda_staging_area() {
-    local staging_dir="/tmp/conda-staging"
+    # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+    local staging_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}/conda-staging"
     echo "Setting up conda staging area at ${staging_dir}..."
     # J1: Validate parent directory exists before creating subdirectory
     # J2: Use mktemp for secure temporary directory creation (K3)
@@ -3098,8 +3107,10 @@ setup_conda_staging_area() {
     fi
     # Note: Do not modify CONDA_PKGS_DIRS here to avoid interfering with normal conda operations
     # The staging area will be used manually for specific cleanup operations
-    # J2, K2: Note: Using /tmp/conda-staging instead of mktemp for persistence across function calls
+    # J2, K2: Note: Using alternative temp directory for conda-staging instead of /tmp
+    # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
     # This is intentional for manual cleanup operations, but should be cleaned up after use
+    local conda_staging_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}/conda-staging"
     echo "✓ Conda staging area configured (manual mode)"
 }
 # End function (self-contained)
@@ -4192,11 +4203,14 @@ if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
     # shellcheck disable=SC2034 # gpg_exit_code may be used for debugging/logging
     gpg_exit_code=0
     # I4: Capture HTTP status code separately using -w with newline separator
+    # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+    local gpg_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+    local gpg_response_file="${gpg_tmp_dir}/virtualgl_gpg_response_$$.tmp"
     http_code="000"
-    if curl -w "\n%{http_code}" -fsSL --max-time 30 "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>/dev/null > /tmp/virtualgl_gpg_response.tmp; then
+    if curl -w "\n%{http_code}" -fsSL --max-time 30 "${VIRTUALGL_TURBOVNC_GPG_KEY_URL}" 2>/dev/null > "${gpg_response_file}"; then
         # I4: Extract HTTP code from last line of response
-        if [ -f /tmp/virtualgl_gpg_response.tmp ] && [ -s /tmp/virtualgl_gpg_response.tmp ]; then
-            http_code=$(tail -n 1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "000")
+        if [ -f "${gpg_response_file}" ] && [ -s "${gpg_response_file}" ]; then
+            http_code=$(tail -n 1 "${gpg_response_file}" 2>/dev/null || echo "000")
             # I4: Validate HTTP status code is 3-digit number before checking
             if [[ "${http_code}" =~ ^[0-9]{3}$ ]]; then
                 if [ "${http_code}" != "200" ]; then
@@ -4204,7 +4218,7 @@ if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
                     gpg_key_output=""
                 else
                     # I4: HTTP 200 success - extract body (all lines except last)
-                    gpg_key_output=$(head -n -1 /tmp/virtualgl_gpg_response.tmp 2>/dev/null || echo "")
+                    gpg_key_output=$(head -n -1 "${gpg_response_file}" 2>/dev/null || echo "")
                 fi
             else
                 echo "[warn] ⚠ Invalid HTTP status code format: ${http_code}"
@@ -4214,10 +4228,10 @@ if [ -n "${VIRTUALGL_TURBOVNC_GPG_KEY_URL:-}" ]; then
             echo "[warn] ⚠ Downloaded GPG key response is empty or missing"
             gpg_key_output=""
         fi
-        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+        rm -f "${gpg_response_file}" 2>/dev/null || true
     else
         echo "[warn] ⚠ Failed to download GPG key from ${VIRTUALGL_TURBOVNC_GPG_KEY_URL} (connection/timeout error)"
-        rm -f /tmp/virtualgl_gpg_response.tmp 2>/dev/null || true
+        rm -f "${gpg_response_file}" 2>/dev/null || true
         gpg_key_output=""
     fi
     if [ -n "${gpg_key_output:-}" ]; then

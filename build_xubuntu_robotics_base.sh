@@ -3279,10 +3279,14 @@ From: ${BASE_IMAGE}
     gcc -xc++ -E -v < /dev/null 2>&1 | grep -- "^ /" 2>/dev/null || echo "Cannot check (GCC not ready)"
     echo "================================="
     echo "Test compile with stdlib.h:"
-    echo '#include <stdlib.h>' > /tmp/test_c.c
-    echo 'int main() { return 0; }' >> /tmp/test_c.c
-    gcc /tmp/test_c.c -o /tmp/test_c.o && echo "SUCCESS" || echo "FAILED"
-    rm -f /tmp/test_c.c /tmp/test_c.o
+    # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
+    TEST_TMP_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+    TEST_C_SRC="${TEST_TMP_DIR}/test_c_$$.c"
+    TEST_C_BIN="${TEST_TMP_DIR}/test_c_$$.o"
+    echo '#include <stdlib.h>' > "${TEST_C_SRC}"
+    echo 'int main() { return 0; }' >> "${TEST_C_SRC}"
+    gcc "${TEST_C_SRC}" -o "${TEST_C_BIN}" && echo "SUCCESS" || echo "FAILED"
+    rm -f "${TEST_C_SRC}" "${TEST_C_BIN}" 2>/dev/null || true
     echo "================================="
 }
     export MAKEFLAGS="-j\$(( \$(nproc) / 2 ))"
