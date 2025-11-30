@@ -139,21 +139,57 @@ printf '%s\n' "[CRITICAL] Fixing /tmp permissions immediately (before any operat
 # This is critical because base Docker images may have incorrect /tmp permissions
 # Note: We use a simple chmod here since ensure_tmp_permissions() is defined later
 # This initial fix will be re-verified and re-applied by ensure_tmp_permissions() when needed
+
+# CRITICAL DIAGNOSTICS: Check why /tmp might not be writable even as root
+printf '%s\n' "[DIAG] Checking /tmp filesystem status..."
+TMP_PERMS_BEFORE=$(stat -c "%a" /tmp 2>/dev/null || echo "unknown")
+TMP_FSTYPE=$(df -T /tmp 2>/dev/null | tail -1 | awk '{print $2}' || echo "unknown")
+TMP_MOUNT=$(mount | grep -E "^[^ ]+.*on /tmp " || echo "not mounted separately")
+TMP_MOUNT_OPTS=""
+if [ -n "${TMP_MOUNT}" ] && [ "${TMP_MOUNT}" != "not mounted separately" ]; then
+    TMP_MOUNT_OPTS=$(echo "${TMP_MOUNT}" | grep -oE "(ro|rw|noexec|nodev|nosuid)" || echo "none")
+fi
+
+printf '%s\n' "[DIAG]   Current permissions: ${TMP_PERMS_BEFORE}"
+printf '%s\n' "[DIAG]   Filesystem type: ${TMP_FSTYPE}"
+printf '%s\n' "[DIAG]   Mount options: ${TMP_MOUNT_OPTS:-default}"
+
+# Check if /tmp is actually writable (test file creation)
+TMP_TEST_FILE="/tmp/.root_write_test_$$"
+if ! touch "${TMP_TEST_FILE}" 2>/dev/null; then
+    printf '%s\n' "[ERROR] ⚠ /tmp is NOT writable even as root!" >&2
+    printf '%s\n' "[ERROR] This indicates filesystem/mount restrictions, not just permissions" >&2
+    printf '%s\n' "[ERROR] Possible causes:" >&2
+    printf '%s\n' "  1. Container overlay filesystem is read-only" >&2
+    printf '%s\n' "  2. /tmp is mounted with restrictive options (ro, noexec, etc.)" >&2
+    printf '%s\n' "  3. Base Docker image has /tmp on read-only filesystem" >&2
+    printf '%s\n' "  4. Host filesystem restrictions propagated to container" >&2
+    printf '%s\n' "[ERROR] Mount info: ${TMP_MOUNT}" >&2
+    printf '%s\n' "[ERROR] Build cannot continue - will use alternative temp directory" >&2
+    # Don't exit - we'll use alternative temp directory instead
+else
+    rm -f "${TMP_TEST_FILE}" 2>/dev/null || true
+    printf '%s\n' "[DIAG]   /tmp is writable (test file creation succeeded)"
+fi
+
 chmod 1777 /tmp 2>/dev/null || {
     printf '%s\n' "[WARN] Failed to set /tmp permissions to 1777" >&2
+    printf '%s\n' "[WARN] This may indicate mount restrictions (chmod fails even for root)" >&2
     # Try alternative: ensure /tmp exists and is at least writable
     mkdir -p /tmp 2>/dev/null || true
     chmod 777 /tmp 2>/dev/null || true
 }
+
 # Verify /tmp is writable (critical check)
 if [ ! -w /tmp ]; then
     printf '%s\n' "[ERROR] ⚠ /tmp is NOT writable even after chmod attempt!" >&2
-    printf '%s\n' "[ERROR] This will cause build failures. Checking mount status..." >&2
+    printf '%s\n' "[ERROR] This will cause build failures. Full diagnostics:" >&2
     mount | grep -E "^[^ ]+.*on /tmp " || printf '%s\n' "  (no mount info found)"
-    printf '%s\n' "[ERROR] Build cannot continue without writable /tmp" >&2
-    exit 1
+    printf '%s\n' "[ERROR] Build will use alternative temp directory to continue" >&2
+    # Don't exit - we'll configure APT to use alternative directory
+else
+    printf '%s\n' "✓ /tmp permissions fixed and verified (1777)"
 fi
-printf '%s\n' "✓ /tmp permissions fixed and verified (1777)"
 
 #===============================================================================
 # TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)

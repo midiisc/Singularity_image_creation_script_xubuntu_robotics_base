@@ -3060,6 +3060,14 @@ From: ${BASE_IMAGE}
 
 # === %post Section ===
 %post -c /bin/bash
+    # CRITICAL: Set non-interactive environment variables FIRST to prevent any prompts
+    # This must be set before any package operations to suppress "reset password later" and other prompts
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    export NEEDRESTART_MODE=a
+    export UCF_FORCE_CONFFNEW=1
+    
     # Enable strict mode (portable across /bin/sh and /bin/bash)
     if [ -n "${BASH_VERSION:-}" ]; then
         set -euo pipefail
@@ -3155,6 +3163,44 @@ From: ${BASE_IMAGE}
     rm -rf /var/lib/dpkg/lock-frontend
     rm -rf /var/lib/dpkg/lock
     rm -rf /var/cache/apt/archives/lock
+
+    # CRITICAL: Configure APT to use alternative temp directory BEFORE any APT operations
+    # This prevents "Couldn't create temporary file /tmp/apt.conf.XXXXXX" errors
+    # Prefer: /container_cache/apt-temp > ${CONTAINER_BUILD_TMPDIR}/apt-temp > /var/tmp/apt-temp
+    echo "[CRITICAL] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
+    APT_TMP_ALT=""
+    # Try /container_cache/apt-temp first (bind-mounted from host, should be writable)
+    if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/container_cache/apt-temp"
+        echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache)"
+    # Try ${CONTAINER_BUILD_TMPDIR}/apt-temp (already configured temp dir)
+    elif mkdir -p "${CONTAINER_BUILD_TMPDIR}/apt-temp" 2>/dev/null && touch "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null; then
+        rm -f "${CONTAINER_BUILD_TMPDIR}/apt-temp/.test_write_$$" 2>/dev/null || true
+        APT_TMP_ALT="${CONTAINER_BUILD_TMPDIR}/apt-temp"
+        echo "  ✓ Using ${CONTAINER_BUILD_TMPDIR}/apt-temp (build temp dir)"
+    # Fallback to /var/tmp/apt-temp
+    elif mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/var/tmp/apt-temp"
+        echo "  ✓ Using /var/tmp/apt-temp (fallback)"
+    else
+        echo "[WARN] ⚠ Could not find writable temp directory for APT, will try /tmp (may fail)"
+        APT_TMP_ALT="/tmp"
+    fi
+    
+    if [ -n "${APT_TMP_ALT}" ] && [ "${APT_TMP_ALT}" != "/tmp" ]; then
+        # Set proper permissions
+        chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
+        
+        # Configure APT to use alternative temp directory
+        mkdir -p /etc/apt/apt.conf.d
+        echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";" > /etc/apt/apt.conf.d/99-tmpdir-alternative
+        echo "Acquire::TempDir \"${APT_TMP_ALT}\";" >> /etc/apt/apt.conf.d/99-tmpdir-alternative
+        export TMPDIR="${APT_TMP_ALT}"
+        echo "  ✓ APT configured to use ${APT_TMP_ALT} for temporary files"
+        echo "  ✓ This avoids potential /tmp permission/mount issues in container environments"
+    fi
 
     # FIX: Disable PEP 668 for container builds
     # Ubuntu 24.04 has PEP 668 protection, remove it for containers
