@@ -3170,6 +3170,20 @@ From: ${BASE_IMAGE}
     echo "[CRITICAL] Configuring APT to use alternative temporary directory (avoiding /tmp issues)..."
     APT_TMP_ALT=""
     # Try /container_cache/apt-temp first (bind-mounted from host, should be writable)
+    # Check if /container_cache exists and is accessible
+    if [ -d /container_cache ] || [ -L /container_cache ]; then
+        echo "  [DEBUG] /container_cache exists (directory or symlink)"
+        if [ -L /container_cache ]; then
+            echo "  [DEBUG] /container_cache is a symlink: $(readlink /container_cache 2>/dev/null || echo 'unknown')"
+        fi
+        if [ -w /container_cache ] 2>/dev/null; then
+            echo "  [DEBUG] /container_cache is writable"
+        else
+            echo "  [DEBUG] /container_cache is NOT writable (permissions: $(stat -c '%a' /container_cache 2>/dev/null || echo 'unknown'))"
+        fi
+    else
+        echo "  [DEBUG] /container_cache does not exist (bind mount may have failed)"
+    fi
     if mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
         rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
         APT_TMP_ALT="/container_cache/apt-temp"
@@ -3336,6 +3350,24 @@ fi
 
 # Critical: Try apptainer first (preferred), fallback to singularity
 HOST_CACHE_BIND_SRC="${SCRIPT_DIR}/container_cache"
+# CRITICAL: Resolve symlink to actual path if container_cache is a symlink
+# Bind mounts work better with actual paths rather than symlinks
+if [ -L "${HOST_CACHE_BIND_SRC}" ]; then
+    log "container_cache is a symlink, resolving to actual path..."
+    # Use readlink -f to resolve symlink to canonical absolute path
+    HOST_CACHE_BIND_SRC_RESOLVED=""
+    if command -v readlink >/dev/null 2>&1; then
+        HOST_CACHE_BIND_SRC_RESOLVED="$(readlink -f "${HOST_CACHE_BIND_SRC}" 2>/dev/null || echo "")"
+    elif command -v realpath >/dev/null 2>&1; then
+        HOST_CACHE_BIND_SRC_RESOLVED="$(realpath "${HOST_CACHE_BIND_SRC}" 2>/dev/null || echo "")"
+    fi
+    if [ -n "${HOST_CACHE_BIND_SRC_RESOLVED}" ] && [ -d "${HOST_CACHE_BIND_SRC_RESOLVED}" ]; then
+        log "Resolved symlink: ${HOST_CACHE_BIND_SRC} -> ${HOST_CACHE_BIND_SRC_RESOLVED}"
+        HOST_CACHE_BIND_SRC="${HOST_CACHE_BIND_SRC_RESOLVED}"
+    else
+        log_warning "Failed to resolve symlink ${HOST_CACHE_BIND_SRC}, using symlink path (may cause issues)"
+    fi
+fi
 # CRITICAL: Create host cache directory structure with proper permissions BEFORE bind mount
 # This ensures the bind-mounted directory has correct permissions inside the container
 if ! mkdir -p "${HOST_CACHE_BIND_SRC}" 2>/dev/null; then
