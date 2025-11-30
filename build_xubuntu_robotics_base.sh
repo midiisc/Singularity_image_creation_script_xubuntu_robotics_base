@@ -2974,6 +2974,10 @@ fi
 # Critical: This defines the entire container build process
 # Dependencies: Block 15 (VirtualGL), Block 15 (TurboVNC), System (Container runtime)
 # Outputs: VNC server, GPU acceleration
+# CRITICAL: Temporarily disable 'set -u' for heredoc generation to avoid unbound variable errors
+# Variables set inside heredoc content (container %post section) are not available during heredoc generation
+# These variables are properly escaped (\${VAR}) to expand at container runtime, not during heredoc generation
+set +u
 cat > "${DEF_NAME}" <<DEF
 Bootstrap: docker
 From: ${BASE_IMAGE}
@@ -3164,25 +3168,25 @@ From: ${BASE_IMAGE}
     fi
     
     # Set proper permissions
-    chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || chmod 777 "${APT_TMP_ALT}" 2>/dev/null || true
+    chmod 1777 "\${APT_TMP_ALT}" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}" 2>/dev/null || true
     
     # Configure APT to use alternative temp directory (comprehensive configuration)
     mkdir -p /etc/apt/apt.conf.d
     {
-        echo "Dir::Cache::Archives \"${APT_TMP_ALT}\";"
-        echo "Acquire::TempDir \"${APT_TMP_ALT}\";"
-        echo "Dir::State::lists \"${APT_TMP_ALT}/lists\";"
-        echo "Dir::Cache \"${APT_TMP_ALT}\";"
+        echo "Dir::Cache::Archives \"\${APT_TMP_ALT}\";"
+        echo "Acquire::TempDir \"\${APT_TMP_ALT}\";"
+        echo "Dir::State::lists \"\${APT_TMP_ALT}/lists\";"
+        echo "Dir::Cache \"\${APT_TMP_ALT}\";"
     } > /etc/apt/apt.conf.d/99-tmpdir-alternative
     
     # CRITICAL: Set TMPDIR environment variable to APT temp directory
     # This ensures ALL tools (not just APT) use the alternative temp directory
-    export TMPDIR="${APT_TMP_ALT}"
-    export TEMP="${APT_TMP_ALT}"
-    export TMP="${APT_TMP_ALT}"
+    export TMPDIR="\${APT_TMP_ALT}"
+    export TEMP="\${APT_TMP_ALT}"
+    export TMP="\${APT_TMP_ALT}"
     
-    echo "  ✓ APT configured to use ${APT_TMP_ALT} for temporary files"
-    echo "  ✓ TMPDIR/TEMP/TMP environment variables set to ${APT_TMP_ALT}"
+    echo "  ✓ APT configured to use \${APT_TMP_ALT} for temporary files"
+    echo "  ✓ TMPDIR/TEMP/TMP environment variables set to \${APT_TMP_ALT}"
     echo "  ✓ This completely avoids /tmp permission/mount issues"
     
     # CRITICAL: Fix /tmp permissions IMMEDIATELY (after APT config, before other operations)
@@ -3268,20 +3272,20 @@ From: ${BASE_IMAGE}
     # (right after non-interactive variables) to ensure it's configured before ANY APT operations
     # This prevents "Couldn't create temporary file /tmp/apt.conf.XXXXXX" errors
     # The configuration is already in place at this point - verify it's still set
-    if [ -z "${APT_TMP_ALT:-}" ]; then
+    if [ -z "\${APT_TMP_ALT:-}" ]; then
         echo "[WARN] APT_TMP_ALT not set - this should have been configured at start of %post"
         echo "[WARN] Attempting to read from APT config file..."
         if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
-            APT_TMP_ALT=$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative | sed 's/.*"\(.*\)".*/\1/' || echo "")
-            if [ -n "${APT_TMP_ALT}" ]; then
-                echo "[INFO] Found APT temp directory from config: ${APT_TMP_ALT}"
-                export TMPDIR="${APT_TMP_ALT}"
-                export TEMP="${APT_TMP_ALT}"
-                export TMP="${APT_TMP_ALT}"
+            APT_TMP_ALT=\$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative | sed 's/.*"\(.*\)".*/\1/' || echo "")
+            if [ -n "\${APT_TMP_ALT}" ]; then
+                echo "[INFO] Found APT temp directory from config: \${APT_TMP_ALT}"
+                export TMPDIR="\${APT_TMP_ALT}"
+                export TEMP="\${APT_TMP_ALT}"
+                export TMP="\${APT_TMP_ALT}"
             fi
         fi
     else
-        echo "[INFO] APT temp directory configured: ${APT_TMP_ALT}"
+        echo "[INFO] APT temp directory configured: \${APT_TMP_ALT}"
     fi
 
     # FIX: Disable PEP 668 for container builds
@@ -3382,6 +3386,8 @@ From: ${BASE_IMAGE}
 
 DEF
 # End heredoc (self-contained)
+# CRITICAL: Re-enable 'set -u' after heredoc generation
+set -u
 log "Singularity definition file generated successfully."
 
 #===============================================================================
