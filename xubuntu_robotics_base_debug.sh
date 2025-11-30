@@ -203,13 +203,15 @@ fi
 #-------------------------------------------------------------------------------
 if [ ! -w /tmp ]; then
     # Try finding a writable fallback immediately (in order of preference)
+    # CRITICAL: Apptainer 1.4.1 bind-mounts both /tmp and /var/tmp from host during %post
+    # Use container overlay directories (not bind-mounted) for reliability
     early_tmpdir_found=false
-    for fallback in "/container_cache/tmp" "/var/tmp" "/home/root/tmp" "/root/tmp"; do
+    for fallback in "/opt/apt-temp" "/container_cache/tmp" "/apptainer-build-temp/apt" "/usr/local/tmp"; do
         if mkdir -p "${fallback}" 2>/dev/null && [ -w "${fallback}" ]; then
             # Test actual writability with file creation
             if touch "${fallback}/.write_test_$$" 2>/dev/null; then
                 rm -f "${fallback}/.write_test_$$" 2>/dev/null || true
-                printf '%s\n' "⚠ /tmp is read-only. Early-switching TMPDIR to: ${fallback}"
+                printf '%s\n' "⚠ /tmp is read-only (bind-mounted from host). Early-switching TMPDIR to: ${fallback}"
                 export TMPDIR="${fallback}"
                 export TEMP="${fallback}"
                 export TMP="${fallback}"
@@ -224,7 +226,7 @@ if [ ! -w /tmp ]; then
     
     if [ "${early_tmpdir_found}" = false ]; then
         printf '%s\n' "[WARN] ⚠ Could not find writable fallback for TMPDIR, Block 4 may fail" >&2
-        printf '%s\n' "[WARN] Tried: /container_cache/tmp, /var/tmp, /home/root/tmp, /root/tmp" >&2
+        printf '%s\n' "[WARN] Tried: /opt/apt-temp, /container_cache/tmp, /apptainer-build-temp/apt, /usr/local/tmp" >&2
     fi
 fi
 
@@ -788,7 +790,8 @@ debug_glibc() {
   # Note: This occurs in non-strict mode context (pipefail disabled), so || fallback is acceptable
   # SC2155: Declare and assign separately to avoid masking return values
   # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
-  local test_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+  # Note: /var/tmp is also bind-mounted from host in Apptainer 1.4.1, use /opt as fallback
+  local test_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/opt}}"
   local tmp_src
   tmp_src=$(mktemp -t glibc_testXXXX.c 2>/dev/null) || tmp_src="${test_tmp_dir}/glibc_test_$$.c"
   local tmp_bin
@@ -935,7 +938,8 @@ test_mirror() {
     # Note: curl returns non-zero exit code for 4xx/5xx, but still writes HTTP code to stdout
     # Use separate files to capture stdout (format string) and stderr (errors)
     # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
-    local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+    # Note: /var/tmp is also bind-mounted from host in Apptainer 1.4.1, use /opt as fallback
+    local curl_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-/opt}}"
     local curl_stdout curl_stderr
     curl_stdout=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stdout="${curl_tmp_dir}/curl_stdout_$$"
     curl_stderr=$(mktemp -p "${curl_tmp_dir}" 2>/dev/null) || curl_stderr="${curl_tmp_dir}/curl_stderr_$$"
@@ -3612,17 +3616,19 @@ ensure_tmp_permissions() {
 # FIND BEST WRITABLE TEMP DIRECTORY
 #===============================================================================
 # Purpose: Find a writable directory for APT temp files, preferring:
-#          1. /container_cache/apt-temp (bind-mounted from host, should be writable)
-#          2. Current working directory (if writable - may be script's host dir)
-#          3. /var/tmp/apt-temp (fallback)
+#          1. /opt/apt-temp (container overlay - NOT bind-mounted, most reliable)
+#          2. /container_cache/apt-temp (bind-mounted from host, should be writable)
+#          3. /apptainer-build-temp/apt (container overlay - NOT bind-mounted)
+# CRITICAL: Apptainer 1.4.1 bind-mounts /tmp and /var/tmp from host during %post
+#          Use container overlay directories to avoid host filesystem restrictions
 # Parameters: None
 # Returns: 0 on success, 1 on failure
 # Side effects: Sets APT_TMP_ALT global variable
 find_best_writable_temp_dir() {
     local test_dirs=(
+        "/opt/apt-temp"
         "/container_cache/apt-temp"
-        "${PWD:-$(pwd 2>/dev/null || echo /)}/apt-temp"
-        "/var/tmp/apt-temp"
+        "/apptainer-build-temp/apt"
     )
     
     local best_dir=""

@@ -3156,25 +3156,27 @@ From: ${BASE_IMAGE}
     echo "[CRITICAL] Configuring APT to use alternative temporary directory FIRST (before any APT operations)..."
     
     # Find best writable temp directory (try common locations)
+    # CRITICAL: Apptainer 1.4.1 bind-mounts both /tmp and /var/tmp from host during %post
+    # Use container overlay directories (NOT bind-mounted) to avoid host filesystem restrictions
     APT_TMP_ALT=""
-    # Try /var/tmp/apt-temp first (most reliable, doesn't depend on bind mounts)
-    if mkdir -p /var/tmp/apt-temp 2>/dev/null && touch /var/tmp/apt-temp/.test_write_$$ 2>/dev/null; then
-        rm -f /var/tmp/apt-temp/.test_write_$$ 2>/dev/null || true
-        APT_TMP_ALT="/var/tmp/apt-temp"
-        echo "  ✓ Using /var/tmp/apt-temp (most reliable option)"
-    # Try /container_cache/apt-temp (bind-mounted from host)
+    # Try /opt/apt-temp first (container overlay - NOT bind-mounted, most reliable)
+    if mkdir -p /opt/apt-temp 2>/dev/null && touch /opt/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /opt/apt-temp/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/opt/apt-temp"
+        echo "  ✓ Using /opt/apt-temp (container overlay - most reliable)"
+    # Try /container_cache/apt-temp (bind-mounted from host, should be writable)
     elif mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
         rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
         APT_TMP_ALT="/container_cache/apt-temp"
-        echo "  ✓ Using /container_cache/apt-temp (bind-mounted cache)"
-    # Try /tmp/build-temp/apt-temp (fallback)
-    elif mkdir -p /tmp/build-temp/apt-temp 2>/dev/null && touch /tmp/build-temp/apt-temp/.test_write_$$ 2>/dev/null; then
-        rm -f /tmp/build-temp/apt-temp/.test_write_$$ 2>/dev/null || true
-        APT_TMP_ALT="/tmp/build-temp/apt-temp"
-        echo "  ✓ Using /tmp/build-temp/apt-temp (fallback)"
+        echo "  ✓ Using /container_cache/apt-temp (writable bind mount)"
+    # Try /apptainer-build-temp/apt (container overlay - NOT bind-mounted)
+    elif mkdir -p /apptainer-build-temp/apt 2>/dev/null && touch /apptainer-build-temp/apt/.test_write_$$ 2>/dev/null; then
+        rm -f /apptainer-build-temp/apt/.test_write_$$ 2>/dev/null || true
+        APT_TMP_ALT="/apptainer-build-temp/apt"
+        echo "  ✓ Using /apptainer-build-temp/apt (container overlay)"
     else
         echo "[ERROR] ⚠ CRITICAL: Could not find ANY writable temp directory for APT"
-        echo "[ERROR] ⚠ Tried: /var/tmp/apt-temp, /container_cache/apt-temp, /tmp/build-temp/apt-temp"
+        echo "[ERROR] ⚠ Tried: /opt/apt-temp, /container_cache/apt-temp, /apptainer-build-temp/apt"
         echo "[ERROR] ⚠ Build cannot continue without a writable temp directory"
         exit 1
     fi
@@ -3282,7 +3284,8 @@ From: ${BASE_IMAGE}
     echo "================================="
     echo "Test compile with stdlib.h:"
     # CRITICAL: Use alternative temp directory instead of /tmp (may not be writable in containers)
-    TEST_TMP_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
+    # Note: /var/tmp is also bind-mounted from host in Apptainer 1.4.1, use /opt as fallback
+    TEST_TMP_DIR="${APT_TMP_ALT:-${TMPDIR:-/opt}}"
     TEST_C_SRC="${TEST_TMP_DIR}/test_c_$$.c"
     TEST_C_BIN="${TEST_TMP_DIR}/test_c_$$.o"
     echo '#include <stdlib.h>' > "${TEST_C_SRC}"
