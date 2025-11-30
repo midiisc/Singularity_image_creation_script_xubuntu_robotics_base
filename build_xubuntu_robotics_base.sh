@@ -1714,8 +1714,10 @@ mkdir -p "${BUILD_TMP_DIR}" || {
     log_error "Failed to create temporary directory: ${BUILD_TMP_DIR}"
     exit 1
 }
-# Use 755 instead of 777 for security (container runtime should handle access)
-chmod 755 "${BUILD_TMP_DIR}" || {
+# Use 1777 (sticky bit) for temp directories to allow container root user to write correctly
+# This is critical for Singularity/Apptainer builds where the container's root user
+# needs write access to the host temp directory mapped into the container
+chmod 1777 "${BUILD_TMP_DIR}" || {
     log_warning "Failed to set permissions on ${BUILD_TMP_DIR}, continuing..."
 }
 # ENDIF: chmod on BUILD_TMP_DIR

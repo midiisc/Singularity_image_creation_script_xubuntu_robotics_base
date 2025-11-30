@@ -192,6 +192,43 @@ else
 fi
 
 #===============================================================================
+# EARLY TMPDIR FAILOVER (BEFORE BLOCK 4 - MIRROR PROBING)
+#===============================================================================
+# Purpose: If /tmp is not writable, immediately switch to a writable directory
+#          so early blocks (like Mirror Probing in Block 4) do not crash when
+#          using mktemp or other tools that depend on TMPDIR
+# Critical: This must run BEFORE Block 4 which uses mktemp for curl operations
+# Dependencies: None (runs early, before most functions are defined)
+# Outputs: TMPDIR, TEMP, TMP environment variables set to writable directory
+#-------------------------------------------------------------------------------
+if [ ! -w /tmp ]; then
+    # Try finding a writable fallback immediately (in order of preference)
+    early_tmpdir_found=false
+    for fallback in "/container_cache/tmp" "/var/tmp" "/home/root/tmp" "/root/tmp"; do
+        if mkdir -p "${fallback}" 2>/dev/null && [ -w "${fallback}" ]; then
+            # Test actual writability with file creation
+            if touch "${fallback}/.write_test_$$" 2>/dev/null; then
+                rm -f "${fallback}/.write_test_$$" 2>/dev/null || true
+                printf '%s\n' "⚠ /tmp is read-only. Early-switching TMPDIR to: ${fallback}"
+                export TMPDIR="${fallback}"
+                export TEMP="${fallback}"
+                export TMP="${fallback}"
+                # Ensure APT uses this via config immediately (before Block 4)
+                mkdir -p /etc/apt/apt.conf.d 2>/dev/null
+                echo "Acquire::TempDir \"${fallback}\";" >> /etc/apt/apt.conf.d/00-early-tmpdir
+                early_tmpdir_found=true
+                break
+            fi
+        fi
+    done
+    
+    if [ "${early_tmpdir_found}" = false ]; then
+        printf '%s\n' "[WARN] ⚠ Could not find writable fallback for TMPDIR, Block 4 may fail" >&2
+        printf '%s\n' "[WARN] Tried: /container_cache/tmp, /var/tmp, /home/root/tmp, /root/tmp" >&2
+    fi
+fi
+
+#===============================================================================
 # TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)
 #===============================================================================
 # Purpose: Define color variables before Block 0 uses them
