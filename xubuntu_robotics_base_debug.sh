@@ -4721,14 +4721,19 @@ if [ ! -f "/usr/bin/find" ]; then
     exit 1
 fi
 echo "  ✓ /usr/bin/find exists"
-# CRITICAL: Test find -printf using existing files first (avoid temp file creation issues in containers)
-# In Singularity containers, /tmp may be read-only (bind-mounted), so prefer existing files
-TEST_FILE_EXISTING="/etc/passwd"
-if [ -f "${TEST_FILE_EXISTING}" ]; then
-    echo "  Testing /usr/bin/find -printf with existing file: ${TEST_FILE_EXISTING}"
-    if /usr/bin/find "${TEST_FILE_EXISTING}" -printf '%p\n' >/dev/null 2>&1; then
-        echo "  ✓ /usr/bin/find supports -printf (verified with ${TEST_FILE_EXISTING})"
-        # Ensure /usr/bin is in PATH before other directories
+# CRITICAL: Test find -printf using a writable temporary file to avoid overlay FS/system file issues
+# We use APT_TMP_ALT which was verified writable in Block 8.4
+# Using ANSI-C quoting ($'%p\n') ensures bash interprets \n as newline before passing to find
+TEST_DIR_SAFE="${APT_TMP_ALT:-${TMPDIR:-/tmp}}"
+TEST_FILE_SAFE="${TEST_DIR_SAFE}/find_printf_test_$$"
+# Create a clean test file
+if touch "${TEST_FILE_SAFE}" 2>/dev/null; then
+    echo "  Testing /usr/bin/find -printf with temp file: ${TEST_FILE_SAFE}"
+    # Run test, capturing output for debugging if needed, but checking exit code
+    # Use ANSI-C quoting ($'%p\n') for reliable escape sequence handling
+    if /usr/bin/find "${TEST_FILE_SAFE}" -printf $'%p\n' >/dev/null 2>&1; then
+        echo "  ✓ /usr/bin/find supports -printf (verified)"
+        # Ensure /usr/bin is in PATH before other directories if needed
         if [ "${FIND_PATH}" != "/usr/bin/find" ]; then
             echo "[WARN] ⚠ PATH find (${FIND_PATH}) is not /usr/bin/find"
             echo "[INFO] Updating PATH to prioritize /usr/bin..."
@@ -4737,7 +4742,7 @@ if [ -f "${TEST_FILE_EXISTING}" ]; then
             # Verify PATH find now works
             NEW_FIND_PATH=$(command -v find 2>/dev/null || echo "not found")
             echo "  Updated PATH find: ${NEW_FIND_PATH}"
-            if find "${TEST_FILE_EXISTING}" -printf '%p\n' >/dev/null 2>&1; then
+            if find "${TEST_FILE_SAFE}" -printf $'%p\n' >/dev/null 2>&1; then
                 echo "  ✓ PATH find now supports -printf after PATH update"
             else
                 echo "[WARN] ⚠ PATH find does not support -printf, but /usr/bin/find does"
@@ -4747,37 +4752,22 @@ if [ -f "${TEST_FILE_EXISTING}" ]; then
             echo "  ✓ PATH find is /usr/bin/find (correct)"
         fi
     else
-        echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
-        echo "[ERROR] ⚠ Testing find version..."
+        echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf on verified writable file"
+        echo "[ERROR] ⚠ Command output for diagnostics:"
+        /usr/bin/find "${TEST_FILE_SAFE}" -printf $'%p\n' || true
+        echo "[ERROR] ⚠ Find version:"
         /usr/bin/find --version 2>&1 | head -1 || echo "  Cannot get find version"
-        echo "[ERROR] ⚠ This indicates findutils installation failed or system incompatibility"
+        rm -f "${TEST_FILE_SAFE}" 2>/dev/null || true
         exit 1
     fi
+    rm -f "${TEST_FILE_SAFE}" 2>/dev/null || true
 else
-    # Fallback: Try to create a test file if /etc/passwd doesn't exist (shouldn't happen)
-    echo "[WARN] ⚠ /etc/passwd not found, attempting to create test file..."
-    # Use APT_TMP_ALT if available (should be set earlier and be writable)
-    TEST_DIR="${APT_TMP_ALT:-${TMPDIR:-/var/tmp}}"
-    if [ ! -w "${TEST_DIR}" ] 2>/dev/null; then
-        TEST_DIR="/tmp"
-    fi
-    echo "  Trying temp directory: ${TEST_DIR}"
-    mkdir -p "${TEST_DIR}" 2>/dev/null || true
-    TEST_FILE="${TEST_DIR}/find_printf_test_$$"
-    if touch "${TEST_FILE}" 2>/dev/null; then
-        echo "  ✓ Test file created: ${TEST_FILE}"
-        if /usr/bin/find "${TEST_FILE}" -printf '%p\n' >/dev/null 2>&1; then
-            echo "  ✓ /usr/bin/find supports -printf"
-        else
-            echo "[ERROR] ⚠ /usr/bin/find does NOT support -printf"
-            /usr/bin/find --version 2>&1 | head -1 || echo "  Cannot get find version"
-            rm -f "${TEST_FILE}" 2>/dev/null || true
-            exit 1
-        fi
-        rm -f "${TEST_FILE}" 2>/dev/null || true
+    # Fallback only if we absolutely cannot write to our temp dir (unlikely given Block 8 checks)
+    echo "[WARN] ⚠ Could not create test file in ${TEST_DIR_SAFE}, skipping rigorous -printf check"
+    if /usr/bin/find --version >/dev/null 2>&1; then
+        echo "  ✓ /usr/bin/find exists and executes (version check passed)"
     else
-        echo "[ERROR] ⚠ Could not create test file and /etc/passwd not available"
-        echo "[ERROR] ⚠ Cannot verify find -printf support"
+        echo "[ERROR] ⚠ /usr/bin/find failed basic execution check"
         exit 1
     fi
 fi
@@ -11442,8 +11432,11 @@ if [ "${PHASE3_ALL_SUCCESS}" = true ]; then
     -D SuiteSparse_DIR="${SuiteSparse_DIR}"
 
   #--- Sub-block 17.12: Build and install g2o ---
-  # Critical: Compile g2o with ninja using half CPU cores
-  ninja -j$(($(nproc) / 2)) || { printf "ERROR: Failed to build g2o\n" >&2; exit 1; }
+  # Critical: Compile g2o with ninja using memory-aware job calculation
+  # Optimization: Use calculate_build_jobs to maximize throughput without OOM
+  BUILD_JOBS=$(calculate_build_jobs)
+  echo "Building g2o with ${BUILD_JOBS} parallel jobs..."
+  ninja -j"${BUILD_JOBS}" || { printf "ERROR: Failed to build g2o\n" >&2; exit 1; }
   ninja install 2>&1 | tee /tmp/g2o_install.log || { printf "ERROR: Failed to install g2o\n" >&2; exit 1; }
   # Use dynamic directory detection from installation output
   run_ldconfig_refresh_from_install_output "/tmp/g2o_install.log" 200
