@@ -1139,9 +1139,25 @@ comprehensive_cleanup() {
     echo ""
     echo "2. Cleaning build temp directories in OUR folders..."
     # Critical: Remove all temporary build artifacts in controlled locations
-    strict_cleanup_our_dirs "$OUR_WORKSPACE_DIR"
-    strict_cleanup_our_dirs "$OUR_TMP_DIR"
-    strict_cleanup_our_dirs "$OUR_HOME_DIR"
+    local failed_dirs=()
+    
+    echo "   Cleaning ${OUR_WORKSPACE_DIR}..."
+    if ! strict_cleanup_our_dirs "$OUR_WORKSPACE_DIR"; then
+        failed_dirs+=("${OUR_WORKSPACE_DIR}")
+        echo "   ✗ Failed to clean ${OUR_WORKSPACE_DIR}"
+    fi
+    
+    echo "   Cleaning ${OUR_TMP_DIR}..."
+    if ! strict_cleanup_our_dirs "$OUR_TMP_DIR"; then
+        failed_dirs+=("${OUR_TMP_DIR}")
+        echo "   ✗ Failed to clean ${OUR_TMP_DIR}"
+    fi
+    
+    echo "   Cleaning ${OUR_HOME_DIR}..."
+    if ! strict_cleanup_our_dirs "$OUR_HOME_DIR"; then
+        failed_dirs+=("${OUR_HOME_DIR}")
+        echo "   ✗ Failed to clean ${OUR_HOME_DIR}"
+    fi
 
     # === Step 3: Clean container cache directories ===
     echo ""
@@ -1365,6 +1381,18 @@ comprehensive_cleanup() {
 
     if [ "${remaining_temps:-0}" -gt 0 ]; then
         echo "  ✗ Still have ${remaining_temps} temp directories"
+        echo "  Listing remaining directories:"
+        for candidate_dir in "${cleanup_dirs[@]}"; do
+            if [ -d "${candidate_dir}" ]; then
+                find "${candidate_dir}" -maxdepth 1 -type d \( \
+                    -name "build-temp-*" \
+                    -o -name "bundle-temp-*" \
+                    -o -name "sbuild-*" \
+                \) 2>/dev/null | while IFS= read -r remaining_dir || [ -n "${remaining_dir}" ]; do
+                    echo "    - ${remaining_dir}"
+                done
+            fi
+        done
         issues=$((issues + remaining_temps))
     else
         echo "  ✓ No temp directories remaining"
@@ -1408,11 +1436,38 @@ comprehensive_cleanup() {
 
     # Final status report
     echo ""
-    if [ "${issues:-0}" -eq 0 ]; then
+    if [ "${issues:-0}" -eq 0 ] && [ "${#failed_dirs[@]}" -eq 0 ]; then
         echo "CLEANUP COMPLETE - No issues found"
         return 0
     else
         echo "!!! CLEANUP INCOMPLETE - ${issues} issues remain"
+        if [ "${#failed_dirs[@]}" -gt 0 ]; then
+            echo ""
+            echo "Failed to clean the following directories:"
+            for failed_dir in "${failed_dirs[@]}"; do
+                echo "  ✗ ${failed_dir}"
+                # List remaining directories in failed location
+                if [ -d "${failed_dir}" ]; then
+                    local remaining_in_dir
+                    remaining_in_dir=$(find "${failed_dir}" -maxdepth 1 -type d \( \
+                        -name "build-temp-*" \
+                        -o -name "bundle-temp-*" \
+                        -o -name "sbuild-*" \
+                    \) 2>/dev/null | wc -l | tr -d '[:space:]')
+                    remaining_in_dir="${remaining_in_dir:-0}"
+                    if [ "${remaining_in_dir:-0}" -gt 0 ]; then
+                        echo "    Remaining directories in ${failed_dir}:"
+                        find "${failed_dir}" -maxdepth 1 -type d \( \
+                            -name "build-temp-*" \
+                            -o -name "bundle-temp-*" \
+                            -o -name "sbuild-*" \
+                        \) 2>/dev/null | while IFS= read -r remaining_dir || [ -n "${remaining_dir}" ]; do
+                            echo "      - ${remaining_dir}"
+                        done
+                    fi
+                fi
+            done
+        fi
         return 1
     fi
     # End if-else block (self-contained)
@@ -1437,6 +1492,8 @@ log "Starting comprehensive pre-build cleanup..."
 if ! comprehensive_cleanup; then
     log_error "Comprehensive cleanup failed"
     log_error "Cannot proceed with build until all remnants are removed"
+    log_error "Check the cleanup output above for specific directories that failed to clean"
+    log_error "Failed directories and remaining temp directories are listed in the cleanup report"
     exit 1
 fi
 # End if-fi block (self-contained)
