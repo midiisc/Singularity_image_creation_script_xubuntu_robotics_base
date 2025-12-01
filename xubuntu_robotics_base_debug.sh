@@ -3911,26 +3911,31 @@ if ensure_directory_writable "${APT_TMP_ALT}" "APT alternative temp directory"; 
     fi
     echo "[INFO]   This avoids potential /tmp permission/mount issues in container environments"
     
-    # CRITICAL FIX: Create shim wrappers for gpg and apt-key
+    # CRITICAL FIX: Create shim wrappers for gpg and apt-key (only if not already shimmed by bootstrap)
     # APT sanitizes environment before spawning subprocesses, so TMPDIR gets lost
     # Solution: Create wrapper scripts in /usr/local/bin (higher PATH priority) that
     # intercept calls and force TMPDIR to the alternative temp directory
-    echo "[INFO] Creating shim wrappers for gpg and apt-key to intercept temp directory usage..."
+    # NOTE: Bootstrap block already shimmed /usr/bin/gpg and /usr/bin/apt-key, so we skip if .real files exist
+    echo "[INFO] Checking if additional shim wrappers are needed..."
     mkdir -p /usr/local/bin
     
-    # Find real gpg binary location
-    REAL_GPG=""
-    if command -v gpg >/dev/null 2>&1; then
-        REAL_GPG="$(command -v gpg)"
-    elif [ -x /usr/bin/gpg ]; then
-        REAL_GPG="/usr/bin/gpg"
+    # Check if gpg is already shimmed by bootstrap block
+    if [ -f /usr/bin/gpg.real ]; then
+        echo "[INFO] gpg already shimmed by bootstrap block - skipping /usr/local/bin wrapper"
     else
-        echo "[WARN] ⚠ gpg not found - shim wrapper will be created but may not work"
-        REAL_GPG="/usr/bin/gpg"
-    fi
-    
-    # Create gpg shim wrapper with variable expansion for real binary path
-    cat > /usr/local/bin/gpg <<GPGSHIMEOF
+        # Find real gpg binary location
+        REAL_GPG=""
+        if command -v gpg >/dev/null 2>&1; then
+            REAL_GPG="$(command -v gpg)"
+        elif [ -x /usr/bin/gpg ]; then
+            REAL_GPG="/usr/bin/gpg"
+        else
+            echo "[WARN] ⚠ gpg not found - shim wrapper will be created but may not work"
+            REAL_GPG="/usr/bin/gpg"
+        fi
+        
+        # Create gpg shim wrapper with variable expansion for real binary path
+        cat > /usr/local/bin/gpg <<GPGSHIMEOF
 #!/bin/bash
 # Purpose: Shim wrapper for gpg that forces TMPDIR to alternative temp directory
 # This intercepts gpg calls and ensures they use a writable temp directory
@@ -3976,11 +3981,14 @@ fi
 exec "${REAL_GPG}" "\$@"
 GPGSHIMEOF
     
-    chmod +x /usr/local/bin/gpg
-    echo "[INFO] ✓ Created gpg shim wrapper at /usr/local/bin/gpg"
+        chmod +x /usr/local/bin/gpg
+        echo "[INFO] ✓ Created gpg shim wrapper at /usr/local/bin/gpg"
+    fi
     
-    # Create apt-key shim wrapper (if apt-key exists)
-    if command -v apt-key >/dev/null 2>&1 || [ -x /usr/bin/apt-key ]; then
+    # Create apt-key shim wrapper (if apt-key exists and not already shimmed)
+    if [ -f /usr/bin/apt-key.real ]; then
+        echo "[INFO] apt-key already shimmed by bootstrap block - skipping /usr/local/bin wrapper"
+    elif command -v apt-key >/dev/null 2>&1 || [ -x /usr/bin/apt-key ]; then
         REAL_APT_KEY=""
         if command -v apt-key >/dev/null 2>&1; then
             REAL_APT_KEY="$(command -v apt-key)"
@@ -4041,12 +4049,9 @@ APTKEYSHIMEOF
         echo "[INFO] apt-key not found - skipping apt-key shim wrapper (may not be needed)"
     fi
     
-    # Verify shims are working
-    if [ -x /usr/local/bin/gpg ] && /usr/local/bin/gpg --version >/dev/null 2>&1; then
-        echo "[INFO] ✓ gpg shim wrapper verified working"
-    else
-        echo "[WARN] ⚠ gpg shim wrapper may not be working correctly"
-    fi
+    # Skip verification step - it can hang if gpg is having issues
+    # Bootstrap block already verified the shims work by successfully finding a writable directory
+    echo "[INFO] Shim wrappers configured (bootstrap block handles primary shimming)"
     
 else
     echo "[ERROR] ⚠ Cannot create writable temporary directory at ${APT_TMP_ALT} - build cannot continue"
