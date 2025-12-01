@@ -3584,9 +3584,28 @@ else
     fi
 fi
 # ENDIF: host cache directory creation and permission setup
+
+#--- Sub-block 22.x: Configure Cache and /tmp Bind Mounts ---
+# CRITICAL FIX: Create a dedicated scratch directory for /tmp
+# This solves the "Permission denied" errors for GPG, apt-key, and mktemp inside the container
+# By bind-mounting a writable host directory to /tmp, we bypass container filesystem restrictions
+CONTAINER_TMP_BIND="${BUILD_TMP_DIR}/container_tmp"
+mkdir -p "${CONTAINER_TMP_BIND}"
+chmod 1777 "${CONTAINER_TMP_BIND}" 2>/dev/null || chmod 777 "${CONTAINER_TMP_BIND}" 2>/dev/null || true
+log "Created container temp directory: ${CONTAINER_TMP_BIND} (permissions: $(stat -c "%a" "${CONTAINER_TMP_BIND}" 2>/dev/null || echo "unknown"))"
+
 # CRITICAL: Explicitly specify :rw mode for bind mount to ensure write permissions
 # Even though Apptainer/Singularity defaults to rw, being explicit prevents issues
-HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache:rw"
+# Bind mount structure:
+#   1. Cache directory -> /container_cache (for package caching)
+#   2. Container temp dir -> /tmp (Fixes GPG/APT permission errors)
+#   3. Container temp dir -> /var/tmp (Fixes some other tools)
+HOST_CACHE_BIND_SPEC="${HOST_CACHE_BIND_SRC}:/container_cache:rw,${CONTAINER_TMP_BIND}:/tmp:rw,${CONTAINER_TMP_BIND}:/var/tmp:rw"
+
+log "Bind mounts configured:"
+log "  - Cache: ${HOST_CACHE_BIND_SRC} -> /container_cache"
+log "  - Temp:  ${CONTAINER_TMP_BIND} -> /tmp (Fixes permission errors)"
+log "  - Temp:  ${CONTAINER_TMP_BIND} -> /var/tmp (Fixes permission errors)"
 
 if [ -x /usr/bin/apptainer ]; then
     log "Using apptainer for container build..."

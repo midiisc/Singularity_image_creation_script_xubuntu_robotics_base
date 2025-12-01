@@ -5345,6 +5345,26 @@ printf '%b\n' "${BLUE}BLOCK 12A: Intel oneAPI MKL Installation${NC}"
 printf '%b\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 printf '%s\n' ""
 
+# 1. PRE-FLIGHT CHECK: Ensure we have a writable temp dir
+# (This should be solved by the host bind-mount, but we verify)
+echo "[12A.0] Verifying /tmp is writable (required for GPG/APT operations)..."
+if ! touch /tmp/.mkl_test_$$ 2>/dev/null; then
+    echo -e "  ${YELLOW}⚠ /tmp is not writable! Attempting fallback...${NC}"
+    # Use alternative temp directory if /tmp is not writable
+    if [ -n "${APT_TMP_ALT:-}" ] && [ -d "${APT_TMP_ALT}" ]; then
+        export TMPDIR="${APT_TMP_ALT}"
+        export TEMP="${APT_TMP_ALT}"
+        export TMP="${APT_TMP_ALT}"
+        echo -e "  ${YELLOW}  Using alternative temp directory: ${APT_TMP_ALT}${NC}"
+    else
+        echo -e "  ${RED}✗ ERROR: No writable temp directory available - GPG/APT operations may fail${NC}"
+        echo -e "  ${YELLOW}  This should be resolved by host bind-mount of /tmp${NC}"
+    fi
+else
+    rm -f /tmp/.mkl_test_$$ 2>/dev/null || true
+    echo -e "  ${GREEN}✓ /tmp is writable (bind-mount working correctly)${NC}"
+fi
+
 : "${INTEL_ONEAPI_GPG_KEY_URL:?INTEL_ONEAPI_GPG_KEY_URL must be set in config.sh}"
 : "${INTEL_ONEAPI_APT_SOURCE:?INTEL_ONEAPI_APT_SOURCE must be set in config.sh}"
 
