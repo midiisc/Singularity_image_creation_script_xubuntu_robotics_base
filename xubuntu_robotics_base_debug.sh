@@ -231,6 +231,80 @@ if [ ! -w /tmp ]; then
 fi
 
 #===============================================================================
+# CRITICAL FIX: TOOL SHIMS TO BYPASS APT ENVIRONMENT SANITIZATION
+#===============================================================================
+# Purpose: Replace system binaries (gpg, apt-key, mktemp) with shim scripts that
+#          force-restore TMPDIR before calling the real tools.
+# Problem: apt-get strips TMPDIR env var before calling gpg/apt-key/mktemp.
+#          These tools then default to /tmp, which is broken/read-only.
+# Solution: Replace binaries with shims that force-restore our safe TMPDIR.
+# Dependencies: EARLY TMPDIR FAILOVER (sets TMPDIR) or APT_TMP_ALT (set later)
+# Outputs: Shim scripts installed in /usr/bin/ replacing real binaries
+#-------------------------------------------------------------------------------
+# Determine which temp directory to use (APT_TMP_ALT if set, otherwise TMPDIR from early failover)
+SHIM_TMP_DIR="${APT_TMP_ALT:-${TMPDIR:-/opt/apt-temp}}"
+
+if [ -n "${SHIM_TMP_DIR}" ] && [ -d "${SHIM_TMP_DIR}" ]; then
+    printf '%s\n' "[CRITICAL] Installing shims to force tools to use ${SHIM_TMP_DIR}..."
+    
+    # Ensure the directory is writable before installing shims
+    if [ -w "${SHIM_TMP_DIR}" ]; then
+        # 1. Shim for GPG (used by apt-key and repo verification)
+        if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
+            mv /usr/bin/gpg /usr/bin/gpg.real
+            cat > /usr/bin/gpg <<GPGSHIMEOF
+#!/bin/sh
+export TMPDIR="${SHIM_TMP_DIR}"
+export TEMP="${SHIM_TMP_DIR}"
+export TMP="${SHIM_TMP_DIR}"
+# Ensure we preserve all arguments
+exec /usr/bin/gpg.real "\$@"
+GPGSHIMEOF
+            chmod 755 /usr/bin/gpg
+            printf '%s\n' "  ✓ Installed GPG shim"
+        fi
+        
+        # 2. Shim for apt-key (often calls mktemp directly)
+        if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
+            mv /usr/bin/apt-key /usr/bin/apt-key.real
+            cat > /usr/bin/apt-key <<APTKEYSHIMEOF
+#!/bin/sh
+export TMPDIR="${SHIM_TMP_DIR}"
+export TEMP="${SHIM_TMP_DIR}"
+export TMP="${SHIM_TMP_DIR}"
+# apt-key often uses /tmp explicitly, so we use a stronger override if possible
+# or just rely on the env var which apt-key script usually respects
+exec /usr/bin/apt-key.real "\$@"
+APTKEYSHIMEOF
+            chmod 755 /usr/bin/apt-key
+            printf '%s\n' "  ✓ Installed apt-key shim"
+        fi
+        
+        # 3. Create a global mktemp wrapper (nuclear option for shell scripts)
+        # Many scripts call 'mktemp' which defaults to /tmp if TMPDIR isn't set.
+        # Since APT scrubs TMPDIR, scripts called by APT fail.
+        if [ -f /usr/bin/mktemp ] && [ ! -f /usr/bin/mktemp.real ]; then
+            mv /usr/bin/mktemp /usr/bin/mktemp.real
+            cat > /usr/bin/mktemp <<MKTEMPSHIMEOF
+#!/bin/sh
+export TMPDIR="${SHIM_TMP_DIR}"
+export TEMP="${SHIM_TMP_DIR}"
+export TMP="${SHIM_TMP_DIR}"
+exec /usr/bin/mktemp.real "\$@"
+MKTEMPSHIMEOF
+            chmod 755 /usr/bin/mktemp
+            printf '%s\n' "  ✓ Installed mktemp shim"
+        fi
+        
+        printf '%s\n' "[CRITICAL] ✓ Tool shims installed successfully - tools will use ${SHIM_TMP_DIR} instead of /tmp"
+    else
+        printf '%s\n' "[WARN] ⚠ ${SHIM_TMP_DIR} is not writable, cannot install safety shims." >&2
+    fi
+else
+    printf '%s\n' "[WARN] ⚠ APT_TMP_ALT/TMPDIR not set or directory missing, cannot install safety shims." >&2
+fi
+
+#===============================================================================
 # TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)
 #===============================================================================
 # Purpose: Define color variables before Block 0 uses them
@@ -3752,6 +3826,8 @@ if ! find_best_writable_temp_dir; then
 fi
 
 # APT_TMP_ALT is now set by find_best_writable_temp_dir
+# CRITICAL: Export APT_TMP_ALT so shim wrappers can access it
+export APT_TMP_ALT
 echo "[INFO] Using APT temp directory: ${APT_TMP_ALT}"
 
 if ensure_directory_writable "${APT_TMP_ALT}" "APT alternative temp directory"; then
@@ -3779,6 +3855,144 @@ if ensure_directory_writable "${APT_TMP_ALT}" "APT alternative temp directory"; 
         echo "[INFO] ✓ APT configured to use ${APT_TMP_ALT}/lists for package index files"
     fi
     echo "[INFO]   This avoids potential /tmp permission/mount issues in container environments"
+    
+    # CRITICAL FIX: Create shim wrappers for gpg and apt-key
+    # APT sanitizes environment before spawning subprocesses, so TMPDIR gets lost
+    # Solution: Create wrapper scripts in /usr/local/bin (higher PATH priority) that
+    # intercept calls and force TMPDIR to the alternative temp directory
+    echo "[INFO] Creating shim wrappers for gpg and apt-key to intercept temp directory usage..."
+    mkdir -p /usr/local/bin
+    
+    # Find real gpg binary location
+    REAL_GPG=""
+    if command -v gpg >/dev/null 2>&1; then
+        REAL_GPG="$(command -v gpg)"
+    elif [ -x /usr/bin/gpg ]; then
+        REAL_GPG="/usr/bin/gpg"
+    else
+        echo "[WARN] ⚠ gpg not found - shim wrapper will be created but may not work"
+        REAL_GPG="/usr/bin/gpg"
+    fi
+    
+    # Create gpg shim wrapper with variable expansion for real binary path
+    cat > /usr/local/bin/gpg <<GPGSHIMEOF
+#!/bin/bash
+# Purpose: Shim wrapper for gpg that forces TMPDIR to alternative temp directory
+# This intercepts gpg calls and ensures they use a writable temp directory
+# even when APT sanitizes the environment before spawning subprocesses
+# Returns: Exit code from real gpg command
+
+# Get alternative temp directory from multiple sources (in order of preference):
+# 1. Environment variable APT_TMP_ALT (may be sanitized by APT)
+# 2. APT config file (persistent, survives environment sanitization)
+# 3. Fallback to common writable directories
+
+ALT_TMP=""
+
+# Try environment variable first
+if [ -n "\${APT_TMP_ALT:-}" ] && [ -d "\${APT_TMP_ALT}" ] && [ -w "\${APT_TMP_ALT}" ]; then
+    ALT_TMP="\${APT_TMP_ALT}"
+# Try reading from APT config file (survives environment sanitization)
+elif [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+    ALT_TMP=\$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    if [ -z "\${ALT_TMP}" ] || [ ! -d "\${ALT_TMP}" ] || [ ! -w "\${ALT_TMP}" ]; then
+        ALT_TMP=""
+    fi
+fi
+
+# Fallback: try to find a writable directory
+if [ -z "\${ALT_TMP}" ]; then
+    for fallback in "/opt/apt-temp" "/container_cache/apt-temp" "/apptainer-build-temp/apt"; do
+        if [ -d "\${fallback}" ] && [ -w "\${fallback}" ]; then
+            ALT_TMP="\${fallback}"
+            break
+        fi
+    done
+fi
+
+# If we found a writable directory, use it
+if [ -n "\${ALT_TMP}" ] && [ -d "\${ALT_TMP}" ] && [ -w "\${ALT_TMP}" ]; then
+    export TMPDIR="\${ALT_TMP}"
+    export TEMP="\${ALT_TMP}"
+    export TMP="\${ALT_TMP}"
+fi
+
+# Call real gpg with all arguments
+exec "${REAL_GPG}" "\$@"
+GPGSHIMEOF
+    
+    chmod +x /usr/local/bin/gpg
+    echo "[INFO] ✓ Created gpg shim wrapper at /usr/local/bin/gpg"
+    
+    # Create apt-key shim wrapper (if apt-key exists)
+    if command -v apt-key >/dev/null 2>&1 || [ -x /usr/bin/apt-key ]; then
+        REAL_APT_KEY=""
+        if command -v apt-key >/dev/null 2>&1; then
+            REAL_APT_KEY="$(command -v apt-key)"
+        else
+            REAL_APT_KEY="/usr/bin/apt-key"
+        fi
+        
+        # Create apt-key shim wrapper with variable expansion for real binary path
+        cat > /usr/local/bin/apt-key <<APTKEYSHIMEOF
+#!/bin/bash
+# Purpose: Shim wrapper for apt-key that forces TMPDIR to alternative temp directory
+# This intercepts apt-key calls and ensures they use a writable temp directory
+# even when APT sanitizes the environment before spawning subprocesses
+# Returns: Exit code from real apt-key command
+
+# Get alternative temp directory from multiple sources (in order of preference):
+# 1. Environment variable APT_TMP_ALT (may be sanitized by APT)
+# 2. APT config file (persistent, survives environment sanitization)
+# 3. Fallback to common writable directories
+
+ALT_TMP=""
+
+# Try environment variable first
+if [ -n "\${APT_TMP_ALT:-}" ] && [ -d "\${APT_TMP_ALT}" ] && [ -w "\${APT_TMP_ALT}" ]; then
+    ALT_TMP="\${APT_TMP_ALT}"
+# Try reading from APT config file (survives environment sanitization)
+elif [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+    ALT_TMP=\$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    if [ -z "\${ALT_TMP}" ] || [ ! -d "\${ALT_TMP}" ] || [ ! -w "\${ALT_TMP}" ]; then
+        ALT_TMP=""
+    fi
+fi
+
+# Fallback: try to find a writable directory
+if [ -z "\${ALT_TMP}" ]; then
+    for fallback in "/opt/apt-temp" "/container_cache/apt-temp" "/apptainer-build-temp/apt"; do
+        if [ -d "\${fallback}" ] && [ -w "\${fallback}" ]; then
+            ALT_TMP="\${fallback}"
+            break
+        fi
+    done
+fi
+
+# If we found a writable directory, use it
+if [ -n "\${ALT_TMP}" ] && [ -d "\${ALT_TMP}" ] && [ -w "\${ALT_TMP}" ]; then
+    export TMPDIR="\${ALT_TMP}"
+    export TEMP="\${ALT_TMP}"
+    export TMP="\${ALT_TMP}"
+fi
+
+# Call real apt-key with all arguments
+exec "${REAL_APT_KEY}" "\$@"
+APTKEYSHIMEOF
+        
+        chmod +x /usr/local/bin/apt-key
+        echo "[INFO] ✓ Created apt-key shim wrapper at /usr/local/bin/apt-key"
+    else
+        echo "[INFO] apt-key not found - skipping apt-key shim wrapper (may not be needed)"
+    fi
+    
+    # Verify shims are working
+    if [ -x /usr/local/bin/gpg ] && /usr/local/bin/gpg --version >/dev/null 2>&1; then
+        echo "[INFO] ✓ gpg shim wrapper verified working"
+    else
+        echo "[WARN] ⚠ gpg shim wrapper may not be working correctly"
+    fi
+    
 else
     echo "[ERROR] ⚠ Cannot create writable temporary directory at ${APT_TMP_ALT} - build cannot continue"
     exit 1

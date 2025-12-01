@@ -3230,6 +3230,161 @@ From: ${BASE_IMAGE}
     echo "  ✓ TMPDIR/TEMP/TMP environment variables set to \${APT_TMP_ALT:-/opt/apt-temp}"
     echo "  ✓ This completely avoids /tmp permission/mount issues"
     
+    # CRITICAL: Create wrapper scripts (shims) to intercept gpg/apt-key calls
+    # APT sanitizes environment before launching subprocesses, so TMPDIR is lost
+    # These wrappers force tools to use writable temp directory even after environment sanitization
+    # The wrappers read APT_TMP_ALT at runtime and use the same fallback logic as the main script
+    echo "[CRITICAL] Creating wrapper scripts (shims) to intercept GPG/apt-key calls..."
+    mkdir -p /usr/local/bin
+    
+    # Find writable temp directory for wrapper scripts (same logic as main script)
+    # Try /opt/apt-temp first (container overlay - most reliable)
+    WRAPPER_TMP=""
+    if mkdir -p /opt/apt-temp 2>/dev/null && touch /opt/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /opt/apt-temp/.test_write_$$ 2>/dev/null || true
+        WRAPPER_TMP="/opt/apt-temp"
+    elif mkdir -p /container_cache/apt-temp 2>/dev/null && touch /container_cache/apt-temp/.test_write_$$ 2>/dev/null; then
+        rm -f /container_cache/apt-temp/.test_write_$$ 2>/dev/null || true
+        WRAPPER_TMP="/container_cache/apt-temp"
+    elif mkdir -p /apptainer-build-temp/apt 2>/dev/null && touch /apptainer-build-temp/apt/.test_write_$$ 2>/dev/null; then
+        rm -f /apptainer-build-temp/apt/.test_write_$$ 2>/dev/null || true
+        WRAPPER_TMP="/apptainer-build-temp/apt"
+    else
+        WRAPPER_TMP="/opt/apt-temp"
+    fi
+    
+    # Create gpg wrapper - intercepts all gpg calls and forces TMPDIR
+    # CRITICAL: Reads from APT config file to survive environment sanitization
+    cat > /usr/local/bin/gpg <<'GPGSHIM'
+#!/bin/bash
+# Purpose: Wrapper script to force gpg to use writable temp directory
+# This intercepts gpg calls even when APT sanitizes environment
+# Reads from APT config file (survives environment sanitization)
+
+ALT_TMP=""
+
+# Try environment variable first (may be sanitized by APT)
+if [ -n "${APT_TMP_ALT:-}" ] && [ -d "${APT_TMP_ALT:-}" ] && [ -w "${APT_TMP_ALT:-}" ]; then
+    ALT_TMP="${APT_TMP_ALT:-}"
+# Try reading from APT config file (survives environment sanitization)
+elif [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+    ALT_TMP=$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    if [ -z "${ALT_TMP}" ] || [ ! -d "${ALT_TMP}" ] || [ ! -w "${ALT_TMP}" ]; then
+        ALT_TMP=""
+    fi
+fi
+
+# Fallback: try to find a writable directory
+if [ -z "${ALT_TMP}" ]; then
+    for fallback in "/opt/apt-temp" "/container_cache/apt-temp" "/apptainer-build-temp/apt"; do
+        if [ -d "${fallback}" ] && [ -w "${fallback}" ]; then
+            ALT_TMP="${fallback}"
+            break
+        fi
+    done
+fi
+
+# If we found a writable directory, use it
+if [ -n "${ALT_TMP}" ] && [ -d "${ALT_TMP}" ] && [ -w "${ALT_TMP}" ]; then
+    export TMPDIR="${ALT_TMP}"
+    export TEMP="${ALT_TMP}"
+    export TMP="${ALT_TMP}"
+fi
+
+exec /usr/bin/gpg "$@"
+GPGSHIM
+    chmod +x /usr/local/bin/gpg
+    
+    # Create apt-key wrapper (if it exists in the system)
+    # CRITICAL: Reads from APT config file to survive environment sanitization
+    if [ -f /usr/bin/apt-key ]; then
+        cat > /usr/local/bin/apt-key <<'APTKEYSHIM'
+#!/bin/bash
+# Purpose: Wrapper script to force apt-key to use writable temp directory
+# Reads from APT config file (survives environment sanitization)
+
+ALT_TMP=""
+
+# Try environment variable first (may be sanitized by APT)
+if [ -n "${APT_TMP_ALT:-}" ] && [ -d "${APT_TMP_ALT:-}" ] && [ -w "${APT_TMP_ALT:-}" ]; then
+    ALT_TMP="${APT_TMP_ALT:-}"
+# Try reading from APT config file (survives environment sanitization)
+elif [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+    ALT_TMP=$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    if [ -z "${ALT_TMP}" ] || [ ! -d "${ALT_TMP}" ] || [ ! -w "${ALT_TMP}" ]; then
+        ALT_TMP=""
+    fi
+fi
+
+# Fallback: try to find a writable directory
+if [ -z "${ALT_TMP}" ]; then
+    for fallback in "/opt/apt-temp" "/container_cache/apt-temp" "/apptainer-build-temp/apt"; do
+        if [ -d "${fallback}" ] && [ -w "${fallback}" ]; then
+            ALT_TMP="${fallback}"
+            break
+        fi
+    done
+fi
+
+# If we found a writable directory, use it
+if [ -n "${ALT_TMP}" ] && [ -d "${ALT_TMP}" ] && [ -w "${ALT_TMP}" ]; then
+    export TMPDIR="${ALT_TMP}"
+    export TEMP="${ALT_TMP}"
+    export TMP="${ALT_TMP}"
+fi
+
+exec /usr/bin/apt-key "$@"
+APTKEYSHIM
+        chmod +x /usr/local/bin/apt-key
+    fi
+    
+    # Create mktemp wrapper - ensures temp files are created in writable location
+    # CRITICAL: Reads from APT config file to survive environment sanitization
+    cat > /usr/local/bin/mktemp <<'MKTEMPSHIM'
+#!/bin/bash
+# Purpose: Wrapper script to force mktemp to use writable temp directory
+# Reads from APT config file (survives environment sanitization)
+
+ALT_TMP=""
+
+# Try environment variable first (may be sanitized by APT)
+if [ -n "${APT_TMP_ALT:-}" ] && [ -d "${APT_TMP_ALT:-}" ] && [ -w "${APT_TMP_ALT:-}" ]; then
+    ALT_TMP="${APT_TMP_ALT:-}"
+# Try reading from APT config file (survives environment sanitization)
+elif [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
+    ALT_TMP=$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || echo "")
+    if [ -z "${ALT_TMP}" ] || [ ! -d "${ALT_TMP}" ] || [ ! -w "${ALT_TMP}" ]; then
+        ALT_TMP=""
+    fi
+fi
+
+# Fallback: try to find a writable directory
+if [ -z "${ALT_TMP}" ]; then
+    for fallback in "/opt/apt-temp" "/container_cache/apt-temp" "/apptainer-build-temp/apt"; do
+        if [ -d "${fallback}" ] && [ -w "${fallback}" ]; then
+            ALT_TMP="${fallback}"
+            break
+        fi
+    done
+fi
+
+# If we found a writable directory, use it
+if [ -n "${ALT_TMP}" ] && [ -d "${ALT_TMP}" ] && [ -w "${ALT_TMP}" ]; then
+    export TMPDIR="${ALT_TMP}"
+    export TEMP="${ALT_TMP}"
+    export TMP="${ALT_TMP}"
+fi
+
+exec /usr/bin/mktemp "$@"
+MKTEMPSHIM
+    chmod +x /usr/local/bin/mktemp
+    
+    # Ensure /usr/local/bin comes before /usr/bin in PATH (critical for interception)
+    export PATH="/usr/local/bin:\${PATH:-/usr/bin:/bin}"
+    echo "  ✓ Created wrapper scripts: gpg, apt-key, mktemp"
+    echo "  ✓ PATH configured to prioritize /usr/local/bin (wrapper interception active)"
+    echo "  ✓ Wrappers will force tools to use writable temp directory even after APT environment sanitization"
+    
     # CRITICAL: Fix /tmp permissions IMMEDIATELY (after APT config, before other operations)
     # Base Docker images may have incorrect /tmp permissions (e.g., 755 instead of 1777)
     # This must happen before sourcing config or running any commands
