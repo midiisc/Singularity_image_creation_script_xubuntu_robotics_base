@@ -5802,6 +5802,8 @@ else
             export MKL_BLAS_LIBRARIES="${MKL_LIB_DIR}/libmkl_intel_lp64.so;${MKL_LIB_DIR}/libmkl_core.so;${MKL_LIB_DIR}/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
             
             printf '%b\n' "${GREEN}✓ Intel oneAPI MKL installation complete${NC}"
+            # ENDIF: MKL_BASE directory check
+            fi
         else
             echo -e "${RED}✗ Error: MKL installation could not be verified.${NC}"
             echo "  Packages installed but directory structure unexpected."
