@@ -298,8 +298,15 @@ install_host_tool() {
     local install_status=0
     
     # Run installation and capture output for better error reporting
-    # Use TMPDIR environment variable to ensure APT uses alternative temp directory if configured
-    install_output=$(sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get install -y --no-install-recommends "${package_name}" 2>&1) || install_status=$?
+    # Use TMPDIR environment variable for tools like gpg/tar, and pass APT options via command-line flags
+    # This avoids creating persistent config files on the host system
+    local apt_cmd
+    if [ -n "${HOST_APT_TMP_ALT:-}" ] && [ "${HOST_APT_TMP_ALT}" != "/tmp" ]; then
+        apt_cmd="apt-get install -y -o Dir::Cache::Archives=${HOST_APT_TMP_ALT} -o Acquire::TempDir=${HOST_APT_TMP_ALT} --no-install-recommends"
+    else
+        apt_cmd="apt-get install -y --no-install-recommends"
+    fi
+    install_output=$(sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" ${apt_cmd} "${package_name}" 2>&1) || install_status=$?
     
     # D1: Quote arithmetic variable expansion
     if [ "${install_status}" -eq 0 ]; then
@@ -359,30 +366,33 @@ if [ -n "${HOST_APT_TMP_ALT}" ] && [ "${HOST_APT_TMP_ALT}" != "/tmp" ]; then
     # Set proper permissions
     chmod 1777 "${HOST_APT_TMP_ALT}" 2>/dev/null || chmod 777 "${HOST_APT_TMP_ALT}" 2>/dev/null || true
     
-    # Create APT config file on host
-    mkdir -p /etc/apt/apt.conf.d 2>/dev/null || true
-    if [ -w /etc/apt/apt.conf.d ] || sudo sh -c '[ -w /etc/apt/apt.conf.d ]'; then
-        {
-            echo "Dir::Cache::Archives \"${HOST_APT_TMP_ALT}\";"
-            echo "Acquire::TempDir \"${HOST_APT_TMP_ALT}\";"
-        } | sudo tee /etc/apt/apt.conf.d/99-host-tmpdir-alternative >/dev/null 2>&1 || true
-        printf '%s\n' "  ✓ Host APT configured to use ${HOST_APT_TMP_ALT}"
-    else
-        printf '%s\n' "  ⚠ WARNING: Cannot write to /etc/apt/apt.conf.d, using TMPDIR environment variable instead" >&2
+    # Clean up any existing persistent config file from previous runs (host hygiene)
+    # This ensures we don't leave persistent configuration affecting future apt operations
+    if [ -f /etc/apt/apt.conf.d/99-host-tmpdir-alternative ]; then
+        sudo rm -f /etc/apt/apt.conf.d/99-host-tmpdir-alternative 2>/dev/null || true
+        printf '%s\n' "  ✓ Cleaned up previous persistent APT config file (keeping host clean)"
     fi
     
-    # Set TMPDIR environment variable for sudo commands
+    # Set TMPDIR environment variable for tools like gpg, tar, mktemp (NOT for apt-get)
+    # APT options will be passed directly via command-line flags to avoid persistent config files
     export TMPDIR="${HOST_APT_TMP_ALT}"
     export TEMP="${HOST_APT_TMP_ALT}"
     export TMP="${HOST_APT_TMP_ALT}"
     printf '%s\n' "  ✓ TMPDIR/TEMP/TMP set to ${HOST_APT_TMP_ALT} for host operations"
+    printf '%s\n' "  ✓ APT will use ${HOST_APT_TMP_ALT} via command-line options (no persistent config)"
 fi
 
 printf '%s\n' "Updating package list..."
-# Use sudo with TMPDIR set to ensure APT uses alternative temp directory
-if ! sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get update -qq 2>&1; then
-    printf '%s\n' "WARNING: apt-get update had issues, but continuing with installations..." >&2
-# ENDIF: apt-get update check
+# Use sudo with TMPDIR set for tools, and pass APT options via command-line flags (no persistent config)
+if [ -n "${HOST_APT_TMP_ALT:-}" ] && [ "${HOST_APT_TMP_ALT}" != "/tmp" ]; then
+    if ! sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get update -o Dir::Cache::Archives=${HOST_APT_TMP_ALT} -o Acquire::TempDir=${HOST_APT_TMP_ALT} -qq 2>&1; then
+        printf '%s\n' "WARNING: apt-get update had issues, but continuing with installations..." >&2
+    fi
+else
+    if ! sudo env TMPDIR="${HOST_APT_TMP_ALT:-${TMPDIR:-/tmp}}" TEMP="${HOST_APT_TMP_ALT:-${TEMP:-/tmp}}" TMP="${HOST_APT_TMP_ALT:-${TMP:-/tmp}}" apt-get update -qq 2>&1; then
+        printf '%s\n' "WARNING: apt-get update had issues, but continuing with installations..." >&2
+    fi
+# ENDIF: HOST_APT_TMP_ALT check
 fi
 
 #--- Sub-block 3.4: Function to check find -printf support ---
