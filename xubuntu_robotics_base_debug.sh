@@ -231,77 +231,44 @@ if [ ! -w /tmp ]; then
 fi
 
 #===============================================================================
-# CRITICAL FIX: TOOL SHIMS TO BYPASS APT ENVIRONMENT SANITIZATION
+# CRITICAL FIX: TOOL SHIMS (CORRECTED)
 #===============================================================================
-# Purpose: Replace system binaries (gpg, apt-key, mktemp) with shim scripts that
-#          force-restore TMPDIR before calling the real tools.
-# Problem: apt-get strips TMPDIR env var before calling gpg/apt-key/mktemp.
-#          These tools then default to /tmp, which is broken/read-only.
-# Solution: Replace binaries with shims that force-restore our safe TMPDIR.
-# Dependencies: EARLY TMPDIR FAILOVER (sets TMPDIR) or APT_TMP_ALT (set later)
-# Outputs: Shim scripts installed in /usr/bin/ replacing real binaries
+# Purpose: Force tools to use the writable temp directory defined in "Early Failover"
+# Dependency: Assumes 'Early TMPDIR Failover' block (lines ~220-250) ran successfully
 #-------------------------------------------------------------------------------
-# Determine which temp directory to use (APT_TMP_ALT if set, otherwise TMPDIR from early failover)
-SHIM_TMP_DIR="${APT_TMP_ALT:-${TMPDIR:-/opt/apt-temp}}"
+# Use the TMPDIR variable set by the Early Failover block
+TARGET_TEMP="${TMPDIR:-/tmp}"
 
-if [ -n "${SHIM_TMP_DIR}" ] && [ -d "${SHIM_TMP_DIR}" ]; then
-    printf '%s\n' "[CRITICAL] Installing shims to force tools to use ${SHIM_TMP_DIR}..."
+if [ "${TARGET_TEMP}" != "/tmp" ] && [ -d "${TARGET_TEMP}" ] && [ -w "${TARGET_TEMP}" ]; then
+    printf '%s\n' "[CRITICAL] Installing shims to force tools to use ${TARGET_TEMP}..."
     
-    # Ensure the directory is writable before installing shims
-    if [ -w "${SHIM_TMP_DIR}" ]; then
-        # 1. Shim for GPG (used by apt-key and repo verification)
-        if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
-            mv /usr/bin/gpg /usr/bin/gpg.real
-            cat > /usr/bin/gpg <<GPGSHIMEOF
+    # 1. Shim for GPG (Fixes 'Invalid Signatures' / NO_PUBKEY errors)
+    if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
+        mv /usr/bin/gpg /usr/bin/gpg.real
+        cat > /usr/bin/gpg <<EOF
 #!/bin/sh
-export TMPDIR="${SHIM_TMP_DIR}"
-export TEMP="${SHIM_TMP_DIR}"
-export TMP="${SHIM_TMP_DIR}"
-# Ensure we preserve all arguments
+export TMPDIR="${TARGET_TEMP}"
+export TEMP="${TARGET_TEMP}"
+export TMP="${TARGET_TEMP}"
 exec /usr/bin/gpg.real "\$@"
-GPGSHIMEOF
-            chmod 755 /usr/bin/gpg
-            printf '%s\n' "  ✓ Installed GPG shim"
-        fi
-        
-        # 2. Shim for apt-key (often calls mktemp directly)
-        if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
-            mv /usr/bin/apt-key /usr/bin/apt-key.real
-            cat > /usr/bin/apt-key <<APTKEYSHIMEOF
+EOF
+        chmod 755 /usr/bin/gpg
+        echo "  ✓ Installed GPG shim"
+    fi
+    
+    # 2. Shim for apt-key (Fixes 'mkstemp permission denied' errors)
+    if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
+        mv /usr/bin/apt-key /usr/bin/apt-key.real
+        cat > /usr/bin/apt-key <<EOF
 #!/bin/sh
-export TMPDIR="${SHIM_TMP_DIR}"
-export TEMP="${SHIM_TMP_DIR}"
-export TMP="${SHIM_TMP_DIR}"
-# apt-key often uses /tmp explicitly, so we use a stronger override if possible
-# or just rely on the env var which apt-key script usually respects
+export TMPDIR="${TARGET_TEMP}"
 exec /usr/bin/apt-key.real "\$@"
-APTKEYSHIMEOF
-            chmod 755 /usr/bin/apt-key
-            printf '%s\n' "  ✓ Installed apt-key shim"
-        fi
-        
-        # 3. Create a global mktemp wrapper (nuclear option for shell scripts)
-        # Many scripts call 'mktemp' which defaults to /tmp if TMPDIR isn't set.
-        # Since APT scrubs TMPDIR, scripts called by APT fail.
-        if [ -f /usr/bin/mktemp ] && [ ! -f /usr/bin/mktemp.real ]; then
-            mv /usr/bin/mktemp /usr/bin/mktemp.real
-            cat > /usr/bin/mktemp <<MKTEMPSHIMEOF
-#!/bin/sh
-export TMPDIR="${SHIM_TMP_DIR}"
-export TEMP="${SHIM_TMP_DIR}"
-export TMP="${SHIM_TMP_DIR}"
-exec /usr/bin/mktemp.real "\$@"
-MKTEMPSHIMEOF
-            chmod 755 /usr/bin/mktemp
-            printf '%s\n' "  ✓ Installed mktemp shim"
-        fi
-        
-        printf '%s\n' "[CRITICAL] ✓ Tool shims installed successfully - tools will use ${SHIM_TMP_DIR} instead of /tmp"
-    else
-        printf '%s\n' "[WARN] ⚠ ${SHIM_TMP_DIR} is not writable, cannot install safety shims." >&2
+EOF
+        chmod 755 /usr/bin/apt-key
+        echo "  ✓ Installed apt-key shim"
     fi
 else
-    printf '%s\n' "[WARN] ⚠ APT_TMP_ALT/TMPDIR not set or directory missing, cannot install safety shims." >&2
+    echo "[WARN] Writable TMPDIR not found. Shims skipped. Build may fail."
 fi
 
 #===============================================================================
@@ -5624,9 +5591,10 @@ if [ "${mkl_package_installed}" = true ] && [ "${mkl_files_exist}" = true ]; the
 else
     # 1. CLEANUP: Remove conflicting system packages
     # This prevents the "0s installation" where apt thinks MKL is already installed via the (wrong) Ubuntu package
-    echo -e "${YELLOW}[12A.1] Purging conflicting Ubuntu MKL packages...${NC}"
+    # CRITICAL: Do NOT use autoremove - it can remove essential packages like coreutils (contains sleep)
+    echo -e "${YELLOW}[12A.1] Removing conflicting Ubuntu MKL packages...${NC}"
+    # Only remove specific conflicting packages, DO NOT autoremove
     apt-get remove -y --purge intel-mkl libmkl-* >/dev/null 2>&1 || true
-    apt-get autoremove -y >/dev/null 2>&1 || true
     
     echo -e "${YELLOW}[12A.2] Configuring Intel oneAPI APT repository...${NC}"
     
