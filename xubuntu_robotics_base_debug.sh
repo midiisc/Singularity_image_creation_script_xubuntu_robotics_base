@@ -127,6 +127,94 @@ fi
 # ENDIF: common_functions.sh exists
 
 #===============================================================================
+# CRITICAL FIX: BOOTSTRAP SAFE ENVIRONMENT (RUN THIS FIRST)
+#===============================================================================
+# Purpose: 1. Find a writable temp directory (since /tmp is often broken in containers)
+#          2. Create "Shim" wrappers for gpg/apt-key/mktemp to force them to use it
+#          3. Prevent "Permission denied" and "Invalid Signature" errors in Block 0
+# Critical: This MUST run before Block 0 (container scripts installation) which uses apt-get
+# Dependencies: None (foundational - must be first)
+# Outputs: Shims installed, TMPDIR set, APT configured
+#-------------------------------------------------------------------------------
+echo "==> Bootstrapping safe build environment..."
+
+# 1. FIND A WRITABLE DIRECTORY
+# We cannot trust /tmp (may be read-only/noexec) or variables (may be unset)
+SAFE_TMP=""
+for candidate in "/var/tmp" "/opt/tmp" "/usr/local/tmp" "/home/root/tmp"; do
+    # Try to create and write to the directory
+    if mkdir -p "${candidate}" 2>/dev/null && touch "${candidate}/.test_$$" 2>/dev/null; then
+        rm "${candidate}/.test_$$" 2>/dev/null || true
+        SAFE_TMP="${candidate}"
+        echo "  ✓ Found writable temp dir: ${SAFE_TMP}"
+        break
+    fi
+done
+
+if [ -z "${SAFE_TMP}" ]; then
+    echo "  ✗ FATAL: Could not find ANY writable directory for temporary files."
+    echo "  ✗ Checked: /var/tmp, /opt/tmp, /usr/local/tmp, /home/root/tmp"
+    exit 1
+fi
+
+# 2. FORCE ENVIRONMENT VARIABLES GLOBAL
+export TMPDIR="${SAFE_TMP}"
+export TEMP="${SAFE_TMP}"
+export TMP="${SAFE_TMP}"
+
+# 3. INSTALL SHIMS (Interceptors)
+# These replace system binaries to FORCE the safe TMPDIR, even when apt-get scrubs env vars
+echo "  → Installing tool shims to bypass APT environment scrubbing..."
+
+# Shim for GPG (Fixes 'Invalid Signatures' / 'NO_PUBKEY')
+if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
+    mv /usr/bin/gpg /usr/bin/gpg.real
+    cat > /usr/bin/gpg <<EOF
+#!/bin/sh
+export TMPDIR="${SAFE_TMP}"
+export TEMP="${SAFE_TMP}"
+export TMP="${SAFE_TMP}"
+# Pass all arguments exactly as received
+exec /usr/bin/gpg.real "\$@"
+EOF
+    chmod 755 /usr/bin/gpg
+    echo "    ✓ Shimmed: gpg"
+fi
+
+# Shim for apt-key (Fixes 'mkstemp: Permission denied')
+if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
+    mv /usr/bin/apt-key /usr/bin/apt-key.real
+    cat > /usr/bin/apt-key <<EOF
+#!/bin/sh
+export TMPDIR="${SAFE_TMP}"
+exec /usr/bin/apt-key.real "\$@"
+EOF
+    chmod 755 /usr/bin/apt-key
+    echo "    ✓ Shimmed: apt-key"
+fi
+
+# Shim for mktemp (Fixes scripts that rely on default /tmp)
+if [ -f /usr/bin/mktemp ] && [ ! -f /usr/bin/mktemp.real ]; then
+    mv /usr/bin/mktemp /usr/bin/mktemp.real
+    cat > /usr/bin/mktemp <<EOF
+#!/bin/sh
+export TMPDIR="${SAFE_TMP}"
+exec /usr/bin/mktemp.real "\$@"
+EOF
+    chmod 755 /usr/bin/mktemp
+    echo "    ✓ Shimmed: mktemp"
+fi
+
+# 4. PRE-CONFIGURE APT
+# Force APT internals to also use the safe directory
+mkdir -p /etc/apt/apt.conf.d
+echo "Acquire::TempDir \"${SAFE_TMP}\";" > /etc/apt/apt.conf.d/00-safe-temp
+echo "  ✓ Configured APT Acquire::TempDir to ${SAFE_TMP}"
+
+echo "==> Bootstrap complete. Environment is safe."
+echo ""
+
+#===============================================================================
 # CRITICAL: FIX /tmp PERMISSIONS IMMEDIATELY (BEFORE ANY OPERATIONS)
 #===============================================================================
 # Purpose: Fix /tmp permissions as early as possible to prevent permission errors
