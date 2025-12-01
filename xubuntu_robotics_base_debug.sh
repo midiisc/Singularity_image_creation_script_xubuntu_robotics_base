@@ -319,47 +319,6 @@ if [ ! -w /tmp ]; then
 fi
 
 #===============================================================================
-# CRITICAL FIX: TOOL SHIMS (CORRECTED)
-#===============================================================================
-# Purpose: Force tools to use the writable temp directory defined in "Early Failover"
-# Dependency: Assumes 'Early TMPDIR Failover' block (lines ~220-250) ran successfully
-#-------------------------------------------------------------------------------
-# Use the TMPDIR variable set by the Early Failover block
-TARGET_TEMP="${TMPDIR:-/tmp}"
-
-if [ "${TARGET_TEMP}" != "/tmp" ] && [ -d "${TARGET_TEMP}" ] && [ -w "${TARGET_TEMP}" ]; then
-    printf '%s\n' "[CRITICAL] Installing shims to force tools to use ${TARGET_TEMP}..."
-    
-    # 1. Shim for GPG (Fixes 'Invalid Signatures' / NO_PUBKEY errors)
-    if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
-        mv /usr/bin/gpg /usr/bin/gpg.real
-        cat > /usr/bin/gpg <<EOF
-#!/bin/sh
-export TMPDIR="${TARGET_TEMP}"
-export TEMP="${TARGET_TEMP}"
-export TMP="${TARGET_TEMP}"
-exec /usr/bin/gpg.real "\$@"
-EOF
-        chmod 755 /usr/bin/gpg
-        echo "  ✓ Installed GPG shim"
-    fi
-    
-    # 2. Shim for apt-key (Fixes 'mkstemp permission denied' errors)
-    if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
-        mv /usr/bin/apt-key /usr/bin/apt-key.real
-        cat > /usr/bin/apt-key <<EOF
-#!/bin/sh
-export TMPDIR="${TARGET_TEMP}"
-exec /usr/bin/apt-key.real "\$@"
-EOF
-        chmod 755 /usr/bin/apt-key
-        echo "  ✓ Installed apt-key shim"
-    fi
-else
-    echo "[WARN] Writable TMPDIR not found. Shims skipped. Build may fail."
-fi
-
-#===============================================================================
 # TERMINAL COLOR CODES (DEFINED EARLY FOR BLOCK 0)
 #===============================================================================
 # Purpose: Define color variables before Block 0 uses them
