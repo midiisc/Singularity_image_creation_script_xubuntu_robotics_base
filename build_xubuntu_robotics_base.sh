@@ -3182,42 +3182,42 @@ From: ${BASE_IMAGE}
     fi
     
     # Set proper permissions
-    chmod 1777 "\${APT_TMP_ALT}" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}" 2>/dev/null || true
+    chmod 1777 "\${APT_TMP_ALT:-/opt/apt-temp}" 2>/dev/null || chmod 777 "\${APT_TMP_ALT:-/opt/apt-temp}" 2>/dev/null || true
     
     # CRITICAL: Create required APT directory structure
     # APT requires lists/partial directory for package index downloads
     # APT also requires archives/partial directory for package downloads
-    mkdir -p "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || {
-        echo "[ERROR] ⚠ Failed to create APT lists directory structure at \${APT_TMP_ALT}/lists/partial"
+    mkdir -p "\${APT_TMP_ALT:-/opt/apt-temp}/lists/partial" 2>/dev/null || {
+        echo "[ERROR] ⚠ Failed to create APT lists directory structure at \${APT_TMP_ALT:-/opt/apt-temp}/lists/partial"
         exit 1
     }
-    mkdir -p "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || {
-        echo "[ERROR] ⚠ Failed to create APT archives directory structure at \${APT_TMP_ALT}/archives/partial"
+    mkdir -p "\${APT_TMP_ALT:-/opt/apt-temp}/archives/partial" 2>/dev/null || {
+        echo "[ERROR] ⚠ Failed to create APT archives directory structure at \${APT_TMP_ALT:-/opt/apt-temp}/archives/partial"
         exit 1
     }
-    chmod 755 "\${APT_TMP_ALT}/lists" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/lists" 2>/dev/null || true
-    chmod 755 "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/lists/partial" 2>/dev/null || true
-    chmod 755 "\${APT_TMP_ALT}/archives" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/archives" 2>/dev/null || true
-    chmod 755 "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT}/archives/partial" 2>/dev/null || true
-    echo "  ✓ Created APT directory structure: \${APT_TMP_ALT}/lists/partial and \${APT_TMP_ALT}/archives/partial"
+    chmod 755 "\${APT_TMP_ALT:-/opt/apt-temp}/lists" 2>/dev/null || chmod 777 "\${APT_TMP_ALT:-/opt/apt-temp}/lists" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT:-/opt/apt-temp}/lists/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT:-/opt/apt-temp}/lists/partial" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT:-/opt/apt-temp}/archives" 2>/dev/null || chmod 777 "\${APT_TMP_ALT:-/opt/apt-temp}/archives" 2>/dev/null || true
+    chmod 755 "\${APT_TMP_ALT:-/opt/apt-temp}/archives/partial" 2>/dev/null || chmod 777 "\${APT_TMP_ALT:-/opt/apt-temp}/archives/partial" 2>/dev/null || true
+    echo "  ✓ Created APT directory structure: \${APT_TMP_ALT:-/opt/apt-temp}/lists/partial and \${APT_TMP_ALT:-/opt/apt-temp}/archives/partial"
     
     # Configure APT to use alternative temp directory (comprehensive configuration)
     mkdir -p /etc/apt/apt.conf.d
     {
-        echo "Dir::Cache::Archives \"\${APT_TMP_ALT}\";"
-        echo "Acquire::TempDir \"\${APT_TMP_ALT}\";"
-        echo "Dir::State::lists \"\${APT_TMP_ALT}/lists\";"
-        echo "Dir::Cache \"\${APT_TMP_ALT}\";"
+        echo "Dir::Cache::Archives \"\${APT_TMP_ALT:-/opt/apt-temp}\";"
+        echo "Acquire::TempDir \"\${APT_TMP_ALT:-/opt/apt-temp}\";"
+        echo "Dir::State::lists \"\${APT_TMP_ALT:-/opt/apt-temp}/lists\";"
+        echo "Dir::Cache \"\${APT_TMP_ALT:-/opt/apt-temp}\";"
     } > /etc/apt/apt.conf.d/99-tmpdir-alternative
     
     # CRITICAL: Set TMPDIR environment variable to APT temp directory
     # This ensures ALL tools (not just APT) use the alternative temp directory
-    export TMPDIR="\${APT_TMP_ALT}"
-    export TEMP="\${APT_TMP_ALT}"
-    export TMP="\${APT_TMP_ALT}"
+    export TMPDIR="\${APT_TMP_ALT:-/opt/apt-temp}"
+    export TEMP="\${APT_TMP_ALT:-/opt/apt-temp}"
+    export TMP="\${APT_TMP_ALT:-/opt/apt-temp}"
     
-    echo "  ✓ APT configured to use \${APT_TMP_ALT} for temporary files"
-    echo "  ✓ TMPDIR/TEMP/TMP environment variables set to \${APT_TMP_ALT}"
+    echo "  ✓ APT configured to use \${APT_TMP_ALT:-/opt/apt-temp} for temporary files"
+    echo "  ✓ TMPDIR/TEMP/TMP environment variables set to \${APT_TMP_ALT:-/opt/apt-temp}"
     echo "  ✓ This completely avoids /tmp permission/mount issues"
     
     # CRITICAL: Fix /tmp permissions IMMEDIATELY (after APT config, before other operations)
@@ -3231,7 +3231,7 @@ From: ${BASE_IMAGE}
     }
     # Verify /tmp is writable (for other tools, APT won't use it)
     if [ ! -w /tmp ]; then
-        echo "[WARN] ⚠ /tmp is NOT writable (but APT is configured to use \${APT_TMP_ALT})"
+        echo "[WARN] ⚠ /tmp is NOT writable (but APT is configured to use \${APT_TMP_ALT:-/opt/apt-temp})"
     else
         echo "✓ /tmp permissions fixed (1777)"
     fi
@@ -3249,12 +3249,12 @@ From: ${BASE_IMAGE}
     else
         echo "⚠ WARNING: config.sh not found - using fallback hardcoded paths"
         export CONTAINER_CACHE_ROOT="/container_cache"
-        export CONTAINER_BIN_CACHE="${CONTAINER_CACHE_ROOT}/binaries"
-        export CONTAINER_DEB_CACHE="${CONTAINER_CACHE_ROOT}/debs"
-        export CONTAINER_APT_CACHE="${CONTAINER_CACHE_ROOT}/apt/archives"
-        export CONTAINER_CONDA_CACHE="${CONTAINER_CACHE_ROOT}/conda_pkgs"
-        export CONTAINER_WHEELS_CACHE="${CONTAINER_CACHE_ROOT}/wheels"
-        export CONTAINER_JULIA_CACHE="${CONTAINER_CACHE_ROOT}/julia_pkgs"
+        export CONTAINER_BIN_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/binaries"
+        export CONTAINER_DEB_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/debs"
+        export CONTAINER_APT_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/apt/archives"
+        export CONTAINER_CONDA_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/conda_pkgs"
+        export CONTAINER_WHEELS_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/wheels"
+        export CONTAINER_JULIA_CACHE="\${CONTAINER_CACHE_ROOT:-/container_cache}/julia_pkgs"
         export CONFIG_SOURCED=1
     fi
 
@@ -3313,15 +3313,15 @@ From: ${BASE_IMAGE}
         echo "[WARN] Attempting to read from APT config file..."
         if [ -f /etc/apt/apt.conf.d/99-tmpdir-alternative ]; then
             APT_TMP_ALT=\$(grep "Acquire::TempDir" /etc/apt/apt.conf.d/99-tmpdir-alternative | sed 's/.*"\(.*\)".*/\1/' || echo "")
-            if [ -n "\${APT_TMP_ALT}" ]; then
-                echo "[INFO] Found APT temp directory from config: \${APT_TMP_ALT}"
-                export TMPDIR="\${APT_TMP_ALT}"
-                export TEMP="\${APT_TMP_ALT}"
-                export TMP="\${APT_TMP_ALT}"
+            if [ -n "\${APT_TMP_ALT:-}" ]; then
+                echo "[INFO] Found APT temp directory from config: \${APT_TMP_ALT:-/opt/apt-temp}"
+                export TMPDIR="\${APT_TMP_ALT:-/opt/apt-temp}"
+                export TEMP="\${APT_TMP_ALT:-/opt/apt-temp}"
+                export TMP="\${APT_TMP_ALT:-/opt/apt-temp}"
             fi
         fi
     else
-        echo "[INFO] APT temp directory configured: \${APT_TMP_ALT}"
+        echo "[INFO] APT temp directory configured: \${APT_TMP_ALT:-/opt/apt-temp}"
     fi
 
     # FIX: Disable PEP 668 for container builds

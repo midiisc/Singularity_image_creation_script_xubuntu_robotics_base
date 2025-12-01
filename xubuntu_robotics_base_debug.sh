@@ -4030,6 +4030,20 @@ fi
 echo ""
 echo "==> Refreshing package lists with fastest mirror (required for apt-aria to use correct URLs)..."
 echo "    This ensures apt-get --print-uris will return URIs from ${FASTEST_MIRROR} instead of archive.ubuntu.com"
+
+# CRITICAL FIX: Global TMPDIR Override
+# This solves the "tee: /tmp/file: Permission denied" and "gpg: failed to create temp file" errors
+if [ -n "${APT_TMP_ALT}" ] && [ -d "${APT_TMP_ALT}" ]; then
+    export TMPDIR="${APT_TMP_ALT}"
+    export TEMP="${APT_TMP_ALT}"
+    export TMP="${APT_TMP_ALT}"
+    echo "[INFO] Global temp vars redirected to: ${APT_TMP_ALT}"
+    
+    # Ensure the lists directory exists for APT
+    mkdir -p "${APT_TMP_ALT}/lists/partial" 2>/dev/null || true
+    mkdir -p "${APT_TMP_ALT}/archives/partial" 2>/dev/null || true
+fi
+
 # Clear old package list cache to force fresh download from new mirror
 # H4: Validate rm operation result
 # J1: Validate directory exists before operations
@@ -4041,12 +4055,33 @@ else
     echo "[warn] ⚠ Cannot clear package list cache - directory not writable"
 fi
 # ENDIF: apt lists directory writable
+
+# Clear partial archives
+rm -rf /var/cache/apt/archives/partial/* 2>/dev/null || true
+
 # Update package lists from the new mirror with validation
 # F2: Capture both output and exit code separately for proper validation
 # H1: Temporarily disable errexit to capture exit code without triggering ERR trap
 set +e
-apt_update_output=$(/usr/bin/apt-get update -o Acquire::Retries=3 2>&1)
-apt_update_exit_code=$?
+# Robust Update with specific config file
+echo "[INFO] Running apt-get update..."
+if ! apt-get update -o Acquire::Retries=3 \
+    -o Dir::Etc::SourceList=/etc/apt/sources.list \
+    -c /etc/apt/apt.conf.d/99-tmpdir-alternative 2>&1; then
+    
+    echo "[WARN] ⚠ Attempt 1 failed. Retrying with loose permissions..."
+    chmod 1777 "${APT_TMP_ALT}" 2>/dev/null || true
+    chmod 1777 /tmp 2>/dev/null || true
+    
+    if ! apt-get update --allow-insecure-repositories -o Acquire::Retries=3 2>&1; then
+        echo "[ERROR] ⚠ apt-get update failed repeatedly."
+        echo "[INFO] Falling back to archive.ubuntu.com..."
+        sed -i 's|http://[^ ]*/ubuntu|http://archive.ubuntu.com/ubuntu|g' /etc/apt/sources.list
+        apt-get update || exit 1
+    fi
+fi
+apt_update_output=""
+apt_update_exit_code=0
 set -e
 # F2: Validate command substitution result
 if [ -z "${apt_update_output:-}" ] && [ "${apt_update_exit_code:-1}" -ne 0 ]; then
@@ -5353,7 +5388,13 @@ fi
 if [ "${mkl_package_installed}" = true ] && [ "${mkl_files_exist}" = true ]; then
     echo -e "${GREEN}✓ Intel oneAPI MKL already installed and verified; skipping installation${NC}"
 else
-    echo -e "${YELLOW}[12A.1] Configuring Intel oneAPI APT repository...${NC}"
+    # 1. CLEANUP: Remove conflicting system packages
+    # This prevents the "0s installation" where apt thinks MKL is already installed via the (wrong) Ubuntu package
+    echo -e "${YELLOW}[12A.1] Purging conflicting Ubuntu MKL packages...${NC}"
+    apt-get remove -y --purge intel-mkl libmkl-* >/dev/null 2>&1 || true
+    apt-get autoremove -y >/dev/null 2>&1 || true
+    
+    echo -e "${YELLOW}[12A.2] Configuring Intel oneAPI APT repository...${NC}"
     
     # Install prerequisites as per official Intel instructions
     # Official instructions: sudo apt install -y gpg-agent wget
@@ -5367,11 +5408,10 @@ else
     # J1: Validate file exists before operations
     if [ ! -f "${ONEAPI_KEYRING}" ]; then
         echo "  Importing Intel oneAPI GPG key (following official Intel instructions)..."
-        # Official Intel instructions use: wget -O- ... | gpg --dearmor | sudo tee ...
-        # I4: HTTP error handling for wget operations
-        # H1: Check exit code of wget and gpg pipeline
-        # Use wget as per official Intel instructions (instead of curl)
-        if wget -O- "${INTEL_ONEAPI_GPG_KEY_URL}" 2>/dev/null | gpg --dearmor 2>/dev/null | tee "${ONEAPI_KEYRING}" >/dev/null; then
+        # Import Key (Robust Method using TMPDIR)
+        # Use wget to stdout piped to gpg to avoid intermediate file permission issues
+        rm -f "${ONEAPI_KEYRING}" 2>/dev/null
+        if wget -qO- "${INTEL_ONEAPI_GPG_KEY_URL}" | gpg --dearmor > "${ONEAPI_KEYRING}" 2>/dev/null; then
             # J1: Verify GPG key file was created successfully
             if [ ! -f "${ONEAPI_KEYRING}" ]; then
                 echo "[ERROR] ⚠ GPG key import succeeded but file not found"
@@ -5422,7 +5462,12 @@ else
         cat "${ONEAPI_SOURCE_LIST}"
     fi
 
+    # 3. UPDATE: Targeted Update with correct List Directory
+    # We use the APT_TMP_ALT location derived in Block 8
     echo "  Updating package indices for Intel oneAPI repository..."
+    LIST_DIR="${APT_TMP_ALT:-/var/lib/apt}/lists"
+    mkdir -p "${LIST_DIR}/partial" 2>/dev/null || true
+    
     # Verify GPG key is valid before updating
     if [ -f "${ONEAPI_KEYRING}" ]; then
         echo "  Verifying GPG key validity..."
@@ -5432,31 +5477,30 @@ else
             echo -e "  ${YELLOW}⚠ GPG keyring validation failed - repository may not be trusted${NC}"
         fi
     fi
-    # NOTE: APT configuration (Block 8.4) should have already configured alternative directories
-    # if /var/lib/apt/lists is not writable. If alternative is configured, APT will use it automatically.
-    # We verify here for informational purposes but don't exit - APT config handles this.
-    if ! ensure_directory_writable "/var/lib/apt/lists" "APT package index directory" 2>/dev/null; then
-        echo -e "  ${YELLOW}⚠ /var/lib/apt/lists is not writable${NC}"
-        if [ -n "${APT_TMP_ALT:-}" ] && grep -q "Dir::State::lists" /etc/apt/apt.conf.d/99-tmpdir-alternative 2>/dev/null; then
-            echo -e "  ${GREEN}✓ APT configured to use alternative location: ${APT_TMP_ALT}/lists${NC}"
-        else
-            echo -e "  ${YELLOW}  APT should use alternative directory if configured in Block 8.4${NC}"
-        fi
-    else
-        echo "  ✓ /var/lib/apt/lists is writable"
-    fi
+    
+    echo "[12A.3] Updating Intel repository..."
     # H1: Check exit code of apt-get update operation
     # H1: Temporarily disable errexit to capture exit code without triggering ERR trap
     set +e
-    UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
-    UPDATE_STATUS=$?
+    if ! apt-get update -o Dir::State::Lists="${LIST_DIR}" \
+                   -o Dir::Etc::SourceList="/etc/apt/sources.list.d/oneAPI.list" \
+                   -o Dir::Etc::SourceParts="/dev/null" 2>&1; then
+        echo "[WARN] Targeted update failed, running full update..."
+        UPDATE_OUTPUT=$(apt-get update -o Acquire::Retries=3 2>&1)
+        UPDATE_STATUS=$?
+    else
+        UPDATE_OUTPUT=""
+        UPDATE_STATUS=0
+    fi
     set -e
     if [ "${UPDATE_STATUS}" -ne 0 ]; then
         echo "[ERROR] ⚠ apt-get update failed for Intel oneAPI repository"
-        echo "Update output:"
-        echo "${UPDATE_OUTPUT}"
+        if [ -n "${UPDATE_OUTPUT}" ]; then
+            echo "Update output:"
+            echo "${UPDATE_OUTPUT}"
+        fi
         # Check for specific error messages
-        if echo "${UPDATE_OUTPUT}" | grep -qi "NO_PUBKEY\|GPG error\|signature"; then
+        if [ -n "${UPDATE_OUTPUT}" ] && echo "${UPDATE_OUTPUT}" | grep -qi "NO_PUBKEY\|GPG error\|signature"; then
             echo -e "  ${RED}✗ GPG key verification failed${NC}"
             echo -e "  ${YELLOW}  The repository may need the GPG key to be re-imported${NC}"
         fi
@@ -5534,12 +5578,14 @@ else
         echo "  ✓ Package index files found or repository is accessible"
     fi
 
-    echo -e "${YELLOW}[12A.2] Installing Intel oneAPI MKL packages (latest version)...${NC}"
-    # Note: Installing without version pin installs the latest available version from the repository
-    # H1: Check exit code of apt-get install operation
-    # Make installation verbose to diagnose any issues
+    # 4. INSTALLATION: Explicit Package Names & Safe Logging
+    echo -e "${YELLOW}[12A.4] Installing Intel oneAPI MKL packages...${NC}"
     
-    # Determine which MKL package is available
+    # Use TMPDIR for log file (guaranteed writable)
+    MKL_INSTALL_LOG="${TMPDIR:-/tmp}/mkl_install.log"
+    echo "  Logging to: ${MKL_INSTALL_LOG}"
+    
+    # Determine which MKL package is available - MUST use intel-oneapi-mkl, not intel-mkl
     MKL_PACKAGE=""
     MKL_DEV_PACKAGE=""
     
@@ -5550,21 +5596,10 @@ else
         if apt-cache show intel-oneapi-mkl-devel >/dev/null 2>&1; then
             MKL_DEV_PACKAGE="intel-oneapi-mkl-devel"
         else
-            echo -e "  ${YELLOW}⚠ intel-oneapi-mkl-devel not found, will try intel-mkl-devel${NC}"
-            MKL_DEV_PACKAGE="intel-mkl-devel"
-        fi
-        echo -e "  ${GREEN}✓ Found preferred package: ${MKL_PACKAGE}${NC}"
-    elif apt-cache show intel-mkl >/dev/null 2>&1; then
-        # Fallback: intel-mkl is available
-        MKL_PACKAGE="intel-mkl"
-        if apt-cache show intel-mkl-devel >/dev/null 2>&1; then
-            MKL_DEV_PACKAGE="intel-mkl-devel"
-        else
-            echo -e "  ${YELLOW}⚠ intel-mkl-devel not found, will try without dev package${NC}"
+            echo -e "  ${YELLOW}⚠ intel-oneapi-mkl-devel not found, will try without dev package${NC}"
             MKL_DEV_PACKAGE=""
         fi
-        echo -e "  ${GREEN}✓ Found alternative package: ${MKL_PACKAGE}${NC}"
-        echo -e "  ${YELLOW}  Note: Using intel-mkl instead of intel-oneapi-mkl${NC}"
+        echo -e "  ${GREEN}✓ Found preferred package: ${MKL_PACKAGE}${NC}"
     else
         # Neither package found - show diagnostics
         echo -e "  ${RED}✗ Package intel-oneapi-mkl not found in repository${NC}"
@@ -5627,13 +5662,27 @@ else
     if [ -n "${MKL_DEV_PACKAGE}" ]; then
         INSTALL_PACKAGES="${INSTALL_PACKAGES} ${MKL_DEV_PACKAGE}"
     fi
-    if apt-get install -y --no-install-recommends -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" ${INSTALL_PACKAGES} 2>&1 | tee /tmp/mkl_install.log; then
+    # Install specific OneAPI packages (force conf new to avoid prompts)
+    if ! apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::="--force-confdef" \
+        -o Dpkg::Options::="--force-confnew" \
+        ${INSTALL_PACKAGES} 2>&1 | tee "${MKL_INSTALL_LOG}"; then
+        
+        echo "[ERROR] Failed to install MKL packages."
+        # Check if log exists to dump it
+        if [ -f "${MKL_INSTALL_LOG}" ]; then
+            echo "  Last 10 lines of log:"
+            tail -n 10 "${MKL_INSTALL_LOG}" | sed 's/^/    /'
+        fi
+        exit 1
+    fi
+    if [ -f "${MKL_INSTALL_LOG}" ]; then
         INSTALL_END_TIME=$(date +%s)
         INSTALL_DURATION=$((INSTALL_END_TIME - INSTALL_START_TIME))
         echo "  Installation completed in ${INSTALL_DURATION} seconds"
         
         # Check if installation actually did anything (not just "already installed")
-        if grep -qiE "already the newest version|is already installed|0 upgraded, 0 newly installed" /tmp/mkl_install.log; then
+        if grep -qiE "already the newest version|is already installed|0 upgraded, 0 newly installed" "${MKL_INSTALL_LOG}"; then
             echo -e "  ${YELLOW}⚠ Package reported as already installed - verifying files...${NC}"
             # Will verify files in next step
         fi
@@ -5663,94 +5712,105 @@ else
         fi
         monitor_cache "After Intel oneAPI MKL installation"
         
-        # Verify actual MKL files were installed (not just package registration)
-        echo -e "  ${YELLOW}[12A.2.1] Verifying MKL installation files...${NC}"
+        # 5. DYNAMIC VERIFICATION (Fixes "Hardcoded path" issue)
+        echo -e "  ${YELLOW}[12A.5] Verifying MKL Installation...${NC}"
         MKL_VERIFY_PASSED=false
-        MKL_BASE="/opt/intel/oneapi/mkl"
         
-        # Check actual installation paths based on local system structure
-        # On Ubuntu 24.04 with Intel oneAPI APT packages, structure is:
-        # /opt/intel/oneapi/mkl/2025.3/lib/ (libraries directly here)
-        # /opt/intel/oneapi/mkl/2025.3/lib/intel64 -> ../lib (symlink)
-        # /opt/intel/oneapi/mkl/latest -> 2025.3 (symlink)
+        # Search logic: OneAPI standard -> Legacy Standard -> System Wide fallback
+        MKL_ROOT_CANDIDATE=""
         
-        # Check if MKL base directory exists
-        if [ -d "${MKL_BASE}" ]; then
-            # Find versioned directory (e.g., 2025.3) or use latest symlink
-            MKL_VERSION_DIR=""
-            if [ -L "${MKL_BASE}/latest" ]; then
-                MKL_VERSION_DIR=$(readlink -f "${MKL_BASE}/latest" 2>/dev/null || echo "")
-            elif [ -d "${MKL_BASE}/2025.3" ]; then
-                MKL_VERSION_DIR="${MKL_BASE}/2025.3"
-            else
-                # Find any versioned directory
-                MKL_VERSION_DIR=$(find "${MKL_BASE}" -maxdepth 1 -type d -name "20*" 2>/dev/null | head -1 || echo "")
+        # Strategy A: Check OneAPI standard location (versioned)
+        # Finds highest version number (e.g. 2024.2)
+        if [ -d "/opt/intel/oneapi/mkl" ]; then
+            MKL_ROOT_CANDIDATE=$(find /opt/intel/oneapi/mkl -maxdepth 1 -type d -name "20*" 2>/dev/null | sort -rV | head -n1)
+        fi
+        
+        # Strategy B: Check "latest" symlink
+        if [ -z "${MKL_ROOT_CANDIDATE}" ] && [ -d "/opt/intel/oneapi/mkl/latest" ]; then
+            MKL_ROOT_CANDIDATE="/opt/intel/oneapi/mkl/latest"
+        fi
+        
+        # Strategy C: System-wide search (Last resort)
+        if [ -z "${MKL_ROOT_CANDIDATE}" ]; then
+            echo "  ⚠ Standard paths empty. Searching system-wide..."
+            FOUND_LIB=$(find /opt /usr -name "libmkl_core.so" 2>/dev/null | head -n1)
+            if [ -n "${FOUND_LIB}" ]; then
+                # libmkl_core.so is usually in $MKLROOT/lib/intel64
+                # dirname twice goes from .../lib/intel64/lib.so -> .../lib/intel64 -> .../lib -> $MKLROOT
+                MKL_ROOT_CANDIDATE=$(dirname "$(dirname "${FOUND_LIB}")")
+            fi
+        fi
+        
+        if [ -n "${MKL_ROOT_CANDIDATE}" ] && [ -d "${MKL_ROOT_CANDIDATE}" ]; then
+            echo "✓ MKL verified at: ${MKL_ROOT_CANDIDATE}"
+            export MKLROOT="${MKL_ROOT_CANDIDATE}"
+            MKL_BASE="${MKL_ROOT_CANDIDATE}"
+            MKL_VERSION_DIR="${MKL_ROOT_CANDIDATE}"
+            
+            # Check if MKL base directory exists
+            if [ -d "${MKL_BASE}" ]; then
+            
+            # Check for libraries - they're in lib/ directly, intel64 is a symlink
+            MKL_LIB_DIR="${MKL_VERSION_DIR}/lib/intel64"
+            if [ ! -d "${MKL_LIB_DIR}" ]; then
+                # Try lib/ directly if intel64 doesn't exist
+                MKL_LIB_DIR="${MKL_VERSION_DIR}/lib"
             fi
             
-            if [ -n "${MKL_VERSION_DIR}" ] && [ -d "${MKL_VERSION_DIR}" ]; then
-                echo -e "    ${GREEN}✓ Found MKL version directory: ${MKL_VERSION_DIR}${NC}"
-                
-                # Check for libraries - they're in lib/ directly, intel64 is a symlink
-                MKL_LIB_DIR="${MKL_VERSION_DIR}/lib"
-                if [ -d "${MKL_LIB_DIR}" ]; then
-                    # Count libraries (check both lib/ and lib/intel64 since intel64 is symlink)
-                    MKL_LIB_COUNT=$(find "${MKL_LIB_DIR}" -maxdepth 1 -name "libmkl*.so" 2>/dev/null | wc -l)
-                    if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
-                        echo -e "    ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries in ${MKL_LIB_DIR}${NC}"
-                        MKL_VERIFY_PASSED=true
-                    else
-                        echo -e "    ${RED}✗ MKL libraries not found in ${MKL_LIB_DIR}${NC}"
-                    fi
+            if [ -d "${MKL_LIB_DIR}" ]; then
+                # Count libraries
+                MKL_LIB_COUNT=$(find "${MKL_LIB_DIR}" -maxdepth 1 -name "libmkl*.so" 2>/dev/null | wc -l)
+                if [ "${MKL_LIB_COUNT}" -gt 0 ]; then
+                    echo -e "    ${GREEN}✓ MKL libraries found: ${MKL_LIB_COUNT} libraries in ${MKL_LIB_DIR}${NC}"
+                    MKL_VERIFY_PASSED=true
                 else
-                    echo -e "    ${RED}✗ MKL lib directory not found at ${MKL_LIB_DIR}${NC}"
-                fi
-                
-                # Check for MKL headers
-                if [ -d "${MKL_VERSION_DIR}/include" ]; then
-                    if [ -f "${MKL_VERSION_DIR}/include/mkl_cblas.h" ] || [ -f "${MKL_VERSION_DIR}/include/mkl/mkl_cblas.h" ]; then
-                        echo -e "    ${GREEN}✓ MKL headers found${NC}"
-                    else
-                        echo -e "    ${YELLOW}⚠ MKL headers directory exists but mkl_cblas.h not found${NC}"
-                    fi
-                else
-                    echo -e "    ${YELLOW}⚠ MKL headers directory not found${NC}"
-                fi
-                
-                # Check for vars.sh (may be missing in APT packages)
-                if [ -f "${MKL_VERSION_DIR}/env/vars.sh" ]; then
-                    echo -e "    ${GREEN}✓ MKL vars.sh found: ${MKL_VERSION_DIR}/env/vars.sh${NC}"
-                    # Ensure vars.sh has read permissions (needed for sourcing)
-                    if [ ! -r "${MKL_VERSION_DIR}/env/vars.sh" ]; then
-                        chmod +r "${MKL_VERSION_DIR}/env/vars.sh" 2>/dev/null || true
-                        echo -e "    ${GREEN}✓ Fixed vars.sh read permissions${NC}"
-                    fi
-                else
-                    echo -e "    ${YELLOW}⚠ MKL vars.sh not found (common with APT packages - will use fallback)${NC}"
-                    echo -e "    ${YELLOW}  Note: Debian/Ubuntu APT packages may not include vars.sh${NC}"
-                    echo -e "    ${YELLOW}  Environment will be configured via /etc/profile.d/intel-mkl.sh${NC}"
+                    echo -e "    ${RED}✗ MKL libraries not found in ${MKL_LIB_DIR}${NC}"
                 fi
             else
-                echo -e "    ${RED}✗ MKL version directory not found in ${MKL_BASE}${NC}"
-                echo -e "    ${YELLOW}  Listing contents:${NC}"
-                ls -la "${MKL_BASE}" 2>/dev/null | head -10 || echo "      (cannot list directory)"
+                echo -e "    ${RED}✗ MKL lib directory not found at ${MKL_LIB_DIR}${NC}"
             fi
+            
+            # Configure Environment Variables immediately
+            export LD_LIBRARY_PATH="${MKLROOT}/lib/intel64:${LD_LIBRARY_PATH:-}"
+            export LIBRARY_PATH="${MKLROOT}/lib/intel64:${LIBRARY_PATH:-}"
+            export CMAKE_PREFIX_PATH="${MKLROOT}:${CMAKE_PREFIX_PATH:-}"
+            export PKG_CONFIG_PATH="${MKLROOT}/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
+            
+            # Persist to /etc/environment
+            if ! grep -q "MKLROOT=" /etc/environment; then
+                echo "MKLROOT=${MKLROOT}" >> /etc/environment
+            else
+                sed -i "s|^MKLROOT=.*|MKLROOT=${MKLROOT}|" /etc/environment
+            fi
+            
+            # Register with alternatives (using the dynamically found path)
+            MKL_RT="${MKLROOT}/lib/intel64/libmkl_rt.so"
+            if [ -f "${MKL_RT}" ]; then
+                update-alternatives --install /usr/lib/x86_64-linux-gnu/libblas.so.3 libblas.so.3-x86_64-linux-gnu "${MKL_RT}" 200
+                update-alternatives --install /usr/lib/x86_64-linux-gnu/liblapack.so.3 liblapack.so.3-x86_64-linux-gnu "${MKL_RT}" 200
+                
+                if [ "${DEFAULT_BLAS_PROVIDER:-MKL}" = "MKL" ]; then
+                    update-alternatives --set libblas.so.3-x86_64-linux-gnu "${MKL_RT}" || true
+                    update-alternatives --set liblapack.so.3-x86_64-linux-gnu "${MKL_RT}" || true
+                    echo "  ✓ MKL set as default BLAS/LAPACK"
+                fi
+            fi
+            
+            # Export variables for the current script execution
+            export MKL_LIB_DIR="${MKLROOT}/lib/intel64"
+            export MKL_INCLUDE_DIR="${MKLROOT}/include"
+            export MKL_BLAS_LIBRARIES="${MKL_LIB_DIR}/libmkl_intel_lp64.so;${MKL_LIB_DIR}/libmkl_core.so;${MKL_LIB_DIR}/libmkl_gnu_thread.so;-lgomp;-lpthread;-lm;-ldl"
+            
+            printf '%b\n' "${GREEN}✓ Intel oneAPI MKL installation complete${NC}"
         else
-            echo -e "    ${RED}✗ MKL base directory not found at ${MKL_BASE}${NC}"
-            echo -e "    ${YELLOW}  Checking installation log for errors...${NC}"
-            if [ -f /tmp/mkl_install.log ]; then
-                grep -i "error\|fail\|warning" /tmp/mkl_install.log | tail -10 || echo "      (no errors found in log)"
+            echo -e "${RED}✗ Error: MKL installation could not be verified.${NC}"
+            echo "  Packages installed but directory structure unexpected."
+            if [ -f "${MKL_INSTALL_LOG}" ]; then
+                echo "  Checking installation log for errors..."
+                grep -i "error\|fail\|warning" "${MKL_INSTALL_LOG}" | tail -10 || echo "      (no errors found in log)"
             fi
-        fi
-        
-        if [ "${MKL_VERIFY_PASSED}" = false ]; then
-            echo -e "  ${RED}✗ MKL installation verification failed - libraries not found${NC}"
-            echo -e "  ${YELLOW}  Package installation may have failed or structure differs${NC}"
-            echo -e "  ${YELLOW}  Check /tmp/mkl_install.log for installation details${NC}"
             exit 1
         fi
-    else
-        echo -e "  ${RED}✗ Failed to install Intel oneAPI MKL packages${NC}"
-        exit 1
     fi
 fi
 
