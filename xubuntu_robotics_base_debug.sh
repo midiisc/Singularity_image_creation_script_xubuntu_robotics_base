@@ -4695,10 +4695,11 @@ fi
 echo "[INFO] Verifying findutils installation and find -printf support..."
 # Refresh command cache to ensure newly installed find is found
 hash -r 2>/dev/null || true
-# Check for findutils package with retry and better diagnostics
+# Robust package check using dpkg-query instead of brittle dpkg -l | grep
+# dpkg-query is more reliable in container environments and less sensitive to output formatting
 FINDUTILS_INSTALLED=false
 for retry in 1 2 3; do
-    if dpkg -l | grep -qE "^ii.*findutils"; then
+    if dpkg-query -W -f='${Status}' findutils 2>/dev/null | grep -q "install ok installed"; then
         FINDUTILS_INSTALLED=true
         break
     fi
@@ -4709,15 +4710,15 @@ for retry in 1 2 3; do
         dpkg --configure -a 2>/dev/null || true
     fi
 done
-# If dpkg check fails, verify by checking if the binary exists (more reliable)
+# If dpkg-query check fails, verify by checking if the binary exists (more reliable)
 if [ "$FINDUTILS_INSTALLED" != "true" ]; then
-    echo "  [DEBUG] dpkg status check failed, verifying by binary existence..."
+    echo "  [DEBUG] dpkg-query status check failed, verifying by binary existence..."
     if [ -f "/usr/bin/find" ] && [ -x "/usr/bin/find" ]; then
         echo "  [DEBUG] /usr/bin/find exists and is executable - findutils appears installed"
         FINDUTILS_INSTALLED=true
     else
         echo "[ERROR] ⚠ findutils package verification failed"
-        echo "[ERROR] ⚠ dpkg status: $(dpkg -l | grep findutils || echo 'not found')"
+        echo "[ERROR] ⚠ dpkg-query status: $(dpkg-query -W -f='${Status}' findutils 2>&1 || echo 'package not found')"
         echo "[ERROR] ⚠ /usr/bin/find exists: $([ -f /usr/bin/find ] && echo 'yes' || echo 'no')"
         echo "[ERROR] ⚠ This may indicate the package installation failed or was incomplete"
         exit 1
