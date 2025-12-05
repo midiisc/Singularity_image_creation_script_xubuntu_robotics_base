@@ -153,25 +153,28 @@ update_def_paths() {
     
     # Replace absolute paths with BUILD_ROOT-relative paths
     # CRITICAL: Handle path replacement carefully to avoid duplicates
-    # The definition files should already have correct paths after our fix,
-    # but we still need to handle the base repo path replacement
-    # Strategy: Replace the base repo path, but ensure we don't create duplicates
+    # Strategy: Only replace if the path doesn't already match BUILD_ROOT
     
-    # First, replace the full base path (including cumulative_build_stages_0_to_10 if present)
-    # This handles: /home/midhun/.../cumulative_build_stages_0_to_10/... -> ${BUILD_ROOT}/...
-    sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
+    # First, fix any existing duplicates (shouldn't happen after our fixes, but be safe)
+    sed "s|${BUILD_ROOT}/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
         "${def_file}" > "${temp_file}.1"
     
+    # Then replace the full path (including cumulative_build_stages_0_to_10) with BUILD_ROOT
+    # This handles: /home/midhun/.../cumulative_build_stages_0_to_10/... -> ${BUILD_ROOT}/...
+    sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
+        "${temp_file}.1" > "${temp_file}.2"
+    
     # Then replace just the base repo path (for paths that don't include cumulative_build_stages_0_to_10)
-    sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base|${BUILD_ROOT}|g" \
-        "${temp_file}.1" > "${temp_file}"
+    # But only if it's not already been replaced (avoid creating duplicates)
+    sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base\([^/]\)|${BUILD_ROOT}\1|g" \
+        "${temp_file}.2" > "${temp_file}"
     
-    # Finally, fix any duplicates that might have been created
+    # Final cleanup: remove any duplicates that might have been created
     sed "s|${BUILD_ROOT}/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
-        "${temp_file}" > "${temp_file}.2"
+        "${temp_file}" > "${temp_file}.final"
     
-    mv "${temp_file}.2" "${temp_file}"
-    rm -f "${temp_file}.1" 2>/dev/null || true
+    mv "${temp_file}.final" "${temp_file}"
+    rm -f "${temp_file}.1" "${temp_file}.2" 2>/dev/null || true
     
     # Replace the original file
     mv "${temp_file}" "${def_file}"
