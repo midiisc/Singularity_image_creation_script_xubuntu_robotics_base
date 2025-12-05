@@ -152,8 +152,16 @@ update_def_paths() {
     local temp_file="${def_file}.tmp"
     
     # Replace absolute paths with BUILD_ROOT-relative paths
+    # Handle both cases:
+    # 1. Paths that include cumulative_build_stages_0_to_10 (remove duplicate)
+    # 2. Paths that don't include it (add BUILD_ROOT)
+    # First, fix any existing duplicates
+    sed "s|${BUILD_ROOT}/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
+        "${def_file}" > "${temp_file}.1"
+    # Then replace base repo path with BUILD_ROOT
     sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base|${BUILD_ROOT}|g" \
-        "${def_file}" > "${temp_file}"
+        "${temp_file}.1" > "${temp_file}"
+    rm -f "${temp_file}.1" 2>/dev/null || true
     
     # Replace the original file
     mv "${temp_file}" "${def_file}"
