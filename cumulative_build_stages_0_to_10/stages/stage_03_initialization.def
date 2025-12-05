@@ -39,6 +39,13 @@ From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_
     mkdir -p ${APPTAINER_ROOTFS}/tmp
     mkdir -p ${APPTAINER_ROOTFS}/var/tmp
     mkdir -p ${APPTAINER_ROOTFS}/scripts
+    # CRITICAL: Ensure .singularity.d directory structure exists for metadata
+    # This is needed for stages that will be used as base images (localimage)
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d/actions
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d/env
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d/libs
+    chmod -R 755 ${APPTAINER_ROOTFS}/.singularity.d 2>/dev/null || true
 
 # === %post Section ===
 %post -c /bin/bash
