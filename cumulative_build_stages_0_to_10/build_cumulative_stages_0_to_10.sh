@@ -212,9 +212,40 @@ build_stage() {
                 exit 1
             fi
             
+            # Get absolute path (resolve any symlinks or relative paths)
+            # Use readlink -f first (GNU), fallback to realpath (BSD/macOS), then use original if both fail
+            local prev_output_abs
+            if command -v readlink >/dev/null 2>&1; then
+                prev_output_abs=$(readlink -f "${prev_output}" 2>/dev/null || echo "${prev_output}")
+            elif command -v realpath >/dev/null 2>&1; then
+                prev_output_abs=$(realpath "${prev_output}" 2>/dev/null || echo "${prev_output}")
+            else
+                # If neither is available, convert to absolute path manually
+                if [[ "${prev_output}" = /* ]]; then
+                    prev_output_abs="${prev_output}"
+                else
+                    prev_output_abs="${BUILD_ROOT}/${prev_output}"
+                fi
+            fi
+            
+            # Verify the absolute path exists
+            if [ ! -f "${prev_output_abs}" ]; then
+                echo "Error: Previous stage image not found at resolved path: ${prev_output_abs}" >&2
+                echo "       Original path: ${prev_output}" >&2
+                echo "       Build root: ${BUILD_ROOT}" >&2
+                echo "       Please verify Stage ${prev_stage_num} completed successfully" >&2
+                exit 1
+            fi
+            
             # Update the From: line in the definition file
-            sed -i "s|^From:.*|From: ${prev_output}|g" "${def_file}"
-            echo "✓ Updated From: path to previous stage image"
+            # For local SIF files, use absolute path directly (no prefix needed)
+            # Escape special characters in path for sed replacement string:
+            # - Escape backslash (\)
+            # - Escape ampersand (&) - represents matched text in replacement
+            # - Escape delimiter (|) - our sed delimiter
+            local prev_output_escaped=$(printf '%s\n' "${prev_output_abs}" | sed 's/\\/\\\\/g; s/&/\\&/g; s/|/\\|/g')
+            sed -i "s|^From:.*|From: ${prev_output_escaped}|g" "${def_file}"
+            echo "✓ Updated From: path to previous stage image: ${prev_output_abs}"
         fi
     
     # Setup bind mounts
