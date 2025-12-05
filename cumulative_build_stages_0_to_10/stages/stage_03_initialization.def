@@ -1,0 +1,632 @@
+# CRITICAL: CUMULATIVE BUILD - Stage 3 builds on Stage 2
+# This stage includes ALL cumulative steps from:
+#   - Stage 0: Minimal base (bind mounts, essential tools)
+#   - Stage 1: Bootstrap safe environment (APT robustness, directory structure, procps-ng)
+#   - Stage 2: Terminal colors and Block 0 (container scripts installation)
+#   - Stage 3: Initialization blocks (phase tracking, debug functions, build jobs)
+# 
+# Stage 3 MUST be built on top of Stage 2 for cumulative build
+# Using absolute path to ensure Stage 2 image is found
+Bootstrap: localimage
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/test_local_mounts/progressive/output/stage_02_colors_block0.sif
+
+# === %files Section ===
+%files
+    # CRITICAL: Copy centralized configuration (SINGLE SOURCE OF TRUTH)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    # Copy container scripts (already installed in Stage 2, but ensure they're available)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    # Copy common functions (needed for calculate_build_jobs and other functions)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/common_functions.sh /scripts/common_functions.sh
+
+# === %labels Section ===
+%labels
+    Maintainer midhun
+    Description "Progressive Stage 3: Initialization Blocks (Phase Tracking, Debug Functions, Build Jobs)"
+
+# === %environment Section ===
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Asia/Kolkata
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# === %setup Section ===
+%setup
+    # Create mount point directories (using /container_cache as default - config.sh available in %post)
+    mkdir -p ${APPTAINER_ROOTFS}/container_cache
+    mkdir -p ${APPTAINER_ROOTFS}/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/var/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/scripts
+
+# === %post Section ===
+%post -c /bin/bash
+    # CRITICAL: Set non-interactive environment variables FIRST
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    
+    # === CRITICAL: Source centralized configuration ===
+    # config.sh is the SINGLE SOURCE OF TRUTH for all paths, versions, and settings
+    # It is copied to /etc/config.sh in the %files section
+    if [ -f /etc/config.sh ]; then
+        # Disable strict mode temporarily to allow config.sh to set defaults
+        set +u
+        source /etc/config.sh
+        set -u
+        printf '%s\n' "[%post] ✓ Loaded centralized configuration from /etc/config.sh"
+    else
+        printf '%s\n' "[%post] ⚠ WARNING: /etc/config.sh not found - using defaults"
+        printf '%s\n' "[%post]   This should not happen - config.sh should be copied in %files section"
+        # Set minimal defaults if config.sh missing
+        export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        export INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    fi
+    
+    # === CRITICAL: Set terminal color codes FIRST (before any usage) ===
+    # Purpose: Define color codes for terminal output (needed for all output sections)
+    # Dependencies: None (foundational - must be set before use)
+    # Outputs: Environment variables for colored output
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export NC='\033[0m'
+    
+    printf '%s\n' "=========================================="
+    printf '%s\n' "PROGRESSIVE STAGE 3: Initialization Blocks"
+    printf '%s\n' "=========================================="
+    printf '%s\n' ""
+    printf '%s\n' "[CUMULATIVE BUILD] Stage 3 includes all cumulative steps from:"
+    printf '%s\n' "  - Stage 0: Minimal base (bind mounts, essential tools)"
+    printf '%s\n' "  - Stage 1: Bootstrap safe environment (APT robustness, directory structure, procps-ng)"
+    printf '%s\n' "  - Stage 2: Terminal colors and Block 0 (container scripts installation)"
+    printf '%s\n' "  - Stage 3: Initialization blocks (phase tracking, debug functions, build jobs)"
+    printf '%s\n' ""
+    
+    # === CUMULATIVE VERIFICATION: Verify all previous stages' work ===
+    # Purpose: Ensure all cumulative work from previous stages is preserved
+    # This is critical for cumulative builds where each stage builds on the previous
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}CUMULATIVE VERIFICATION: Previous Stages${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    CUMULATIVE_VERIFY_FAILED=0
+    
+    # Verify Stage 0: Essential tools
+    # Note: Check for actual commands, not package names
+    # gnupg package provides 'gpg' command, procps package provides 'ps', 'pgrep', etc.
+    printf '%s\n' "[VERIFY STAGE 0] Essential tools..."
+    for tool in wget curl gpg-agent gpg file dpkg-deb tar gzip bzip2 xz unzip; do
+        if command -v "${tool}" >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ ${tool} is available"
+        else
+            printf '%s\n' "  ✗ ${tool} is NOT available (Stage 0 requirement)"
+            CUMULATIVE_VERIFY_FAILED=$((CUMULATIVE_VERIFY_FAILED + 1))
+        fi
+    done
+    # Verify procps tools (ps, pgrep are provided by procps package)
+    if command -v ps >/dev/null 2>&1 && command -v pgrep >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ procps tools available (ps, pgrep)"
+    else
+        printf '%s\n' "  ✗ procps tools NOT available (Stage 0 requirement)"
+        CUMULATIVE_VERIFY_FAILED=$((CUMULATIVE_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify Stage 1: Bootstrap environment (procps-ng, APT robustness)
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY STAGE 1] Bootstrap environment..."
+    # Verify procps-ng (unconditional installation from Stage 1)
+    if command -v pgrep >/dev/null 2>&1 && command -v ps >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ procps-ng tools available (pgrep, ps)"
+    else
+        printf '%s\n' "  ✗ procps-ng tools NOT available (Stage 1 requirement)"
+        CUMULATIVE_VERIFY_FAILED=$((CUMULATIVE_VERIFY_FAILED + 1))
+    fi
+    # Verify APT robustness configuration
+    if [ -f /etc/apt/apt.conf.d/01-robustness ]; then
+        printf '%s\n' "  ✓ APT robustness configuration exists"
+    else
+        printf '%s\n' "  ⚠ APT robustness configuration missing (may be normal if Stage 1 not run)"
+    fi
+    # Verify directory structure (from Stage 1)
+    for dir in /var/lib/apt/lists /var/cache/apt/archives "${CONTAINER_CACHE_ROOT}"; do
+        if [ -d "${dir}" ]; then
+            printf '%s\n' "  ✓ Directory exists: ${dir}"
+        else
+            printf '%s\n' "  ✗ Directory missing: ${dir} (Stage 1 requirement)"
+            CUMULATIVE_VERIFY_FAILED=$((CUMULATIVE_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    # Verify Stage 2: Terminal colors and container scripts
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY STAGE 2] Terminal colors and container scripts..."
+    # Verify terminal colors (from Stage 2)
+    if [ -n "${RED:-}" ] && [ -n "${GREEN:-}" ] && [ -n "${YELLOW:-}" ] && [ -n "${BLUE:-}" ] && [ -n "${NC:-}" ]; then
+        printf '%s\n' "  ✓ Terminal color codes defined (from Stage 2)"
+    else
+        # Set colors if not already set (fallback - will be set in BLOCK 1)
+        printf '%s\n' "  ⚠ Terminal color codes not set (will be set in BLOCK 1)"
+        export RED='\033[0;31m'
+        export GREEN='\033[0;32m'
+        export YELLOW='\033[1;33m'
+        export BLUE='\033[0;34m'
+        export NC='\033[0m'
+    fi
+    # Verify container scripts installation (from Stage 2)
+    CONTAINER_SCRIPTS_INSTALL_PATH="${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
+    if [ -d "${CONTAINER_SCRIPTS_INSTALL_PATH}" ] && [ -f "${CONTAINER_SCRIPTS_INSTALL_PATH}/install.sh" ]; then
+        printf '%s\n' "  ✓ Container scripts directory exists: ${CONTAINER_SCRIPTS_INSTALL_PATH}"
+    else
+        printf '%s\n' "  ⚠ Container scripts directory missing (will be available via %files section)"
+    fi
+    
+    # Cumulative verification summary
+    printf '%s\n' ""
+    printf '%s\n' "[CUMULATIVE VERIFICATION] Summary:"
+    if [ ${CUMULATIVE_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All cumulative verification checks passed"
+        printf '%s\n' "  ✓ Previous stages' work is preserved"
+    else
+        printf '%s\n' "  ✗ ${CUMULATIVE_VERIFY_FAILED} cumulative verification(s) failed"
+        printf '%s\n' "  → Installing missing tools from previous stages..."
+        
+        # Install missing essential tools from Stage 0 and Stage 1
+        # Build list of missing tools and their package names
+        MISSING_PACKAGES=""
+        
+        # Check and add missing tools
+        # Note: Check for actual commands, not package names
+        if ! command -v wget >/dev/null 2>&1; then
+            MISSING_PACKAGES="${MISSING_PACKAGES} wget"
+        fi
+        
+        # gnupg package provides 'gpg' command
+        if ! command -v gpg >/dev/null 2>&1; then
+            MISSING_PACKAGES="${MISSING_PACKAGES} gnupg gnupg2"
+        fi
+        
+        # procps package provides 'ps', 'pgrep', etc.
+        if ! command -v ps >/dev/null 2>&1 || ! command -v pgrep >/dev/null 2>&1; then
+            # Install procps (procps-ng may not exist, so try procps first)
+            MISSING_PACKAGES="${MISSING_PACKAGES} procps"
+        fi
+        
+        if ! command -v file >/dev/null 2>&1; then
+            MISSING_PACKAGES="${MISSING_PACKAGES} file less"
+        fi
+        
+        if ! command -v unzip >/dev/null 2>&1; then
+            MISSING_PACKAGES="${MISSING_PACKAGES} unzip"
+        fi
+        
+        if [ -n "${MISSING_PACKAGES}" ]; then
+            printf '%s\n' "  [INSTALL] Installing missing tools: ${MISSING_PACKAGES}"
+            
+            # CRITICAL: Ensure APT directories are writable BEFORE any apt-get operations
+            printf '%s\n' "  [CRITICAL] Verifying APT writability (required for build)..."
+            APT_WRITABILITY_FAILED=0
+            for apt_dir in /var/lib/apt/lists /var/lib/apt/lists/partial /var/cache/apt/archives /var/cache/apt/archives/partial /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /etc/apt/preferences.d /etc/apt/apt.conf.d; do
+                # Create directory if it doesn't exist
+                mkdir -p "${apt_dir}" 2>/dev/null || true
+                # Set permissions
+                chmod 755 "${apt_dir}" 2>/dev/null || true
+                # Test writability
+                if [ -d "${apt_dir}" ]; then
+                    if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                        rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                        printf '%s\n' "    ✓ ${apt_dir} is writable"
+                    else
+                        printf '%s\n' "    ⚠ ${apt_dir} not writable - attempting to fix..."
+                        chown -R root:root "${apt_dir}" 2>/dev/null || true
+                        chmod -R 755 "${apt_dir}" 2>/dev/null || true
+                        if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                            rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                            printf '%s\n' "    ✓ ${apt_dir} is now writable (fixed)"
+                        else
+                            printf '%s\n' "    ✗ ${apt_dir} is NOT writable - APT operations will fail"
+                            APT_WRITABILITY_FAILED=$((APT_WRITABILITY_FAILED + 1))
+                        fi
+                    fi
+                fi
+            done
+            if [ ${APT_WRITABILITY_FAILED} -gt 0 ]; then
+                printf '%s\n' "  ✗ FATAL: ${APT_WRITABILITY_FAILED} APT directory(ies) not writable - cannot proceed with build"
+                exit 1
+            else
+                printf '%s\n' "  ✓ All APT directories verified writable"
+            fi
+            
+            printf '%s\n' "  [UPDATE] Updating package lists..."
+            
+            # Update package lists
+            if ! apt-get update -qq 2>&1; then
+                printf '%s\n' "  ✗ Failed to update package lists"
+                exit 1
+            fi
+            
+            # Install packages (try procps-ng separately if procps doesn't provide pgrep)
+            INSTALL_PACKAGES="${MISSING_PACKAGES}"
+            if echo "${MISSING_PACKAGES}" | grep -q "procps"; then
+                # Try installing procps first
+                if apt-get install -y --no-install-recommends procps 2>&1; then
+                    printf '%s\n' "  ✓ procps installed"
+                    # Remove procps from list if it was there
+                    INSTALL_PACKAGES=$(echo "${INSTALL_PACKAGES}" | sed 's/procps//g' | sed 's/  */ /g' | sed 's/^ *//' | sed 's/ *$//')
+                    # Check if pgrep is now available
+                    if ! command -v pgrep >/dev/null 2>&1; then
+                        # Try procps-ng if available (may not exist)
+                        if apt-cache show procps-ng >/dev/null 2>&1; then
+                            INSTALL_PACKAGES="${INSTALL_PACKAGES} procps-ng"
+                        fi
+                    fi
+                fi
+            fi
+            
+            # Install remaining packages
+            if [ -n "${INSTALL_PACKAGES}" ]; then
+                if apt-get install -y --no-install-recommends ${INSTALL_PACKAGES} 2>&1; then
+                    printf '%s\n' "  ✓ Missing tools installed successfully"
+                else
+                    printf '%s\n' "  ✗ Failed to install some packages, but continuing..."
+                    # Don't exit - some packages may be optional
+                fi
+            fi
+            
+            # Verify all tools are now available (check actual commands, not package names)
+            VERIFY_FAILED=0
+            for tool in wget gpg file unzip; do
+                if ! command -v "${tool}" >/dev/null 2>&1; then
+                    printf '%s\n' "  ⚠ ${tool} still not available after installation attempt"
+                    VERIFY_FAILED=$((VERIFY_FAILED + 1))
+                fi
+            done
+            # Check procps tools
+            if ! command -v ps >/dev/null 2>&1 || ! command -v pgrep >/dev/null 2>&1; then
+                printf '%s\n' "  ⚠ procps tools (ps, pgrep) still not available after installation attempt"
+                VERIFY_FAILED=$((VERIFY_FAILED + 1))
+            fi
+            
+            if [ ${VERIFY_FAILED} -gt 0 ]; then
+                printf '%s\n' "  ⚠ ${VERIFY_FAILED} tool(s) still missing (may be in base image)"
+            else
+                printf '%s\n' "  ✓ All essential tools verified"
+            fi
+        fi
+        
+        # Verify APT robustness configuration exists (from Stage 1)
+        if [ ! -f /etc/apt/apt.conf.d/01-robustness ]; then
+            printf '%s\n' "  [INSTALL] Creating APT robustness configuration (from Stage 1)..."
+            mkdir -p /etc/apt/apt.conf.d
+            {
+                echo "# APT robustness configuration"
+                echo "Acquire::Check-Valid-Until false;"
+                echo "Acquire::Retries \"3\";"
+                echo "Acquire::http::Timeout \"20\";"
+                echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";"
+                echo "APT::Keep-Downloaded-Packages \"true\";"
+            } > /etc/apt/apt.conf.d/01-robustness
+            printf '%s\n' "  ✓ APT robustness configuration created"
+        fi
+    fi
+    
+    printf '%s\n' ""
+    
+    # === BLOCK 1: INITIALIZATION AND CONFIGURATION ===
+    # Purpose: Set up phase tracking, environment variables
+    # Dependencies: /etc/config.sh (sourced above)
+    # Outputs: Environment variables, configuration
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}BLOCK 1: Initialization and Configuration${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # --- Sub-block 1.1: Phase tracking variables ---
+    # Purpose: Track progress through different installation phases
+    # Dependencies: None (foundational)
+    # Outputs: Environment variables for phase tracking
+    printf '%s\n' "[PHASE TRACKING] Setting up phase tracking variables..."
+    export PHASE1_STATUS="NOT RUN"  # System base packages
+    export PHASE2_STATUS="NOT RUN"  # Development tools
+    export PHASE3_STATUS="NOT RUN"  # GUI and desktop
+    export PHASE4_STATUS="NOT RUN"  # Scientific computing
+    export PHASE5_STATUS="NOT RUN"  # Cleanup and finalization
+    
+    # Verify phase tracking variables are set
+    PHASE_VERIFY_FAILED=0
+    for phase_var in PHASE1_STATUS PHASE2_STATUS PHASE3_STATUS PHASE4_STATUS PHASE5_STATUS; do
+        if [ -n "${!phase_var:-}" ]; then
+            printf '%s\n' "  ✓ ${phase_var} is set: ${!phase_var}"
+        else
+            printf '%s\n' "  ✗ ${phase_var} is NOT set"
+            PHASE_VERIFY_FAILED=$((PHASE_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    if [ ${PHASE_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All phase tracking variables set successfully"
+    else
+        printf '%s\n' "  ✗ ${PHASE_VERIFY_FAILED} phase tracking variable(s) failed to set"
+        exit 1
+    fi
+    
+    # --- Sub-block 1.2: Terminal color codes ---
+    # Purpose: Define color codes for terminal output (already done in Stage 2)
+    # Dependencies: None (foundational)
+    # Outputs: Environment variables for colored output
+    # Note: Colors are already defined in Stage 2, but we verify they're still available
+    printf '%s\n' ""
+    printf '%s\n' "[TERMINAL COLORS] Verifying terminal color codes..."
+    COLOR_VERIFY_FAILED=0
+    for color_var in RED GREEN YELLOW BLUE NC; do
+        if [ -n "${!color_var:-}" ]; then
+            printf '%s\n' "  ✓ ${color_var} is set: ${!color_var}"
+        else
+            # Set colors if not already set (fallback)
+            case "${color_var}" in
+                RED) export RED='\033[0;31m' ;;
+                GREEN) export GREEN='\033[0;32m' ;;
+                YELLOW) export YELLOW='\033[1;33m' ;;
+                BLUE) export BLUE='\033[0;34m' ;;
+                NC) export NC='\033[0m' ;;
+            esac
+            printf '%s\n' "  ✓ ${color_var} set (fallback): ${!color_var}"
+        fi
+    done
+    
+    if [ ${COLOR_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All terminal color codes available"
+    else
+        printf '%s\n' "  ⚠ ${COLOR_VERIFY_FAILED} color code(s) had issues (may be normal)"
+    fi
+    
+    # --- Sub-block 1.3: Environment setup ---
+    # Critical: Non-interactive mode for apt operations
+    # Dependencies: None (foundational)
+    # Outputs: Environment variables, configuration
+    printf '%s\n' ""
+    printf '%s\n' "[ENVIRONMENT] Setting up environment variables..."
+    export DEBIAN_FRONTEND=noninteractive
+    printf '%s\n' "  ✓ DEBIAN_FRONTEND=noninteractive"
+    
+    # Verify environment variables
+    if [ "${DEBIAN_FRONTEND}" = "noninteractive" ]; then
+        printf '%s\n' "  ✓ Environment setup verified"
+    else
+        printf '%s\n' "  ✗ Environment setup failed"
+        exit 1
+    fi
+    
+    printf '%s\n' ""
+    
+    # === BLOCK 2: LOAD COMMON FUNCTIONS ===
+    # Purpose: Load shared functions from common_functions.sh
+    # Dependencies: /scripts/common_functions.sh (copied in %files section)
+    # Outputs: Common functions available (calculate_build_jobs, etc.)
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}BLOCK 2: Loading Common Functions${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Load common functions from /scripts/common_functions.sh
+    if [ -f /scripts/common_functions.sh ]; then
+        printf '%s\n' "[LOAD] Loading common functions from /scripts/common_functions.sh..."
+        set +u  # Temporarily disable -u to allow common_functions.sh to set defaults
+        source /scripts/common_functions.sh
+        set -u  # Re-enable -u
+        printf '%s\n' "  ✓ Common functions loaded successfully"
+        
+        # Verify calculate_build_jobs function is available
+        if command -v calculate_build_jobs >/dev/null 2>&1 || type calculate_build_jobs >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ calculate_build_jobs() function is available"
+            
+            # Test calculate_build_jobs function
+            printf '%s\n' "  [TEST] Testing calculate_build_jobs() function..."
+            BUILD_JOBS=$(calculate_build_jobs 2>&1)
+            if [ -n "${BUILD_JOBS}" ] && [ "${BUILD_JOBS}" -gt 0 ] 2>/dev/null; then
+                printf '%s\n' "  ✓ calculate_build_jobs() returned: ${BUILD_JOBS} jobs"
+                export BUILD_JOBS
+            else
+                printf '%s\n' "  ⚠ calculate_build_jobs() returned invalid value: ${BUILD_JOBS}"
+            fi
+        else
+            printf '%s\n' "  ✗ calculate_build_jobs() function is NOT available"
+            exit 1
+        fi
+    else
+        printf '%s\n' "  ⚠ WARNING: /scripts/common_functions.sh not found"
+        printf '%s\n' "  Some functions may not be available"
+    fi
+    
+    printf '%s\n' ""
+    
+    # === BLOCK 3: DEBUG AND DIAGNOSTIC FUNCTIONS ===
+    # Purpose: Provide debugging utilities for build process
+    # Dependencies: None (self-contained function)
+    # Outputs: debug_glibc() function available
+    # Note: Following script copying philosophy - debug_glibc should be in container-scripts
+    #       For now, we define it here, but it should be moved to a separate script file
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}BLOCK 3: Debug and Diagnostic Functions${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Define debug_glibc function (from xubuntu_robotics_base_debug.sh BLOCK 2)
+    # TODO: Move this to container-scripts/shell-scripts/debug-functions.sh following script copying philosophy
+    printf '%s\n' "[DEFINE] Defining debug_glibc() function..."
+    debug_glibc() {
+        local stage="$1"
+        # Temporarily disable pipefail to prevent pipeline failures from stopping the script
+        local __prev_opts="$-"
+        local __had_e=0
+        case "$__prev_opts" in *e*) __had_e=1 ;; esac
+        set +e
+        set +o pipefail 2>/dev/null || true
+        
+        printf '%s\n' "=========================================================="
+        printf '%b\n' "${BLUE}DEBUG CHECKPOINT: ${stage}${NC}"
+        printf '%s\n' "Time: $(date)"
+        printf '%s\n' "=========================================================="
+        printf '%s\n' "GLIBC version:"
+        /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "GLIBC version check failed" || true
+        printf '%s\n' "---"
+        printf '%s\n' "ldd version:"
+        (timeout 5 sh -c 'ldd --version 2>&1' || printf '%s\n' "ldd version check failed or timed out") | head -1 || true
+        printf '%s\n' "---"
+        printf '%s\n' "GCC version:"
+        gcc --version 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "GCC not installed yet" || true
+        printf '%s\n' "---"
+        printf '%s\n' "Test stdlib.h locations:"
+        find /usr/include -name "stdlib.h" 2>/dev/null || printf '%s\n' "stdlib.h not found"
+        printf '%s\n' "---"
+        printf '%s\n' "Test cstdlib locations:"
+        find /usr/include -name "cstdlib" 2>/dev/null || printf '%s\n' "cstdlib not found"
+        printf '%s\n' "---"
+        printf '%s\n' "Compiler include paths:"
+        gcc -xc++ -E -v - < /dev/null 2>&1 | grep '^ /' 2>/dev/null || printf '%s\n' "Cannot check (GCC not ready)"
+        printf '%s\n' "---"
+        printf '%s\n' "Test compile with stdlib.h:"
+        # Use alternative temp directory (from config.sh or defaults)
+        CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+        local test_tmp_dir="${APT_TMP_ALT:-${TMPDIR:-${INSTALL_PREFIX}}}"
+        local tmp_src
+        tmp_src=$(mktemp -t glibc_testXXXX.c 2>/dev/null) || tmp_src="${test_tmp_dir}/glibc_test_$$.c"
+        local tmp_bin
+        tmp_bin=$(mktemp -t glibc_testXXXX 2>/dev/null) || tmp_bin="${test_tmp_dir}/glibc_test_$$"
+        {
+            printf '%s\n' '#include <stdlib.h>'
+            printf '%s\n' 'int main(void) { return 0; }'
+        } > "${tmp_src}"
+        if gcc "${tmp_src}" -o "${tmp_bin}" 2>&1; then
+            printf '%s\n' "SUCCESS"
+        else
+            printf '%s\n' "FAILED"
+        fi
+        rm -f "${tmp_src}" "${tmp_bin}" 2>/dev/null || true
+        printf '%s\n' "---"
+        printf '%s\n' ""
+        # Reset terminal state
+        printf '\033[0m\n'
+        # Restore pipefail
+        set -o pipefail 2>/dev/null || true
+        # Restore -e if it was previously set
+        if [ "$__had_e" -eq 1 ]; then
+            set -e
+        fi
+    }
+    
+    # Export function for use in subprocesses
+    export -f debug_glibc
+    
+    # Verify debug_glibc function is available
+    if command -v debug_glibc >/dev/null 2>&1 || type debug_glibc >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ debug_glibc() function is available"
+        
+        # Test debug_glibc function (will show diagnostics)
+        printf '%s\n' "  [TEST] Testing debug_glibc() function..."
+        if debug_glibc "Stage 3 Initialization Test" >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ debug_glibc() executed successfully"
+        else
+            printf '%s\n' "  ⚠ debug_glibc() had issues (may be normal if GCC not installed)"
+        fi
+    else
+        printf '%s\n' "  ✗ debug_glibc() function is NOT available"
+        exit 1
+    fi
+    
+    printf '%s\n' ""
+    
+    # === COMPREHENSIVE VERIFICATION ===
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}COMPREHENSIVE VERIFICATION${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    VERIFY_FAILED=0
+    
+    # Verify phase tracking variables
+    printf '%s\n' "[VERIFY] Phase tracking variables..."
+    for phase_var in PHASE1_STATUS PHASE2_STATUS PHASE3_STATUS PHASE4_STATUS PHASE5_STATUS; do
+        if [ -n "${!phase_var:-}" ]; then
+            printf '%s\n' "  ✓ ${phase_var}: ${!phase_var}"
+        else
+            printf '%s\n' "  ✗ ${phase_var}: NOT SET"
+            VERIFY_FAILED=$((VERIFY_FAILED + 1))
+        fi
+    done
+    
+    # Verify environment variables
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY] Environment variables..."
+    if [ "${DEBIAN_FRONTEND}" = "noninteractive" ]; then
+        printf '%s\n' "  ✓ DEBIAN_FRONTEND: ${DEBIAN_FRONTEND}"
+    else
+        printf '%s\n' "  ✗ DEBIAN_FRONTEND: ${DEBIAN_FRONTEND} (expected: noninteractive)"
+        VERIFY_FAILED=$((VERIFY_FAILED + 1))
+    fi
+    
+    # Verify functions are callable
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY] Function availability..."
+    
+    if command -v calculate_build_jobs >/dev/null 2>&1 || type calculate_build_jobs >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ calculate_build_jobs() is callable"
+        BUILD_JOBS_TEST=$(calculate_build_jobs 2>&1)
+        if [ -n "${BUILD_JOBS_TEST}" ] && [ "${BUILD_JOBS_TEST}" -gt 0 ] 2>/dev/null; then
+            printf '%s\n' "  ✓ calculate_build_jobs() returns valid value: ${BUILD_JOBS_TEST}"
+        else
+            printf '%s\n' "  ⚠ calculate_build_jobs() returned: ${BUILD_JOBS_TEST}"
+        fi
+    else
+        printf '%s\n' "  ✗ calculate_build_jobs() is NOT callable"
+        VERIFY_FAILED=$((VERIFY_FAILED + 1))
+    fi
+    
+    if command -v debug_glibc >/dev/null 2>&1 || type debug_glibc >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ debug_glibc() is callable"
+    else
+        printf '%s\n' "  ✗ debug_glibc() is NOT callable"
+        VERIFY_FAILED=$((VERIFY_FAILED + 1))
+    fi
+    
+    # Final verification summary
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY] Verification summary:"
+    if [ ${VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All verification checks passed"
+    else
+        printf '%s\n' "  ✗ ${VERIFY_FAILED} verification(s) failed"
+        exit 1
+    fi
+    
+    printf '%s\n' ""
+    
+    # === CLEANUP ===
+    printf '%s\n' "[CLEANUP] Cleaning up temporary files..."
+    
+    # Clean test files (using CONTAINER_CACHE_ROOT from config.sh)
+    CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    for test_path in /tmp /var/tmp "${CONTAINER_CACHE_ROOT}"; do
+        if [ -d "${test_path}" ]; then
+            find "${test_path}" -maxdepth 1 -type f \( -name ".test_*" -o -name ".write_test_*" -o -name "glibc_test_*" \) 2>/dev/null | while IFS= read -r test_file || [ -n "${test_file}" ]; do
+                rm -f "${test_file}" 2>/dev/null || true
+            done
+        fi
+    done
+    
+    # Clean APT cache
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get clean >/dev/null 2>&1 || true
+        apt-get autoclean >/dev/null 2>&1 || true
+    fi
+    
+    printf '%s\n' "${GREEN}✓ Cleanup complete${NC}"
+    printf '%s\n' ""
+    printf '%s\n' "=========================================="
+    printf '%s\n' "Stage 3 complete."
+    printf '%s\n' "=========================================="
+

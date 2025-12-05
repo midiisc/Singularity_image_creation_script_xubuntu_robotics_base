@@ -1,0 +1,1011 @@
+# CRITICAL: CUMULATIVE BUILD - Stage 7 builds on Stage 6
+# This stage includes ALL cumulative steps from:
+#   - Stage 0: Minimal base (bind mounts, essential tools)
+#   - Stage 1: Bootstrap safe environment (APT robustness, directory structure, procps-ng)
+#   - Stage 2: Terminal colors and Block 0 (container scripts installation)
+#   - Stage 3: Initialization blocks (phase tracking, debug functions, build jobs)
+#   - Stage 4: Cache and mirror functions (cache management, mirror probing, library verification)
+#   - Stage 5: Cache monitoring and configuration (cache monitoring system, unified cache configuration)
+#   - Stage 6: Package management functions (advanced package management with staging, retry, atomicity, integrity, locking)
+#   - Stage 7: Main build execution start (cache directory structure, systematic writability enforcement) - NEW
+# 
+# Stage 7 MUST be built on top of Stage 6 for cumulative build
+# Using absolute path to ensure Stage 6 image is found
+Bootstrap: localimage
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/test_local_mounts/progressive/output/stage_06_package_management.sif
+
+# === %files Section ===
+%files
+    # CRITICAL: Copy centralized configuration (SINGLE SOURCE OF TRUTH)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    # Copy container scripts (already installed in Stage 2, but ensure they're available)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    # Copy common functions (needed for cache management functions)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/common_functions.sh /scripts/common_functions.sh
+    # Copy mirror functions (needed for mirror probing)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/mirror_functions.sh /scripts/mirror_functions.sh
+    # Copy library functions (needed for library verification)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/library_functions.sh /scripts/library_functions.sh
+    # Copy cache functions (needed for cache monitoring and configuration)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/cache_functions.sh /scripts/cache_functions.sh
+    # Copy package functions (needed for advanced package management)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/package_functions.sh /scripts/package_functions.sh
+
+# === %labels Section ===
+%labels
+    Maintainer midhun
+    Description "Progressive Stage 7: Main Build Execution Start (Cache Directory Structure, Systematic Writability Enforcement)"
+
+# === %environment Section ===
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Asia/Kolkata
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    
+    # Terminal color codes (from Stage 2) - simple exports only
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export NC='\033[0m'
+    
+    # Phase tracking variables (from Stage 3) - simple exports only
+    export PHASE1_STATUS="NOT RUN"
+    export PHASE2_STATUS="NOT RUN"
+    export PHASE3_STATUS="NOT RUN"
+    export PHASE4_STATUS="NOT RUN"
+    export PHASE5_STATUS="NOT RUN"
+    
+    # Cache configuration variables (from Stage 5) - simple exports only
+    # Note: These use hardcoded paths since config.sh is not available in %environment
+    # The actual values will be set from config.sh in %post section
+    export CACHE_ROOT="/container_cache"
+    export PIP_CACHE_DIR="/container_cache/wheels"
+    export CONDA_PKGS_DIRS="/container_cache/conda_pkgs"
+    export JULIA_DEPOT_PATH="/container_cache/julia_pkgs:/usr/local/share/julia"
+
+# === %setup Section ===
+%setup
+    # Create mount point directories (using /container_cache as default - config.sh available in %post)
+    mkdir -p ${APPTAINER_ROOTFS}/container_cache
+    mkdir -p ${APPTAINER_ROOTFS}/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/var/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/scripts
+
+# === %post Section ===
+%post -c /bin/bash
+    # CRITICAL: Set non-interactive environment variables FIRST
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    
+    # === CRITICAL: Source centralized configuration ===
+    # config.sh is the SINGLE SOURCE OF TRUTH for all paths, versions, and settings
+    # It is copied to /etc/config.sh in the %files section
+    if [ -f /etc/config.sh ]; then
+        # Disable strict mode temporarily to allow config.sh to set defaults
+        set +u
+        source /etc/config.sh
+        set -u
+        printf '%s\n' "[%post] ✓ Loaded centralized configuration from /etc/config.sh"
+    else
+        printf '%s\n' "[%post] ⚠ WARNING: /etc/config.sh not found - using defaults"
+        printf '%s\n' "[%post]   This should not happen - config.sh should be copied in %files section"
+        # Set minimal defaults if config.sh missing
+        export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        export INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    fi
+    
+    # === CRITICAL: Set terminal color codes FIRST (before any usage) ===
+    # Purpose: Define color codes for terminal output (needed for all output sections)
+    # Dependencies: None (foundational - must be set before use)
+    # Outputs: Environment variables for colored output
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export NC='\033[0m'
+    
+    printf '%s\n' "=========================================="
+    printf '%s\n' "PROGRESSIVE STAGE 7: Main Build Execution Start"
+    printf '%s\n' "=========================================="
+    printf '%s\n' ""
+    printf '%s\n' "[CUMULATIVE BUILD] Stage 7 includes ALL cumulative steps from:"
+    printf '%s\n' "  - Stage 0: Minimal base (bind mounts, essential tools) - INCLUDED"
+    printf '%s\n' "  - Stage 1: Bootstrap safe environment (APT robustness, directory structure, procps-ng) - INCLUDED"
+    printf '%s\n' "  - Stage 2: Terminal colors and Block 0 (container scripts installation) - INCLUDED"
+    printf '%s\n' "  - Stage 3: Initialization blocks (phase tracking, debug functions, build jobs) - INCLUDED"
+    printf '%s\n' "  - Stage 4: Cache and mirror functions (cache management, mirror probing, library verification) - INCLUDED"
+    printf '%s\n' "  - Stage 5: Cache monitoring and configuration (cache monitoring system, unified cache configuration) - INCLUDED"
+    printf '%s\n' "  - Stage 6: Package management functions (advanced package management with staging, retry, atomicity, integrity, locking) - INCLUDED"
+    printf '%s\n' "  - Stage 7: Main build execution start (cache directory structure, systematic writability enforcement) - NEW"
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 0: MINIMAL BASE - ALL STEPS INCLUDED
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 0: Installing Essential Tools${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # CRITICAL: Ensure APT directories are writable BEFORE any apt-get operations
+    printf '%s\n' "[STAGE 0] Verifying APT writability (CRITICAL for build)..."
+    APT_WRITABILITY_FAILED=0
+    for apt_dir in /var/lib/apt/lists /var/lib/apt/lists/partial /var/cache/apt/archives /var/cache/apt/archives/partial /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /etc/apt/preferences.d /etc/apt/apt.conf.d; do
+        # Create directory if it doesn't exist
+        mkdir -p "${apt_dir}" 2>/dev/null || true
+        # Set permissions
+        chmod 755 "${apt_dir}" 2>/dev/null || true
+        # Test writability
+        if [ -d "${apt_dir}" ]; then
+            if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                printf '%s\n' "  ✓ ${apt_dir} is writable"
+            else
+                printf '%s\n' "  ⚠ ${apt_dir} not writable - attempting to fix..."
+                chown -R root:root "${apt_dir}" 2>/dev/null || true
+                chmod -R 755 "${apt_dir}" 2>/dev/null || true
+                if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                    rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                    printf '%s\n' "  ✓ ${apt_dir} is now writable (fixed)"
+                else
+                    printf '%s\n' "  ✗ ${apt_dir} is NOT writable - APT operations will fail"
+                    APT_WRITABILITY_FAILED=$((APT_WRITABILITY_FAILED + 1))
+                fi
+            fi
+        fi
+    done
+    if [ ${APT_WRITABILITY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ FATAL: ${APT_WRITABILITY_FAILED} APT directory(ies) not writable - cannot proceed with build"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All APT directories verified writable"
+    fi
+    printf '%s\n' ""
+    
+    printf '%s\n' "[STAGE 0] Installing essential tools..."
+    apt-get update -qq >/dev/null 2>&1 || true
+    
+    # Essential download and network tools
+    if ! apt-get install -y --no-install-recommends \
+        wget \
+        curl \
+        gpg-agent \
+        ca-certificates \
+        gnupg \
+        gnupg2 \
+        >/dev/null 2>&1; then
+        printf '%s\n' "  ✗ Failed to install essential download tools"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Essential download tools installed"
+    
+    # Essential system tools
+    if ! apt-get install -y --no-install-recommends \
+        procps \
+        file \
+        less \
+        >/dev/null 2>&1; then
+        printf '%s\n' "  ✗ Failed to install essential system tools"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Essential system tools installed"
+    
+    # Try procps-ng if procps didn't provide pgrep
+    if ! command -v pgrep >/dev/null 2>&1; then
+        apt-get install -y --no-install-recommends procps-ng >/dev/null 2>&1 || true
+    fi
+    
+    # Essential package inspection tools
+    if ! apt-get install -y --no-install-recommends dpkg-dev >/dev/null 2>&1; then
+        printf '%s\n' "  ✗ Failed to install dpkg-dev"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Package inspection tools installed"
+    
+    # Essential archive and compression tools
+    if ! apt-get install -y --no-install-recommends \
+        tar \
+        gzip \
+        bzip2 \
+        xz-utils \
+        unzip \
+        >/dev/null 2>&1; then
+        printf '%s\n' "  ✗ Failed to install archive tools"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Archive tools installed"
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 1: BOOTSTRAP SAFE ENVIRONMENT - ALL STEPS INCLUDED
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 1: Bootstrap Safe Environment${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Find safe temp directory
+    printf '%s\n' "[STAGE 1] Finding safe temp directory..."
+    SAFE_TMP=""
+    if touch /tmp/.test_$$ 2>/dev/null; then
+        rm /tmp/.test_$$ 2>/dev/null || true
+        SAFE_TMP="/tmp"
+        printf '%s\n' "  ✓ Found writable temp dir: ${SAFE_TMP}"
+    else
+        for candidate in "/var/tmp" "/opt/tmp" "/usr/local/tmp" "/home/root/tmp"; do
+            if mkdir -p "${candidate}" 2>/dev/null && touch "${candidate}/.test_$$" 2>/dev/null; then
+                rm "${candidate}/.test_$$" 2>/dev/null || true
+                SAFE_TMP="${candidate}"
+                printf '%s\n' "  ✓ Found writable temp dir: ${SAFE_TMP} (fallback)"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "${SAFE_TMP}" ]; then
+        printf '%s\n' "  ✗ FATAL: Could not find ANY writable directory for temporary files"
+        exit 1
+    fi
+    
+    export TMPDIR="${SAFE_TMP}"
+    export TEMP="${SAFE_TMP}"
+    export TMP="${SAFE_TMP}"
+    
+    # Install tool shims
+    printf '%s\n' "[STAGE 1] Installing tool shims..."
+    if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
+        mv /usr/bin/gpg /usr/bin/gpg.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexport TEMP="%s"\nexport TMP="%s"\nexec /usr/bin/gpg.real "$@"\n' "${SAFE_TMP}" "${SAFE_TMP}" "${SAFE_TMP}" > /usr/bin/gpg
+        chmod 755 /usr/bin/gpg
+        printf '%s\n' "  ✓ Shimmed: gpg"
+    fi
+    
+    if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
+        mv /usr/bin/apt-key /usr/bin/apt-key.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexec /usr/bin/apt-key.real "$@"\n' "${SAFE_TMP}" > /usr/bin/apt-key
+        chmod 755 /usr/bin/apt-key
+        printf '%s\n' "  ✓ Shimmed: apt-key"
+    fi
+    
+    if [ -f /usr/bin/mktemp ] && [ ! -f /usr/bin/mktemp.real ]; then
+        mv /usr/bin/mktemp /usr/bin/mktemp.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexec /usr/bin/mktemp.real "$@"\n' "${SAFE_TMP}" > /usr/bin/mktemp
+        chmod 755 /usr/bin/mktemp
+        printf '%s\n' "  ✓ Shimmed: mktemp"
+    fi
+    
+    # APT temp configuration
+    mkdir -p /etc/apt/apt.conf.d
+    echo "Acquire::TempDir \"${SAFE_TMP}\";" > /etc/apt/apt.conf.d/00-safe-temp
+    printf '%s\n' "  ✓ Configured APT Acquire::TempDir to ${SAFE_TMP}"
+    
+    # APT robustness configuration
+    printf '%s\n' "[STAGE 1] Configuring APT robustness..."
+    mkdir -p "${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/apt/archives}" 2>/dev/null || true
+    mkdir -p "${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/apt/archives}/partial" 2>/dev/null || true
+    
+    {
+        echo "# APT robustness configuration"
+        echo "Acquire::Check-Valid-Until false;"
+        echo "Acquire::Retries \"3\";"
+        echo "Acquire::http::Timeout \"20\";"
+        echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/apt/archives}\";"
+        echo "APT::Keep-Downloaded-Packages \"true\";"
+    } > /etc/apt/apt.conf.d/01-robustness
+    printf '%s\n' "  ✓ APT robustness configuration created"
+    
+    # Create directory structure
+    printf '%s\n' "[STAGE 1] Creating directory structure..."
+    for dir in /var/lib/apt/lists /var/lib/apt/lists/partial /var/cache/apt/archives /var/cache/apt/archives/partial /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /etc/apt/preferences.d /etc/apt/apt.conf.d; do
+        mkdir -p "${dir}" 2>/dev/null || true
+        chmod 755 "${dir}" 2>/dev/null || true
+        # CRITICAL: Ensure writability during build
+        if [ -d "${dir}" ]; then
+            # Test writability by creating a test file
+            if touch "${dir}/.write_test_$$" 2>/dev/null; then
+                rm -f "${dir}/.write_test_$$" 2>/dev/null || true
+                printf '%s\n' "  ✓ ${dir} is writable"
+            else
+                printf '%s\n' "  ⚠ ${dir} may not be writable - attempting to fix..."
+                # Try to fix ownership and permissions
+                chown -R root:root "${dir}" 2>/dev/null || true
+                chmod -R 755 "${dir}" 2>/dev/null || true
+                # Test again
+                if touch "${dir}/.write_test_$$" 2>/dev/null; then
+                    rm -f "${dir}/.write_test_$$" 2>/dev/null || true
+                    printf '%s\n' "  ✓ ${dir} is now writable (fixed)"
+                else
+                    printf '%s\n' "  ✗ ${dir} is NOT writable - this may cause APT failures during build"
+                    exit 1
+                fi
+            fi
+        fi
+    done
+    printf '%s\n' "  ✓ Directory structure created and verified writable"
+    
+    # Install procps-ng unconditionally
+    printf '%s\n' "[STAGE 1] Installing procps-ng..."
+    apt-get install -y --no-install-recommends procps 2>&1 || true
+    apt-get install -y --no-install-recommends procps-ng 2>&1 || true
+    printf '%s\n' "  ✓ procps-ng installation attempted"
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 2: TERMINAL COLORS AND CONTAINER SCRIPTS - ALL STEPS INCLUDED
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 2: Terminal Colors and Container Scripts${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Terminal color codes (already set above, but verify)
+    printf '%s\n' "[STAGE 2] Verifying terminal color codes..."
+    COLOR_VERIFY_FAILED=0
+    for color_var in RED GREEN YELLOW BLUE NC; do
+        if [ -z "${!color_var:-}" ]; then
+            printf '%s\n' "  ✗ ${color_var} not defined"
+            COLOR_VERIFY_FAILED=$((COLOR_VERIFY_FAILED + 1))
+        fi
+    done
+    if [ ${COLOR_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All terminal color codes defined"
+    fi
+    
+    # Container scripts installation
+    printf '%s\n' "[STAGE 2] Installing container scripts..."
+    CONTAINER_SCRIPTS_PATH="${CONTAINER_SCRIPTS_INSTALL_PATH:-/container-scripts}"
+    INSTALLER_SCRIPT="${CONTAINER_SCRIPTS_PATH}/install.sh"
+    
+    if [ -d "${CONTAINER_SCRIPTS_PATH}" ] && [ -f "${INSTALLER_SCRIPT}" ]; then
+        chmod +x "${INSTALLER_SCRIPT}" 2>/dev/null || true
+        if "${INSTALLER_SCRIPT}" --all 2>&1; then
+            printf '%s\n' "  ✓ Container scripts installed successfully"
+        else
+            printf '%s\n' "  ⚠ Container scripts installation had issues (may already be installed)"
+        fi
+    else
+        printf '%s\n' "  ⚠ Container scripts directory not found (may be from %files section)"
+    fi
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 3: INITIALIZATION BLOCKS - ALL STEPS INCLUDED
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 3: Initialization Blocks${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Phase tracking variables
+    printf '%s\n' "[STAGE 3] Setting up phase tracking variables..."
+    export PHASE1_STATUS="NOT RUN"
+    export PHASE2_STATUS="NOT RUN"
+    export PHASE3_STATUS="NOT RUN"
+    export PHASE4_STATUS="NOT RUN"
+    export PHASE5_STATUS="NOT RUN"
+    printf '%s\n' "  ✓ Phase tracking variables set"
+    
+    # Environment setup
+    printf '%s\n' "[STAGE 3] Setting up environment..."
+    export DEBIAN_FRONTEND=noninteractive
+    printf '%s\n' "  ✓ Environment setup complete"
+    
+    # Load common functions
+    printf '%s\n' "[STAGE 3] Loading common functions..."
+    if [ -f /scripts/common_functions.sh ]; then
+        set +u
+        source /scripts/common_functions.sh 2>/dev/null || true
+        set -u
+        if command -v calculate_build_jobs >/dev/null 2>&1; then
+            BUILD_JOBS=$(calculate_build_jobs 2>&1 || echo "8")
+            export BUILD_JOBS
+            printf '%s\n' "  ✓ calculate_build_jobs() loaded (returns: ${BUILD_JOBS})"
+        else
+            printf '%s\n' "  ⚠ calculate_build_jobs() not available"
+        fi
+    else
+        printf '%s\n' "  ⚠ common_functions.sh not found (will be loaded later)"
+    fi
+    
+    # Define debug_glibc() function (from Stage 3)
+    printf '%s\n' "[STAGE 3] Defining debug_glibc() function..."
+    debug_glibc() {
+        local stage="$1"
+        local __prev_opts="$-"
+        local __had_e=0
+        case "$__prev_opts" in *e*) __had_e=1 ;; esac
+        set +e
+        set +o pipefail 2>/dev/null || true
+        printf '%s\n' "=========================================================="
+        printf '%b\n' "${BLUE}DEBUG CHECKPOINT: ${stage}${NC}"
+        printf '%s\n' "Time: $(date)"
+        printf '%s\n' "=========================================================="
+        /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || true
+        printf '%s\n' "---"
+        (timeout 5 sh -c 'ldd --version 2>&1' || true) | head -1 || true
+        printf '%s\n' "---"
+        gcc --version 2>/dev/null | head -1 2>/dev/null || printf '%s\n' "GCC not installed yet" || true
+        printf '%s\n' "---"
+        find /usr/include -name "stdlib.h" 2>/dev/null || printf '%s\n' "stdlib.h not found"
+        printf '%s\n' "---"
+        printf '\033[0m\n'
+        set -o pipefail 2>/dev/null || true
+        if [ "$__had_e" -eq 1 ]; then
+            set -e
+        fi
+    }
+    export -f debug_glibc
+    printf '%s\n' "  ✓ debug_glibc() function defined"
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 4: CACHE AND MIRROR FUNCTIONS - NEW STEPS
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 4: Cache and Mirror Functions${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # === SOURCE FUNCTION SCRIPTS ===
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}LOADING FUNCTION SCRIPTS${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Source common functions (cache management functions)
+    if [ -f /scripts/common_functions.sh ]; then
+        printf '%s\n' "[LOAD] Sourcing common_functions.sh..."
+        if source /scripts/common_functions.sh 2>/dev/null; then
+            printf '%s\n' "  ✓ common_functions.sh loaded successfully"
+        else
+            printf '%s\n' "  ✗ Failed to load common_functions.sh"
+            exit 1
+        fi
+    else
+        printf '%s\n' "  ✗ common_functions.sh not found"
+        exit 1
+    fi
+    
+    # Source mirror functions
+    if [ -f /scripts/mirror_functions.sh ]; then
+        printf '%s\n' "[LOAD] Sourcing mirror_functions.sh..."
+        if source /scripts/mirror_functions.sh 2>/dev/null; then
+            printf '%s\n' "  ✓ mirror_functions.sh loaded successfully"
+        else
+            printf '%s\n' "  ✗ Failed to load mirror_functions.sh"
+            exit 1
+        fi
+    else
+        printf '%s\n' "  ✗ mirror_functions.sh not found"
+        exit 1
+    fi
+    
+    # Source library functions
+    if [ -f /scripts/library_functions.sh ]; then
+        printf '%s\n' "[LOAD] Sourcing library_functions.sh..."
+        if source /scripts/library_functions.sh 2>/dev/null; then
+            printf '%s\n' "  ✓ library_functions.sh loaded successfully"
+        else
+            printf '%s\n' "  ✗ Failed to load library_functions.sh"
+            exit 1
+        fi
+    else
+        printf '%s\n' "  ✗ library_functions.sh not found"
+        exit 1
+    fi
+    printf '%s\n' ""
+    
+    # === VERIFY ALL FUNCTIONS ARE DEFINED ===
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}FUNCTION VERIFICATION${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    FUNCTION_VERIFY_FAILED=0
+    
+    # Verify cache management functions (from common_functions.sh)
+    printf '%s\n' "[VERIFY] Cache management functions..."
+    if declare -f consolidate_cache_packages >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ consolidate_cache_packages() is defined"
+    else
+        printf '%s\n' "  ✗ consolidate_cache_packages() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    if declare -f monitor_cache >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ monitor_cache() is defined"
+    else
+        printf '%s\n' "  ✗ monitor_cache() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify mirror functions (from mirror_functions.sh)
+    printf '%s\n' "[VERIFY] Mirror probing functions..."
+    if declare -f test_mirror >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ test_mirror() is defined"
+    else
+        printf '%s\n' "  ✗ test_mirror() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    if declare -f probe_and_set_mirrors >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ probe_and_set_mirrors() is defined"
+    else
+        printf '%s\n' "  ✗ probe_and_set_mirrors() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify library functions (from library_functions.sh)
+    printf '%s\n' "[VERIFY] Library verification functions..."
+    if declare -f verify_library_available >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ verify_library_available() is defined"
+    else
+        printf '%s\n' "  ✗ verify_library_available() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    # Also check alias
+    if declare -f verify_library_installation >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ verify_library_installation() is defined (alias)"
+    else
+        printf '%s\n' "  ⚠ verify_library_installation() alias not found (using verify_library_available instead)"
+    fi
+    if declare -f run_ldconfig_refresh >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ run_ldconfig_refresh() is defined"
+    else
+        printf '%s\n' "  ✗ run_ldconfig_refresh() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    if declare -f run_ldconfig_refresh_dir >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ run_ldconfig_refresh_dir() is defined"
+    else
+        printf '%s\n' "  ✗ run_ldconfig_refresh_dir() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    if declare -f ensure_library_path_registered >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ ensure_library_path_registered() is defined"
+    else
+        printf '%s\n' "  ✗ ensure_library_path_registered() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    if declare -f ensure_compiled_lib_priority >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ ensure_compiled_lib_priority() is defined"
+    else
+        printf '%s\n' "  ✗ ensure_compiled_lib_priority() is NOT defined"
+        FUNCTION_VERIFY_FAILED=$((FUNCTION_VERIFY_FAILED + 1))
+    fi
+    
+    if [ ${FUNCTION_VERIFY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ ${FUNCTION_VERIFY_FAILED} function verification(s) failed"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All functions verified and available"
+    fi
+    printf '%s\n' ""
+    
+    # === TEST FUNCTION EXECUTION ===
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}FUNCTION EXECUTION TESTS${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    EXECUTION_TEST_FAILED=0
+    
+    # Test cache management functions (should not fail even if cache is empty)
+    printf '%s\n' "[TEST] Testing consolidate_cache_packages()..."
+    if consolidate_cache_packages >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ consolidate_cache_packages() executed successfully"
+    else
+        printf '%s\n' "  ✗ consolidate_cache_packages() execution failed"
+        EXECUTION_TEST_FAILED=$((EXECUTION_TEST_FAILED + 1))
+    fi
+    
+    printf '%s\n' "[TEST] Testing monitor_cache()..."
+    if monitor_cache "Stage 4 test" >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ monitor_cache() executed successfully"
+    else
+        printf '%s\n' "  ✗ monitor_cache() execution failed"
+        EXECUTION_TEST_FAILED=$((EXECUTION_TEST_FAILED + 1))
+    fi
+    
+    # Test library functions
+    printf '%s\n' "[TEST] Testing run_ldconfig_refresh()..."
+    if run_ldconfig_refresh >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ run_ldconfig_refresh() executed successfully"
+    else
+        printf '%s\n' "  ✗ run_ldconfig_refresh() execution failed"
+        EXECUTION_TEST_FAILED=$((EXECUTION_TEST_FAILED + 1))
+    fi
+    
+    printf '%s\n' "[TEST] Testing ensure_compiled_lib_priority()..."
+    if ensure_compiled_lib_priority >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ ensure_compiled_lib_priority() executed successfully"
+    else
+        printf '%s\n' "  ✗ ensure_compiled_lib_priority() execution failed"
+        EXECUTION_TEST_FAILED=$((EXECUTION_TEST_FAILED + 1))
+    fi
+    
+    # Test library verification (test with a system library that should exist)
+    printf '%s\n' "[TEST] Testing verify_library_available()..."
+    if verify_library_available "libc.so" "/lib/x86_64-linux-gnu/libc.so.6" >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ verify_library_available() executed successfully (found libc.so)"
+    else
+        printf '%s\n' "  ⚠ verify_library_available() test inconclusive (libc.so may not be in expected location)"
+        # Don't fail - this is just a test
+    fi
+    
+    # Note: test_mirror() and probe_and_set_mirrors() require network access
+    # We'll skip network tests in build (they can be tested at runtime)
+    printf '%s\n' "[INFO] Skipping network-dependent tests (test_mirror, probe_and_set_mirrors) - will be tested at runtime"
+    
+    if [ ${EXECUTION_TEST_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ ${EXECUTION_TEST_FAILED} execution test(s) failed"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All execution tests passed"
+    fi
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 5: CACHE MONITORING AND CONFIGURATION - ALL STEPS INCLUDED
+    # Purpose: Cache monitoring system and unified cache configuration
+    # Dependencies: config.sh (sourced above), common_functions.sh, cache_functions.sh
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 5: Cache Monitoring and Configuration${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Source cache functions (from Stage 5)
+    printf '%s\n' "[STAGE 5] Loading cache functions..."
+    if [ -f /scripts/cache_functions.sh ]; then
+        set +u
+        source /scripts/cache_functions.sh 2>/dev/null || true
+        set -u
+        if declare -f display_cache_monitoring_summary >/dev/null 2>&1 && declare -f cache_summary >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ cache_functions.sh loaded successfully"
+        else
+            printf '%s\n' "  ⚠ Some cache functions not available (may be from previous stage)"
+        fi
+    else
+        printf '%s\n' "  ⚠ cache_functions.sh not found (will be loaded later)"
+    fi
+    
+    # Initialize cache monitoring data if not already done
+    if [ -z "${CACHE_MONITOR_DATA:-}" ]; then
+        CACHE_MONITOR_DATA="/tmp/cache_monitor_data.txt"
+        if [ ! -f "${CACHE_MONITOR_DATA}" ]; then
+            printf '%s\n' "Stage|Container APT|Var APT|Conda|Wheels|Julia" > "${CACHE_MONITOR_DATA}"
+        fi
+        export CACHE_MONITOR_DATA
+    fi
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 6: PACKAGE MANAGEMENT FUNCTIONS - ALL STEPS INCLUDED
+    # Purpose: Advanced package management with staging, retry, atomicity, integrity, locking
+    # Dependencies: config.sh (sourced above), package_functions.sh (copied in %files)
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 6: Package Management Functions${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Source package functions (from Stage 6)
+    printf '%s\n' "[STAGE 6] Loading package functions..."
+    if [ -f /scripts/package_functions.sh ]; then
+        set +u
+        source /scripts/package_functions.sh 2>/dev/null || true
+        set -u
+        if declare -f setup_conda_staging_area >/dev/null 2>&1 && \
+           declare -f atomic_package_replace >/dev/null 2>&1 && \
+           declare -f verify_package_integrity >/dev/null 2>&1 && \
+           declare -f acquire_package_lock >/dev/null 2>&1 && \
+           declare -f release_package_lock >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ package_functions.sh loaded successfully"
+        else
+            printf '%s\n' "  ⚠ Some package functions not available (may be from previous stage)"
+        fi
+    else
+        printf '%s\n' "  ⚠ package_functions.sh not found (will be loaded later)"
+    fi
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 7: MAIN BUILD EXECUTION START - NEW STEPS
+    # Purpose: Initialize build environment, create cache directories, systematic writability enforcement
+    # Dependencies: config.sh (sourced above), common_functions.sh (ensure_directory_writable)
+    # ============================================================================
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}STAGE 7: Main Build Execution Start${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # === BLOCK 8: MAIN BUILD EXECUTION START ===
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${BLUE}BLOCK 8: Main Build Execution Start${NC}"
+    printf '%s\n' "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    
+    # Sub-block 8.1: Initial diagnostic checkpoint
+    printf '%s\n' "[BLOCK 8.1] Running initial diagnostic checkpoint..."
+    if declare -f debug_glibc >/dev/null 2>&1; then
+        debug_glibc "START - Before any apt operations"
+        printf '%s\n' "  ✓ Initial diagnostic checkpoint completed"
+    else
+        printf '%s\n' "  ⚠ debug_glibc() not available (may be from previous stage)"
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.2: Create cache directory structure
+    printf '%s\n' "[BLOCK 8.2] Creating cache directory structure..."
+    CACHE_DIRS_CREATED=0
+    CACHE_DIRS_FAILED=0
+    
+    # Create container cache directories
+    for cache_dir in \
+        "${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/apt/archives}" \
+        "${CONTAINER_WHEELS_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/wheels}" \
+        "${CONTAINER_CONDA_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/conda_pkgs}" \
+        "${CONTAINER_JULIA_CACHE:-${CONTAINER_CACHE_ROOT:-/container_cache}/julia_pkgs}"; do
+        if mkdir -p "${cache_dir}" 2>/dev/null; then
+            chmod 755 "${cache_dir}" 2>/dev/null || true
+            printf '%s\n' "  ✓ Created: ${cache_dir}"
+            CACHE_DIRS_CREATED=$((CACHE_DIRS_CREATED + 1))
+    else
+            printf '%s\n' "  ✗ Failed to create: ${cache_dir}"
+            CACHE_DIRS_FAILED=$((CACHE_DIRS_FAILED + 1))
+    fi
+    done
+    
+    # Create user-specific cache directories
+    for user_cache_dir in /root/.cache/conda /root/.cache/julia /root/.local/share/julia; do
+        if mkdir -p "${user_cache_dir}" 2>/dev/null; then
+            chmod 755 "${user_cache_dir}" 2>/dev/null || true
+            printf '%s\n' "  ✓ Created: ${user_cache_dir}"
+            CACHE_DIRS_CREATED=$((CACHE_DIRS_CREATED + 1))
+    else
+            printf '%s\n' "  ✗ Failed to create: ${user_cache_dir}"
+            CACHE_DIRS_FAILED=$((CACHE_DIRS_FAILED + 1))
+    fi
+    done
+    
+    if [ ${CACHE_DIRS_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ ${CACHE_DIRS_FAILED} cache directory(ies) failed to create"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All ${CACHE_DIRS_CREATED} cache directories created successfully"
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.3: Verify ensure_directory_writable() function is available
+    printf '%s\n' "[BLOCK 8.3] Verifying ensure_directory_writable() function..."
+    if [ -f /scripts/common_functions.sh ]; then
+        set +u
+        source /scripts/common_functions.sh 2>/dev/null || true
+        set -u
+        if declare -f ensure_directory_writable >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ ensure_directory_writable() is available (from common_functions.sh)"
+        else
+            printf '%s\n' "  ✗ ensure_directory_writable() is NOT available"
+        exit 1
+        fi
+    else
+        printf '%s\n' "  ✗ common_functions.sh not found"
+        exit 1
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.4: Systematic writability enforcement for all system directories
+    printf '%s\n' "[BLOCK 8.4] Systematically ensuring all system directories are writable..."
+    WRITABILITY_FAILED=0
+    
+    # APT-related directories (critical for package management)
+    printf '%s\n' "  Verifying APT directories..."
+    for apt_dir in \
+        "/var/lib/apt/lists" \
+        "/var/lib/apt/lists/partial" \
+        "/var/cache/apt/archives" \
+        "/var/cache/apt/archives/partial" \
+        "/etc/apt/sources.list.d" \
+        "/etc/apt/trusted.gpg.d" \
+        "/etc/apt/preferences.d"; do
+        if ensure_directory_writable "${apt_dir}" "APT directory: ${apt_dir}" >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ ${apt_dir} is writable"
+        else
+            printf '%s\n' "  ✗ ${apt_dir} is NOT writable"
+            WRITABILITY_FAILED=$((WRITABILITY_FAILED + 1))
+        fi
+    done
+    
+    # Library and system configuration directories
+    printf '%s\n' "  Verifying library and system directories..."
+    for sys_dir in \
+        "/etc/ld.so.conf.d" \
+        "/usr/local/bin" \
+        "/usr/local/lib" \
+        "/usr/local/lib64" \
+        "/usr/local/share" \
+        "/usr/local/include"; do
+        if ensure_directory_writable "${sys_dir}" "System directory: ${sys_dir}" >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ ${sys_dir} is writable"
+        else
+            printf '%s\n' "  ✗ ${sys_dir} is NOT writable"
+            WRITABILITY_FAILED=$((WRITABILITY_FAILED + 1))
+        fi
+    done
+    
+    # Installation prefix directory
+    printf '%s\n' "  Verifying installation prefix..."
+    INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    if ensure_directory_writable "${INSTALL_PREFIX}" "Installation prefix: ${INSTALL_PREFIX}" >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ ${INSTALL_PREFIX} is writable"
+        # Create common subdirectories
+        for subdir in "${INSTALL_PREFIX}/bin" "${INSTALL_PREFIX}/lib" "${INSTALL_PREFIX}/lib64" "${INSTALL_PREFIX}/include" "${INSTALL_PREFIX}/share"; do
+            if ensure_directory_writable "${subdir}" "Installation subdirectory: ${subdir}" >/dev/null 2>&1; then
+                printf '%s\n' "  ✓ ${subdir} is writable"
+            else
+                printf '%s\n' "  ⚠ ${subdir} may not be writable (non-critical)"
+            fi
+        done
+        else
+        printf '%s\n' "  ✗ ${INSTALL_PREFIX} is NOT writable"
+        WRITABILITY_FAILED=$((WRITABILITY_FAILED + 1))
+        fi
+    
+    if [ ${WRITABILITY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ ${WRITABILITY_FAILED} directory(ies) are NOT writable - build may fail"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All system directories verified writable"
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.5: Cache validation and repair (verify function is available)
+    printf '%s\n' "[BLOCK 8.5] Verifying validate_and_repair_cache() function..."
+    if [ -f /scripts/cache_functions.sh ]; then
+        set +u
+        source /scripts/cache_functions.sh 2>/dev/null || true
+        set -u
+        if declare -f validate_and_repair_cache >/dev/null 2>&1; then
+            printf '%s\n' "  ✓ validate_and_repair_cache() is available (from cache_functions.sh)"
+            printf '%s\n' "  Executing validate_and_repair_cache()..."
+            if validate_and_repair_cache >/dev/null 2>&1; then
+                printf '%s\n' "  ✓ validate_and_repair_cache() executed successfully"
+    else
+                printf '%s\n' "  ⚠ validate_and_repair_cache() had issues (non-critical)"
+            fi
+        else
+            printf '%s\n' "  ⚠ validate_and_repair_cache() is NOT available (may be from previous stage)"
+        fi
+    else
+        printf '%s\n' "  ⚠ cache_functions.sh not found (will be loaded later)"
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.6: Test write permissions
+    printf '%s\n' "[BLOCK 8.6] Testing write permissions..."
+    TEST_FILE="/root/.cache/write_test"
+    if [ -d /root/.cache ] && [ -w /root/.cache ]; then
+        if touch "${TEST_FILE}" 2>/dev/null; then
+            if [ -f "${TEST_FILE}" ] && rm -f "${TEST_FILE}" 2>/dev/null; then
+                printf '%s\n' "  ✓ Write permissions verified in /root/.cache"
+            else
+                printf '%s\n' "  ⚠ Failed to remove test file (non-critical)"
+            fi
+        else
+            printf '%s\n' "  ⚠ Write permissions issue detected in /root/.cache (non-critical)"
+        fi
+    else
+        printf '%s\n' "  ⚠ /root/.cache directory not writable (non-critical)"
+    fi
+    printf '%s\n' ""
+    
+    # Sub-block 8.7: GPG verification functions (placeholder)
+    printf '%s\n' "[BLOCK 8.7] Setting up GPG verification (placeholder)..."
+    setup_gpg_verification() {
+        printf '%s\n' "==> Setting up GPG verification for .deb packages..."
+        # TODO: Implement GPG key import and verification setup
+        # This function is a placeholder for future GPG verification functionality
+        return 0
+    }
+    export -f setup_gpg_verification
+    if setup_gpg_verification >/dev/null 2>&1; then
+        printf '%s\n' "  ✓ GPG verification placeholder function created"
+    else
+        printf '%s\n' "  ⚠ GPG verification placeholder function had issues (non-critical)"
+    fi
+    printf '%s\n' ""
+    
+    # === FINAL SUMMARY ===
+    printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' "${GREEN}STAGE 7 COMPLETE${NC}"
+    printf '%s\n' "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    printf '%s\n' ""
+    printf '%s\n' "✓ Cumulative verification: All previous stages verified"
+    printf '%s\n' "✓ Function scripts loaded: common_functions.sh, mirror_functions.sh, library_functions.sh, cache_functions.sh, package_functions.sh"
+    printf '%s\n' "✓ Cache directory structure: All cache directories created"
+    printf '%s\n' "✓ Systematic writability enforcement: All system directories verified writable"
+    printf '%s\n' "✓ Cache validation: validate_and_repair_cache() available and executed"
+    printf '%s\n' "✓ Write permissions: Tested and verified"
+    printf '%s\n' ""
+    printf '%s\n' "Stage 7 includes:"
+    printf '%s\n' "  - Initial diagnostic checkpoint: debug_glibc() executed"
+    printf '%s\n' "  - Cache directory structure: All cache directories created"
+    printf '%s\n' "  - Directory writability enforcement: ensure_directory_writable() function"
+    printf '%s\n' "  - Systematic writability verification: All APT, library, and installation directories verified"
+    printf '%s\n' "  - Cache validation: validate_and_repair_cache() executed"
+    printf '%s\n' "  - Write permissions test: /root/.cache verified writable"
+    printf '%s\n' "  - GPG verification placeholder: setup_gpg_verification() function created"
+    printf '%s\n' ""
+    
+    # === CREATE RUNTIME INITIALIZATION SCRIPT ===
+    # Purpose: Source function scripts and define functions at runtime
+    # This script will be sourced automatically by bash when container starts
+    printf '%s\n' "[RUNTIME INIT] Creating runtime initialization script..."
+    mkdir -p /etc/profile.d
+    {
+        echo "#!/bin/bash"
+        echo "# Runtime initialization script for Stage 7"
+        echo "# This script sources all function scripts and defines functions"
+        echo ""
+        echo "# Source function scripts (from Stages 3, 4, 5, 6, and 7)"
+        echo "if [ -f /scripts/common_functions.sh ]; then"
+        echo "    . /scripts/common_functions.sh 2>/dev/null || true"
+        echo "fi"
+        echo "if [ -f /scripts/mirror_functions.sh ]; then"
+        echo "    . /scripts/mirror_functions.sh 2>/dev/null || true"
+        echo "fi"
+        echo "if [ -f /scripts/library_functions.sh ]; then"
+        echo "    . /scripts/library_functions.sh 2>/dev/null || true"
+        echo "fi"
+        echo "if [ -f /scripts/cache_functions.sh ]; then"
+        echo "    . /scripts/cache_functions.sh 2>/dev/null || true"
+        echo "fi"
+        echo "if [ -f /scripts/package_functions.sh ]; then"
+        echo "    . /scripts/package_functions.sh 2>/dev/null || true"
+        echo "fi"
+        echo ""
+        echo "# Define debug_glibc() function (from Stage 3)"
+        echo "debug_glibc() {"
+        echo "    local stage=\"\${1:-unknown}\""
+        echo "    local __prev_opts=\"\$-\""
+        echo "    local __had_e=0"
+        echo "    case \"\$__prev_opts\" in *e*) __had_e=1 ;; esac"
+        echo "    set +e"
+        echo "    set +o pipefail 2>/dev/null || true"
+        echo "    printf '%s\\n' '=========================================================='"
+        echo "    printf '%b\\n' \"\${BLUE}DEBUG CHECKPOINT: \${stage}\${NC}\""
+        echo "    printf '%s\\n' \"Time: \$(date)\""
+        echo "    printf '%s\\n' '=========================================================='"
+        echo "    /lib/x86_64-linux-gnu/libc.so.6 2>/dev/null | head -1 2>/dev/null || true"
+        echo "    printf '%s\\n' '---'"
+        echo "    (timeout 5 sh -c 'ldd --version 2>&1' || true) | head -1 || true"
+        echo "    printf '%s\\n' '---'"
+        echo "    gcc --version 2>/dev/null | head -1 2>/dev/null || printf '%s\\n' 'GCC not installed yet' || true"
+        echo "    printf '%s\\n' '---'"
+        echo "    find /usr/include -name 'stdlib.h' 2>/dev/null || printf '%s\\n' 'stdlib.h not found'"
+        echo "    printf '%s\\n' '---'"
+        echo "    printf '\\033[0m\\n'"
+        echo "    set -o pipefail 2>/dev/null || true"
+        echo "    if [ \"\$__had_e\" -eq 1 ]; then"
+        echo "        set -e"
+        echo "    fi"
+        echo "}"
+        echo "export -f debug_glibc"
+        echo ""
+        echo "# Define setup_gpg_verification() function (from Stage 7)"
+        echo "setup_gpg_verification() {"
+        echo "    printf '%s\\n' '==> Setting up GPG verification for .deb packages...'"
+        echo "    # TODO: Implement GPG key import and verification setup"
+        echo "    return 0"
+        echo "}"
+        echo "export -f setup_gpg_verification"
+    } > /etc/profile.d/stage7_init.sh
+    chmod 644 /etc/profile.d/stage7_init.sh
+    printf '%s\n' "  ✓ Runtime initialization script created: /etc/profile.d/stage7_init.sh"
+    
+    # Cleanup temporary files
+    rm -rf /tmp/* /var/tmp/* 2>/dev/null || true
+

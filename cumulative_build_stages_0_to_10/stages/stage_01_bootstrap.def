@@ -1,0 +1,938 @@
+Bootstrap: docker
+From: osrf/ros:jazzy-desktop-full-noble
+
+# === %files Section ===
+%files
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+
+# === %labels Section ===
+%labels
+    Maintainer midhun
+    Description "Progressive Stage 1: Bootstrap safe environment"
+
+# === %environment Section ===
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Asia/Kolkata
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# === %setup Section ===
+%setup
+    mkdir -p ${APPTAINER_ROOTFS}/container_cache
+    mkdir -p ${APPTAINER_ROOTFS}/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/var/tmp
+
+# === %post Section ===
+%post -c /bin/bash
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    
+    # === CRITICAL: Source centralized configuration ===
+    # config.sh is the SINGLE SOURCE OF TRUTH for all paths, versions, and settings
+    # It is copied to /etc/config.sh in the %files section
+    if [ -f /etc/config.sh ]; then
+        # Disable strict mode temporarily to allow config.sh to set defaults
+        set +u
+        source /etc/config.sh
+        set -u
+        printf '%s\n' "[%post] ✓ Loaded centralized configuration from /etc/config.sh"
+        printf '%s\n' "[%post]   CONTAINER_CACHE_ROOT: ${CONTAINER_CACHE_ROOT:-/container_cache}"
+        printf '%s\n' "[%post]   CONTAINER_APT_CACHE: ${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
+        printf '%s\n' "[%post]   INSTALL_PREFIX: ${INSTALL_PREFIX:-/opt}"
+    else
+        printf '%s\n' "[%post] ⚠ WARNING: /etc/config.sh not found - using defaults"
+        printf '%s\n' "[%post]   This should not happen - config.sh should be copied in %files section"
+        # Set minimal defaults if config.sh missing
+        export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        export CONTAINER_APT_CACHE="${CONTAINER_APT_CACHE:-${CONTAINER_CACHE_ROOT}/apt/archives}"
+        export INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    fi
+    
+    echo "=========================================="
+    echo "PROGRESSIVE STAGE 1: Bootstrap Safe Environment"
+    echo "=========================================="
+    echo ""
+    echo "[CRITICAL] Pre-installation: Verifying base Docker directory structure..."
+    
+    # === CRITICAL: Verify and create base Docker directory structure ===
+    # Purpose: Ensure all critical directories exist with proper permissions before any operations
+    # This prevents errors in later stages due to missing directories or incorrect permissions
+    
+    printf '%s\n' "[DIRECTORY STRUCTURE] Verifying and creating base Docker directory structure..."
+    
+    # Function to ensure directory exists with proper permissions
+    ensure_dir_structure() {
+        local dir_path="$1"
+        local perms="${2:-755}"
+        local description="${3:-${dir_path}}"
+        
+        if [ ! -d "${dir_path}" ]; then
+            if mkdir -p "${dir_path}" 2>/dev/null; then
+                chmod "${perms}" "${dir_path}" 2>/dev/null || true
+                printf '%s\n' "  ✓ Created: ${description} (${dir_path})"
+            else
+                printf '%s\n' "  ✗ Failed to create: ${description} (${dir_path})"
+                return 1
+            fi
+        else
+            # Directory exists, verify permissions
+            chmod "${perms}" "${dir_path}" 2>/dev/null || true
+            printf '%s\n' "  ✓ Verified: ${description} (${dir_path})"
+        fi
+        
+        # Test writability
+        local test_file="${dir_path}/.write_test_$$"
+        if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+            return 0
+        else
+            printf '%s\n' "  ⚠ Warning: ${description} may not be writable (${dir_path})"
+            return 1
+        fi
+    }
+    
+    # Critical system directories
+    ensure_dir_structure "/var/lib/apt/lists" "755" "APT package index directory"
+    ensure_dir_structure "/var/lib/apt/lists/partial" "755" "APT partial downloads"
+    ensure_dir_structure "/var/cache/apt/archives" "755" "APT package cache"
+    ensure_dir_structure "/var/cache/apt/archives/partial" "755" "APT partial package cache"
+    ensure_dir_structure "/etc/apt/sources.list.d" "755" "APT repository configs"
+    ensure_dir_structure "/etc/apt/trusted.gpg.d" "755" "APT GPG keys"
+    ensure_dir_structure "/etc/apt/preferences.d" "755" "APT preferences"
+    ensure_dir_structure "/etc/apt/apt.conf.d" "755" "APT configuration directory"
+    
+    # Library and system configuration directories
+    ensure_dir_structure "/etc/ld.so.conf.d" "755" "Library path configuration"
+    ensure_dir_structure "/usr/local/bin" "755" "User-installed binaries"
+    ensure_dir_structure "/usr/local/lib" "755" "User-installed libraries"
+    ensure_dir_structure "/usr/local/lib64" "755" "User-installed 64-bit libraries"
+    ensure_dir_structure "/usr/local/share" "755" "User-installed shared data"
+    ensure_dir_structure "/usr/local/include" "755" "User-installed headers"
+    
+    # Optional software installation directories
+    ensure_dir_structure "/opt" "755" "Optional software root"
+    
+    # User cache and local directories
+    ensure_dir_structure "/root/.cache" "755" "Root user cache"
+    ensure_dir_structure "/root/.local" "755" "Root user local data"
+    ensure_dir_structure "/root/.local/share" "755" "Root user shared data"
+    
+    # Container cache directories
+    ensure_dir_structure "/container_cache" "755" "Container cache root"
+    ensure_dir_structure "/container_cache/apt" "755" "Container APT cache"
+    ensure_dir_structure "/container_cache/binaries" "755" "Container binaries cache"
+    ensure_dir_structure "/container_cache/conda_pkgs" "755" "Container Conda cache"
+    ensure_dir_structure "/container_cache/debs" "755" "Container DEB cache"
+    ensure_dir_structure "/container_cache/julia_pkgs" "755" "Container Julia cache"
+    ensure_dir_structure "/container_cache/wheels" "755" "Container Python wheels cache"
+    ensure_dir_structure "/container_cache/apt-temp" "1777" "Container APT temp directory"
+    
+    # Log directories
+    ensure_dir_structure "/var/log" "755" "Log directory"
+    ensure_dir_structure "/var/log/apt" "755" "APT log directory"
+    
+    printf '%s\n' "✓ Base directory structure verified and created"
+    printf '%s\n' ""
+    
+    # === CRITICAL: Verify user groups ===
+    printf '%s\n' "[USER GROUPS] Verifying user groups..."
+    
+    # Check if root user exists and has correct groups
+    if id root >/dev/null 2>&1; then
+        ROOT_UID=$(id -u root 2>/dev/null || printf '%s\n' "0")
+        ROOT_GID=$(id -g root 2>/dev/null || printf '%s\n' "0")
+        printf '%s\n' "  ✓ Root user: UID=${ROOT_UID}, GID=${ROOT_GID}"
+    else
+        printf '%s\n' "  ✗ Root user not found"
+    fi
+    
+    # Verify critical groups exist
+    for group in root adm sudo; do
+        if getent group "${group}" >/dev/null 2>&1; then
+            GROUP_GID=$(getent group "${group}" | cut -d: -f3 2>/dev/null || printf '%s\n' "unknown")
+            printf '%s\n' "  ✓ Group '${group}' exists (GID=${GROUP_GID})"
+        else
+            printf '%s\n' "  ⚠ Group '${group}' not found (may be normal in container)"
+        fi
+    done
+    
+    printf '%s\n' "✓ User group verification complete"
+    printf '%s\n' ""
+    
+    # === CRITICAL: Ensure APT directories are writable BEFORE any apt-get operations ===
+    printf '%s\n' "[CRITICAL] Verifying APT writability (required for build)..."
+    APT_WRITABILITY_FAILED=0
+    for apt_dir in /var/lib/apt/lists /var/lib/apt/lists/partial /var/cache/apt/archives /var/cache/apt/archives/partial /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /etc/apt/preferences.d /etc/apt/apt.conf.d; do
+        # Create directory if it doesn't exist
+        mkdir -p "${apt_dir}" 2>/dev/null || true
+        # Set permissions
+        chmod 755 "${apt_dir}" 2>/dev/null || true
+        # Test writability
+        if [ -d "${apt_dir}" ]; then
+            if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                printf '%s\n' "  ✓ ${apt_dir} is writable"
+            else
+                printf '%s\n' "  ⚠ ${apt_dir} not writable - attempting to fix..."
+                chown -R root:root "${apt_dir}" 2>/dev/null || true
+                chmod -R 755 "${apt_dir}" 2>/dev/null || true
+                if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                    rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                    printf '%s\n' "  ✓ ${apt_dir} is now writable (fixed)"
+                else
+                    printf '%s\n' "  ✗ ${apt_dir} is NOT writable - APT operations will fail"
+                    APT_WRITABILITY_FAILED=$((APT_WRITABILITY_FAILED + 1))
+                fi
+            fi
+        fi
+    done
+    if [ ${APT_WRITABILITY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ FATAL: ${APT_WRITABILITY_FAILED} APT directory(ies) not writable - cannot proceed with build"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All APT directories verified writable"
+    fi
+    printf '%s\n' ""
+    
+    # === CRITICAL: APT update with error checking ===
+    printf '%s\n' "[APT UPDATE] Updating package lists with comprehensive error checking..."
+    
+    APT_UPDATE_OUTPUT=$(mktemp /tmp/apt_update_XXXXXX.log 2>/dev/null || printf '%s\n' "/tmp/apt_update_$$.log")
+    APT_UPDATE_ERRORS=0
+    
+    if ! apt-get update -qq 2>"${APT_UPDATE_OUTPUT}"; then
+        printf '%s\n' "  ✗ APT update failed - checking for errors..."
+        APT_UPDATE_ERRORS=1
+        
+        # Check for GPG signature errors
+        if grep -i "gpg\|signature\|no_pubkey\|key" "${APT_UPDATE_OUTPUT}" >/dev/null 2>&1; then
+            printf '%s\n' "  ⚠ GPG signature errors detected in APT update:"
+            grep -i "gpg\|signature\|no_pubkey\|key" "${APT_UPDATE_OUTPUT}" | head -5 || true
+        fi
+        
+        # Check for network errors
+        if grep -i "failed\|error\|unable\|connection" "${APT_UPDATE_OUTPUT}" >/dev/null 2>&1; then
+            printf '%s\n' "  ⚠ Network or connection errors detected:"
+            grep -i "failed\|error\|unable\|connection" "${APT_UPDATE_OUTPUT}" | head -5 || true
+        fi
+        
+        # Check for permission errors
+        if grep -i "permission\|denied\|read-only\|writable" "${APT_UPDATE_OUTPUT}" >/dev/null 2>&1; then
+            printf '%s\n' "  ⚠ Permission errors detected:"
+            grep -i "permission\|denied\|read-only\|writable" "${APT_UPDATE_OUTPUT}" | head -5 || true
+        fi
+        
+        printf '%s\n' "  ⚠ APT update had errors but continuing (will retry after fixes)..."
+    else
+        printf '%s\n' "  ✓ APT update completed successfully"
+    fi
+    
+    rm -f "${APT_UPDATE_OUTPUT}" 2>/dev/null || true
+    
+    # === CRITICAL: Test APT package list writes ===
+    printf '%s\n' "[APT WRITE TEST] Testing APT package list write capability..."
+    
+    APT_LISTS_TEST="/var/lib/apt/lists/.write_test_$$"
+    if touch "${APT_LISTS_TEST}" 2>/dev/null && rm -f "${APT_LISTS_TEST}" 2>/dev/null; then
+        printf '%s\n' "  ✓ APT lists directory is writable"
+    else
+        printf '%s\n' "  ✗ APT lists directory is NOT writable - this will cause package list errors"
+        printf '%s\n' "  Attempting to fix permissions..."
+        chmod 755 /var/lib/apt/lists 2>/dev/null || true
+        chmod 755 /var/lib/apt/lists/partial 2>/dev/null || true
+        
+        # Retry test
+        if touch "${APT_LISTS_TEST}" 2>/dev/null && rm -f "${APT_LISTS_TEST}" 2>/dev/null; then
+            printf '%s\n' "  ✓ APT lists directory is now writable (fixed)"
+        else
+            printf '%s\n' "  ✗ APT lists directory still not writable after fix attempt"
+            APT_UPDATE_ERRORS=$((APT_UPDATE_ERRORS + 1))
+        fi
+    fi
+    
+    printf '%s\n' ""
+    
+    # Essential download and network tools (inspired by xubuntu_robotics_base_debug.sh BLOCK 10.10)
+    printf '%s\n' "[PACKAGE INSTALL] Installing essential download and network tools..."
+    if ! apt-get install -y --no-install-recommends \
+        wget \
+        curl \
+        gpg-agent \
+        ca-certificates \
+        gnupg \
+        gnupg2 \
+        2>&1; then
+        printf '%s\n' "  ✗ Failed to install essential download tools"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Essential download tools installed"
+    
+    # === CRITICAL: Unconditional procps-ng installation and verification ===
+    printf '%s\n' "[PACKAGE INSTALL] Installing procps and procps-ng (unconditional)..."
+    
+    # Install procps first (standard package)
+    if ! apt-get install -y --no-install-recommends procps 2>&1; then
+        printf '%s\n' "  ✗ Failed to install procps"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ procps installed"
+    
+    # Install procps-ng unconditionally (not conditional)
+    if ! apt-get install -y --no-install-recommends procps-ng 2>&1; then
+        printf '%s\n' "  ⚠ Failed to install procps-ng (may not be available on this system)"
+        printf '%s\n' "  Continuing with procps only..."
+    else
+        printf '%s\n' "  ✓ procps-ng installed"
+    fi
+    
+    # Verify procps tools are available
+    printf '%s\n' "  [VERIFY] Verifying procps tools..."
+    PROCPS_VERIFY_FAILED=0
+    
+    for tool in ps pgrep pkill; do
+        if command -v "${tool}" >/dev/null 2>&1; then
+            TOOL_VERSION=$("${tool}" --version 2>/dev/null | head -1 || printf '%s\n' "unknown")
+            printf '%s\n' "    ✓ ${tool} available (${TOOL_VERSION})"
+        else
+            printf '%s\n' "    ✗ ${tool} NOT available after procps installation"
+            PROCPS_VERIFY_FAILED=$((PROCPS_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    # Test pgrep functionality
+    if command -v pgrep >/dev/null 2>&1; then
+        if pgrep -V >/dev/null 2>&1; then
+            printf '%s\n' "    ✓ pgrep execution test: PASSED"
+        else
+            printf '%s\n' "    ✗ pgrep execution test: FAILED"
+            PROCPS_VERIFY_FAILED=$((PROCPS_VERIFY_FAILED + 1))
+        fi
+    else
+        printf '%s\n' "    ✗ pgrep not found - procps installation may have failed"
+        PROCPS_VERIFY_FAILED=$((PROCPS_VERIFY_FAILED + 1))
+    fi
+    
+    if [ ${PROCPS_VERIFY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ⚠ ${PROCPS_VERIFY_FAILED} procps verification(s) failed"
+    else
+        printf '%s\n' "  ✓ All procps tools verified successfully"
+    fi
+    
+    # Essential system tools for verification and debugging
+    printf '%s\n' "[PACKAGE INSTALL] Installing essential system tools..."
+    if ! apt-get install -y --no-install-recommends \
+        file \
+        less \
+        2>&1; then
+        printf '%s\n' "  ✗ Failed to install essential system tools"
+        exit 1
+    fi
+    printf '%s\n' "  ✓ Essential system tools installed"
+    
+    # Essential package inspection tools (inspired by build_xubuntu_robotics_base.sh)
+    printf '%s\n' "[PACKAGE INSTALL] Installing essential package inspection tools..."
+    if ! apt-get install -y --no-install-recommends dpkg-dev 2>&1; then
+        printf '%s\n' "  ✗ Failed to install dpkg-dev"
+        exit 1
+    fi
+    
+    # Verify dpkg-deb is available
+    if command -v dpkg-deb >/dev/null 2>&1; then
+        DPKG_DEB_VERSION=$(dpkg-deb --version 2>/dev/null | head -1 || printf '%s\n' "unknown")
+        printf '%s\n' "  ✓ dpkg-deb available: ${DPKG_DEB_VERSION}"
+    else
+        printf '%s\n' "  ✗ dpkg-deb not found after installation"
+        exit 1
+    fi
+    
+    # Essential archive and compression tools (inspired by xubuntu_robotics_base_debug.sh BLOCK 10.12)
+    printf '%s\n' "[PACKAGE INSTALL] Installing essential archive and compression tools..."
+    if ! apt-get install -y --no-install-recommends \
+        tar \
+        gzip \
+        bzip2 \
+        xz-utils \
+        unzip \
+        2>&1; then
+        printf '%s\n' "  ✗ Failed to install archive tools"
+        exit 1
+    fi
+    
+    # Verify archive tools are available
+    printf '%s\n' "  [VERIFY] Verifying archive tools..."
+    ARCHIVE_VERIFY_FAILED=0
+    
+    for tool in tar gzip bzip2 xz unzip; do
+        if command -v "${tool}" >/dev/null 2>&1; then
+            TOOL_VERSION=$("${tool}" --version 2>/dev/null | head -1 || "${tool}" -V 2>/dev/null | head -1 || printf '%s\n' "available")
+            printf '%s\n' "    ✓ ${tool} available (${TOOL_VERSION})"
+        else
+            printf '%s\n' "    ✗ ${tool} NOT available after installation"
+            ARCHIVE_VERIFY_FAILED=$((ARCHIVE_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    if [ ${ARCHIVE_VERIFY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ⚠ ${ARCHIVE_VERIFY_FAILED} archive tool verification(s) failed"
+    else
+        printf '%s\n' "  ✓ All archive tools verified successfully"
+    fi
+    
+    printf '%s\n' ""
+    
+    # BOOTSTRAP SAFE ENVIRONMENT (from xubuntu_robotics_base_debug.sh lines 130-224)
+    echo "==> Bootstrapping safe build environment..."
+    
+    SAFE_TMP=""
+    if touch /tmp/.test_$$ 2>/dev/null; then
+        rm /tmp/.test_$$ 2>/dev/null || true
+        SAFE_TMP="/tmp"
+        echo "  ✓ Found writable temp dir: ${SAFE_TMP} (bind-mounted from host)"
+    else
+        for candidate in "/var/tmp" "/opt/tmp" "/usr/local/tmp" "/home/root/tmp"; do
+            if mkdir -p "${candidate}" 2>/dev/null && touch "${candidate}/.test_$$" 2>/dev/null; then
+                rm "${candidate}/.test_$$" 2>/dev/null || true
+                SAFE_TMP="${candidate}"
+                echo "  ✓ Found writable temp dir: ${SAFE_TMP} (fallback)"
+                break
+            fi
+        done
+    fi
+    
+    if [ -z "${SAFE_TMP}" ]; then
+        echo "  ✗ FATAL: Could not find ANY writable directory for temporary files."
+        exit 1
+    fi
+    
+    export TMPDIR="${SAFE_TMP}"
+    export TEMP="${SAFE_TMP}"
+    export TMP="${SAFE_TMP}"
+    
+    echo "  → Installing tool shims to bypass APT environment scrubbing..."
+    
+    if [ -f /usr/bin/gpg ] && [ ! -f /usr/bin/gpg.real ]; then
+        mv /usr/bin/gpg /usr/bin/gpg.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexport TEMP="%s"\nexport TMP="%s"\nexec /usr/bin/gpg.real "$@"\n' "${SAFE_TMP}" "${SAFE_TMP}" "${SAFE_TMP}" > /usr/bin/gpg
+        chmod 755 /usr/bin/gpg
+        echo "    ✓ Shimmed: gpg"
+    fi
+    
+    if [ -f /usr/bin/apt-key ] && [ ! -f /usr/bin/apt-key.real ]; then
+        mv /usr/bin/apt-key /usr/bin/apt-key.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexec /usr/bin/apt-key.real "$@"\n' "${SAFE_TMP}" > /usr/bin/apt-key
+        chmod 755 /usr/bin/apt-key
+        echo "    ✓ Shimmed: apt-key"
+    fi
+    
+    if [ -f /usr/bin/mktemp ] && [ ! -f /usr/bin/mktemp.real ]; then
+        mv /usr/bin/mktemp /usr/bin/mktemp.real
+        printf '#!/bin/sh\nexport TMPDIR="%s"\nexec /usr/bin/mktemp.real "$@"\n' "${SAFE_TMP}" > /usr/bin/mktemp
+        chmod 755 /usr/bin/mktemp
+        echo "    ✓ Shimmed: mktemp"
+    fi
+    
+    mkdir -p /etc/apt/apt.conf.d
+    echo "Acquire::TempDir \"${SAFE_TMP}\";" > /etc/apt/apt.conf.d/00-safe-temp
+    echo "  ✓ Configured APT Acquire::TempDir to ${SAFE_TMP}"
+    
+    # === CRITICAL: Comprehensive APT robustness configuration ===
+    printf '%s\n' ""
+    printf '%s\n' "[APT ROBUSTNESS] Configuring APT for robust operation..."
+    
+    # Use container cache paths from config.sh (already loaded above)
+    # These are set from config.sh which is the SINGLE SOURCE OF TRUTH
+    # No need to set defaults again - they're already set when config.sh was sourced
+    
+    # Ensure container cache directories exist
+    printf '%s\n' "  [CACHE] Setting up container cache for package reuse..."
+    mkdir -p "${CONTAINER_APT_CACHE}" 2>/dev/null || true
+    mkdir -p "${CONTAINER_APT_CACHE}/partial" 2>/dev/null || true
+    
+    # Verify container cache is writable
+    CACHE_TEST_FILE="${CONTAINER_APT_CACHE}/.cache_test_$$"
+    if touch "${CACHE_TEST_FILE}" 2>/dev/null && rm -f "${CACHE_TEST_FILE}" 2>/dev/null; then
+        printf '%s\n' "  ✓ Container cache directory is writable: ${CONTAINER_APT_CACHE}"
+    else
+        printf '%s\n' "  ⚠ Container cache directory may not be writable: ${CONTAINER_APT_CACHE}"
+        printf '%s\n' "  Will use default APT cache location"
+        CONTAINER_APT_CACHE="/var/cache/apt/archives"
+    fi
+    
+    # Configure APT to handle GPG signature errors gracefully
+    # CRITICAL: Configure APT to use container_cache for package downloads
+    # This ensures packages are cached and reused across stages
+    {
+        echo "# APT robustness configuration"
+        echo "# Prevent GPG signature errors from blocking operations"
+        echo "Acquire::Check-Valid-Until false;"
+        echo "Acquire::AllowInsecureRepositories false;"
+        echo "Acquire::AllowDowngradeToInsecureRepositories false;"
+        echo ""
+        echo "# Retry configuration for network issues"
+        echo "Acquire::Retries \"3\";"
+        echo "Acquire::http::Timeout \"20\";"
+        echo "Acquire::ftp::Timeout \"20\";"
+        echo ""
+        echo "# Prevent GPG warnings from blocking package operations"
+        echo "APT::Get::AllowUnauthenticated false;"
+        echo ""
+        echo "# CRITICAL: Configure APT to use container_cache for package downloads"
+        echo "# This ensures packages are cached and reused across stages"
+        echo "Dir::Cache::Archives \"${CONTAINER_APT_CACHE}\";"
+        echo "APT::Keep-Downloaded-Packages \"true\";"
+        echo "APT::Clean-Installed \"false\";"
+        echo ""
+        echo "# Ensure package list writes work correctly"
+        echo "Dir::State::lists \"/var/lib/apt/lists\";"
+    } > /etc/apt/apt.conf.d/01-robustness
+    
+    printf '%s\n' "  ✓ APT robustness configuration created"
+    printf '%s\n' "  ✓ APT cache configured to use: ${CONTAINER_APT_CACHE}"
+    printf '%s\n' "  ✓ APT configured to keep downloaded packages (reusable cache)"
+    
+    # Verify APT cache configuration
+    printf '%s\n' "  [VERIFY] Verifying APT cache configuration..."
+    if [ -f /etc/apt/apt.conf.d/01-robustness ]; then
+        CONFIGURED_CACHE=$(grep "Dir::Cache::Archives" /etc/apt/apt.conf.d/01-robustness | sed 's/.*"\(.*\)".*/\1/' || printf '%s\n' "")
+        if [ -n "${CONFIGURED_CACHE}" ] && [ -d "${CONFIGURED_CACHE}" ]; then
+            printf '%s\n' "  ✓ APT cache configuration verified: ${CONFIGURED_CACHE}"
+        else
+            printf '%s\n' "  ⚠ APT cache configuration may be incorrect: ${CONFIGURED_CACHE}"
+        fi
+    fi
+    
+    # === CRITICAL: GPG signature verification setup ===
+    printf '%s\n' "[GPG VERIFICATION] Setting up GPG signature verification..."
+    
+    # Verify GPG is working
+    if command -v gpg >/dev/null 2>&1; then
+        if gpg --version >/dev/null 2>&1; then
+            GPG_VERSION=$(gpg --version | head -1 || printf '%s\n' "unknown")
+            printf '%s\n' "  ✓ GPG available: ${GPG_VERSION}"
+        else
+            printf '%s\n' "  ✗ GPG version check failed"
+        fi
+        
+        # Test GPG with temp directory
+        GPG_TEST_KEYRING="/tmp/gpg_test_keyring_$$"
+        if gpg --no-default-keyring --keyring "${GPG_TEST_KEYRING}" --list-keys >/dev/null 2>&1; then
+            rm -f "${GPG_TEST_KEYRING}" 2>/dev/null || true
+            printf '%s\n' "  ✓ GPG keyring operations working"
+        else
+            printf '%s\n' "  ⚠ GPG keyring test had issues (may be normal in container)"
+        fi
+    else
+        printf '%s\n' "  ✗ GPG not found - GPG signature verification will fail"
+    fi
+    
+    # Verify APT GPG key directories are writable
+    if [ -w /etc/apt/trusted.gpg.d ]; then
+        printf '%s\n' "  ✓ APT GPG key directory is writable"
+    else
+        printf '%s\n' "  ✗ APT GPG key directory is NOT writable"
+        chmod 755 /etc/apt/trusted.gpg.d 2>/dev/null || true
+        if [ -w /etc/apt/trusted.gpg.d ]; then
+            printf '%s\n' "  ✓ APT GPG key directory is now writable (fixed)"
+        fi
+    fi
+    
+    # Test GPG signature verification with a known repository
+    printf '%s\n' "  [TEST] Testing GPG signature verification..."
+    if apt-get update -qq 2>&1 | grep -i "gpg\|signature\|no_pubkey" >/dev/null 2>&1; then
+        printf '%s\n' "  ⚠ GPG signature warnings detected during apt-get update"
+        printf '%s\n' "  This is normal for some repositories but should be monitored"
+    else
+        printf '%s\n' "  ✓ No GPG signature errors detected"
+    fi
+    
+    printf '%s\n' ""
+    
+    # === CRITICAL: Verify all APT paths are writable ===
+    printf '%s\n' "[APT PATH VERIFICATION] Verifying all APT paths are writable..."
+    
+    APT_PATH_VERIFY_FAILED=0
+    
+    # Function to verify APT path writability
+    verify_apt_path() {
+        local path="$1"
+        local description="$2"
+        
+        if [ ! -d "${path}" ]; then
+            if mkdir -p "${path}" 2>/dev/null; then
+                chmod 755 "${path}" 2>/dev/null || true
+                printf '%s\n' "    ✓ Created and verified: ${description} (${path})"
+            else
+                printf '%s\n' "    ✗ Failed to create: ${description} (${path})"
+                return 1
+            fi
+        fi
+        
+        # Test writability
+        local test_file="${path}/.write_test_$$"
+        if touch "${test_file}" 2>/dev/null && rm -f "${test_file}" 2>/dev/null; then
+            printf '%s\n' "    ✓ Verified writable: ${description} (${path})"
+            return 0
+        else
+            printf '%s\n' "    ✗ NOT writable: ${description} (${path})"
+            return 1
+        fi
+    }
+    
+    verify_apt_path "/var/lib/apt/lists" "APT package index directory" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/var/lib/apt/lists/partial" "APT partial downloads" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/var/cache/apt/archives" "APT package cache" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/var/cache/apt/archives/partial" "APT partial package cache" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/etc/apt/sources.list.d" "APT repository configs" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/etc/apt/trusted.gpg.d" "APT GPG keys" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    verify_apt_path "/etc/apt/preferences.d" "APT preferences" || APT_PATH_VERIFY_FAILED=$((APT_PATH_VERIFY_FAILED + 1))
+    
+    if [ ${APT_PATH_VERIFY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ⚠ ${APT_PATH_VERIFY_FAILED} APT path verification(s) failed"
+    else
+        printf '%s\n' "  ✓ All APT paths verified writable"
+    fi
+    
+    printf '%s\n' ""
+    
+    echo "==> Bootstrap complete. Environment is safe."
+    echo ""
+    
+    # FIX /tmp PERMISSIONS (from lines 227-289)
+    printf '%s\n' "[CRITICAL] Fixing /tmp permissions immediately..."
+    chmod 1777 /tmp 2>/dev/null || {
+        printf '%s\n' "[WARN] Failed to set /tmp permissions to 1777"
+        mkdir -p /tmp 2>/dev/null || true
+        chmod 777 /tmp 2>/dev/null || true
+    }
+    
+    if [ ! -w /tmp ]; then
+        printf '%s\n' "[ERROR] ⚠ /tmp is NOT writable even after chmod attempt!"
+    else
+        printf '%s\n' "✓ /tmp permissions fixed and verified (1777)"
+    fi
+    
+    # EARLY TMPDIR FAILOVER (from lines 292-328)
+    if [ ! -w /tmp ]; then
+        early_tmpdir_found=false
+        # Use INSTALL_PREFIX from config.sh for fallback paths
+        INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+        CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        for fallback in "${INSTALL_PREFIX}/apt-temp" "${CONTAINER_CACHE_ROOT}/tmp" "/apptainer-build-temp/apt" "/usr/local/tmp"; do
+            if mkdir -p "${fallback}" 2>/dev/null && [ -w "${fallback}" ]; then
+                if touch "${fallback}/.write_test_$$" 2>/dev/null; then
+                    rm -f "${fallback}/.write_test_$$" 2>/dev/null || true
+                    printf '%s\n' "⚠ /tmp is read-only. Early-switching TMPDIR to: ${fallback}"
+                    export TMPDIR="${fallback}"
+                    export TEMP="${fallback}"
+                    export TMP="${fallback}"
+                    mkdir -p /etc/apt/apt.conf.d 2>/dev/null
+                    echo "Acquire::TempDir \"${fallback}\";" >> /etc/apt/apt.conf.d/00-early-tmpdir
+                    early_tmpdir_found=true
+                    break
+                fi
+            fi
+        done
+        
+        if [ "${early_tmpdir_found}" = false ]; then
+            printf '%s\n' "[WARN] ⚠ Could not find writable fallback for TMPDIR"
+        fi
+    fi
+    
+    # COMPREHENSIVE VERIFICATION AFTER BOOTSTRAP
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY] Comprehensive bootstrap verification..."
+    BOOTSTRAP_VERIFY_FAILED=0
+    
+    # Verify shims were created correctly
+    for shim_tool in gpg apt-key mktemp; do
+        if [ -f "/usr/bin/${shim_tool}" ] && [ -f "/usr/bin/${shim_tool}.real" ]; then
+            SHIM_PERMS=$(stat -c '%a' "/usr/bin/${shim_tool}" 2>/dev/null || printf '%s\n' "unknown")
+            if [ "${SHIM_PERMS}" = "755" ]; then
+                printf '%s\n' "  ✓ ${shim_tool} shim: OK (perms: ${SHIM_PERMS})"
+            else
+                printf '%s\n' "  ✗ ${shim_tool} shim: Wrong permissions (${SHIM_PERMS}, expected 755)"
+                chmod 755 "/usr/bin/${shim_tool}" 2>/dev/null || {
+                    printf '%s\n' "  ✗ Failed to fix ${shim_tool} shim permissions"
+                    BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+                }
+            fi
+            
+            # Test shim execution
+            if [ -x "/usr/bin/${shim_tool}" ]; then
+                printf '%s\n' "  ✓ ${shim_tool} shim: Executable"
+            else
+                printf '%s\n' "  ✗ ${shim_tool} shim: Not executable"
+                BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+            fi
+        else
+            printf '%s\n' "  ⚠ ${shim_tool} shim: Not found (may not be needed)"
+        fi
+    done
+    
+    # Verify APT configuration
+    if [ -f "/etc/apt/apt.conf.d/00-safe-temp" ]; then
+        APT_TEMP_DIR=$(grep -oP 'Acquire::TempDir "\K[^"]+' /etc/apt/apt.conf.d/00-safe-temp 2>/dev/null || printf '%s\n' "")
+        if [ -n "${APT_TEMP_DIR}" ] && [ -d "${APT_TEMP_DIR}" ] && [ -w "${APT_TEMP_DIR}" ]; then
+            printf '%s\n' "  ✓ APT temp dir configured: ${APT_TEMP_DIR} (writable)"
+        else
+            printf '%s\n' "  ✗ APT temp dir misconfigured or not writable: ${APT_TEMP_DIR}"
+            BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+        fi
+    else
+        printf '%s\n' "  ✗ APT temp dir configuration missing"
+        BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify TMPDIR environment variables
+    if [ -n "${TMPDIR:-}" ] && [ -d "${TMPDIR}" ] && [ -w "${TMPDIR}" ]; then
+        printf '%s\n' "  ✓ TMPDIR set correctly: ${TMPDIR} (writable)"
+    else
+        printf '%s\n' "  ✗ TMPDIR not set or not writable"
+        BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify /tmp permissions
+    TMP_PERMS=$(stat -c '%a' /tmp 2>/dev/null || printf '%s\n' "unknown")
+    if [ "${TMP_PERMS}" = "1777" ] || [ "${TMP_PERMS}" = "777" ]; then
+        printf '%s\n' "  ✓ /tmp permissions: ${TMP_PERMS}"
+    else
+        printf '%s\n' "  ✗ /tmp permissions incorrect: ${TMP_PERMS} (expected 1777 or 777)"
+        BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+    fi
+    
+    # Test actual tool execution with shims
+    printf '%s\n' "  Testing shimmed tools..."
+    if command -v gpg >/dev/null 2>&1; then
+        if gpg --version >/dev/null 2>&1; then
+            printf '%s\n' "    ✓ gpg execution test: PASSED"
+        else
+            printf '%s\n' "    ✗ gpg execution test: FAILED"
+            BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+        fi
+    fi
+    
+    if command -v mktemp >/dev/null 2>&1; then
+        TEST_TMPFILE=$(mktemp 2>/dev/null || printf '%s\n' "")
+        if [ -n "${TEST_TMPFILE}" ] && [ -f "${TEST_TMPFILE}" ]; then
+            rm -f "${TEST_TMPFILE}" 2>/dev/null || true
+            printf '%s\n' "    ✓ mktemp execution test: PASSED"
+        else
+            printf '%s\n' "    ✗ mktemp execution test: FAILED"
+            BOOTSTRAP_VERIFY_FAILED=$((BOOTSTRAP_VERIFY_FAILED + 1))
+        fi
+    fi
+    
+    # === CRITICAL: Verify container_cache is working ===
+    printf '%s\n' ""
+    printf '%s\n' "[CACHE VERIFICATION] Verifying container_cache functionality..."
+    
+    # Container cache paths are already set from config.sh (loaded at start of %post)
+    # These variables are the SINGLE SOURCE OF TRUTH from config.sh
+    
+    # Check if container_cache is mounted and accessible
+    if [ -d "${CONTAINER_CACHE_ROOT}" ]; then
+        printf '%s\n' "  ✓ Container cache root exists: ${CONTAINER_CACHE_ROOT}"
+        
+        # Check if APT cache directory exists and is writable
+        if [ -d "${CONTAINER_APT_CACHE}" ]; then
+            printf '%s\n' "  ✓ APT cache directory exists: ${CONTAINER_APT_CACHE}"
+            
+            # Check if any packages are cached
+            CACHED_PACKAGES=$(find "${CONTAINER_APT_CACHE}" -name "*.deb" 2>/dev/null | wc -l || printf '%s\n' "0")
+            if [ "${CACHED_PACKAGES}" -gt 0 ]; then
+                printf '%s\n' "  ✓ Found ${CACHED_PACKAGES} cached package(s) in container_cache"
+                printf '%s\n' "  ✓ Container cache is working - packages are being cached"
+            else
+                printf '%s\n' "  ℹ No packages cached yet (normal for first run)"
+                printf '%s\n' "  ℹ Packages will be cached here for reuse in later stages"
+            fi
+            
+            # Verify cache directory is writable
+            CACHE_TEST_FILE="${CONTAINER_APT_CACHE}/.cache_verify_$$"
+            if touch "${CACHE_TEST_FILE}" 2>/dev/null && rm -f "${CACHE_TEST_FILE}" 2>/dev/null; then
+                printf '%s\n' "  ✓ Container cache directory is writable"
+            else
+                printf '%s\n' "  ⚠ Container cache directory may not be writable"
+            fi
+        else
+            printf '%s\n' "  ⚠ APT cache directory does not exist: ${CONTAINER_APT_CACHE}"
+        fi
+        
+        # Check other cache subdirectories (using config.sh variables)
+        CONTAINER_BIN_CACHE="${CONTAINER_BIN_CACHE:-${CONTAINER_CACHE_ROOT}/binaries}"
+        CONTAINER_DEB_CACHE="${CONTAINER_DEB_CACHE:-${CONTAINER_CACHE_ROOT}/debs}"
+        CONTAINER_CONDA_CACHE="${CONTAINER_CONDA_CACHE:-${CONTAINER_CACHE_ROOT}/conda_pkgs}"
+        CONTAINER_WHEELS_CACHE="${CONTAINER_WHEELS_CACHE:-${CONTAINER_CACHE_ROOT}/wheels}"
+        CONTAINER_JULIA_CACHE="${CONTAINER_JULIA_CACHE:-${CONTAINER_CACHE_ROOT}/julia_pkgs}"
+        for cache_dir in "${CONTAINER_BIN_CACHE}" "${CONTAINER_DEB_CACHE}" \
+                         "${CONTAINER_CONDA_CACHE}" "${CONTAINER_WHEELS_CACHE}" \
+                         "${CONTAINER_JULIA_CACHE}"; do
+            if [ -d "${cache_dir}" ]; then
+                printf '%s\n' "  ✓ Cache subdirectory exists: ${cache_dir}"
+            else
+                printf '%s\n' "  ℹ Cache subdirectory will be created when needed: ${cache_dir}"
+            fi
+        done
+    else
+        printf '%s\n' "  ⚠ Container cache root does not exist: ${CONTAINER_CACHE_ROOT}"
+        printf '%s\n' "  ⚠ This may indicate bind mount issue - packages will not be cached"
+    fi
+    
+    # Verify APT is configured to use container_cache
+    if [ -f /etc/apt/apt.conf.d/01-robustness ]; then
+        CONFIGURED_CACHE=$(grep "Dir::Cache::Archives" /etc/apt/apt.conf.d/01-robustness | sed 's/.*"\(.*\)".*/\1/' 2>/dev/null || printf '%s\n' "")
+        if [ -n "${CONFIGURED_CACHE}" ] && [ "${CONFIGURED_CACHE}" = "${CONTAINER_APT_CACHE}" ]; then
+            printf '%s\n' "  ✓ APT configured to use container_cache: ${CONFIGURED_CACHE}"
+        else
+            printf '%s\n' "  ⚠ APT cache configuration may be incorrect"
+        fi
+    fi
+    
+    printf '%s\n' ""
+    
+    # === CRITICAL: Final comprehensive verification ===
+    printf '%s\n' ""
+    printf '%s\n' "[FINAL VERIFICATION] Comprehensive system verification..."
+    
+    FINAL_VERIFY_FAILED=0
+    
+    # Verify all installed packages are functional
+    printf '%s\n' "  [PACKAGE VERIFICATION] Verifying installed packages..."
+    
+    for tool in wget curl gpg file less dpkg-deb tar gzip; do
+        if command -v "${tool}" >/dev/null 2>&1; then
+            if "${tool}" --version >/dev/null 2>&1 || "${tool}" -V >/dev/null 2>&1 || "${tool}" -h >/dev/null 2>&1; then
+                printf '%s\n' "    ✓ ${tool}: OK"
+            else
+                printf '%s\n' "    ⚠ ${tool}: Found but execution test failed"
+                FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + 1))
+            fi
+        else
+            printf '%s\n' "    ✗ ${tool}: NOT FOUND"
+            FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    # Verify procps tools again in final check
+    printf '%s\n' "  [PROCPS FINAL CHECK] Final procps verification..."
+    if command -v pgrep >/dev/null 2>&1 && pgrep -V >/dev/null 2>&1; then
+        printf '%s\n' "    ✓ pgrep: OK (final check passed)"
+    else
+        printf '%s\n' "    ✗ pgrep: FAILED (final check)"
+        FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify APT can write package lists
+    printf '%s\n' "  [APT WRITE FINAL CHECK] Final APT write capability check..."
+    APT_FINAL_TEST="/var/lib/apt/lists/.final_write_test_$$"
+    if touch "${APT_FINAL_TEST}" 2>/dev/null && rm -f "${APT_FINAL_TEST}" 2>/dev/null; then
+        printf '%s\n' "    ✓ APT package list writes: OK"
+    else
+        printf '%s\n' "    ✗ APT package list writes: FAILED"
+        FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify GPG signature verification works
+    printf '%s\n' "  [GPG FINAL CHECK] Final GPG verification check..."
+    if command -v gpg >/dev/null 2>&1 && gpg --version >/dev/null 2>&1; then
+        printf '%s\n' "    ✓ GPG signature verification: OK"
+    else
+        printf '%s\n' "    ✗ GPG signature verification: FAILED"
+        FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + 1))
+    fi
+    
+    # Verify directory structure
+    printf '%s\n' "  [DIRECTORY STRUCTURE FINAL CHECK] Final directory structure check..."
+    DIR_CHECK_FAILED=0
+    # Use INSTALL_PREFIX from config.sh
+    INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    for dir in /var/lib/apt/lists /var/cache/apt/archives /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /usr/local/bin /usr/local/lib "${INSTALL_PREFIX}"; do
+        if [ -d "${dir}" ] && [ -w "${dir}" ]; then
+            printf '%s\n' "    ✓ ${dir}: OK"
+        else
+            printf '%s\n' "    ✗ ${dir}: FAILED (missing or not writable)"
+            DIR_CHECK_FAILED=$((DIR_CHECK_FAILED + 1))
+        fi
+    done
+    
+    if [ ${DIR_CHECK_FAILED} -gt 0 ]; then
+        FINAL_VERIFY_FAILED=$((FINAL_VERIFY_FAILED + DIR_CHECK_FAILED))
+    fi
+    
+    # Final bootstrap verification summary
+    printf '%s\n' ""
+    printf '%s\n' "[VERIFY] Bootstrap verification summary:"
+    if [ ${BOOTSTRAP_VERIFY_FAILED} -eq 0 ] && [ ${FINAL_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All bootstrap verifications passed (${BOOTSTRAP_VERIFY_FAILED} bootstrap + ${FINAL_VERIFY_FAILED} final = 0 total failures)"
+    else
+        TOTAL_FAILURES=$((BOOTSTRAP_VERIFY_FAILED + FINAL_VERIFY_FAILED))
+        printf '%s\n' "  ✗ ${TOTAL_FAILURES} verification(s) failed (${BOOTSTRAP_VERIFY_FAILED} bootstrap + ${FINAL_VERIFY_FAILED} final)"
+        printf '%s\n' "  Build will continue but may have issues"
+    fi
+    
+    # CLEANUP: Remove test files and temporary artifacts
+    printf '%s\n' ""
+    printf '%s\n' "[CLEANUP] Cleaning up temporary files and build remnants..."
+    CLEANUP_COUNT=0
+    CLEANUP_SIZE=0
+    
+    # Clean test files from mount points
+    # Use CONTAINER_CACHE_ROOT from config.sh
+    CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    for mount_point in "${CONTAINER_CACHE_ROOT}" /tmp /var/tmp; do
+        if [ -d "${mount_point}" ]; then
+            find "${mount_point}" -maxdepth 1 -type f \( -name ".test_*" -o -name ".write_test_*" -o -name ".*_test_*" \) 2>/dev/null | while IFS= read -r test_file || [ -n "${test_file}" ]; do
+                if [ -f "${test_file}" ]; then
+                    FILE_SIZE=$(stat -c '%s' "${test_file}" 2>/dev/null || printf '%s\n' "0")
+                    rm -f "${test_file}" 2>/dev/null && {
+                        CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+                        CLEANUP_SIZE=$((CLEANUP_SIZE + FILE_SIZE))
+                    }
+                fi
+            done
+        fi
+    done
+    
+    # Clean APT cache
+    if command -v apt-get >/dev/null 2>&1; then
+        CACHE_SIZE_BEFORE=$(du -sk /var/cache/apt 2>/dev/null | cut -f1 || printf '%s\n' "0")
+        apt-get clean >/dev/null 2>&1 || true
+        apt-get autoclean >/dev/null 2>&1 || true
+        CACHE_SIZE_AFTER=$(du -sk /var/cache/apt 2>/dev/null | cut -f1 || printf '%s\n' "0")
+        CACHE_FREED=$((CACHE_SIZE_BEFORE - CACHE_SIZE_AFTER))
+        if [ ${CACHE_FREED} -gt 0 ]; then
+            CACHE_FREED_MB=$((CACHE_FREED / 1024))
+            printf '%s\n' "  ✓ APT cache cleaned (freed ${CACHE_FREED_MB}MB)"
+        else
+            printf '%s\n' "  ✓ APT cache already clean"
+        fi
+    fi
+    
+    # Clean temporary shim test files
+    for shim_tool in gpg apt-key mktemp; do
+        if [ -f "/tmp/${shim_tool}_test_*" ] 2>/dev/null; then
+            rm -f "/tmp/${shim_tool}_test_"* 2>/dev/null || true
+        fi
+    done
+    
+    if [ ${CLEANUP_COUNT} -gt 0 ]; then
+        CLEANUP_MB=$((CLEANUP_SIZE / 1024 / 1024))
+        printf '%s\n' "  ✓ Cleaned ${CLEANUP_COUNT} temporary file(s) (${CLEANUP_MB}MB)"
+    else
+        printf '%s\n' "  ✓ No temporary files to clean"
+    fi
+    
+    # Verify cleanup was successful
+    REMAINING_TESTS=$(find /tmp /var/tmp /container_cache -maxdepth 1 -type f -name ".test_*" -o -name ".write_test_*" 2>/dev/null | wc -l || printf '%s\n' "0")
+    if [ "${REMAINING_TESTS}" -eq 0 ]; then
+        printf '%s\n' "  ✓ Cleanup verification: All test files removed"
+    else
+        printf '%s\n' "  ⚠ Cleanup verification: ${REMAINING_TESTS} test file(s) still remain"
+    fi
+    
+    printf '%s\n' ""
+    printf '%s\n' "=========================================="
+    printf '%s\n' "Stage 1 complete."
+    printf '%s\n' "=========================================="

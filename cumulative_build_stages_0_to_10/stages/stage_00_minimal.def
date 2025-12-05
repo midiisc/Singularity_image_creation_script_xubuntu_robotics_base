@@ -1,0 +1,270 @@
+Bootstrap: docker
+From: osrf/ros:jazzy-desktop-full-noble
+
+# === %files Section ===
+%files
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+
+# === %labels Section ===
+%labels
+    Maintainer midhun
+    Description "Progressive Stage 0: Minimal test image for bind mount verification"
+
+# === %environment Section ===
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Asia/Kolkata
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# === %setup Section ===
+%setup
+    # CRITICAL: Create mount point directories in %setup (runs before %post)
+    # These directories must exist for bind mounts to work during build
+    # Use /container_cache as default (config.sh will be available in %post)
+    mkdir -p ${APPTAINER_ROOTFS}/container_cache
+    mkdir -p ${APPTAINER_ROOTFS}/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/var/tmp
+    # Set proper permissions in %setup
+    chmod 755 ${APPTAINER_ROOTFS}/container_cache 2>/dev/null || true
+    chmod 1777 ${APPTAINER_ROOTFS}/tmp 2>/dev/null || true
+    chmod 1777 ${APPTAINER_ROOTFS}/var/tmp 2>/dev/null || true
+
+# === %post Section ===
+%post -c /bin/bash
+    # CRITICAL: Set non-interactive environment variables FIRST
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    
+    # === CRITICAL: Source centralized configuration ===
+    # config.sh is the SINGLE SOURCE OF TRUTH for all paths, versions, and settings
+    # It is copied to /etc/config.sh in the %files section
+    if [ -f /etc/config.sh ]; then
+        # Disable strict mode temporarily to allow config.sh to set defaults
+        set +u
+        source /etc/config.sh
+        set -u
+        printf '%s\n' "[%post] ✓ Loaded centralized configuration from /etc/config.sh"
+        printf '%s\n' "[%post]   Using CONTAINER_CACHE_ROOT: ${CONTAINER_CACHE_ROOT:-/container_cache}"
+    else
+        printf '%s\n' "[%post] ⚠ WARNING: /etc/config.sh not found - using defaults"
+        printf '%s\n' "[%post]   This should not happen - config.sh should be copied in %files section"
+        # Set minimal defaults if config.sh missing
+        export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    fi
+    
+    printf '%s\n' "=========================================="
+    printf '%s\n' "PROGRESSIVE STAGE 0: Minimal Test Image"
+    printf '%s\n' "=========================================="
+    printf '%s\n' "[%post] Starting minimal setup..."
+    
+    # CRITICAL: Ensure APT directories are writable BEFORE any apt-get operations
+    printf '%s\n' "[CRITICAL] Verifying APT writability (required for build)..."
+    APT_WRITABILITY_FAILED=0
+    for apt_dir in /var/lib/apt/lists /var/lib/apt/lists/partial /var/cache/apt/archives /var/cache/apt/archives/partial /etc/apt/sources.list.d /etc/apt/trusted.gpg.d /etc/apt/preferences.d /etc/apt/apt.conf.d; do
+        # Create directory if it doesn't exist
+        mkdir -p "${apt_dir}" 2>/dev/null || true
+        # Set permissions
+        chmod 755 "${apt_dir}" 2>/dev/null || true
+        # Test writability
+        if [ -d "${apt_dir}" ]; then
+            if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                printf '%s\n' "  ✓ ${apt_dir} is writable"
+            else
+                printf '%s\n' "  ⚠ ${apt_dir} not writable - attempting to fix..."
+                chown -R root:root "${apt_dir}" 2>/dev/null || true
+                chmod -R 755 "${apt_dir}" 2>/dev/null || true
+                if touch "${apt_dir}/.write_test_$$" 2>/dev/null; then
+                    rm -f "${apt_dir}/.write_test_$$" 2>/dev/null || true
+                    printf '%s\n' "  ✓ ${apt_dir} is now writable (fixed)"
+                else
+                    printf '%s\n' "  ✗ ${apt_dir} is NOT writable - APT operations will fail"
+                    APT_WRITABILITY_FAILED=$((APT_WRITABILITY_FAILED + 1))
+                fi
+            fi
+        fi
+    done
+    if [ ${APT_WRITABILITY_FAILED} -gt 0 ]; then
+        printf '%s\n' "  ✗ FATAL: ${APT_WRITABILITY_FAILED} APT directory(ies) not writable - cannot proceed with build"
+        exit 1
+    else
+        printf '%s\n' "  ✓ All APT directories verified writable"
+    fi
+    printf '%s\n' ""
+    
+    # Install essential tools for testing and verification
+    # Based on build_xubuntu_robotics_base.sh and xubuntu_robotics_base_debug.sh
+    printf '%s\n' "[%post] Installing essential tools..."
+    apt-get update -qq >/dev/null 2>&1 || true
+    
+    # Essential download and network tools (inspired by xubuntu_robotics_base_debug.sh BLOCK 10.10)
+    apt-get install -y --no-install-recommends \
+        wget \
+        curl \
+        gpg-agent \
+        ca-certificates \
+        gnupg \
+        gnupg2 \
+        >/dev/null 2>&1 || true
+    
+    # Essential system tools for verification and debugging (inspired by xubuntu_robotics_base_debug.sh BLOCK 10.13)
+    # Note: procps-ng may not exist on all systems, so we install procps first
+    apt-get install -y --no-install-recommends \
+        procps \
+        file \
+        less \
+        >/dev/null 2>&1 || true
+    
+    # Try procps-ng if procps didn't provide pgrep (some systems)
+    if ! command -v pgrep >/dev/null 2>&1; then
+        apt-get install -y --no-install-recommends procps-ng >/dev/null 2>&1 || true
+    fi
+    
+    # Essential package inspection tools (inspired by build_xubuntu_robotics_base.sh)
+    apt-get install -y --no-install-recommends \
+        dpkg-dev \
+        >/dev/null 2>&1 || true
+    
+    # Essential archive and compression tools (inspired by xubuntu_robotics_base_debug.sh BLOCK 10.12)
+    apt-get install -y --no-install-recommends \
+        tar \
+        gzip \
+        bzip2 \
+        xz-utils \
+        unzip \
+        >/dev/null 2>&1 || true
+    
+    # Basic system info
+    printf '%s\n' "[%post] System information:"
+    OS_NAME=$(cat /etc/os-release 2>/dev/null | grep PRETTY_NAME 2>/dev/null | cut -d'"' -f2 2>/dev/null || printf '%s\n' "unknown")
+    printf '%s\n' "  - OS: ${OS_NAME}"
+    printf '%s\n' "  - User: $(whoami)"
+    printf '%s\n' "  - UID: $(id -u)"
+    printf '%s\n' "  - GID: $(id -g)"
+    
+    # Check if we're in a container
+    if [ -f "/.singularity.d/runscript" ] || [ -f "/.apptainer.d/runscript" ]; then
+        printf '%s\n' "  - Container detected: YES"
+    else
+        printf '%s\n' "  - Container detected: NO"
+    fi
+    
+    # COMPREHENSIVE MOUNT POINT VERIFICATION
+    # Use config.sh variables instead of hardcoded paths
+    printf '%s\n' "[%post] Verifying mount points (using config.sh variables):"
+    MOUNT_VERIFY_FAILED=0
+    
+    # Use CONTAINER_CACHE_ROOT from config.sh (defaults to /container_cache if not set)
+    CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    
+    for mount_point in "${CONTAINER_CACHE_ROOT}" /tmp /var/tmp; do
+        printf '%s\n' "  Checking: ${mount_point}"
+        
+        # Check existence
+        if [ ! -d "${mount_point}" ]; then
+            printf '%s\n' "    ✗ MISSING"
+            MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+            continue
+        fi
+        
+        printf '%s\n' "    ✓ EXISTS"
+        
+        # Check permissions
+        PERMS=$(stat -c '%a' "${mount_point}" 2>/dev/null || printf '%s\n' "unknown")
+        OWNER=$(stat -c '%U:%G' "${mount_point}" 2>/dev/null || printf '%s\n' "unknown")
+        printf '%s\n' "    Permissions: ${PERMS}"
+        printf '%s\n' "    Owner: ${OWNER}"
+        
+        # Fix permissions if needed
+        if [ "${mount_point}" = "/tmp" ] || [ "${mount_point}" = "/var/tmp" ]; then
+            if [ "${PERMS}" != "1777" ] && [ "${PERMS}" != "777" ]; then
+                printf '%s\n' "    → Fixing permissions to 1777..."
+                chmod 1777 "${mount_point}" 2>/dev/null || chmod 777 "${mount_point}" 2>/dev/null || {
+                    printf '%s\n' "    ✗ Failed to fix permissions"
+                    MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+                }
+            fi
+        elif [ "${mount_point}" = "${CONTAINER_CACHE_ROOT}" ]; then
+            if [ "${PERMS}" != "755" ] && [ "${PERMS}" != "775" ]; then
+                printf '%s\n' "    → Fixing permissions to 755..."
+                chmod 755 "${mount_point}" 2>/dev/null || {
+                    printf '%s\n' "    ✗ Failed to fix permissions"
+                    MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+                }
+            fi
+        fi
+        
+        # Test read access
+        if [ -r "${mount_point}" ]; then
+            printf '%s\n' "    ✓ Read access: OK"
+        else
+            printf '%s\n' "    ✗ Read access: FAILED"
+            MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+        fi
+        
+        # Test write access
+        TEST_FILE="${mount_point}/.write_test_$$"
+        if touch "${TEST_FILE}" 2>/dev/null; then
+            rm -f "${TEST_FILE}" 2>/dev/null || true
+            printf '%s\n' "    ✓ Write access: OK"
+        else
+            printf '%s\n' "    ✗ Write access: FAILED"
+            MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+        fi
+        
+        # Test execute access (for directories)
+        if [ -x "${mount_point}" ]; then
+            printf '%s\n' "    ✓ Execute access: OK"
+        else
+            printf '%s\n' "    ✗ Execute access: FAILED"
+            MOUNT_VERIFY_FAILED=$((MOUNT_VERIFY_FAILED + 1))
+        fi
+    done
+    
+    # Final verification summary
+    printf '%s\n' ""
+    printf '%s\n' "[%post] Mount verification summary:"
+    if [ ${MOUNT_VERIFY_FAILED} -eq 0 ]; then
+        printf '%s\n' "  ✓ All mount points verified successfully"
+    else
+        printf '%s\n' "  ✗ ${MOUNT_VERIFY_FAILED} mount point verification(s) failed"
+        printf '%s\n' "  Build will continue but may have issues"
+    fi
+    
+    printf '%s\n' ""
+    # CLEANUP: Remove test files and temporary artifacts
+    printf '%s\n' ""
+    printf '%s\n' "[CLEANUP] Cleaning up temporary files..."
+    CLEANUP_COUNT=0
+    
+    # Clean test files from mount points (using config.sh variables)
+    CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+    for mount_point in "${CONTAINER_CACHE_ROOT}" /tmp /var/tmp; do
+        if [ -d "${mount_point}" ]; then
+            find "${mount_point}" -maxdepth 1 -type f -name ".test_*" -o -name ".write_test_*" 2>/dev/null | while IFS= read -r test_file || [ -n "${test_file}" ]; do
+                if [ -f "${test_file}" ]; then
+                    rm -f "${test_file}" 2>/dev/null && CLEANUP_COUNT=$((CLEANUP_COUNT + 1))
+                fi
+            done
+        fi
+    done
+    
+    # Clean APT cache
+    if command -v apt-get >/dev/null 2>&1; then
+        apt-get clean >/dev/null 2>&1 || true
+        apt-get autoclean >/dev/null 2>&1 || true
+        printf '%s\n' "  ✓ APT cache cleaned"
+    fi
+    
+    if [ ${CLEANUP_COUNT} -gt 0 ]; then
+        printf '%s\n' "  ✓ Cleaned ${CLEANUP_COUNT} temporary test file(s)"
+    else
+        printf '%s\n' "  ✓ No temporary files to clean"
+    fi
+    
+    printf '%s\n' ""
+    printf '%s\n' "[%post] Minimal setup complete."
+    printf '%s\n' "=========================================="

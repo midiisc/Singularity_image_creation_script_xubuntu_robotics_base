@@ -1,0 +1,143 @@
+# CRITICAL: CUMULATIVE BUILD - Stage 10 builds on Stage 9
+# This stage includes ALL cumulative steps from:
+#   - Stage 0: Minimal base (bind mounts, essential tools)
+#   - Stage 1: Bootstrap safe environment (APT robustness, directory structure, procps-ng)
+#   - Stage 2: Terminal colors and Block 0 (container scripts installation)
+#   - Stage 3: Initialization blocks (phase tracking, debug functions, build jobs)
+#   - Stage 4: Cache and mirror functions (cache management, mirror probing, library verification)
+#   - Stage 5: Cache monitoring and configuration (cache monitoring system, unified cache configuration)
+#   - Stage 6: Package management functions (advanced package management with staging, retry, atomicity, integrity, locking)
+#   - Stage 7: Main build execution start (cache directory structure, systematic writability enforcement)
+#   - Stage 8: Mirror selection and APT setup (BLOCK 9 and BLOCK 10)
+    #   - Stage 9: APT-ARIA wrapper setup (BLOCK 11) - INCLUDED
+    #   - Stage 10: Intel oneAPI MKL Installation (BLOCK 12A) - NEW
+# 
+# Stage 10 MUST be built on top of Stage 9 for cumulative build
+# Using absolute path to ensure Stage 8 image is found
+Bootstrap: localimage
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/test_local_mounts/progressive/output/stage_09_apt_aria.sif
+
+# === %files Section ===
+%files
+    # CRITICAL: Copy centralized configuration (SINGLE SOURCE OF TRUTH)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    # Copy container scripts (already installed in Stage 2, but ensure they're available)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    # Copy common functions (needed for cache management functions)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/common_functions.sh /scripts/common_functions.sh
+    # Copy mirror functions (needed for mirror probing)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/mirror_functions.sh /scripts/mirror_functions.sh
+    # Copy library functions (needed for library verification)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/library_functions.sh /scripts/library_functions.sh
+    # Copy cache functions (needed for cache monitoring and configuration)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/cache_functions.sh /scripts/cache_functions.sh
+    # Copy package functions (needed for advanced package management)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/package_functions.sh /scripts/package_functions.sh
+    # Copy apt-aria wrapper and container-cache.sh (for BLOCK 11)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts/shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/apt-wrapper-aria2c-accelerated-downloads.sh /usr/local/bin/apt-aria
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts/shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/container-cache.sh /etc/profile.d/container-cache.sh
+    # Copy BLOCK 12A script (Intel oneAPI MKL Installation)
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts/shell-scripts/block-12a-mkl-installation.sh /scripts/block-12a-mkl-installation.sh
+
+# === %labels Section ===
+%labels
+    Maintainer midhun
+    Description "Progressive Stage 10: Intel oneAPI MKL Installation (BLOCK 12A)"
+
+# === %environment Section ===
+%environment
+    export DEBIAN_FRONTEND=noninteractive
+    export TZ=Asia/Kolkata
+    export LANG=C.UTF-8
+    export LC_ALL=C.UTF-8
+    export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    
+    # Terminal color codes (from Stage 2) - simple exports only
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export NC='\033[0m'
+    
+    # Phase tracking variables (from Stage 3) - simple exports only
+    export PHASE1_STATUS="NOT RUN"
+    export PHASE2_STATUS="NOT RUN"
+    export PHASE3_STATUS="NOT RUN"
+    export PHASE4_STATUS="NOT RUN"
+    export PHASE5_STATUS="NOT RUN"
+    
+    # Cache configuration variables (from Stage 5) - simple exports only
+    # Note: These use hardcoded paths since config.sh is not available in %environment
+    # The actual values will be set from config.sh in %post section
+    export CACHE_ROOT="/container_cache"
+    export PIP_CACHE_DIR="/container_cache/wheels"
+    export CONDA_PKGS_DIRS="/container_cache/conda_pkgs"
+    export JULIA_DEPOT_PATH="/container_cache/julia_pkgs:/usr/local/share/julia"
+    
+    # Mirror configuration (from Stage 8) - will be set in %post
+    export FASTEST_MIRROR=""
+
+# === %setup Section ===
+%setup
+    # Create mount point directories (using /container_cache as default - config.sh available in %post)
+    mkdir -p ${APPTAINER_ROOTFS}/container_cache
+    mkdir -p ${APPTAINER_ROOTFS}/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/var/tmp
+    mkdir -p ${APPTAINER_ROOTFS}/scripts
+
+# === %post Section ===
+%post -c /bin/bash
+    # CRITICAL: Set non-interactive environment variables FIRST
+    export DEBIAN_FRONTEND=noninteractive
+    export DEBCONF_NONINTERACTIVE_SEEN=true
+    export DEBCONF_NOWARNINGS=true
+    
+    # === CRITICAL: Source centralized configuration ===
+    if [ -f /etc/config.sh ]; then
+        set +u
+        source /etc/config.sh
+        set -u
+        printf '%s\n' "[%post] ✓ Loaded centralized configuration from /etc/config.sh"
+    else
+        printf '%s\n' "[%post] ⚠ WARNING: /etc/config.sh not found - using defaults"
+        export CONTAINER_CACHE_ROOT="${CONTAINER_CACHE_ROOT:-/container_cache}"
+        export INSTALL_PREFIX="${INSTALL_PREFIX:-/opt}"
+    fi
+    
+    # === CRITICAL: Set terminal color codes FIRST ===
+    export RED='\033[0;31m'
+    export GREEN='\033[0;32m'
+    export YELLOW='\033[1;33m'
+    export BLUE='\033[0;34m'
+    export NC='\033[0m'
+    
+    printf '%s\n' "=========================================="
+    printf '%s\n' "PROGRESSIVE STAGE 10: Intel oneAPI MKL Installation"
+    printf '%s\n' "=========================================="
+    printf '%s\n' ""
+    printf '%s\n' "[CUMULATIVE BUILD] Stage 10 builds on Stage 9, which includes ALL cumulative steps from Stages 0-9"
+    printf '%s\n' "  - Base image (stage_09_apt_aria.sif) already contains all cumulative steps"
+    printf '%s\n' "  - Stage 10 adds: Intel oneAPI MKL Installation (BLOCK 12A)"
+    printf '%s\n' ""
+    
+    # ============================================================================
+    # STAGE 10: BLOCK 12A - INTEL oneAPI MKL INSTALLATION
+    # ============================================================================
+    printf '%s\n' "${BLUE}===========================================================${NC}"
+    printf '%s\n' "${BLUE}BLOCK 12A: Intel oneAPI MKL Installation${NC}"
+    printf '%s\n' "${BLUE}===========================================================${NC}"
+    printf '%s\n' ""
+    
+    # Source BLOCK 12A script
+    if [ -f /scripts/block-12a-mkl-installation.sh ]; then
+        printf '%s\n' "[STAGE 10] Executing BLOCK 12A: Intel oneAPI MKL Installation..."
+        . /scripts/block-12a-mkl-installation.sh
+        printf '%s\n' "[STAGE 10] ✓ BLOCK 12A completed"
+    else
+        printf '%s\n' "[ERROR] ⚠ block-12a-mkl-installation.sh not found"
+        exit 1
+    fi
+    printf '%s\n' ""
+    
+    printf '%s\n' "${GREEN}✓ STAGE 10 COMPLETE${NC}"
+    printf '%s\n' ""
