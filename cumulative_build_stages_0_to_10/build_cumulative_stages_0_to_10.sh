@@ -237,15 +237,20 @@ build_stage() {
                 exit 1
             fi
             
-            # Update the From: line in the definition file
-            # For local SIF files, use absolute path directly (no prefix needed)
+            # Update the Bootstrap and From: lines in the definition file
+            # CRITICAL: When using a local SIF file, Bootstrap must be "localimage", not "docker"
             # Escape special characters in path for sed replacement string:
             # - Escape backslash (\)
             # - Escape ampersand (&) - represents matched text in replacement
             # - Escape delimiter (|) - our sed delimiter
             local prev_output_escaped=$(printf '%s\n' "${prev_output_abs}" | sed 's/\\/\\\\/g; s/&/\\&/g; s/|/\\|/g')
+            
+            # Change Bootstrap from docker to localimage when using local SIF
+            sed -i "s|^Bootstrap:.*|Bootstrap: localimage|g" "${def_file}"
+            
+            # Update the From: line with the absolute path to the previous stage SIF
             sed -i "s|^From:.*|From: ${prev_output_escaped}|g" "${def_file}"
-            echo "✓ Updated From: path to previous stage image: ${prev_output_abs}"
+            echo "✓ Updated Bootstrap to 'localimage' and From: path to previous stage image: ${prev_output_abs}"
         fi
     
     # Setup bind mounts
