@@ -80,6 +80,11 @@ From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_
     # CRITICAL: Ensure .singularity.d directory exists for metadata (required when building from localimage)
     # This must be done early in %post before any metadata operations
     mkdir -p /.singularity.d
+    mkdir -p /.singularity.d/actions
+    mkdir -p /.singularity.d/env
+    mkdir -p /.singularity.d/libs
+    chmod -R 755 /.singularity.d 2>/dev/null || true
+    touch /.singularity.d/.keep 2>/dev/null || true
     chmod 755 /.singularity.d 2>/dev/null || true
     # CRITICAL: Set non-interactive environment variables FIRST
     export DEBIAN_FRONTEND=noninteractive
