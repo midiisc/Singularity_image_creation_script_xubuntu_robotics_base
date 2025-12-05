@@ -1,0 +1,29 @@
+// Bridge ROS 2 Humble (Domain 1) to Zenoh
+{
+  mode: "client",
+  connect: {
+    endpoints: ["tcp/localhost:7447"]
+  },
+
+#--- Sub-block 38.6: Environment finalization ---
+# Purpose: Complete environment setup
+# Dependencies: None (foundational)
+# Outputs: Environment variables, configuration
+  plugins: {
+    ros2dds: {
+      // Domain ID for Humble
+      domain: 1,
+      // Namespace for Humble topics in Zenoh
+      namespace: "/humble",
+      // Topic routing rules
+      allow: [
+        // allow all topics under /humble namespace
+        { topic: "**" }
+      ],
+      // DDS Configuration
+      shm_enabled: true,  // Shared memory for local performance
+      // QoS mapping
+      reliable_routes_blocking: true
+    }
+  }
+}

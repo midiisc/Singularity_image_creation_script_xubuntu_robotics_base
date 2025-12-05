@@ -1,0 +1,409 @@
+#!/bin/bash
+#===============================================================================
+# CENTRALIZED CONFIGURATION
+# Single source of truth for all software versions, URLs, and parameters
+#===============================================================================
+# Purpose: Centralize all version numbers and URLs for easy maintenance
+# Usage: Source this file at the beginning of build and post scripts
+#        source "$(dirname "$0")/config.sh"
+#===============================================================================
+
+#===============================================================================
+# BASE SYSTEM CONFIGURATION
+#===============================================================================
+export BASE_OS="ubuntu"
+export BASE_OS_VERSION="24.04"
+export BASE_OS_CODENAME="noble"
+export SYSTEM_PYTHON_VER="3.12"
+export ROS_DISTRO="jazzy"
+
+#===============================================================================
+# BUILD LOGGING CONFIGURATION
+#===============================================================================
+# Number of log files to keep (includes current run)
+# n=2 means current run + 1 previous run
+# n=3 means current run + 2 previous runs, etc.
+export BUILD_LOG_KEEP_COUNT=2
+
+# Log file directory (relative to workspace root)
+export BUILD_LOG_DIR="build_logs"
+
+# Log file prefix (timestamp will be appended)
+# Timestamp format: YYYYMMDD_Day_HHMM_AMPM (e.g., 20241027_Sun_1430_PM)
+export BUILD_LOG_PREFIX="singularity_build"
+
+# Sync interval (seconds) - how often to flush log to disk
+# Lower = better crash protection, slightly more I/O overhead
+# Higher = less I/O overhead, slightly more data at risk if crashed
+# Recommended: 30-120 seconds, default: 60
+export BUILD_LOG_SYNC_INTERVAL=60
+
+# Base Docker/Singularity Image
+export BASE_IMAGE_REPO="osrf/ros"
+export BASE_IMAGE_VARIANT="desktop-full"
+export BASE_IMAGE="${BASE_IMAGE_REPO}:${ROS_DISTRO}-${BASE_IMAGE_VARIANT}-${BASE_OS_CODENAME}"
+
+#===============================================================================
+# SOFTWARE VERSIONS
+#===============================================================================
+
+# Python/Conda
+# NOTE: Check https://github.com/conda-forge/miniforge/releases for latest version
+# Current version: 25.3.1-0 (verify at https://github.com/conda-forge/miniforge/releases/latest)
+export MINIFORGE_VER="25.3.1-0"
+export MICROMAMBA_VER="2.3.2-0"
+
+# Python Packages (Data Formats)
+export H5PY_VERSION="3.9.0"
+export ZARR_VERSION="2.16.0"
+
+# Python Packages (Messaging/IPC)
+export PYZMQ_VERSION="25.1.0"
+export MSGPACK_VERSION="1.0.7"
+
+# Python Packages (Julia Bridge)
+export JULIACALL_VERSION="0.9.14"
+export JULIAPKG_VERSION="0.1.10"
+
+# Remote Desktop
+export TURBOVNC_VER="3.2.1"
+export VIRTUALGL_VER="3.1.4"
+export NOVNC_VER="1.6.0"
+export XPRA_VERSION="6.3.5"  # Latest from GitHub: https://github.com/Xpra-org/xpra/releases/latest
+export XPRA_HTML5_VERSION="18"  # Latest from GitHub: https://github.com/Xpra-org/xpra-html5/releases/latest
+
+# Development Tools
+export YQ_VER="v4.48.1"
+export JULIA_LTS_VER="1.10.5"
+export LIBCXXWRAP_JULIA_VERSION="0.14.5"  # Latest stable release tag: v0.14.5
+export CXXWRAP_JL_VERSION="0.17.3"        # Latest stable release tag: v0.17.3
+
+# SLAM/Robotics Libraries
+export CERES_VERSION="2.2.0"
+export PYCERES_VERSION="2.5"
+export G2O_VERSION="20241228_git"
+export GTSAM_VERSION="4.2.0"
+export OPENCV_VERSION="4.12.0"
+
+# Linear Algebra and Deep Learning
+export OPENBLAS_VERSION="v0.3.30"  # Latest stable version with DYNAMIC_ARCH support
+export SUITESPARSE_VERSION="v7.12.1"
+export SUITESPARSE_INSTALL_PREFIX="/usr/local"
+export PYTORCH_VERSION="v2.6.0"    # Compatible with CUDA 12.6 and Ubuntu 24.04
+export ENABLE_PYTORCH_BUILD="${ENABLE_PYTORCH_BUILD:-false}"      # Legacy source build toggle (remains disabled)
+export ENABLE_PYTORCH_INSTALL="${ENABLE_PYTORCH_INSTALL:-true}"  # Default: install CUDA+MKL wheels
+# Repo-specific BLAS selector for post-install script (controls update-alternatives)
+# Supported values: MKL (default) or OPENBLAS
+export DEFAULT_BLAS_PROVIDER="${DEFAULT_BLAS_PROVIDER:-MKL}"
+
+# 3D Reconstruction / SfM / NeRF
+export COLMAP_VERSION="3.12.6"
+export OPEN3D_VERSION="0.19.0"
+export OPEN3D_WEBRTC_VER="60e6748"
+
+# NVIDIA Video Codec SDK
+export NVIDIA_VIDEO_SDK_VERSION="12.1.14"
+
+# Desktop Applications
+export FREECAD_VERSION="1.0.2"
+export KASMVNC_VERSION="1.3.1"
+
+# Modern CLI Tools (Rust-based) - all compiled from source
+# Updated to latest compatible versions as of 2025-11-03
+export BAT_VERSION="0.26.0"
+export FD_VERSION="10.3.0"
+export RIPGREP_VERSION="15.1.0"
+export EZA_VERSION="0.23.4"
+export BOTTOM_VERSION="0.11.2"
+export PROCS_VERSION="0.14.10"
+export ZELLIJ_VERSION="0.43.1"
+export DU_DUST_VERSION="1.2.3"
+export OX_VERSION="0.7.7"  # Latest from GitHub: https://github.com/curlpipe/ox/releases/latest
+
+# Middleware
+export ZENOH_VERSION="1.6.2"
+export ZENOH_ROS2DDS_VERSION="1.6.2"  # ROS 2 DDS bridge plugin version
+
+# GPU/CUDA
+export NVIDIA_KEYRING_VER="1.1-1"
+export CUDA_VERSION="12.6"
+export CUDA_MAJOR="${CUDA_VERSION%%.*}"
+# Extract minor version by removing everything up to and including first dot
+export CUDA_MINOR="${CUDA_VERSION#*.}"
+export CUDA_PKG_SUFFIX="${CUDA_VERSION//./-}"
+export CUDA_META_PACKAGE="cuda-${CUDA_PKG_SUFFIX}"
+export CUDA_TOOLKIT_PACKAGE="cuda-toolkit-${CUDA_PKG_SUFFIX}"
+export CUDA_RUNTIME_PACKAGE="cuda-runtime-${CUDA_PKG_SUFFIX}"
+export CUDA_DEMO_PACKAGE="cuda-demo-suite-${CUDA_PKG_SUFFIX}"
+export CUDA_DRIVER_BRANCH="560"
+export CUDA_DRIVER_PACKAGE="nvidia-open-${CUDA_DRIVER_BRANCH}"
+export CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/${BASE_OS_CODENAME}/x86_64"
+export CUDA_REPO_PIN_PRIORITY="600"
+export CUDNN_VER="9.15.0.57-1"  # CUDA 12.x compatible version (preferred, but may not be available)
+export CUDA_CUDNN_PACKAGE="libcudnn9-cuda-${CUDA_MAJOR}"
+export CUDA_CUDNN_DEV_PACKAGE="libcudnn9-dev-cuda-${CUDA_MAJOR}"
+# Note: Available cuDNN versions vary by repository. Common versions:
+#   - 9.15.0.57-1 (CUDA 12.x) - preferred when available
+#   - 9.14.0.64-1 (CUDA 13/12) - alternate fallback
+#   - 9.10.2.21-1 (CUDA 11)
+# If specific version not found, fallback logic will automatically install latest compatible version
+# The script checks version availability before attempting installation to avoid errors
+export CUDA_ARCH="8.6"  # NVIDIA A6000 architecture
+
+#===============================================================================
+# DOWNLOAD URLS (Constructed from versions)
+#===============================================================================
+
+# Miniforge
+# Official GitHub releases URL: https://github.com/conda-forge/miniforge/releases
+# Download URL pattern: https://github.com/conda-forge/miniforge/releases/download/{VERSION}/Miniforge3-{VERSION}-Linux-x86_64.sh
+export MINIFORGE_SH="Miniforge3-${MINIFORGE_VER}-Linux-x86_64.sh"
+export MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/download/${MINIFORGE_VER}/${MINIFORGE_SH}"
+
+# Micromamba
+export MICROMAMBA_BIN="micromamba-linux-64"
+export MICROMAMBA_URL="https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VER}/${MICROMAMBA_BIN}"
+
+# TurboVNC
+export TURBOVNC_DEB="turbovnc_${TURBOVNC_VER}_amd64.deb"
+export TURBOVNC_URL="https://github.com/TurboVNC/turbovnc/releases/download/${TURBOVNC_VER}/${TURBOVNC_DEB}"
+
+# VirtualGL
+export VIRTUALGL_DEB="virtualgl_${VIRTUALGL_VER}_amd64.deb"
+export VIRTUALGL_URL="https://github.com/VirtualGL/virtualgl/releases/download/${VIRTUALGL_VER}/${VIRTUALGL_DEB}"
+
+# yq (YAML processor)
+export YQ_BIN="yq_linux_amd64"
+export YQ_URL="https://github.com/mikefarah/yq/releases/download/${YQ_VER}/${YQ_BIN}"
+
+# Julia
+export JULIA_TARBALL="julia-${JULIA_LTS_VER}-linux-x86_64.tar.gz"
+export JULIA_URL="https://julialang-s3.julialang.org/bin/linux/x64/${JULIA_LTS_VER%.*}/${JULIA_TARBALL}"
+export JULIA_ASC_URL="https://julialang-s3.julialang.org/bin/linux/x64/${JULIA_LTS_VER%.*}/${JULIA_TARBALL}.asc"
+
+# Drake
+export DRAKE_ASC_URL="https://drake-apt.csail.mit.edu/drake.asc"
+export DRAKE_KEY_URL="https://drake-apt.csail.mit.edu/drake.asc"
+
+# NVIDIA
+export NVIDIA_KEYRING_DEB="cuda-keyring_${NVIDIA_KEYRING_VER}_all.deb"
+export NVIDIA_KEYRING_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/${NVIDIA_KEYRING_DEB}"
+export INTEL_ONEAPI_GPG_KEY_URL="https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB"
+export INTEL_ONEAPI_APT_SOURCE="deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main"
+
+# Zenoh
+# Using standalone variant for container builds (self-contained, no system dependencies)
+# Alternative: debian variant contains .deb packages for APT installation
+export ZENOH_FILE="zenoh-${ZENOH_VERSION}-x86_64-unknown-linux-gnu-standalone.zip"
+export ZENOH_URL="https://github.com/eclipse-zenoh/zenoh/releases/download/${ZENOH_VERSION}/${ZENOH_FILE}"
+
+# Zenoh ROS 2 DDS Bridge Plugin
+# Enables communication between Zenoh and ROS 2 DDS systems
+export ZENOH_ROS2DDS_FILE="zenoh-plugin-ros2dds-${ZENOH_ROS2DDS_VERSION}-x86_64-unknown-linux-gnu-standalone.zip"
+export ZENOH_ROS2DDS_URL="https://github.com/eclipse-zenoh/zenoh-plugin-ros2dds/releases/download/${ZENOH_ROS2DDS_VERSION}/${ZENOH_ROS2DDS_FILE}"
+
+# Open3D WebRTC (prebuilt binaries for Open3D 0.19.0 with GLIBCXX_USE_CXX11_ABI=ON)
+export OPEN3D_WEBRTC_FILE="webrtc_${OPEN3D_WEBRTC_VER}_cxx-abi-1.tar.gz"
+export OPEN3D_WEBRTC_URL="https://github.com/isl-org/open3d_downloads/releases/download/webrtc-v3/${OPEN3D_WEBRTC_FILE}"
+
+#===============================================================================
+# SHA256 CHECKSUMS
+#===============================================================================
+export MINIFORGE_SHA256="376b160ed8130820db0ab0f3826ac1fc85923647f75c1b8231166e3d559ab768"
+export MICROMAMBA_SHA256="ffc3cb8d52d4d6b354bdbb979c407719c485392b74e462cbd50811aa88e58f85"
+export YQ_SHA256="99df6047f5b577a9d25f969f7c3823ada3488de2e2115b30a0abb10d9324fd9f"
+export JULIA_SHA256="33497b93cf9dd65e8431024fd1db19cbfbe30bd796775a59d53e2df9a8de6dc0"
+export OPEN3D_WEBRTC_SHA256="0d98ddbc4164b9e7bfc50b7d4eaa912a753dabde0847d85a64f93a062ae4c335"
+
+#===============================================================================
+# GPG KEY IDS AND URLS
+#===============================================================================
+export JULIA_GPG_KEY_ID="3673DF529D9049477F76B37566E3C7DC03D6E495"
+export JULIA_GPG_KEY_URL="https://julialang.org/assets/juliareleases.asc"
+
+# VirtualGL and TurboVNC use the same GPG signing key (v2.6.5+/v2.2.6+)
+# Official documentation: https://virtualgl.org/Downloads/DigitalSignatures
+# Key ID (short form): 4BACCAB36E7FE9A1
+# Full fingerprint: 0xae1a7ba4efff9a9987e1474c4baccab36e7fe9a1
+export VIRTUALGL_TURBOVNC_GPG_KEY_ID="4BACCAB36E7FE9A1"
+export VIRTUALGL_TURBOVNC_GPG_KEY_URL="https://raw.githubusercontent.com/VirtualGL/repo/main/VGL-GPG-KEY"
+export VIRTUALGL_TURBOVNC_GPG_KEY_URL_ALT="https://keyserver.ubuntu.com/pks/lookup?op=get&search=0xae1a7ba4efff9a9987e1474c4baccab36e7fe9a1"
+
+#===============================================================================
+# BUILD PARAMETERS
+#===============================================================================
+export DISK_SPACE_REQUIRED_GB=150
+# Host-side log retention (in build_logs/ directory)
+# LOG_RETENTION_COUNT=1 means keep only the current run (delete all old logs)
+# LOG_RETENTION_COUNT=2 means keep current run + 1 previous run (RECOMMENDED)
+# LOG_RETENTION_COUNT=3 means keep current run + 2 previous runs, etc.
+export LOG_RETENTION_COUNT=2
+export PARALLEL_DOWNLOADS=4
+export CACHE_KEEP_VERSIONS=2
+
+#===============================================================================
+# CACHE DIRECTORY STRUCTURE
+#===============================================================================
+# CRITICAL: Use SCRIPT_DIR if available (set by build script), otherwise fallback to PWD/pwd
+# This ensures cache directories are created relative to the script location, not current working directory
+# When sourced inside container, SCRIPT_DIR won't be set, so we use container-relative paths
+if [ -n "${SCRIPT_DIR:-}" ]; then
+    # Host-side: use SCRIPT_DIR (set by build_xubuntu_robotics_base.sh before sourcing config.sh)
+    export CACHE_DIR="${CACHE_DIR:-${SCRIPT_DIR}/container_cache}"
+else
+    # Container-side or fallback: use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
+    export CACHE_DIR="${CACHE_DIR:-${PWD:-$(pwd)}/container_cache}"
+fi
+# ENDIF: SCRIPT_DIR check
+export BIN_CACHE="${CACHE_DIR}/binaries"
+export DEB_CACHE="${CACHE_DIR}/debs"
+export APT_CACHE="${CACHE_DIR}/apt"
+export APT_ARCHIVE_CACHE="${CACHE_DIR}/apt/archives"
+export CONDA_CACHE="${CACHE_DIR}/conda_pkgs"
+export JULIA_CACHE="${CACHE_DIR}/julia_pkgs"
+export WHEELS_CACHE="${CACHE_DIR}/wheels"
+
+#===============================================================================
+# OUTPUT FILE NAMES
+#===============================================================================
+# Generate descriptive image name with version numbers
+# Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base
+# Capitalize ROS distribution name (first letter uppercase, rest lowercase)
+# ROS_DISTRO_CAPITALIZED kept for potential future use (may be exported or used by other scripts)
+if [ -n "${ROS_DISTRO:-}" ]; then
+    # D3: Use here-string instead of echo | awk for better performance and safety
+    ROS_DISTRO_CAPITALIZED=$(awk '{print toupper(substr($0,1,1)) tolower(substr($0,2))}' <<< "${ROS_DISTRO}")
+    export ROS_DISTRO_CAPITALIZED
+else
+    export ROS_DISTRO_CAPITALIZED="Unknown"
+fi
+# ENDIF: ROS_DISTRO presence check
+# SIF_NAME and DEF_NAME are defined in BUILD OUTPUT CONFIGURATION section below
+# They are generated dynamically in build script if not set
+
+#===============================================================================
+# CONTAINER-INTERNAL PATHS
+#===============================================================================
+# These paths are used INSIDE the Singularity container after %files section copies
+# They correspond to the mount points defined in the %files section of the .def file
+# NOTE: These are different from host-side cache paths (BIN_CACHE, DEB_CACHE, etc.)
+
+export CONTAINER_CACHE_ROOT="/container_cache"
+export CONTAINER_BIN_CACHE="${CONTAINER_CACHE_ROOT}/binaries"
+export CONTAINER_DEB_CACHE="${CONTAINER_CACHE_ROOT}/debs"
+export CONTAINER_APT_CACHE="${CONTAINER_CACHE_ROOT}/apt/archives"
+export CONTAINER_CONDA_CACHE="${CONTAINER_CACHE_ROOT}/conda_pkgs"
+export CONTAINER_WHEELS_CACHE="${CONTAINER_CACHE_ROOT}/wheels"
+export CONTAINER_JULIA_CACHE="${CONTAINER_CACHE_ROOT}/julia_pkgs"
+
+#===============================================================================
+# INSTALLATION PATHS (Container-Internal Directories)
+#===============================================================================
+# These paths define where software is installed inside the container
+# Default: /opt is used for optional/add-on software per FHS standards
+
+export INSTALL_PREFIX="/opt"
+export RUST_HOME="${INSTALL_PREFIX}/rust"
+export ZENOH_HOME="${INSTALL_PREFIX}/zenoh"
+export DRAKE_HOME="${INSTALL_PREFIX}/drake"
+export TURBOVNC_HOME="${INSTALL_PREFIX}/turbovnc"
+export VIRTUALGL_HOME="${INSTALL_PREFIX}/VirtualGL"
+export MINIFORGE_HOME="${INSTALL_PREFIX}/conda"
+export JULIA_HOME="${INSTALL_PREFIX}/julia"
+export MAMBA_ENVS="${INSTALL_PREFIX}/mamba-envs"
+export JULIA_ENVS="${INSTALL_PREFIX}/juliaenvs"
+
+# Container Build Temporary Directory (used during %post section)
+# Note: This is INSIDE the container, not the host BUILD_TMP_DIR
+export CONTAINER_BUILD_TMPDIR="/tmp/build-temp"
+
+#===============================================================================
+# CONTAINER SCRIPTS CONFIGURATION
+#===============================================================================
+# Paths for container scripts installation system
+# These paths are relative to the repository root (where build script is located)
+
+# Container scripts source directory (on host, relative to SCRIPT_DIR)
+export CONTAINER_SCRIPTS_DIR="container-scripts"
+
+# Container scripts installation path (inside container)
+export CONTAINER_SCRIPTS_INSTALL_PATH="/container-scripts"
+
+# Container scripts manifest file (relative to CONTAINER_SCRIPTS_DIR)
+export CONTAINER_SCRIPTS_MANIFEST="MANIFEST.json"
+
+# Container scripts installer script (relative to CONTAINER_SCRIPTS_DIR)
+export CONTAINER_SCRIPTS_INSTALLER="install.sh"
+
+#===============================================================================
+# BUILD OUTPUT CONFIGURATION
+#===============================================================================
+# Output directory (defaults to current working directory, can be overridden)
+# Set OUT_DIR in environment to override
+# Use PWD with fallback to pwd command if PWD is unset (defensive for strict mode)
+export OUT_DIR="${OUT_DIR:-${PWD:-$(pwd)}}"
+
+# SIF (Singularity Image Format) file name
+# If not set, will be generated from ROS_DISTRO and BASE_OS_VERSION
+# Format: Ubuntu-{VERSION}-ROS2-{DISTRO}-Perception-Robotics-Base.sif
+export SIF_NAME="${SIF_NAME:-}"
+
+# DEF (Definition) file name
+# If not set, will be generated from SIF_NAME (replace .sif with .def)
+export DEF_NAME="${DEF_NAME:-}"
+
+# Container post-script mode
+# Controls which %post script the host build injects into the container.
+#   debug → use xubuntu_robotics_base_debug.sh (stops before OpenCV)
+#   full  → use xubuntu_robotics_base_full.sh (complete image build)
+# Default favors the debug/incremental flow for faster iteration.
+export CONTAINER_POST_SCRIPT_MODE="${CONTAINER_POST_SCRIPT_MODE:-debug}"
+
+# Build log extraction toggle
+# Set to 1 to enable regex-based error/warning extraction + analysis.
+# Default is 0 (disabled) to avoid the heavy grep-based pipeline when not needed.
+export ENABLE_LOG_ERROR_EXTRACTION="${ENABLE_LOG_ERROR_EXTRACTION:-0}"
+
+#===============================================================================
+# NOTE: analyze_build_log() FUNCTION MOVED TO scripts/common_functions.sh
+#===============================================================================
+# Purpose: Analyze build logs to extract errors/warnings with context
+# Usage: Source scripts/common_functions.sh and call analyze_build_log <log_file> <error_log>
+#        Set LOG_FILE and ERROR_LOG variables before calling
+#        For container builds: use BUILD_LOG_FILE and BUILD_ERROR_LOG
+#===============================================================================
+# Legacy function removed - now in scripts/common_functions.sh
+# Use: source "${SCRIPT_DIR}/scripts/common_functions.sh" to access
+# For backwards compatibility, keeping stub that sources common functions if available:
+if [ -z "${ANALYZE_BUILD_LOG_SOURCED:-}" ]; then
+    # Try host-side path first (if SCRIPT_DIR is set)
+    if [ -n "${SCRIPT_DIR:-}" ] && [ -f "${SCRIPT_DIR}/scripts/common_functions.sh" ]; then
+        # shellcheck source=scripts/common_functions.sh
+        source "${SCRIPT_DIR}/scripts/common_functions.sh"
+        export ANALYZE_BUILD_LOG_SOURCED=1
+    # Try container path (inside Singularity container)
+    elif [ -f "/scripts/common_functions.sh" ]; then
+        # shellcheck source=/scripts/common_functions.sh
+        source "/scripts/common_functions.sh"
+        export ANALYZE_BUILD_LOG_SOURCED=1
+    # ENDIF: common_functions.sh exists check
+    fi
+# ENDIF: ANALYZE_BUILD_LOG_SOURCED check
+fi
+
+# Legacy stub (forward to common function if available):
+analyze_build_log() {
+    # Forward to common function if it exists, otherwise no-op
+    if command -v analyze_build_log >/dev/null 2>&1 || type analyze_build_log >/dev/null 2>&1; then
+        command analyze_build_log "$@" || return 1
+    else
+        echo "ERROR: analyze_build_log() not available. Source scripts/common_functions.sh first." >&2
+        return 1
+    # ENDIF: analyze_build_log command/type check
+    fi
+}
+
+#===============================================================================
+# END OF CONFIGURATION
+#===============================================================================
+

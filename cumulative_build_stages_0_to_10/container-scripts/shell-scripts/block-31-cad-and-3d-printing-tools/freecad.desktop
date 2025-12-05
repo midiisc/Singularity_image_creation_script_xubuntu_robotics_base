@@ -1,0 +1,38 @@
+[Desktop Entry]
+Name=FreeCAD
+Comment=A general purpose 3D CAD modeler
+Exec=freecad %F
+# Note: other file: /usr/share/applications/orcaslicer.desktop is installed via install.sh from container-scripts/
+# Source: other/block-31-cad-and-3d-printing-tools/orcaslicer.desktop
+# Target: /usr/share/applications/orcaslicer.desktop
+# Installed in Block 0 (early in script, before any scripts are needed)
+# Define the specific version tag and filename based on the release page
+ORCA_TAG="v2.3.1"
+ORCA_FILENAME="OrcaSlicer_Linux_AppImage_Ubuntu2404_V2.3.1.AppImage"
+# Download, place in a system-wide location, and make executable
+if wget "https://github.com/SoftFever/OrcaSlicer/releases/download/${ORCA_TAG}/${ORCA_FILENAME}" -O /usr/local/bin/orcaslicer.AppImage 2>/dev/null; then
+    # Verify download succeeded and file is not empty
+    if [ -s /usr/local/bin/orcaslicer.AppImage ]; then
+      chmod +x /usr/local/bin/orcaslicer.AppImage
+      # Create symlink for easy terminal access (run with 'orcaslicer')
+      ln -sf /usr/local/bin/orcaslicer.AppImage /usr/local/bin/orcaslicer
+      echo "✓ OrcaSlicer installed successfully"
+    else
+      echo "⚠ OrcaSlicer download failed - file is empty (non-critical, continuing)"
+      rm -f /usr/local/bin/orcaslicer.AppImage
+    fi
+else
+    echo "⚠ Failed to download OrcaSlicer (non-critical, continuing)"
+    rm -f /usr/local/bin/orcaslicer.AppImage
+fi
+
+# Create a desktop entry for the XFCE menu
+cat > /usr/share/applications/orcaslicer.desktop << 'EOF'
+[Desktop Entry]
+Name=OrcaSlicer
+Exec=orcaslicer %F
+Icon=orcaslicer
+Comment=G-code generator for 3D printers
+Type=Application
+Categories=Graphics;3DGraphics;Engineering;
+MimeType=model/stl;application/vnd.ms-pki.stl;application/x-tgif;

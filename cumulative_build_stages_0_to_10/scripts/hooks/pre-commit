@@ -1,0 +1,853 @@
+#!/bin/bash
+################################################################################
+# PRE-COMMIT HOOK: COMPREHENSIVE VALIDATION WITH AUTO-FIX
+# Purpose: Validate and automatically fix issues before committing
+# Installation:
+#   ln -sf ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+# Features:
+#   - Automatic detection of sed pattern errors (D4)
+#   - Automatic fixing of malformed patterns
+#   - Auto-staging of fixed files
+#   - Re-validation after fixes
+#   - CMake flag validation (M8/M9/M10)
+#   - Zero human intervention required
+#
+# Flow:
+#   1. Detect issues → 2. Auto-fix → 3. Re-stage → 4. Re-validate → 5. Commit
+################################################################################
+
+set -euo pipefail
+
+# Configuration
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+WORKSPACE_ROOT=$(cd "${SCRIPT_DIR}/../.." 2>/dev/null && pwd || cd "${SCRIPT_DIR}" && pwd)
+
+# Validators and fixers
+SED_VALIDATOR="${WORKSPACE_ROOT}/scripts/helpers/validate_sed_patterns.sh"
+SED_AUTO_FIX="${WORKSPACE_ROOT}/scripts/helpers/auto_fix_sed_patterns.sh"
+CMAKE_VALIDATOR="${WORKSPACE_ROOT}/scripts/helpers/validate_cmake_flags.sh"
+SHELLCHECK_AUTO_FIX="${WORKSPACE_ROOT}/scripts/helpers/auto_fix_shellcheck.sh"
+CI_CHECKS_RUNNER="${WORKSPACE_ROOT}/scripts/hooks/run_all_ci_checks.sh"
+
+# Build scripts to check
+BUILD_SCRIPTS=(
+  "xubuntu_robotics_base_full.sh"
+  "build_xubuntu_robotics_base.sh"
+  "config.sh"
+)
+
+# Color codes
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly MAGENTA='\033[0;35m'
+readonly NC='\033[0m'
+
+# Auto-fix configuration
+MAX_FIX_ATTEMPTS=3
+# FIX_ATTEMPT removed - using loop_iteration instead
+
+echo ""
+echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║    PRE-COMMIT: AUTOMATED VALIDATION & FIX SYSTEM              ║${NC}"
+echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+# Get list of staged files
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM)
+
+################################################################################
+# NON-FUNCTIONAL FILE DETECTION
+################################################################################
+
+check_non_functional_files() {
+  local non_functional_files=()
+  local missing_docstring_files=()
+  local file
+  
+  # AI-based file purpose checker
+  local AI_CHECKER="${WORKSPACE_ROOT}/scripts/hooks/ai_file_purpose_checker.py"
+  
+  for file in $STAGED_FILES; do
+    local file_path="${WORKSPACE_ROOT}/${file}"
+    
+    # Skip backup files - they are temporary and should not be committed
+    if [[ "$file" =~ \.backup\.[0-9]+$ ]] || [[ "$(basename "$file")" =~ \.backup\. ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping backup file: ${file}"
+      echo -e "${YELLOW}[ACTION]${NC} Backup files should not be committed - they are temporary files created during auto-fix operations"
+      non_functional_files+=("$file")
+      continue
+    # ENDIF: skip backup files
+    fi
+    
+    # Skip ALL core files (primary and secondary) - they are essential to the repository
+    # PRIMARY CORE FILES
+    if [[ "$file" == "build_xubuntu_robotics_base.sh" ]] || \
+       [[ "$file" == "config.sh" ]] || \
+       [[ "$file" == "create_writable_overlay.sh" ]] || \
+       [[ "$file" == "run_on_best_node.sh" ]] || \
+       [[ "$file" == "setup_conda_environments.sh" ]] || \
+       [[ "$file" == "xubuntu_robotics_base_full.sh" ]] || \
+       [[ "$file" == "analyze-library.sh" ]] || \
+       [[ "$file" == "README.md" ]]; then
+      continue
+    # ENDIF: skip primary core files
+    fi
+    
+    # SECONDARY CORE FILES
+    if [[ "$file" == "scripts/hooks/ai_precommit_review.py" ]] || \
+       [[ "$file" == "scripts/hooks/pre-commit" ]] || \
+       [[ "$file" == "scripts/hooks/pre-commit-cmake-validator" ]] || \
+       [[ "$file" == "scripts/hooks/ai_file_purpose_checker.py" ]] || \
+       [[ "$file" == "scripts/hooks/extract_and_enhance_patterns.py" ]] || \
+       [[ "$file" == "scripts/hooks/run_all_ci_checks.sh" ]] || \
+       [[ "$file" == "scripts/hooks/validate_control_structure_markers.sh" ]] || \
+       [[ "$file" == "scripts/hooks/validate_documentation.sh" ]] || \
+       [[ "$file" == ".cursor/pre-commit-audit.sh" ]] || \
+       [[ "$file" == ".cursor/auto-trigger-cursor-ai.sh" ]] || \
+       [[ "$file" == "scripts/helpers/enforce_pre_commit_validation.sh" ]]; then
+      continue
+    # ENDIF: skip secondary core files
+    fi
+    
+    # Core files in subdirectories
+    if [[ "$file" == scripts/helpers/* ]] || [[ "$file" == container-scripts/* ]]; then
+      continue
+    # ENDIF: skip helper and container scripts
+    fi
+    
+    if [[ "$file" == .cursor/rules/*.mdc ]] || [[ "$file" =~ ^\.cursor/.*\.sh$ ]]; then
+      continue
+    # ENDIF: skip cursor rules and cursor scripts
+    fi
+    
+    if [[ "$file" == prompts/*.txt ]] || [[ "$file" == prompts/*.md ]]; then
+      continue
+    # ENDIF: skip prompt files
+    fi
+    
+    # Quick filename pattern check (fast)
+    local basename
+    basename=$(basename "$file")
+    
+    # Check for forbidden patterns in filename
+    # Use here-strings instead of echo | grep (D3: PIPE PATTERN SAFETY)
+    if grep -qiE "(summary|audit|report|findings|analysis|test_results|fixes_summary|removal_summary|endpoint.*summary|endpoint.*results)" <<< "$basename" && \
+       grep -qE "\.(md|txt)$" <<< "$file"; then
+      non_functional_files+=("$file")
+      continue
+    fi
+    # ENDIF: forbidden filename pattern check
+    
+    # AI-based content analysis (for code files)
+    if [ -x "$AI_CHECKER" ] && [ -f "$file_path" ]; then
+      local file_ext="${file_path##*.}"
+      if [[ "$file_ext" =~ ^(sh|py|cpp|c|h|hpp|js|ts|java|go|rs)$ ]]; then
+        # Run AI checker
+        if python3 "$AI_CHECKER" "$file_path" 2>/dev/null; then
+          # Check succeeded (file is OK)
+          :
+        else
+          # Check failed - file is non-functional or missing docstring
+          local checker_output
+          checker_output=$(python3 "$AI_CHECKER" "$file_path" 2>&1)
+          if echo "$checker_output" | grep -q "NON-FUNCTIONAL FILES DETECTED"; then
+            non_functional_files+=("$file")
+          elif echo "$checker_output" | grep -q "FILES MISSING DOCSTRINGS"; then
+            missing_docstring_files+=("$file")
+          fi
+        # ENDIF: AI checker result processing
+        fi
+      # ENDIF: code file extension check
+      fi
+    # ENDIF: AI checker availability check
+    fi
+    
+    # Fallback: Check for test files that should be cleaned up
+    if echo "$basename" | grep -qiE "^test_.*\.(sh|py)$" && \
+       [ ! -f "${WORKSPACE_ROOT}/.gitkeep" ]; then
+      # Allow test files in test directories, but flag standalone test files
+      if ! echo "$file" | grep -qE "(test|tests|spec)/"; then
+        non_functional_files+=("$file")
+      fi
+    # ENDIF: standalone test file check
+    fi
+  # ENDFOR: file
+  done
+  
+  # Check for missing docstrings
+  if [ ${#missing_docstring_files[@]} -gt 0 ]; then
+    echo ""
+    echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${YELLOW}║  ⚠ FILES MISSING DOCSTRINGS/HEADER COMMENTS                  ║${NC}"
+    echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}[WARNING]${NC} The following files are missing docstrings/header comments:"
+    echo ""
+    for file in "${missing_docstring_files[@]}"; do
+      echo -e "  ${YELLOW}✗${NC} ${file}"
+    # ENDFOR: missing_docstring_files
+    done
+    echo ""
+    echo -e "${YELLOW}[REQUIREMENT]${NC}"
+    echo "  All code files must have header comments/docstrings describing their purpose."
+    echo "  This helps identify file functionality and prevents non-functional files."
+    echo ""
+    echo -e "${RED}[BLOCKING COMMIT]${NC} Add docstrings before committing."
+    echo ""
+    return 1
+  # ENDIF: missing docstrings check
+  fi
+  
+  if [ ${#non_functional_files[@]} -gt 0 ]; then
+    echo ""
+    echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${RED}║  ✗ NON-FUNCTIONAL FILES DETECTED                             ║${NC}"
+    echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${YELLOW}[WARNING]${NC} The following files appear to be non-functional:"
+    echo ""
+    for file in "${non_functional_files[@]}"; do
+      echo -e "  ${RED}✗${NC} ${file}"
+    # ENDFOR: non_functional_files display
+    done
+    echo ""
+    echo -e "${YELLOW}[ACTION REQUIRED]${NC}"
+    echo "  These files serve no functional purpose and should be removed."
+    echo "  Repository must remain lean and purely functional."
+    echo ""
+    echo -e "${BLUE}[AUTO-CLEANUP]${NC} Removing non-functional files..."
+    echo ""
+    
+    for file in "${non_functional_files[@]}"; do
+      if [ -f "${WORKSPACE_ROOT}/${file}" ]; then
+        echo -e "  ${YELLOW}→${NC} Removing: ${file}"
+        git reset HEAD "${file}" 2>/dev/null || true
+        rm -f "${WORKSPACE_ROOT}/${file}"
+        echo -e "  ${GREEN}✓${NC} Removed: ${file}"
+      # ENDIF: file exists check
+      fi
+    # ENDFOR: non_functional_files cleanup
+    done
+    
+    echo ""
+    echo -e "${GREEN}[✓]${NC} Non-functional files removed. Please review remaining staged files."
+    echo ""
+    return 1
+  # ENDIF: non_functional_files check
+  fi
+  
+  return 0
+}
+
+# Run non-functional file check
+if ! check_non_functional_files; then
+  echo -e "${YELLOW}[NOTE]${NC} Non-functional files have been removed."
+  echo -e "${YELLOW}[NOTE]${NC} Review remaining staged files before committing."
+  echo ""
+  # Continue with validation - don't block commit if cleanup was successful
+# ENDIF: check_non_functional_files
+fi
+
+# Check if any build scripts are being committed
+SCRIPTS_TO_VALIDATE=()
+for script in "${BUILD_SCRIPTS[@]}"; do
+  if echo "$STAGED_FILES" | grep -q "^${script}$"; then
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping non-shell file: ${script}"
+      continue
+    # ENDIF: non-shell file check
+    fi
+    SCRIPTS_TO_VALIDATE+=("${script}")
+  # ENDIF: script in staged files
+  fi
+# ENDFOR: BUILD_SCRIPTS
+done
+
+# If no build scripts staged, skip validation
+if [ ${#SCRIPTS_TO_VALIDATE[@]} -eq 0 ]; then
+  echo -e "${GREEN}[✓]${NC} No build scripts staged for commit"
+  echo -e "${GREEN}[✓]${NC} Proceeding with commit"
+  echo ""
+  exit 0
+# ENDIF: no scripts to validate
+fi
+
+echo -e "${BLUE}[INFO]${NC} Staged build scripts:"
+for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+  echo -e "       - ${script}"
+# ENDFOR: SCRIPTS_TO_VALIDATE display
+done
+echo ""
+
+################################################################################
+# AUTO-FIX LOOP
+################################################################################
+
+run_validation_and_fix_loop() {
+  local script_path="$1"
+  local script_name
+  script_name=$(basename "$script_path")
+  
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  PROCESSING: ${script_name}${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  
+  local fix_loop_active=true
+  local loop_iteration=0
+  
+  while [ "$fix_loop_active" = true ] && [ $loop_iteration -lt $MAX_FIX_ATTEMPTS ]; do
+    loop_iteration=$((loop_iteration + 1))
+    
+    if [ $loop_iteration -gt 1 ]; then
+      echo -e "${MAGENTA}[RETRY $loop_iteration/$MAX_FIX_ATTEMPTS]${NC} Re-running validation after fixes..."
+      echo ""
+    # ENDIF: retry iteration
+    fi
+    
+    ############################################################################
+    # STEP 1: Run sed pattern validation
+    ############################################################################
+    
+    if [ -x "$SED_VALIDATOR" ]; then
+      echo -e "${BLUE}[VALIDATOR]${NC} Checking sed patterns..."
+      echo ""
+      
+      if "$SED_VALIDATOR" "$script_path" --warn; then
+        echo -e "${GREEN}[✓]${NC} Sed pattern validation: PASSED"
+        echo ""
+        fix_loop_active=false
+        return 0
+      else
+        # Validation failed - attempt auto-fix
+        echo -e "${YELLOW}[⚠]${NC} Sed pattern validation: FAILED"
+        echo ""
+        
+        if [ -x "$SED_AUTO_FIX" ]; then
+          echo -e "${MAGENTA}[AUTO-FIX]${NC} Attempting to fix issues automatically..."
+          echo ""
+          
+          if "$SED_AUTO_FIX" "$script_path"; then
+            echo -e "${GREEN}[✓]${NC} Auto-fix: Corrections applied successfully"
+            echo ""
+            
+            # Re-stage the fixed file
+            echo -e "${BLUE}[GIT]${NC} Re-staging fixed file..."
+            git add "$script_path"
+            echo -e "${GREEN}[✓]${NC} File re-staged: ${script_name}"
+            echo ""
+            
+            # Loop will continue to re-validate
+            echo -e "${MAGENTA}[LOOP]${NC} Re-validating to confirm fixes..."
+            echo ""
+          else
+            # Auto-fix reported no fixes needed
+            echo -e "${GREEN}[✓]${NC} No fixes needed (warnings only)"
+            echo ""
+            fix_loop_active=false
+            return 0
+          # ENDIF: auto-fix execution
+          fi
+        else
+          echo -e "${RED}[✗]${NC} Auto-fix script not found: ${SED_AUTO_FIX}"
+          echo -e "${RED}[✗]${NC} Cannot auto-fix issues"
+          return 1
+        # ENDIF: SED_AUTO_FIX availability
+        fi
+      # ENDIF: sed validator result
+      fi
+    else
+      echo -e "${YELLOW}[⚠]${NC} Sed validator not found, skipping validation"
+      echo ""
+      fix_loop_active=false
+      return 0
+    # ENDIF: SED_VALIDATOR availability
+    fi
+    
+    ############################################################################
+    # STEP 2: Run ShellCheck auto-fix
+    ############################################################################
+    
+    if [ -x "$SHELLCHECK_AUTO_FIX" ] && command -v shellcheck >/dev/null 2>&1; then
+      echo -e "${BLUE}[AUTO-FIX]${NC} Running ShellCheck auto-fix..."
+      echo ""
+      
+      if "$SHELLCHECK_AUTO_FIX" "$script_path"; then
+        # Check if fixes were applied (exit code 0 means fixes applied or none needed)
+        # Re-stage the file if it was modified
+        if git diff --quiet "$script_path"; then
+          echo -e "${GREEN}[✓]${NC} No ShellCheck fixes needed"
+        else
+          echo -e "${GREEN}[✓]${NC} ShellCheck fixes applied"
+          echo ""
+          echo -e "${BLUE}[GIT]${NC} Re-staging fixed file..."
+          git add "$script_path"
+          echo -e "${GREEN}[✓]${NC} File re-staged: ${script_name}"
+        fi
+        echo ""
+      else
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck auto-fix encountered issues (non-fatal)"
+        echo ""
+      # ENDIF: shellcheck auto-fix execution
+      fi
+    else
+      if ! command -v shellcheck >/dev/null 2>&1; then
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck not available, skipping auto-fix"
+      else
+        echo -e "${YELLOW}[⚠]${NC} ShellCheck auto-fix script not found, skipping"
+      fi
+      echo ""
+    # ENDIF: SHELLCHECK_AUTO_FIX availability
+    fi
+  # ENDWHILE: fix loop
+  done
+  
+  # If we exited the loop due to max attempts
+  if [ $loop_iteration -ge $MAX_FIX_ATTEMPTS ]; then
+    echo -e "${RED}[✗]${NC} Max fix attempts ($MAX_FIX_ATTEMPTS) reached"
+    echo -e "${RED}[✗]${NC} Unable to automatically resolve all issues"
+    echo ""
+    return 1
+  # ENDIF: max attempts check
+  fi
+  
+  return 0
+}
+
+################################################################################
+# PROCESS ALL STAGED SCRIPTS
+################################################################################
+
+VALIDATION_FAILED=false
+# TOTAL_FIXES_APPLIED removed - not used in current implementation
+
+for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+  script_path="${WORKSPACE_ROOT}/${script}"
+  
+  if [ ! -f "$script_path" ]; then
+    echo -e "${YELLOW}[⚠]${NC} File not found: ${script}"
+    continue
+  # ENDIF: file existence check
+  fi
+  
+  if ! run_validation_and_fix_loop "$script_path"; then
+    VALIDATION_FAILED=true
+  # ENDIF: validation loop result
+  fi
+# ENDFOR: SCRIPTS_TO_VALIDATE
+done
+
+################################################################################
+# CMAKE VALIDATION (No auto-fix yet)
+################################################################################
+
+if [ -x "$CMAKE_VALIDATOR" ]; then
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  CMAKE FLAG VALIDATION (M8/M9/M10)                             │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  
+  for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+    script_path="${WORKSPACE_ROOT}/${script}"
+    
+    if [ ! -f "$script_path" ]; then
+      continue
+    # ENDIF: file existence check
+    fi
+    
+    echo -e "${BLUE}[→]${NC} Validating: ${script}"
+    echo ""
+    
+    if ! "$CMAKE_VALIDATOR" "$script_path" --strict; then
+      VALIDATION_FAILED=true
+      echo -e "${RED}[✗]${NC} CMake validation failed for: ${script}"
+      echo -e "${YELLOW}[NOTE]${NC} CMake issues require manual review"
+      echo ""
+    else
+      echo -e "${GREEN}[✓]${NC} CMake validation passed for: ${script}"
+      echo ""
+    # ENDIF: CMake validator result
+    fi
+  # ENDFOR: SCRIPTS_TO_VALIDATE CMake check
+  done
+# ENDIF: CMAKE_VALIDATOR availability
+fi
+
+################################################################################
+# COMPREHENSIVE CI CHECKS (All GitHub Actions Checks with Auto-Fix Loop)
+################################################################################
+
+# Initialize CI validation state
+CI_VALIDATION_PASSED=false
+
+if [ -x "$CI_CHECKS_RUNNER" ] && [ ${#SCRIPTS_TO_VALIDATE[@]} -gt 0 ]; then
+  echo ""
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  COMPREHENSIVE CI VALIDATION (All GitHub Actions Checks)        │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  echo -e "${BLUE}[INFO]${NC} Running all CI checks with auto-fix iteration..."
+  echo -e "${BLUE}[INFO]${NC} This will run all checks, auto-fix issues, and iterate until all pass"
+  echo ""
+  
+  # Run all CI checks with JSON export for pattern extraction
+  CI_RESULTS_JSON="${WORKSPACE_ROOT}/.git/.ci-check-results.json"
+  export EXPORT_JSON="$CI_RESULTS_JSON"
+  
+  # Auto-fix loop: run checks, fix issues, re-run until all pass
+  MAX_CI_RETRIES=5
+  CI_RETRY_COUNT=0
+  
+  while [ $CI_RETRY_COUNT -lt $MAX_CI_RETRIES ] && [ "$CI_VALIDATION_PASSED" != true ]; do
+    CI_RETRY_COUNT=$((CI_RETRY_COUNT + 1))
+    
+    if [ $CI_RETRY_COUNT -gt 1 ]; then
+      echo ""
+      echo -e "${MAGENTA}[ITERATION $CI_RETRY_COUNT/$MAX_CI_RETRIES]${NC} Re-running CI checks after auto-fixes..."
+      echo ""
+      
+      # Re-stage any files that were modified by auto-fixes
+      for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+        script_path="${WORKSPACE_ROOT}/${script}"
+        if [ -f "$script_path" ] && ! git diff --quiet "$script_path" 2>/dev/null; then
+          echo -e "${BLUE}[GIT]${NC} Re-staging fixed file: ${script}"
+          git add "$script_path"
+        fi
+      done
+      echo ""
+    fi
+    
+    # Run all CI checks
+    if "$CI_CHECKS_RUNNER"; then
+      CI_VALIDATION_PASSED=true
+      echo ""
+      echo -e "${GREEN}[✓]${NC} All CI checks passed!"
+      echo ""
+      
+      # Clean up JSON file
+      rm -f "$CI_RESULTS_JSON"
+      break
+    else
+      # Some checks failed - auto-fixes should have been applied by run_all_ci_checks.sh
+      echo ""
+      echo -e "${YELLOW}[⚠]${NC} Some CI checks failed (iteration $CI_RETRY_COUNT/$MAX_CI_RETRIES)"
+      echo ""
+      
+      # Extract error patterns and enhance prompts (if JSON available)
+      PATTERN_EXTRACTOR="${WORKSPACE_ROOT}/scripts/hooks/extract_and_enhance_patterns.py"
+      if [ -x "$PATTERN_EXTRACTOR" ] && [ -f "$CI_RESULTS_JSON" ]; then
+        echo -e "${BLUE}[PATTERN EXTRACTION]${NC} Extracting error patterns..."
+        if json_data=$(cat "$CI_RESULTS_JSON" 2>/dev/null); then
+          python3 "$PATTERN_EXTRACTOR" "$json_data" 2>/dev/null || true
+        fi
+      fi
+      
+      # Check if any files were modified (indicating auto-fixes were applied)
+      FILES_MODIFIED=false
+      for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+        script_path="${WORKSPACE_ROOT}/${script}"
+        if [ -f "$script_path" ] && ! git diff --quiet "$script_path" 2>/dev/null; then
+          FILES_MODIFIED=true
+          break
+        fi
+      done
+      
+      if [ "$FILES_MODIFIED" = false ] && [ $CI_RETRY_COUNT -ge $MAX_CI_RETRIES ]; then
+        # No files were modified and we've reached max retries - manual fixes needed
+        echo -e "${RED}[✗]${NC} Max CI check iterations reached"
+        echo -e "${RED}[✗]${NC} Some issues could not be auto-fixed - manual review required"
+        echo ""
+        VALIDATION_FAILED=true
+        break
+      elif [ "$FILES_MODIFIED" = false ]; then
+        # No auto-fixes were applied - likely manual fixes needed
+        echo -e "${YELLOW}[⚠]${NC} No auto-fixes were applied - some issues may require manual fixes"
+        echo ""
+        # Continue to next iteration in case fixes were applied outside the script
+      fi
+      
+      # Continue to next iteration if we haven't reached max retries
+      if [ $CI_RETRY_COUNT -lt $MAX_CI_RETRIES ]; then
+        echo -e "${BLUE}[→]${NC} Continuing to next iteration..."
+        continue
+      fi
+    fi
+  done
+  
+  # Final check
+  if [ "$CI_VALIDATION_PASSED" != true ]; then
+    VALIDATION_FAILED=true
+    echo -e "${RED}[✗]${NC} CI validation failed after $MAX_CI_RETRIES iterations"
+    echo ""
+    echo -e "${YELLOW}[ACTION REQUIRED]${NC}"
+    echo "  Review the CI check errors above and fix manually"
+    echo "  Then re-run: git commit"
+    echo ""
+  fi
+  
+  # Clean up
+  rm -f "$CI_RESULTS_JSON"
+# ENDIF: CI_CHECKS_RUNNER availability
+fi
+
+################################################################################
+# LEGACY COMPREHENSIVE CI CHECKS (Fallback - kept for compatibility)
+################################################################################
+
+CI_CHECKS_SCRIPT="${WORKSPACE_ROOT}/scripts/hooks/run_all_ci_checks.sh"
+
+if [ -x "$CI_CHECKS_SCRIPT" ] && [ "$CI_VALIDATION_PASSED" != true ]; then
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  COMPREHENSIVE CI VALIDATION (All GitHub Actions Checks)        │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  
+  # Run all CI checks with JSON export for pattern extraction
+  CI_RESULTS_JSON="${WORKSPACE_ROOT}/.git/.ci-check-results.json"
+  export EXPORT_JSON="$CI_RESULTS_JSON"
+  
+  if ! "$CI_CHECKS_SCRIPT"; then
+    VALIDATION_FAILED=true
+    echo -e "${RED}[✗]${NC} Some CI checks failed"
+    echo ""
+    
+    # Extract error patterns and enhance prompts
+    PATTERN_EXTRACTOR="${WORKSPACE_ROOT}/scripts/hooks/extract_and_enhance_patterns.py"
+    if [ -x "$PATTERN_EXTRACTOR" ] && [ -f "$CI_RESULTS_JSON" ]; then
+      echo -e "${BLUE}[PATTERN EXTRACTION]${NC} Extracting error patterns and enhancing prompts..."
+      if json_data=$(cat "$CI_RESULTS_JSON" 2>/dev/null); then
+        python3 "$PATTERN_EXTRACTOR" "$json_data" 2>/dev/null || true
+        echo -e "${GREEN}[✓]${NC} Pattern extraction and prompt enhancement completed"
+      fi
+      rm -f "$CI_RESULTS_JSON"
+    fi
+    
+    # Auto-fix loop: retry checks after fixes
+    echo ""
+    echo -e "${MAGENTA}[AUTO-FIX LOOP]${NC} Attempting to fix issues and re-run checks..."
+    MAX_RETRIES=3
+    RETRY_COUNT=0
+    
+    while [ $RETRY_COUNT -lt $MAX_RETRIES ] && [ "$VALIDATION_FAILED" = true ]; do
+      RETRY_COUNT=$((RETRY_COUNT + 1))
+      echo -e "${BLUE}[RETRY $RETRY_COUNT/$MAX_RETRIES]${NC} Re-running CI checks after fixes..."
+      
+      # Re-stage any fixed files
+      git add -u 2>/dev/null || true
+      
+      # Re-run checks
+      if "$CI_CHECKS_SCRIPT"; then
+        VALIDATION_FAILED=false
+        echo -e "${GREEN}[✓]${NC} All checks passed after fixes!"
+        break
+      # ENDIF: CI checks result
+      fi
+    # ENDWHILE: retry loop
+    done
+    
+    if [ "$VALIDATION_FAILED" = true ]; then
+      echo -e "${RED}[✗]${NC} Max retries reached. Some issues could not be auto-fixed."
+    # ENDIF: validation failed after retries
+    fi
+  else
+    echo -e "${GREEN}[✓]${NC} All CI checks passed"
+    rm -f "$CI_RESULTS_JSON"
+    echo ""
+  # ENDIF: CI checks result
+  fi
+# ENDIF: CI_CHECKS_SCRIPT availability
+fi
+
+################################################################################
+# CONTROL STRUCTURE MARKER VALIDATION
+################################################################################
+
+CONTROL_MARKER_VALIDATOR="${WORKSPACE_ROOT}/scripts/hooks/validate_control_structure_markers.sh"
+
+if [ -x "$CONTROL_MARKER_VALIDATOR" ]; then
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  CONTROL STRUCTURE MARKER VALIDATION                            │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  
+  CONTROL_MARKER_FAILED=false
+  
+  for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+    script_path="${WORKSPACE_ROOT}/${script}"
+    
+    if [ ! -f "$script_path" ]; then
+      continue
+    # ENDIF: file existence check
+    fi
+    
+    echo -e "${BLUE}[→]${NC} Validating control structure markers: ${script}"
+    
+    # Run validation with auto-fix enabled
+    export AUTO_FIX=1
+    if ! "$CONTROL_MARKER_VALIDATOR" "$script_path" 2>&1; then
+      CONTROL_MARKER_FAILED=true
+      echo -e "${YELLOW}[⚠]${NC} Control structure marker issues found in: ${script}"
+    else
+      echo -e "${GREEN}[✓]${NC} Control structure markers validated for: ${script}"
+    # ENDIF: control marker validator result
+    fi
+    echo ""
+  # ENDFOR: SCRIPTS_TO_VALIDATE control markers
+  done
+  
+  # Re-stage files if fixes were applied
+  if [ "$CONTROL_MARKER_FAILED" = false ]; then
+    # Check if any files were modified
+    if ! git diff --quiet "${SCRIPTS_TO_VALIDATE[@]}" 2>/dev/null; then
+      echo -e "${BLUE}[GIT]${NC} Re-staging files with control structure marker fixes..."
+      git add "${SCRIPTS_TO_VALIDATE[@]}" 2>/dev/null || true
+      echo -e "${GREEN}[✓]${NC} Control structure marker fixes staged"
+      echo ""
+    # ENDIF: files modified check
+    fi
+  else
+    VALIDATION_FAILED=true
+    echo -e "${RED}[✗]${NC} Control structure marker validation failed"
+    echo ""
+  # ENDIF: control marker validation result
+  fi
+# ENDIF: CONTROL_MARKER_VALIDATOR availability
+fi
+
+################################################################################
+# DOCUMENTATION VALIDATION
+################################################################################
+
+DOC_VALIDATOR="${WORKSPACE_ROOT}/scripts/hooks/validate_documentation.sh"
+
+if [ -x "$DOC_VALIDATOR" ]; then
+  echo -e "${CYAN}╭────────────────────────────────────────────────────────────────╮${NC}"
+  echo -e "${CYAN}│  DOCUMENTATION VALIDATION                                      │${NC}"
+  echo -e "${CYAN}╰────────────────────────────────────────────────────────────────╯${NC}"
+  echo ""
+  
+  DOC_VALIDATION_FAILED=false
+  
+  for script in "${SCRIPTS_TO_VALIDATE[@]}"; do
+    script_path="${WORKSPACE_ROOT}/${script}"
+    
+    if [ ! -f "$script_path" ]; then
+      continue
+    # ENDIF: file existence check
+    fi
+    
+    echo -e "${BLUE}[→]${NC} Validating documentation: ${script}"
+    
+    # Run validation with auto-fix enabled
+    export AUTO_FIX=1
+    if ! "$DOC_VALIDATOR" "$script_path" 2>&1; then
+      DOC_VALIDATION_FAILED=true
+      echo -e "${YELLOW}[⚠]${NC} Documentation issues found in: ${script}"
+    else
+      echo -e "${GREEN}[✓]${NC} Documentation validation passed for: ${script}"
+    # ENDIF: documentation validator result
+    fi
+    echo ""
+  # ENDFOR: SCRIPTS_TO_VALIDATE documentation
+  done
+  
+  # Re-stage files if fixes were applied
+  if [ "$DOC_VALIDATION_FAILED" = false ]; then
+    # Check if any files were modified
+    if ! git diff --quiet "${SCRIPTS_TO_VALIDATE[@]}" 2>/dev/null; then
+      echo -e "${BLUE}[GIT]${NC} Re-staging files with documentation fixes..."
+      git add "${SCRIPTS_TO_VALIDATE[@]}" 2>/dev/null || true
+      echo -e "${GREEN}[✓]${NC} Documentation fixes staged"
+      echo ""
+    # ENDIF: files modified check
+    fi
+  else
+    VALIDATION_FAILED=true
+    echo -e "${RED}[✗]${NC} Documentation validation failed"
+    echo ""
+  # ENDIF: documentation validation result
+  fi
+# ENDIF: DOC_VALIDATOR availability
+fi
+
+################################################################################
+# AI-ASSISTED CODE REVIEW (DISABLED - RUNS IN GITHUB ACTIONS ONLY)
+################################################################################
+
+# AI Review is COMPLETELY DISABLED in local pre-commit hooks.
+# AI review runs automatically in GitHub Actions on all PRs and pushes.
+#
+# This ensures:
+#   - No API costs on local commits
+#   - Consistent review across all contributors
+#   - Centralized review history in GitHub Actions
+#   - Cannot be bypassed (runs in CI/CD)
+#
+# AI review in GitHub Actions:
+#   - Runs automatically on all PRs and pushes to main/beta
+#   - Uses GitHub Secrets for API keys (secure)
+#   - Provides review findings in workflow logs
+#   - Cannot be bypassed
+
+################################################################################
+# FINAL VERDICT
+################################################################################
+
+echo ""
+echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+
+if [ "$VALIDATION_FAILED" = true ]; then
+  echo -e "${CYAN}║${RED}  ✗ COMMIT BLOCKED: Unresolved Validation Errors               ${CYAN}║${NC}"
+  echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  echo -e "${RED}[FAILED]${NC} Unable to automatically resolve all issues"
+  echo ""
+  echo -e "${YELLOW}[SUMMARY]${NC}"
+  echo "  - Sed pattern issues were attempted to auto-fix"
+  echo "  - CMake issues require manual review"
+  echo "  - Some issues could not be automatically resolved"
+  echo ""
+  echo -e "${YELLOW}[ACTIONS REQUIRED]${NC}"
+  echo "  1. Review validation errors above"
+  echo "  2. Manually fix remaining issues"
+  echo "  3. Stage fixes: git add <files>"
+  echo "  4. Re-run: git commit"
+  echo ""
+  echo -e "${YELLOW}[TO BYPASS]${NC} (not recommended):"
+  echo "  git commit --no-verify"
+  echo ""
+  echo -e "${YELLOW}[REFERENCE]${NC}"
+  echo "  - Sed patterns: prompts/Code_check_prompt_manual.txt (D4 in PART2)"
+  echo "  - CMake flags: prompts/Code_check_prompt_manual.txt (M8/M9/M10 in PART3)"
+  echo "  - Master entry point: prompts/Code_check_prompt_manual.txt (loads all parts sequentially)"
+  echo ""
+  exit 1
+else
+  echo -e "${CYAN}║${GREEN}  ✓ ALL VALIDATIONS PASSED - AUTO-FIX SUCCESSFUL                ${CYAN}║${NC}"
+  echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  echo -e "${GREEN}[SUCCESS]${NC} All issues resolved automatically"
+  echo ""
+  echo -e "${BLUE}[SUMMARY]${NC}"
+  echo "  - Sed pattern validation: PASSED"
+  echo "  - All malformed patterns: AUTO-FIXED"
+  echo "  - All missing fallbacks: AUTO-ADDED"
+  echo "  - ShellCheck issues: AUTO-FIXED (if any)"
+  if [ "$CI_VALIDATION_PASSED" = true ]; then
+    echo "  - All CI checks: PASSED (pipe patterns, CMake, TBB, heredoc, bash compatibility, ShellCheck)"
+  fi
+  echo "  - Fixed files: AUTO-STAGED"
+  echo "  - Ready to commit: YES"
+  echo ""
+  echo -e "${GREEN}[✓]${NC} Proceeding with commit..."
+  echo ""
+  echo -e "${CYAN}[NOTE]${NC} AI review runs automatically in GitHub Actions (not locally)"
+  echo ""
+  exit 0
+# ENDIF: validation result
+fi

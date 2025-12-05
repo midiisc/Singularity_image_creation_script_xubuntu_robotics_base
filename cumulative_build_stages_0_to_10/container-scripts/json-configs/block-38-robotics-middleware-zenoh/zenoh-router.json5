@@ -1,0 +1,51 @@
+// Zenoh router configuration for ROS 2 multi-version bridge
+{
+  // Router mode
+
+#--- Sub-block 38.4: Verification continuation ---
+# Purpose: Additional validation checks
+# Dependencies: None (foundational)
+# Outputs: Environment variables, configuration
+  mode: "router",
+  // Listening endpoints
+  listen: {
+    endpoints: [
+      "tcp/0.0.0.0:7447", // Main Zenoh protocol
+      "udp/0.0.0.0:7447", // UDP multicast
+    ],
+  },
+  // Connect to other routers (for distributed systems)
+  connect: {
+    endpoints: [
+      // Add remote routers here if needed
+      // "tcp/remote-router:7447"
+    ],
+  },
+  // Storage configuration (optional - for persistent data)
+  plugins: {
+    storage_manager: {
+      volumes: {
+        memory: {
+          // In-memory storage for transient data
+        },
+      },
+      storages: {
+        demo: {
+          key_expr: "ros2/**",
+          volume: "memory",
+        },
+      },
+    },
+    // REST API plugin (useful for debugging)
+    rest: {
+      http_port: 8000
+    },
+  },
+  // Advanced settings
+  scouting: {
+    multicast: {
+      enabled: true,
+      address: "224.0.0.224:7446"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+Config(
+    general: General(
+        line_number_padding_right: 2,
+        line_number_padding_left: 1,
+        tab_width: 4,
+        undo_period: 5,
+        greeting_message: "Ox Editor - Rust-based minimal editor",
+    ),
+    theme: Theme(
+        editor_bg: (0, 0, 0),
+        editor_fg: (255, 255, 255),
+        line_number_fg: (65, 65, 65),
+        line_number_bg: (0, 0, 0),
+    ),
+    macros: {
+        "python": "#!/usr/bin/env python3\n",
+        "julia": "#!/usr/bin/env julia\n",
+        "bash": "#!/bin/bash\n",
+    },
+)

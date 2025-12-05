@@ -1,0 +1,27 @@
+# Build outputs
+output/
+*.sif
+
+# Build logs
+logs/
+*.log
+
+# Temporary files
+tmp/
+*.tmp
+
+# Container cache (can be large)
+container_cache/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+

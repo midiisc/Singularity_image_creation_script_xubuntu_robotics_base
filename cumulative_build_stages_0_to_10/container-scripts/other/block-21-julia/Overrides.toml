@@ -1,0 +1,3 @@
+# Force Julia to use our CxxWrap source build instead of binary JLL
+[3eaa8dc6-92ce-5c4c-91c6-662a904cf5c7]
+libcxxwrap_julia = "/opt/libcxxwrap-julia"

@@ -1,0 +1,774 @@
+#!/bin/bash
+################################################################################
+# COMPREHENSIVE CI CHECK RUNNER
+# Purpose: Run all CI checks locally before commit/push
+# Features:
+#   - Runs all GitHub Actions checks locally
+#   - Auto-fixes fixable issues
+#   - Extracts error patterns for prompt enhancement
+#   - Updates prompts before commit
+#   - Fully automated retry loop
+################################################################################
+
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+REPO_ROOT=$(cd "${SCRIPT_DIR}/../.." && pwd)
+
+# Colors
+readonly RED='\033[0;31m'
+readonly GREEN='\033[0;32m'
+readonly YELLOW='\033[1;33m'
+readonly BLUE='\033[0;34m'
+readonly CYAN='\033[0;36m'
+readonly NC='\033[0m'
+
+# Build scripts to check
+BUILD_SCRIPTS=(
+  "xubuntu_robotics_base_full.sh"
+  "build_xubuntu_robotics_base.sh"
+)
+
+# Check results
+declare -A CHECK_RESULTS
+declare -A CHECK_ERRORS
+TOTAL_CHECKS=0
+PASSED_CHECKS=0
+FAILED_CHECKS=0
+
+# Detect if running in GitHub Actions
+GITHUB_ACTIONS=${GITHUB_ACTIONS:-false}
+if [ -n "${GITHUB_ACTIONS:-}" ] && [ "${GITHUB_ACTIONS}" != "false" ]; then
+  GITHUB_ACTIONS=true
+fi
+
+# Function to output GitHub Actions annotation
+github_annotation() {
+  local level="$1"  # error, warning, notice
+  local file="$2"
+  local line="$3"
+  local message="$4"
+  
+  if [ "$GITHUB_ACTIONS" = true ]; then
+    echo "::$level file=$file,line=$line::$message"
+  else
+    # For local runs, output in colored format
+    case "$level" in
+      error)
+        echo -e "${RED}::error file=$file,line=$line::$message${NC}"
+        ;;
+      warning)
+        echo -e "${YELLOW}::warning file=$file,line=$line::$message${NC}"
+        ;;
+      *)
+        echo "::$level file=$file,line=$line::$message"
+        ;;
+    esac
+  fi
+}
+
+echo ""
+echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║     COMPREHENSIVE CI VALIDATION - ALL CHECKS                   ║${NC}"
+echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+echo ""
+
+################################################################################
+# CHECK 1: Unsafe Pipe Patterns (echo | grep)
+################################################################################
+
+check_pipe_patterns() {
+  local check_name="check-pipe-patterns"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Unsafe pipe patterns (echo | grep)..."
+  
+  local found_patterns=false
+  local fixes_applied=0
+  local error_details=()
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      echo -e "${YELLOW}[SKIP]${NC} Skipping non-shell file: ${script}"
+      continue
+    fi
+    
+    # Find all echo | grep patterns with file and line number
+    # Skip echo statements that are just displaying text (not executing commands)
+    while IFS= read -r line_info; do
+      if [ -n "$line_info" ]; then
+        local line_num
+        line_num=$(echo "$line_info" | cut -d: -f1)
+        local line_content
+        line_content=$(echo "$line_info" | cut -d: -f2-)
+        
+        # Skip if this is just a display string (echo with quoted string containing |)
+        # Pattern: echo "text | command" or echo 'text | command' (display only, not execution)
+        if grep -qE 'echo\s+["'"'"'].*\|.*["'"'"']' <<< "$line_content"; then
+          continue  # Skip display strings - they don't execute pipes
+        fi
+        
+        # Skip if echo is followed by a comment (likely display text)
+        if grep -qE 'echo\s+.*\|.*#.*display|echo\s+.*\|.*#.*string|echo\s+.*\|.*#.*text' <<< "$line_content"; then
+          continue  # Skip commented display strings
+        fi
+        
+        found_patterns=true
+        
+        # Store error details with file and line
+        error_details+=("${script}:${line_num}:${line_content}")
+        
+        echo -e "${YELLOW}  →${NC} ${script}:${line_num}: ${line_content:0:60}..."
+        
+        # Auto-fix: Replace echo | grep with here-string (D3: pipe pattern safety)
+        # Extract variable name and pattern
+        # Use here-string instead of pipe to avoid subshell (D3)
+        if grep -qE 'echo\s+"\$\{([^}]+)\}"\s+\|\s+grep' <<< "$line_content"; then
+          local var_name
+          var_name=$(sed -nE 's/.*echo\s+"\$\{([^}]+)\}".*/\1/p' <<< "$line_content")
+          # grep_pattern unused - removed to fix SC2034
+          
+          # Create fixed version (use here-string instead of pipe - D3)
+          local fixed_line
+          fixed_line=$(sed -E "s|echo\s+\"\$\{${var_name}\}\"\s+\|\s+grep|grep <<< \"\${${var_name}}\"|g" <<< "$line_content")
+          
+          # Apply fix using sed
+          sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
+          fixes_applied=$((fixes_applied + 1))
+          echo -e "${GREEN}    ✓${NC} Fixed: Replaced with here-string"
+        fi
+      fi
+    done < <(grep -n 'echo.*|.*grep' "$script_path" 2>/dev/null || true)
+  done
+  
+  if [ "$found_patterns" = true ] && [ $fixes_applied -gt 0 ]; then
+    echo -e "${GREEN}[✓]${NC} Auto-fixed $fixes_applied unsafe pipe patterns"
+    CHECK_RESULTS[$check_name]="FIXED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  elif [ "$found_patterns" = true ]; then
+    echo -e "${RED}[✗]${NC} Found unsafe pipe patterns (could not auto-fix)"
+    echo -e "${RED}[DETAILS]${NC} Unsafe pipe patterns found:"
+    for error_detail in "${error_details[@]}"; do
+      local file_name
+      file_name=$(echo "$error_detail" | cut -d: -f1)
+      local line_num_detail
+      line_num_detail=$(echo "$error_detail" | cut -d: -f2)
+      local line_content_detail
+      line_content_detail=$(echo "$error_detail" | cut -d: -f3-)
+      
+      # Output detailed error with GitHub Actions annotation format
+      github_annotation "error" "$file_name" "$line_num_detail" "Unsafe pipe pattern: echo | grep should be replaced with here-string (grep <<< \"\${var}\")"
+      echo -e "${RED}    ✗${NC} ${file_name}:${line_num_detail}: ${line_content_detail}"
+    done
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Unsafe echo | grep patterns found in: ${error_details[*]}"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} No unsafe pipe patterns found"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 2: CMake Flag Validation
+################################################################################
+
+check_cmake_flags() {
+  local check_name="validate-cmake-flags"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} CMake flag validation..."
+  
+  local cmake_validator="${REPO_ROOT}/scripts/helpers/validate_cmake_flags.sh"
+  
+  if [ ! -x "$cmake_validator" ]; then
+    echo -e "${YELLOW}[⚠]${NC} CMake validator not found, skipping..."
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  # Disable exit on error to continue checking all scripts even if one fails
+  set +e
+  
+  local validation_failed=false
+  local validation_errors=()
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    echo -e "  Validating: ${script}..."
+    
+    # Run validator (without --report-only to actually validate)
+    # Capture output to show all errors
+    local validator_output
+    validator_output=$("$cmake_validator" "$script_path" 2>&1)
+    local validator_exit_code=$?
+    
+    # Display validator output (it will show all errors for all libraries)
+    echo "$validator_output"
+    
+    if [ $validator_exit_code -ne 0 ]; then
+      validation_failed=true
+      validation_errors+=("${script}: Validation failed (see output above)")
+    fi
+  done
+  
+  # Re-enable exit on error
+  set -e
+  
+  if [ "$validation_failed" = true ]; then
+    echo -e "${RED}[✗]${NC} CMake flag validation failed for one or more scripts"
+    echo -e "${RED}[DETAILS]${NC} Validation errors:"
+    for error_detail in "${validation_errors[@]}"; do
+      echo -e "${RED}    ✗${NC} $error_detail"
+    done
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Invalid or undocumented CMake flags detected in: ${validation_errors[*]}"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} CMake flag validation passed for all scripts"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 3: Multi-Phase Logic Documentation
+################################################################################
+
+check_multi_phase_docs() {
+  local check_name="check-multi-phase-docs"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Multi-phase logic documentation..."
+  
+  local complex_blocks=0
+  local phase_markers=0
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    local candidate_count
+    candidate_count=$(grep -c "for candidate in" "$script_path" 2>/dev/null || true)
+    candidate_count=${candidate_count:-0}
+    complex_blocks=$((complex_blocks + candidate_count))
+    
+    local phase_count
+    phase_count=$(grep -c "# Phase [0-9]:" "$script_path" 2>/dev/null || true)
+    phase_count=${phase_count:-0}
+    phase_markers=$((phase_markers + phase_count))
+  done
+  
+  echo "  Found $complex_blocks complex blocks, $phase_markers phase markers"
+  
+  if [ "$complex_blocks" -gt 0 ] && [ "$phase_markers" -eq 0 ]; then
+    echo -e "${YELLOW}[⚠]${NC} Consider adding phase markers to complex detection logic"
+    CHECK_RESULTS[$check_name]="WARNING"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  else
+    echo -e "${GREEN}[✓]${NC} Multi-phase logic appears documented"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 4: TBB Verification Blocks
+################################################################################
+
+check_tbb_verification() {
+  local check_name="check-tbb-verification"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} TBB verification blocks..."
+  
+  local main_script="${REPO_ROOT}/xubuntu_robotics_base_full.sh"
+  
+  if [ ! -f "$main_script" ]; then
+    echo -e "${YELLOW}[⚠]${NC} Main script not found, skipping..."
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  local missing_verifications=()
+  
+  if ! grep -q "Verifying TBB configuration for Ceres" "$main_script"; then
+    missing_verifications+=("Ceres")
+  fi
+  if ! grep -q "Verifying TBB configuration for g2o" "$main_script"; then
+    missing_verifications+=("g2o")
+  fi
+  if ! grep -q "Verifying TBB configuration for GTSAM" "$main_script"; then
+    missing_verifications+=("GTSAM")
+  fi
+  
+  if [ ${#missing_verifications[@]} -gt 0 ]; then
+    echo -e "${RED}[✗]${NC} Missing TBB verification for: ${missing_verifications[*]}"
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Missing TBB verification blocks: ${missing_verifications[*]}"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} TBB verification blocks found for all HPC libraries"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 5: Heredoc Syntax
+################################################################################
+
+check_heredoc_syntax() {
+  local check_name="check-heredoc-syntax"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Heredoc syntax..."
+  
+  local unquoted_count=0
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    local heredoc_count
+    # SC2126: Use grep -c instead of grep | wc -l
+    heredoc_count=$(grep -c "<<EOF" "$script_path" 2>/dev/null | tr -d '\n' || echo "0")
+    heredoc_count=$((heredoc_count + 0))  # Ensure numeric conversion
+    # Filter out quoted heredocs
+    local quoted_heredocs
+    quoted_heredocs=$(grep -c "<<'EOF'\|<<\"EOF\"" "$script_path" 2>/dev/null | tr -d '\n' || echo "0")
+    quoted_heredocs=$((quoted_heredocs + 0))  # Ensure numeric conversion
+    heredoc_count=$((heredoc_count - quoted_heredocs))
+    # Ensure non-negative
+    if [ "$heredoc_count" -lt 0 ]; then
+      heredoc_count=0
+    fi
+    unquoted_count=$((unquoted_count + heredoc_count))
+  done
+  
+  if [ "$unquoted_count" -gt 0 ]; then
+    echo -e "${YELLOW}[⚠]${NC} Found $unquoted_count potentially unquoted EOF delimiters"
+    echo "  Consider using <<'EOF' for literal heredocs"
+    CHECK_RESULTS[$check_name]="WARNING"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  else
+    echo -e "${GREEN}[✓]${NC} Heredoc syntax appears correct"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 6: Bash Compatibility
+################################################################################
+
+check_bash_compatibility() {
+  local check_name="check-bash-compatibility"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Bash compatibility (Bash 4+ features)..."
+  
+  local found_incompatible=false
+  local fixes_applied=0
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    # Check for ${var^^} (uppercase)
+    while IFS= read -r line_info; do
+      if [ -n "$line_info" ]; then
+        found_incompatible=true
+        local line_num
+        line_num=$(echo "$line_info" | cut -d: -f1)
+        local line_content
+        line_content=$(echo "$line_info" | cut -d: -f2-)
+        
+        echo -e "${YELLOW}  →${NC} Found Bash 4+ feature at line $line_num"
+        
+        # Auto-fix: Replace ${var^^} with tr
+        # Check for Bash 4+ uppercase conversion (A6: Bash version compatibility)
+        # Use here-string instead of pipe (D3: pipe pattern safety)
+        if grep -qE '\$\{[^}]+\^\^' <<< "$line_content"; then
+          # Use here-string instead of pipe (D3: pipe pattern safety)
+          local var_name
+          var_name=$(sed -nE 's/.*\$\{([^}]+)\^\^\}.*/\1/p' <<< "$line_content")
+          local fixed_line
+          fixed_line=$(sed -E "s|\$\{${var_name}\^\^\}|\$(echo \"\${${var_name}}\" | tr '[:lower:]' '[:upper:]')|g" <<< "$line_content")
+          sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
+          fixes_applied=$((fixes_applied + 1))
+          echo -e "${GREEN}    ✓${NC} Fixed: Replaced with tr command"
+        fi
+        
+        # Auto-fix: Replace ${var,,} with tr
+        # Check for Bash 4+ lowercase conversion (A6: Bash version compatibility)
+        # Use here-string instead of pipe (D3: pipe pattern safety)
+        if grep -qE '\$\{[^}]+,,' <<< "$line_content"; then
+          # Use here-string instead of pipe (D3: pipe pattern safety)
+          local var_name
+          var_name=$(sed -nE 's/.*\$\{([^}]+),,\}.*/\1/p' <<< "$line_content")
+          local fixed_line
+          fixed_line=$(sed -E "s|\$\{${var_name},,\}|\$(echo \"\${${var_name}}\" | tr '[:upper:]' '[:lower:]')|g" <<< "$line_content")
+          sed -i "${line_num}s|.*|${fixed_line}|" "$script_path"
+          fixes_applied=$((fixes_applied + 1))
+          echo -e "${GREEN}    ✓${NC} Fixed: Replaced with tr command"
+        fi
+      fi
+    done < <(grep -nE '\$\{[^}]+\^\^|\$\{[^}]+,,' "$script_path" 2>/dev/null || true)
+  done
+  
+  if [ "$found_incompatible" = true ] && [ $fixes_applied -gt 0 ]; then
+    echo -e "${GREEN}[✓]${NC} Auto-fixed $fixes_applied Bash compatibility issues"
+    CHECK_RESULTS[$check_name]="FIXED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  elif [ "$found_incompatible" = true ]; then
+    echo -e "${RED}[✗]${NC} Found Bash 4+ features (could not auto-fix)"
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Bash 4+ features detected without version checks"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} No Bash 4+ specific features detected"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 7: Unbound Variables in Heredocs
+################################################################################
+
+check_heredoc_unbound_vars() {
+  local check_name="check-heredoc-unbound-vars"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} Unbound variables in heredocs..."
+  
+  local found_issues=false
+  local issues=()
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    # Find heredoc delimiters (unquoted, which expand variables)
+    local heredoc_lines
+    heredoc_lines=$(grep -nE '<<[A-Z_]+[^'\''"]' "$script_path" 2>/dev/null || true)
+    
+    if [ -z "$heredoc_lines" ]; then
+      continue
+    fi
+    
+    # For each heredoc, check for unbound variable patterns inside
+    while IFS= read -r heredoc_line; do
+      if [ -z "$heredoc_line" ]; then
+        continue
+      fi
+      
+      local line_num
+      line_num=$(echo "$heredoc_line" | cut -d: -f1)
+      local delimiter
+      delimiter=$(echo "$heredoc_line" | sed -nE 's/.*<<([A-Z_]+).*/\1/p')
+      
+      if [ -z "$delimiter" ]; then
+        continue
+      fi
+      
+      # Find the end of this heredoc
+      local end_line
+      end_line=$(awk -v start="$line_num" -v delim="$delimiter" '
+        NR > start && /^[[:space:]]*'"$delimiter"'[[:space:]]*$/ { print NR; exit }
+      ' "$script_path" 2>/dev/null || echo "")
+      
+      if [ -z "$end_line" ]; then
+        continue
+      fi
+      
+      # Check for unbound variable patterns in heredoc content (variables without defaults or escapes)
+      # Look for ${VAR} patterns that aren't escaped and don't have defaults
+      local heredoc_content
+      heredoc_content=$(sed -n "${line_num},${end_line}p" "$script_path" 2>/dev/null || true)
+      
+      # Find ${VAR} patterns that should be escaped (variables set inside heredoc content, not on host)
+      # Common patterns: ${APT_TMP_ALT}, ${CONTAINER_BUILD_TMPDIR} (if set in %post section)
+      local unbound_patterns
+      unbound_patterns=$(echo "$heredoc_content" | grep -nE '\$\{[A-Z_]+\}' | grep -vE '\$\{[A-Z_]+:-|\$\{[A-Z_]+\?\}' || true)
+      
+      if [ -n "$unbound_patterns" ]; then
+        while IFS= read -r pattern_line; do
+          if [ -n "$pattern_line" ]; then
+            local relative_line
+            relative_line=$(echo "$pattern_line" | cut -d: -f1)
+            local pattern_content
+            pattern_content=$(echo "$pattern_line" | cut -d: -f2-)
+            local var_name
+            var_name=$(echo "$pattern_content" | sed -nE 's/.*\$\{([A-Z_]+)\}.*/\1/p')
+            
+            # Check if this variable is set before the heredoc (should be expanded) or inside heredoc (should be escaped)
+            # For now, warn about common container variables that should be escaped
+            if [[ "$var_name" =~ ^(APT_TMP_ALT|CONTAINER_BUILD_TMPDIR|CONTAINER_CACHE_ROOT|CONTAINER_.*_CACHE)$ ]]; then
+              found_issues=true
+              local absolute_line=$((line_num + relative_line - 1))
+              issues+=("${script}:${absolute_line}: Variable \${${var_name}} in heredoc should be escaped as \\\${${var_name}} or use default \\\${${var_name}:-default}")
+            fi
+          fi
+        done <<< "$unbound_patterns"
+      fi
+    done <<< "$heredoc_lines"
+  done
+  
+  if [ "$found_issues" = true ]; then
+    echo -e "${RED}[✗]${NC} Found potential unbound variable issues in heredocs:"
+    for issue in "${issues[@]}"; do
+      echo -e "${RED}    ✗${NC} $issue"
+    done
+    echo -e "${YELLOW}[INFO]${NC} Variables set inside heredoc content (e.g., container %post section) should be escaped"
+    echo -e "${YELLOW}[INFO]${NC} Use \\\${VAR} to prevent expansion during heredoc generation"
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="Unbound variable patterns in heredocs: ${issues[*]}"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} No unbound variable issues detected in heredocs"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 8: ShellCheck Linting
+################################################################################
+
+check_shellcheck() {
+  local check_name="shellcheck"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} ShellCheck linting..."
+  
+  if ! command -v shellcheck &> /dev/null; then
+    echo -e "${YELLOW}[⚠]${NC} ShellCheck not installed, skipping..."
+    echo "  Install with: sudo apt install shellcheck"
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  local shellcheck_failed=false
+  local shellcheck_errors=""
+  
+  for script in "${BUILD_SCRIPTS[@]}"; do
+    local script_path="${REPO_ROOT}/${script}"
+    if [ ! -f "$script_path" ]; then
+      continue
+    fi
+    
+    # Safety check: Skip non-shell files (YAML, JSON, etc.)
+    if [[ "$script" =~ \.(yml|yaml|json|json5|xml|toml|conf|def|kdl|ron|pc)$ ]]; then
+      continue
+    fi
+    
+    # Only check for errors, not warnings (SC1090, SC2034, etc. are acceptable)
+    shellcheck_output=""
+    if ! shellcheck_output=$(shellcheck --severity=error -f gcc "$script_path" 2>&1); then
+      shellcheck_failed=true
+      shellcheck_errors+="$shellcheck_output\n"
+    fi
+  done
+  
+  if [ "$shellcheck_failed" = true ]; then
+    echo -e "${RED}[✗]${NC} ShellCheck found errors:"
+    echo -e "$shellcheck_errors" | head -20
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="ShellCheck linting errors found"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} ShellCheck passed (no errors found)"
+    echo -e "${BLUE}[NOTE]${NC} Warnings (SC2034, SC1090, etc.) are acceptable and not checked"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# CHECK 8: MANIFEST.json Validation
+################################################################################
+
+check_manifest_validation() {
+  local check_name="check-manifest-validation"
+  TOTAL_CHECKS=$((TOTAL_CHECKS + 1))
+  
+  echo -e "${BLUE}[CHECK]${NC} MANIFEST.json validation..."
+  
+  local manifest_path="${REPO_ROOT}/container-scripts/MANIFEST.json"
+  local validator_path="${REPO_ROOT}/container-scripts/validate_manifest.py"
+  
+  # Check if manifest exists
+  if [ ! -f "$manifest_path" ]; then
+    echo -e "${YELLOW}[SKIP]${NC} MANIFEST.json not found: ${manifest_path}"
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  # Check if validator exists
+  if [ ! -f "$validator_path" ]; then
+    echo -e "${YELLOW}[SKIP]${NC} validate_manifest.py not found: ${validator_path}"
+    CHECK_RESULTS[$check_name]="SKIPPED"
+    return 0
+  fi
+  
+  # Run validation
+  local validation_output
+  if ! validation_output=$(cd "${REPO_ROOT}/container-scripts" && python3 validate_manifest.py 2>&1); then
+    echo -e "${RED}[✗]${NC} MANIFEST.json validation failed:"
+    echo -e "$validation_output" | head -30
+    CHECK_RESULTS[$check_name]="FAILED"
+    CHECK_ERRORS[$check_name]="MANIFEST.json validation errors found"
+    FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    return 1
+  else
+    echo -e "${GREEN}[✓]${NC} MANIFEST.json validation passed"
+    CHECK_RESULTS[$check_name]="PASSED"
+    PASSED_CHECKS=$((PASSED_CHECKS + 1))
+    return 0
+  fi
+}
+
+################################################################################
+# MAIN EXECUTION
+################################################################################
+
+main() {
+  echo "Running all CI checks..."
+  echo ""
+  
+  # Run all checks
+  check_pipe_patterns
+  check_cmake_flags
+  check_multi_phase_docs
+  check_tbb_verification
+  check_heredoc_syntax
+  check_heredoc_unbound_vars
+  check_bash_compatibility
+  check_shellcheck
+  check_manifest_validation
+  
+  # Summary
+  echo ""
+  echo -e "${CYAN}╔════════════════════════════════════════════════════════════════╗${NC}"
+  echo -e "${CYAN}║     VALIDATION SUMMARY                                           ║${NC}"
+  echo -e "${CYAN}╚════════════════════════════════════════════════════════════════╝${NC}"
+  echo ""
+  echo "Total checks: $TOTAL_CHECKS"
+  echo -e "Passed: ${GREEN}$PASSED_CHECKS${NC}"
+  echo -e "Failed: ${RED}$FAILED_CHECKS${NC}"
+  echo ""
+  
+  # Print failed checks
+  if [ $FAILED_CHECKS -gt 0 ]; then
+    echo -e "${RED}Failed checks:${NC}"
+    for check in "${!CHECK_RESULTS[@]}"; do
+      if [ "${CHECK_RESULTS[$check]}" = "FAILED" ]; then
+        echo -e "  ${RED}✗${NC} $check: ${CHECK_ERRORS[$check]}"
+      fi
+    done
+    echo ""
+    
+    # Export results as JSON for pattern extraction
+    if [ -n "${EXPORT_JSON:-}" ]; then
+      {
+        echo "{"
+        echo "  \"results\": {"
+        local first=true
+        for check in "${!CHECK_RESULTS[@]}"; do
+          [ "$first" = false ] && echo ","
+          first=false
+          echo -n "    \"$check\": \"${CHECK_RESULTS[$check]}\""
+        done
+        echo ""
+        echo "  },"
+        echo "  \"errors\": {"
+        first=true
+        for check in "${!CHECK_ERRORS[@]}"; do
+          [ "$first" = false ] && echo ","
+          first=false
+          # SC2155: Declare and assign separately (already fixed by auto-fix script)
+          local error_msg
+          error_msg=""
+          error_msg="${CHECK_ERRORS[$check]//\"/\\\"}"
+          echo -n "    \"$check\": \"$error_msg\""
+        done
+        echo ""
+        echo "  }"
+        echo "}"
+      } > "${EXPORT_JSON}"
+    fi
+    
+    return 1
+  fi
+  
+  echo -e "${GREEN}[✓]${NC} All checks passed!"
+  return 0
+}
+
+# Run main
+main "$@"
+

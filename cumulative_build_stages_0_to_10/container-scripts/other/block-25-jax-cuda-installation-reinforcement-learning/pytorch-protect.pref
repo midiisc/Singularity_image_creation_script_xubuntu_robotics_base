@@ -1,0 +1,6 @@
+# Prevent APT from installing system PyTorch packages (if any exist)
+# Our custom-compiled PyTorch should be used instead (installed via pip)
+# This is a safety measure - PyTorch is typically not available via APT on Ubuntu
+Package: python3-torch python3-torchvision python3-torchaudio
+Pin: release *
+Pin-Priority: -1

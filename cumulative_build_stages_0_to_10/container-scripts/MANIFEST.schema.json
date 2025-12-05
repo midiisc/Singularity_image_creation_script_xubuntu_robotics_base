@@ -1,0 +1,133 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/your-org/singularity-image-creation/MANIFEST.schema.json",
+  "title": "Container Scripts Manifest Schema",
+  "description": "JSON Schema for container scripts manifest file that maps source files to installation targets",
+  "type": "object",
+  "required": ["version", "description", "files"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+$",
+      "description": "Schema version using semantic versioning (MAJOR.MINOR format)",
+      "examples": ["1.0", "1.1", "2.0"]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable description of the manifest file purpose"
+    },
+    "files": {
+      "type": "array",
+      "description": "Array of file entries mapping source files to installation targets",
+      "items": {
+        "$ref": "#/definitions/fileEntry"
+      },
+      "minItems": 0
+    }
+  },
+  "definitions": {
+    "fileEntry": {
+      "type": "object",
+      "description": "File entry mapping a source file to an installation target with metadata",
+      "required": ["source", "target", "file_type", "permissions"],
+      "properties": {
+        "source": {
+          "type": "string",
+          "pattern": "^[^/].*",
+          "description": "Relative path to source file from container-scripts/ directory. Must not start with '/' (relative path only)",
+          "examples": [
+            "shell-scripts/block-11-apt-aria-wrapper-setup-must-be-before-nvidia/apt-wrapper-aria2c-accelerated-downloads.sh",
+            "config-files/block-14-drake-robotics-framework-setup/99-drake-insecure.conf",
+            "verification-tools/verify-mkl-env.sh"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Target path where file will be installed. Can be absolute (e.g., /usr/local/bin/script.sh) or relative (e.g., ./script.sh) for build-time scripts",
+          "examples": [
+            "/usr/local/bin/apt-aria",
+            "/etc/apt/preferences.d/cuda-repository-pin",
+            "./prune_apt_cache.sh"
+          ]
+        },
+        "file_type": {
+          "type": "string",
+          "enum": ["shell-scripts", "config-files", "other", "json-configs"],
+          "description": "Category classification of the file type",
+          "examples": ["shell-scripts", "config-files", "other", "json-configs"]
+        },
+        "permissions": {
+          "type": "string",
+          "pattern": "^[0-7]{3,4}$",
+          "description": "Octal permission string (3-4 digits, 0-7). Typically 0644 for config files, 0755 for executable scripts",
+          "examples": ["0644", "0755", "0640"]
+        },
+        "block": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Numeric block identifier indicating which build block this file belongs to",
+          "examples": [0, 11, 13, 28, 38]
+        },
+        "block_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable name of the build block",
+          "examples": [
+            "APT-ARIA WRAPPER SETUP (MUST BE BEFORE NVIDIA!)",
+            "NVIDIA CUDA/cuDNN SETUP",
+            "DESKTOP ENVIRONMENT AND REMOTE ACCESS SETUP (Part 1 of 3)"
+          ]
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Human-readable description of the file's purpose and installation target",
+          "examples": [
+            "shell-scripts file: /usr/local/bin/apt-aria",
+            "MKL environment verification script for HPC validation"
+          ]
+        },
+        "dependencies": {
+          "type": "array",
+          "description": "Array of source file paths that this file depends on. Currently unused but reserved for future dependency resolution",
+          "items": {
+            "type": "string",
+            "pattern": "^[^/].*"
+          },
+          "default": []
+        },
+        "line_start": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Starting line number in source script where this file's content begins. Use null for standalone files not extracted from source script",
+          "examples": [646, 2235, 2461, null]
+        },
+        "line_end": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "Ending line number in source script where this file's content ends. Use null for standalone files not extracted from source script",
+          "examples": [650, 2365, 2492, null]
+        },
+        "delimiter": {
+          "type": ["string", "null"],
+          "description": "Heredoc delimiter string used to extract file content from source script. Use null for standalone files not extracted from source script",
+          "examples": ["EOF", "VGLTEST", "PANETWORK", null]
+        },
+        "file_path": {
+          "type": ["string", "null"],
+          "description": "Absolute path to source script file containing this file's content. Use null for standalone files not extracted from source script",
+          "examples": [
+            "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/xubuntu_robotics_base_full.sh",
+            "/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/build_xubuntu_robotics_base.sh",
+            null
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+

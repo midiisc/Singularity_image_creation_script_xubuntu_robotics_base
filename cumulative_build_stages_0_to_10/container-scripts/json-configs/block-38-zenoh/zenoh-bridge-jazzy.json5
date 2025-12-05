@@ -1,0 +1,21 @@
+// Bridge ROS 2 Jazzy (Domain 2) to Zenoh
+{
+  mode: "client",
+  connect: {
+    endpoints: ["tcp/localhost:7447"]
+  },
+  plugins: {
+    ros2dds: {
+      // Domain ID for Jazzy
+      domain: 2,
+      // Namespace for Jazzy topics in Zenoh
+      namespace: "/jazzy",
+      // Topic routing rules
+      allow: [
+        { topic: "**" }
+      ],
+      shm_enabled: true,
+      reliable_routes_blocking: true
+    }
+  }
+}
