@@ -9,20 +9,20 @@
 # Stage 4 MUST be built on top of Stage 3 for cumulative build
 # Using absolute path to ensure Stage 3 image is found
 Bootstrap: localimage
-From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/test_local_mounts/progressive/output/stage_03_initialization.sif
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/tmp/stage_03_temp.sif
 
 # === %files Section ===
 %files
     # CRITICAL: Copy centralized configuration (SINGLE SOURCE OF TRUTH)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/config.sh /etc/config.sh
     # Copy container scripts (already installed in Stage 2, but ensure they're available)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/container-scripts /container-scripts
     # Copy common functions (needed for cache management functions)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/common_functions.sh /scripts/common_functions.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/scripts/common_functions.sh /scripts/common_functions.sh
     # Copy mirror functions (needed for mirror probing)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/mirror_functions.sh /scripts/mirror_functions.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/scripts/mirror_functions.sh /scripts/mirror_functions.sh
     # Copy library functions (needed for library verification)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/library_functions.sh /scripts/library_functions.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/scripts/library_functions.sh /scripts/library_functions.sh
 
 # === %labels Section ===
 %labels
@@ -58,6 +58,8 @@ From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_
     mkdir -p ${APPTAINER_ROOTFS}/tmp
     mkdir -p ${APPTAINER_ROOTFS}/var/tmp
     mkdir -p ${APPTAINER_ROOTFS}/scripts
+    # CRITICAL: Ensure .singularity.d directory exists for metadata (required when building from localimage)
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d
 
 # === %post Section ===
 %post -c /bin/bash

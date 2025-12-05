@@ -3,7 +3,7 @@ From: osrf/ros:jazzy-desktop-full-noble
 
 # === %files Section ===
 %files
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/config.sh /etc/config.sh
 
 # === %labels Section ===
 %labels

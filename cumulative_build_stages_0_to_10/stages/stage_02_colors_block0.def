@@ -1,10 +1,10 @@
-Bootstrap: docker
-From: osrf/ros:jazzy-desktop-full-noble
+Bootstrap: localimage
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/tmp/stage_01_temp.sif
 
 # === %files Section ===
 %files
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/config.sh /etc/config.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/container-scripts /container-scripts
 
 # === %labels Section ===
 %labels

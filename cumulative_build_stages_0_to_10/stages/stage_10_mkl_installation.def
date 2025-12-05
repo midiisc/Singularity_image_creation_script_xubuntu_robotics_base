@@ -84,6 +84,8 @@ From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_
     mkdir -p ${APPTAINER_ROOTFS}/tmp
     mkdir -p ${APPTAINER_ROOTFS}/var/tmp
     mkdir -p ${APPTAINER_ROOTFS}/scripts
+    # CRITICAL: Ensure .singularity.d directory exists for metadata (required when building from localimage)
+    mkdir -p ${APPTAINER_ROOTFS}/.singularity.d
 
 # === %post Section ===
 %post -c /bin/bash

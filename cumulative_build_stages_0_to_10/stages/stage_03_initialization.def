@@ -8,16 +8,16 @@
 # Stage 3 MUST be built on top of Stage 2 for cumulative build
 # Using absolute path to ensure Stage 2 image is found
 Bootstrap: localimage
-From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/test_local_mounts/progressive/output/stage_02_colors_block0.sif
+From: /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/tmp/stage_02_temp.sif
 
 # === %files Section ===
 %files
     # CRITICAL: Copy centralized configuration (SINGLE SOURCE OF TRUTH)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/config.sh /etc/config.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/config.sh /etc/config.sh
     # Copy container scripts (already installed in Stage 2, but ensure they're available)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/container-scripts /container-scripts
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/container-scripts /container-scripts
     # Copy common functions (needed for calculate_build_jobs and other functions)
-    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/scripts/common_functions.sh /scripts/common_functions.sh
+    /home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10/scripts/common_functions.sh /scripts/common_functions.sh
 
 # === %labels Section ===
 %labels
