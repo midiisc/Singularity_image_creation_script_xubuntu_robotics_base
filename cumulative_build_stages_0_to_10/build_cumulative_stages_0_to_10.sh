@@ -152,15 +152,25 @@ update_def_paths() {
     local temp_file="${def_file}.tmp"
     
     # Replace absolute paths with BUILD_ROOT-relative paths
-    # Handle both cases:
-    # 1. Paths that include cumulative_build_stages_0_to_10 (remove duplicate)
-    # 2. Paths that don't include it (add BUILD_ROOT)
-    # First, fix any existing duplicates
-    sed "s|${BUILD_ROOT}/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
+    # CRITICAL: Handle path replacement carefully to avoid duplicates
+    # The definition files should already have correct paths after our fix,
+    # but we still need to handle the base repo path replacement
+    # Strategy: Replace the base repo path, but ensure we don't create duplicates
+    
+    # First, replace the full base path (including cumulative_build_stages_0_to_10 if present)
+    # This handles: /home/midhun/.../cumulative_build_stages_0_to_10/... -> ${BUILD_ROOT}/...
+    sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
         "${def_file}" > "${temp_file}.1"
-    # Then replace base repo path with BUILD_ROOT
+    
+    # Then replace just the base repo path (for paths that don't include cumulative_build_stages_0_to_10)
     sed "s|/home/midhun/Documents/Singularity_image_creation_script_xubuntu_robotics_base|${BUILD_ROOT}|g" \
         "${temp_file}.1" > "${temp_file}"
+    
+    # Finally, fix any duplicates that might have been created
+    sed "s|${BUILD_ROOT}/cumulative_build_stages_0_to_10|${BUILD_ROOT}|g" \
+        "${temp_file}" > "${temp_file}.2"
+    
+    mv "${temp_file}.2" "${temp_file}"
     rm -f "${temp_file}.1" 2>/dev/null || true
     
     # Replace the original file
